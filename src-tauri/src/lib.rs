@@ -535,6 +535,7 @@ pub fn run() {
             commands::mcp::mcp_call_emulator_tool,
             commands::mcp::mcp_set_agent_presets,
             commands::mcp::mcp_set_assistant_names,
+            commands::mcp::mcp_set_media_settings,
             commands::mcp::mcp_deliver_respond,
             commands::mcp::mcp_computer_use_supported,
             commands::mcp::mcp_set_computer_use,

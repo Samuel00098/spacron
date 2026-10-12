@@ -53,6 +53,14 @@ export const MCP_CONFIGURABLE_EXECUTABLES: ReadonlySet<string> = new Set([
   'agent',
   // DeepSeek Harness: the server arrives through a `--patch` launch flag.
   'dsh',
+  'qwen',
+  'kiro-cli',
+  'amp',
+  'devin',
+  'agy',
+  // These two read the project `.mcp.json` written for Claude Code.
+  'copilot',
+  'qodercli',
 ]);
 
 /**

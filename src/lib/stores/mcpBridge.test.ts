@@ -216,7 +216,10 @@ describe('injectMcpConfigForAgent', () => {
     const { injectMcpConfigForAgent } = await mockModule();
     await injectMcpConfigForAgent('codex', 'C:/work/repo');
 
-    expect(writtenGlobal('codex')).toBe(`[mcp_servers.spacron-mcp]\nurl = "${HTTP_URL}"\n`);
+    // `tool_timeout_sec`: Codex's 60s default is shorter than a generate_video call.
+    expect(writtenGlobal('codex')).toBe(
+      `[mcp_servers.spacron-mcp]\nurl = "${HTTP_URL}"\ntool_timeout_sec = 900\n`,
+    );
   });
 
   it('writes global configs off the project-scoped file commands', async () => {
@@ -276,6 +279,55 @@ describe('injectMcpConfigForAgent', () => {
     expect(JSON.parse(writtenGlobal('droid')!)).toEqual({
       mcpServers: { 'spacron-mcp': { type: 'http', url: HTTP_URL, disabled: false } },
     });
+  });
+
+  it('gives Qwen Code `httpUrl` — the key its Gemini fork kept', async () => {
+    const { injectMcpConfigForAgent } = await mockModule();
+    await injectMcpConfigForAgent('qwen', 'C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/.qwen/settings.json')!)).toEqual({
+      mcpServers: { 'spacron-mcp': { httpUrl: HTTP_URL } },
+    });
+  });
+
+  it('gives Kiro and Amp a bare url, Amp under its dotted section key', async () => {
+    const { injectMcpConfigForAgent } = await mockModule();
+    await injectMcpConfigForAgent('kiro-cli', 'C:/work/repo');
+    await injectMcpConfigForAgent('amp', 'C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/.kiro/settings/mcp.json')!)).toEqual({
+      mcpServers: { 'spacron-mcp': { url: HTTP_URL } },
+    });
+    expect(JSON.parse(written('C:/work/repo/.amp/settings.json')!)).toEqual({
+      'amp.mcpServers': { 'spacron-mcp': { url: HTTP_URL } },
+    });
+  });
+
+  it('gives Devin its uncommitted local file with a `transport` key', async () => {
+    const { injectMcpConfigForAgent } = await mockModule();
+    await injectMcpConfigForAgent('devin', 'C:/work/repo');
+
+    expect(JSON.parse(written('C:/work/repo/.devin/config.local.json')!)).toEqual({
+      mcpServers: { 'spacron-mcp': { url: HTTP_URL, transport: 'http' } },
+    });
+  });
+
+  it('gives Antigravity a global `serverUrl` entry and keeps its other servers', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({
+      agy: '{"mcpServers":{"firebase":{"command":"npx","args":["-y","firebase-tools"]}}}',
+    });
+    await injectMcpConfigForAgent('agy', 'C:/work/repo');
+
+    const config = JSON.parse(writtenGlobal('agy')!);
+    expect(config.mcpServers['spacron-mcp']).toEqual({ serverUrl: HTTP_URL, disabled: false });
+    expect(config.mcpServers.firebase).toEqual({ command: 'npx', args: ['-y', 'firebase-tools'] });
+  });
+
+  it('never overwrites an Antigravity config it cannot parse', async () => {
+    const { injectMcpConfigForAgent } = await mockModule({ agy: '{ not json' });
+    await injectMcpConfigForAgent('agy', 'C:/work/repo');
+
+    expect(writtenGlobal('agy')).toBeUndefined();
   });
 
   it('keeps droid servers the user added by hand', async () => {
@@ -587,7 +639,8 @@ describe('ensureMcpConfigsIgnored', () => {
     // file without bound, and the unslashed spelling is the same rule.
     const { ensureMcpConfigsIgnored } = await mockModule({
       [EXCLUDE]:
-        '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n.spacron/*\n!.spacron/memory/\n',
+        '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n.qwen/settings.json\n' +
+        '.kiro/settings/mcp.json\n.amp/settings.json\n.devin/config.local.json\n.spacron/*\n!.spacron/memory/\n',
     });
     await ensureMcpConfigsIgnored('C:/work/repo');
 
@@ -641,7 +694,8 @@ describe('ensureMcpConfigsIgnored', () => {
     // Project open calls this every time; it must not churn the file.
     const { ensureMcpConfigsIgnored } = await mockModule({
       [EXCLUDE]:
-        '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n/.spacron/*\n!/.spacron/memory/\n',
+        '.mcp.json\n.gemini/settings.json\n.cursor/mcp.json\nopencode.json\n.qwen/settings.json\n' +
+        '.kiro/settings/mcp.json\n.amp/settings.json\n.devin/config.local.json\n/.spacron/*\n!/.spacron/memory/\n',
     });
     await ensureMcpConfigsIgnored('C:/work/repo');
 
@@ -1203,6 +1257,18 @@ describe('user MCP servers', () => {
     expect(JSON.parse(writtenGlobal('droid')!).mcpServers['spacron-linear'])
       .toMatchObject({ disabled: false });
     expect(writtenGlobal('codex')).toContain('[mcp_servers.spacron-linear]');
+    const auth = { Authorization: 'Bearer tok' };
+    const url = 'https://mcp.linear.app/mcp';
+    expect(JSON.parse(written('C:/work/repo/.qwen/settings.json')!).mcpServers['spacron-linear'])
+      .toEqual({ httpUrl: url, headers: auth });
+    expect(JSON.parse(written('C:/work/repo/.kiro/settings/mcp.json')!).mcpServers['spacron-linear'])
+      .toEqual({ url, headers: auth });
+    expect(JSON.parse(written('C:/work/repo/.amp/settings.json')!)['amp.mcpServers']['spacron-linear'])
+      .toEqual({ url, headers: auth });
+    expect(JSON.parse(written('C:/work/repo/.devin/config.local.json')!).mcpServers['spacron-linear'])
+      .toEqual({ url, transport: 'http', headers: auth });
+    expect(JSON.parse(writtenGlobal('agy')!).mcpServers['spacron-linear'])
+      .toEqual({ serverUrl: url, disabled: false, headers: auth });
   });
 
   it('writes a local server as a command, not a URL', async () => {

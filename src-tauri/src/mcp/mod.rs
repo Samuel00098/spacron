@@ -32,7 +32,7 @@ use std::{
     convert::Infallible,
     fs,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -96,6 +96,18 @@ pub type AgentTokens = Arc<std::sync::Mutex<HashMap<String, Option<u32>>>>;
 pub struct PendingSend {
     pub tx: oneshot::Sender<Result<serde_json::Value, String>>,
     pub created_at: Instant,
+}
+
+/// The user's image/video provider choice, pushed from Settings by the
+/// frontend (`mediaGeneration` in `stores/settings.ts`) so `generate_image` and
+/// `generate_video` honour it for agents exactly as they do in the chat.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MediaSettings {
+    pub image_provider: String,
+    pub video_provider: String,
+    pub image_models: HashMap<String, String>,
+    pub video_models: HashMap<String, String>,
 }
 
 /// Shared map of in-flight prompt deliveries, keyed by request ID.
@@ -240,6 +252,8 @@ pub struct McpServerHandle {
     pub agent_presets: Arc<Mutex<Vec<AgentPreset>>>,
     /// The app's assistant-name pool, shared with the server. See `ServerState`.
     pub assistant_names: Arc<Mutex<Vec<String>>>,
+    /// Media provider settings, shared with the server. See `ServerState`.
+    pub media_settings: Arc<Mutex<MediaSettings>>,
     /// Names handed out but not yet registered. See `ServerState`.
     reserved_names: Arc<Mutex<Vec<NameReservation>>>,
     /// Computer-use switch and grants, shared with the server. See `crate::desktop`.
@@ -482,6 +496,7 @@ pub fn start(
     let project_root: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let agent_presets: Arc<Mutex<Vec<AgentPreset>>> = Arc::new(Mutex::new(Vec::new()));
     let assistant_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let media_settings: Arc<Mutex<MediaSettings>> = Arc::new(Mutex::new(MediaSettings::default()));
     let reserved_names: Arc<Mutex<Vec<NameReservation>>> = Arc::new(Mutex::new(Vec::new()));
     let sse_sessions: SseSessions = Arc::new(DashMap::new());
     // Persistent bearer-equivalent shared secret, loaded from the user's config
@@ -512,6 +527,7 @@ pub fn start(
         project_root: project_root.clone(),
         agent_presets: agent_presets.clone(),
         assistant_names: assistant_names.clone(),
+        media_settings: media_settings.clone(),
         reserved_names: reserved_names.clone(),
         sse_sessions,
     });
@@ -594,6 +610,7 @@ pub fn start(
         project_root,
         agent_presets,
         assistant_names,
+        media_settings,
         reserved_names,
         desktop,
     };
@@ -641,6 +658,9 @@ struct ServerState {
     /// to name a worker whose spawner left it unnamed or labelled it generically.
     /// Empty means the frontend has not reported yet.
     assistant_names: Arc<Mutex<Vec<String>>>,
+    /// Provider choice for `generate_image` / `generate_video`. Default (empty)
+    /// means "auto", which is also what Settings starts at.
+    media_settings: Arc<Mutex<MediaSettings>>,
     /// Names already handed to a spawn that the frontend has not registered yet.
     /// Registration is asynchronous, so without this two `delegate_task` calls a
     /// few milliseconds apart both see the same pool free and pick one name —
@@ -1568,6 +1588,114 @@ fn tool_emulator_logcat() -> serde_json::Value {
     })
 }
 
+/// Image and video generation for agents, on the same providers, keys and
+/// Settings choice the chat uses (`images::generate_and_save`). Results land in
+/// `<project>/generations`, so they sit with the work the agent is doing.
+fn tool_generate_media(kind: &str) -> serde_json::Value {
+    let (name, article, noun, extra) = if kind == "video" {
+        ("generate_video", "a", "video", " Takes one to several minutes; wait for it rather than calling again.")
+    } else {
+        ("generate_image", "an", "image", "")
+    };
+    serde_json::json!({
+        "name": name,
+        "description": format!(
+            "Generate {article} {noun} with the AI providers configured in Spacron (Settings > AI Connections) and save it to the project's `generations` folder. Returns the saved file's absolute path; use that file rather than generating {noun}s some other way.{extra}"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": format!("What the {noun} should show. Be specific about subject, style, composition and, for video, motion.")
+                },
+                "reference_images": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional absolute paths (at most 4) of images inside the project to edit or use as references."
+                }
+            },
+            "required": ["prompt"]
+        }
+    })
+}
+
+/// Longest a `generate_image` / `generate_video` call may take. Video
+/// providers poll for minutes; past this the agent is told it timed out rather
+/// than left hanging. Mirrors `MEDIA_TOOL_TIMEOUT_SEC` in `stores/mcpBridge.ts`,
+/// which raises the CLI-side timeout where the default is shorter.
+const MEDIA_TIMEOUT: Duration = Duration::from_secs(840);
+
+async fn generate_media_tool(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+    state: &ServerState,
+    kind: &str,
+) -> Json<JsonRpcResponse> {
+    let args = tool_args(params);
+    let prompt = args
+        .and_then(|a| a.get("prompt"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if prompt.is_empty() {
+        return Json(JsonRpcResponse::error(id, -32602, "Parameter 'prompt' is required"));
+    }
+    let references: Vec<String> = args
+        .and_then(|a| a.get("reference_images"))
+        .and_then(|v| v.as_array())
+        .map(|list| list.iter().filter_map(|v| v.as_str()).map(str::to_string).collect())
+        .unwrap_or_default();
+    let root = state.project_root.lock().await.clone();
+    let settings = state.media_settings.lock().await.clone();
+    let (provider, models) = if kind == "video" {
+        (settings.video_provider, settings.video_models)
+    } else {
+        (settings.image_provider, settings.image_models)
+    };
+    let config_dir = mcp_token_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let request_id = format!("mcp-{}", uuid::Uuid::new_v4().simple());
+    let work = crate::commands::images::generate_and_save(
+        &config_dir,
+        request_id.clone(),
+        kind,
+        Some(provider),
+        models,
+        prompt,
+        references,
+        root.as_deref(),
+    );
+    let result = match tokio::time::timeout(MEDIA_TIMEOUT, work).await {
+        Ok(result) => result,
+        Err(_) => {
+            crate::commands::images::generate_image_cancel(request_id);
+            Err(format!("timeout: the {kind} was not ready after {} minutes", MEDIA_TIMEOUT.as_secs() / 60))
+        }
+    };
+    match result {
+        Ok(made) => {
+            let mut text = format!("Saved the {kind} to {}\nProvider: {}", made.path, made.provider);
+            if let Some(revised) = made.revised_prompt.filter(|r| !r.trim().is_empty()) {
+                text.push_str(&format!("\nRevised prompt: {revised}"));
+            }
+            if !made.skipped.is_empty() {
+                text.push_str(&format!("\nSkipped first: {}", made.skipped.join("; ")));
+            }
+            Json(JsonRpcResponse::success(id, text_content(text)))
+        }
+        // A tool-level error (isError) rather than a JSON-RPC one, so the
+        // agent reads the provider report and can tell the user what to fix.
+        Err(e) => Json(JsonRpcResponse::success(
+            id,
+            serde_json::json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
+        )),
+    }
+}
+
 fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
     vec![
         tool_report_status(),
@@ -1588,6 +1716,8 @@ fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
         tool_emulator_text(),
         tool_emulator_rotate(),
         tool_emulator_logcat(),
+        tool_generate_media("image"),
+        tool_generate_media("video"),
     ]
 }
 
@@ -2415,6 +2545,10 @@ async fn handle_tool_call(
         "emulator_text" => emulator_text(id, &params).await,
         "emulator_rotate" => emulator_rotate(id, &params).await,
         "emulator_logcat" => emulator_logcat(id, &params).await,
+
+        // ── Media generation ─────────────────────────────────────────────
+        "generate_image" => generate_media_tool(id, &params, state, "image").await,
+        "generate_video" => generate_media_tool(id, &params, state, "video").await,
 
         // ── Computer use ─────────────────────────────────────────────────
         // Grants belong to a session, so an anonymous caller is refused rather
@@ -3577,6 +3711,7 @@ mod tests {
             project_root: Arc::new(Mutex::new(None)),
             agent_presets: Arc::new(Mutex::new(Vec::new())),
             assistant_names: Arc::new(Mutex::new(Vec::new())),
+            media_settings: Arc::new(Mutex::new(MediaSettings::default())),
             reserved_names: Arc::new(Mutex::new(Vec::new())),
             sse_sessions: Arc::new(DashMap::new()),
             desktop: crate::desktop::DesktopState::new(crate::desktop::DesktopHooks::noop()),

@@ -25,6 +25,8 @@ fn global_agent_config_path(agent: &str) -> Result<PathBuf, String> {
     let relative = match agent {
         "codex" => ".codex/config.toml",
         "droid" => ".factory/mcp.json",
+        // Antigravity CLI: the file `agy mcp add` writes.
+        "agy" => ".gemini/config/mcp_config.json",
         other => return Err(format!("No global MCP config path is known for '{other}'")),
     };
     dirs::home_dir()
@@ -300,6 +302,18 @@ pub async fn mcp_set_assistant_names(
         .filter(|n| !n.is_empty())
         .collect();
     *handle.get()?.assistant_names.lock().await = cleaned;
+    Ok(())
+}
+
+/// Publish Settings > Media generation to the MCP server, so an agent's
+/// `generate_image` / `generate_video` call uses the provider and models the
+/// user picked. Pushed on startup and on every change.
+#[tauri::command]
+pub async fn mcp_set_media_settings(
+    handle: State<'_, McpServer>,
+    settings: crate::mcp::MediaSettings,
+) -> Result<(), String> {
+    *handle.get()?.media_settings.lock().await = settings;
     Ok(())
 }
 

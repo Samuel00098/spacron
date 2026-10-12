@@ -190,6 +190,60 @@ export function opencodeEntry(server: McpServer): Record<string, unknown> {
   return entry;
 }
 
+/** `command`/`args`/`env` with no `type` — the local entry every dialect below shares. */
+function stdioEntry(server: McpServer): Record<string, unknown> {
+  const entry: Record<string, unknown> = { command: server.command?.trim(), args: argList(server) };
+  const env = cleanMap(server.env);
+  if (env) entry.env = env;
+  return entry;
+}
+
+/** A remote entry: `{ [urlKey]: url, headers? }` plus any fixed extras. */
+function remoteEntry(server: McpServer, urlKey: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const entry: Record<string, unknown> = { [urlKey]: server.url?.trim(), ...extra };
+  const headers = cleanMap(server.headers);
+  if (headers) entry.headers = headers;
+  return entry;
+}
+
+/**
+ * Kiro CLI (`.kiro/settings/mcp.json`) and Amp (`.amp/settings.json`): a bare
+ * `url` for remote, no transport field. Both from the vendors' MCP docs,
+ * fetched 2026-10-12.
+ */
+export function untypedEntry(server: McpServer): Record<string, unknown> {
+  return server.transport === 'stdio' ? stdioEntry(server) : remoteEntry(server, 'url');
+}
+
+/**
+ * Qwen Code (`.qwen/settings.json`). A Gemini CLI fork that kept the older
+ * keys: streamable HTTP is `httpUrl`, SSE is `url`. From its MCP docs,
+ * fetched 2026-10-12.
+ */
+export function qwenEntry(server: McpServer): Record<string, unknown> {
+  if (server.transport === 'stdio') return stdioEntry(server);
+  return remoteEntry(server, server.transport === 'http' ? 'httpUrl' : 'url');
+}
+
+/**
+ * Devin CLI (`.devin/config.local.json`): names the transport under
+ * `transport`, not `type`. Shape is what `devin mcp add -s local` wrote,
+ * verified 2026-10-12.
+ */
+export function devinEntry(server: McpServer): Record<string, unknown> {
+  if (server.transport === 'stdio') return { ...stdioEntry(server), transport: 'stdio' };
+  return remoteEntry(server, 'url', { transport: server.transport });
+}
+
+/**
+ * Antigravity CLI (`~/.gemini/config/mcp_config.json`): the URL key is
+ * `serverUrl`. Shape is what `agy mcp add` wrote, verified 2026-10-12.
+ */
+export function antigravityEntry(server: McpServer): Record<string, unknown> {
+  if (server.transport === 'stdio') return stdioEntry(server);
+  return remoteEntry(server, 'serverUrl', { disabled: false });
+}
+
 /** Escape a string for a double-quoted TOML value. */
 function tomlString(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;

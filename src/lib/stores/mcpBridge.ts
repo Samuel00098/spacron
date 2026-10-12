@@ -37,18 +37,22 @@ import {
 import { getAgentRoster } from './runs';
 import { customAgents, removedPresetAgents } from './customAgents';
 import { usageState } from './usage';
-import { agentBrowserTools, mcpServers } from './settings';
+import { agentBrowserTools, mcpServers, mediaGeneration } from './settings';
 import { setBrowserToolsAvailable } from '$lib/services/orchestrator/brain-tools';
 import { syncChatMcpServers } from '$lib/services/orchestrator/mcp-client';
 import {
+  antigravityEntry,
   codexTable,
+  devinEntry,
   droidEntry,
   enabledServers,
   headersLostOnCodex,
   isSpacronKey,
   mergeMap,
   opencodeEntry,
+  qwenEntry,
   standardEntry,
+  untypedEntry,
   type McpServer,
 } from '$lib/services/mcp-servers';
 // ---------------------------------------------------------------------------
@@ -486,6 +490,29 @@ export function initMcpBridge(): void {
   // The chat uses the same MCP servers the agents get (Settings > MCP).
   mcpServers.subscribe((servers) => syncChatMcpServers(servers ?? []));
 
+  // ...and the agents get them without reopening the project. The configs used
+  // to be rewritten only on project open and agent launch, so a server added in
+  // Settings stayed invisible to every CLI until then. Skips each store's
+  // initial fire: project open already writes everything once.
+  let seenServers = false;
+  mcpServers.subscribe(() => {
+    if (seenServers) scheduleMcpConfigResync();
+    seenServers = true;
+  });
+  let seenBrowser = false;
+  agentBrowserTools.subscribe(() => {
+    if (seenBrowser) scheduleMcpConfigResync();
+    seenBrowser = true;
+  });
+
+  // `generate_image` / `generate_video` run in Rust for agents, but the
+  // provider choice and model map live in Settings here.
+  mediaGeneration.subscribe((settings) => {
+    invoke('mcp_set_media_settings', { settings }).catch((e) =>
+      console.warn('[mcp] Could not publish media settings to the MCP server:', e),
+    );
+  });
+
   // An agent reporting on its own turn. This is the deterministic counterpart
   // to the screen-scraping in `agent-turn-watch.ts`: instead of matching an
   // English phrase against the PTY tail and hoping, the agent says what it is
@@ -788,6 +815,13 @@ async function playwrightOpencodeEntry(projectRoot: string | null | undefined) {
  */
 export const BROWSER_STARTUP_TIMEOUT_SEC = 120;
 
+/**
+ * Tool-call budget for `spacron-mcp` where a CLI's default is too short.
+ * `generate_video` polls the provider for minutes; Codex's default is 60s.
+ * Mirrors `MEDIA_TIMEOUT` in `src-tauri/src/mcp/mod.rs`, with headroom.
+ */
+export const MEDIA_TOOL_TIMEOUT_SEC = 900;
+
 /** The same budget in milliseconds, for CLIs whose knob is an env var. */
 export const BROWSER_STARTUP_TIMEOUT_MS = BROWSER_STARTUP_TIMEOUT_SEC * 1000;
 
@@ -865,6 +899,12 @@ function sectionKeys(config: Record<string, unknown>, section: string): string[]
  * | opencode    | `opencode.json`             | remote (HTTP)    |
  * | droid       | `~/.factory/mcp.json`       | streamable HTTP  |
  * | Cursor      | `.cursor/mcp.json`          | streamable HTTP  |
+ * | Qwen Code   | `.qwen/settings.json`       | streamable HTTP  |
+ * | Kiro CLI    | `.kiro/settings/mcp.json`   | streamable HTTP  |
+ * | Amp         | `.amp/settings.json`        | streamable HTTP  |
+ * | Devin CLI   | `.devin/config.local.json`  | streamable HTTP  |
+ * | Antigravity | `~/.gemini/config/mcp_config.json` | streamable HTTP |
+ * | Copilot CLI, Qoder CLI | `.mcp.json` (read as a workspace file) | SSE |
  *
  * Codex and droid have no project-scoped MCP config, so their entries are
  * global. That rests on the server's port and token being stable across
@@ -909,6 +949,26 @@ export async function injectMcpConfigForAgent(
     case 'agent':
       await injectCursorConfig(projectRoot, httpUrl);
       break;
+    case 'qwen':
+      await injectQwenConfig(projectRoot, httpUrl);
+      break;
+    case 'kiro-cli':
+      await injectKiroConfig(projectRoot, httpUrl);
+      break;
+    case 'amp':
+      await injectAmpConfig(projectRoot, httpUrl);
+      break;
+    case 'devin':
+      await injectDevinConfig(projectRoot, httpUrl);
+      break;
+    case 'agy':
+      await injectAntigravityConfig(httpUrl);
+      break;
+    case 'copilot':
+    case 'qodercli':
+      // Both read the project `.mcp.json` written above as a workspace config
+      // (`copilot mcp list` / `qodercli mcp list` show it, checked 2026-10-12).
+      break;
     case 'dsh':
       // DeepSeek Harness gets the server from a `--patch` file on its command
       // line, with the URL in its launch env — nothing to write here. See
@@ -927,7 +987,7 @@ export async function injectMcpConfigForAgent(
       console.warn(
         `[mcp] No MCP config surface known for "${agentExecutable(preset) || preset}". ` +
           `it launches without Spacron tools (no list_agents / send_to_agent / delegate_task). ` +
-          `Supported: claude, codex, gemini, opencode, droid, cursor.`,
+          `Supported: claude, codex, gemini, opencode, droid, cursor, qwen, kiro-cli, amp, devin, agy, copilot, qodercli.`,
       );
       break;
   }
@@ -1026,6 +1086,7 @@ export async function mcpLaunchFlags(
  * without this those agents start with no cross-agent tools. Best-effort.
  */
 export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
+  lastConfiguredRoot = projectRoot;
   try {
     const sseUrl = await getMcpUrl();
     const httpUrl = await getMcpHttpUrl();
@@ -1040,12 +1101,33 @@ export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
       injectGeminiConfig(projectRoot, httpUrl),
       injectOpencodeConfig(projectRoot, httpUrl),
       injectCursorConfig(projectRoot, httpUrl),
+      injectQwenConfig(projectRoot, httpUrl),
+      injectKiroConfig(projectRoot, httpUrl),
+      injectAmpConfig(projectRoot, httpUrl),
+      injectDevinConfig(projectRoot, httpUrl),
       injectCodexConfig(httpUrl),
       injectDroidConfig(httpUrl),
+      injectAntigravityConfig(httpUrl),
     ]);
   } catch (e) {
     console.warn('[mcp] Could not write agent MCP configs on project open:', e);
   }
+}
+
+/** The project `ensureMcpConfigs` last wrote, for a resync after a settings change. */
+let lastConfiguredRoot: string | null = null;
+let resyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Rewrite every CLI's config for the open project, debounced so typing in the
+ * MCP editor does not rewrite a dozen files per keystroke-save.
+ */
+function scheduleMcpConfigResync(): void {
+  if (resyncTimer) clearTimeout(resyncTimer);
+  resyncTimer = setTimeout(() => {
+    resyncTimer = null;
+    if (lastConfiguredRoot) void ensureMcpConfigs(lastConfiguredRoot);
+  }, 400);
 }
 
 /**
@@ -1085,6 +1167,10 @@ const TOKEN_BEARING_PATHS = [
   '.gemini/settings.json',
   '.cursor/mcp.json',
   'opencode.json',
+  '.qwen/settings.json',
+  '.kiro/settings/mcp.json',
+  '.amp/settings.json',
+  '.devin/config.local.json',
 ];
 
 /**
@@ -1345,6 +1431,114 @@ async function injectOpencodeConfig(
   );
 }
 
+/** Qwen Code — project `.qwen/settings.json`. See `qwenEntry` for its keys. */
+async function injectQwenConfig(projectRoot: string | undefined, httpUrl: string): Promise<void> {
+  if (!projectRoot) return;
+  const browser = wantsBrowserTools() ? await playwrightStdioEntry(projectRoot) : null;
+  await mergeJsonMcpConfig(
+    `${projectRoot}/.qwen/settings.json`,
+    'mcpServers',
+    (keys) => ({
+      'spacron-mcp': { httpUrl },
+      [BROWSER_SERVER_KEY]: browser,
+      ...mergeMap(userServers(), keys, qwenEntry),
+    }),
+    'Qwen Code',
+  );
+}
+
+/** Kiro CLI — project `.kiro/settings/mcp.json`, merged over the user file. */
+async function injectKiroConfig(projectRoot: string | undefined, httpUrl: string): Promise<void> {
+  if (!projectRoot) return;
+  const browser = wantsBrowserTools() ? await playwrightStdioEntry(projectRoot) : null;
+  await mergeJsonMcpConfig(
+    `${projectRoot}/.kiro/settings/mcp.json`,
+    'mcpServers',
+    (keys) => ({
+      'spacron-mcp': { url: httpUrl },
+      [BROWSER_SERVER_KEY]: browser,
+      ...mergeMap(userServers(), keys, untypedEntry),
+    }),
+    'Kiro CLI',
+  );
+}
+
+/**
+ * Amp — project `.amp/settings.json`. The section key really is the dotted
+ * string `amp.mcpServers`. Amp asks the user once before running servers from
+ * a workspace file; that approval is Amp's, not something to bypass.
+ */
+async function injectAmpConfig(projectRoot: string | undefined, httpUrl: string): Promise<void> {
+  if (!projectRoot) return;
+  const browser = wantsBrowserTools() ? await playwrightStdioEntry(projectRoot) : null;
+  await mergeJsonMcpConfig(
+    `${projectRoot}/.amp/settings.json`,
+    'amp.mcpServers',
+    (keys) => ({
+      'spacron-mcp': { url: httpUrl },
+      [BROWSER_SERVER_KEY]: browser,
+      ...mergeMap(userServers(), keys, untypedEntry),
+    }),
+    'Amp',
+  );
+}
+
+/**
+ * Devin CLI — project `.devin/config.local.json`, its "not committed" scope.
+ * `.devin/config.json` is the committed one, the wrong home for a file that
+ * carries the MCP token.
+ */
+async function injectDevinConfig(projectRoot: string | undefined, httpUrl: string): Promise<void> {
+  if (!projectRoot) return;
+  const browser = wantsBrowserTools() ? await playwrightStdioEntry(projectRoot) : null;
+  await mergeJsonMcpConfig(
+    `${projectRoot}/.devin/config.local.json`,
+    'mcpServers',
+    (keys) => ({
+      'spacron-mcp': { url: httpUrl, transport: 'http' },
+      [BROWSER_SERVER_KEY]: browser ? { ...browser, transport: 'stdio' } : null,
+      ...mergeMap(userServers(), keys, devinEntry),
+    }),
+    'Devin CLI',
+  );
+}
+
+/**
+ * Antigravity CLI (`agy`) — global `~/.gemini/config/mcp_config.json`, the
+ * file `agy mcp add` writes; it has no project scope. Same global-file caveats
+ * as droid.
+ */
+async function injectAntigravityConfig(httpUrl: string): Promise<void> {
+  try {
+    await warnIfGlobalConfigPortIsEphemeral('agy');
+    const existing = await invoke<string>('mcp_read_global_agent_config', { agent: 'agy' });
+    let config: Record<string, unknown> = {};
+    try {
+      config = existing.trim() ? JSON.parse(existing) : {};
+    } catch {
+      // Unlike droid, never start fresh: Google's other tools read this file
+      // too, and replacing it would drop their servers.
+      console.warn('[mcp] ~/.gemini/config/mcp_config.json is not valid JSON; leaving it alone.');
+      return;
+    }
+    const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
+    servers['spacron-mcp'] = { serverUrl: httpUrl, disabled: false };
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(null);
+    else delete servers[BROWSER_SERVER_KEY];
+    for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), antigravityEntry))) {
+      if (entry === null) delete servers[key];
+      else servers[key] = entry;
+    }
+    config['mcpServers'] = servers;
+    await invoke('mcp_write_global_agent_config', {
+      agent: 'agy',
+      content: JSON.stringify(config, null, 2) + '\n',
+    });
+  } catch (e) {
+    console.warn('[mcp] Failed to write Antigravity config:', e);
+  }
+}
+
 /**
  * droid (Factory) — global `~/.factory/mcp.json`. droid has no project-scoped
  * MCP config, so this is the only place it will look.
@@ -1497,7 +1691,11 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
       return key !== null && isSpacronKey(key);
     });
 
-    content = `${content.trimEnd()}\n\n[mcp_servers.spacron-mcp]\nurl = "${httpUrl}"\n`;
+    // `tool_timeout_sec`: Codex gives a tool call 60s by default, and
+    // `generate_video` routinely takes several minutes.
+    content =
+      `${content.trimEnd()}\n\n[mcp_servers.spacron-mcp]\nurl = "${httpUrl}"\n` +
+      `tool_timeout_sec = ${MEDIA_TOOL_TIMEOUT_SEC}\n`;
 
     if (wantsBrowserTools()) {
       // TOML wants the argv split into `command` + `args`, unlike opencode's

@@ -24,6 +24,13 @@ ChatGPT-path facts measured live on 2026-09-22 that the code cannot tell you:
   back to decoding.
 - Reference images go in as `{"type":"localImage","path":…}` turn input.
 
+Agents reach the same path through the Spacron MCP server's `generate_image`
+/ `generate_video` (`mcp/mod.rs` → `images::generate_and_save`). The provider
+choice lives in the frontend, so `mcpBridge` pushes it with
+`mcp_set_media_settings`; until that push the server runs "auto". Codex gets
+`tool_timeout_sec` on `spacron-mcp` because its 60s default kills video calls.
+Not run end-to-end from a real agent yet (2026-10-12).
+
 Traps:
 
 - The asset-protocol scope for the generated and pasted folders is granted at

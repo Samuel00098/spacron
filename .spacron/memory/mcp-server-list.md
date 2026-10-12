@@ -1,7 +1,13 @@
 # User MCP servers: the namespace rule (2026-09-20)
 
-Settings > MCP lets the user add MCP servers; they are written into all six
-agent CLI configs. Since 2026-09-24 the chat is also an MCP *client* for them
+Settings > MCP lets the user add MCP servers; they are written into every
+agent CLI config Spacron knows (the table in `injectMcpConfigForAgent`), and
+rewritten on any change to the list (`scheduleMcpConfigResync`), not only on
+project open. Coverage widened 2026-10-12 to Qwen, Kiro, Amp, Devin and
+Antigravity; Copilot and Qoder read the project `.mcp.json`. Devin and agy
+shapes were taken from what their own `mcp add` wrote; Qwen/Kiro/Amp from
+vendor docs only (not installed here) — suspect those first. Crush (moved to
+a non-JSON `crushrc`) and Kimi (no documented path) are deliberately absent. Since 2026-09-24 the chat is also an MCP *client* for them
 (`commands/mcp_client.rs`, `services/orchestrator/mcp-client.ts`), through two
 generic brain tools, `mcp_list_tools` and `mcp_call_tool`, rather than one per
 server tool (the brain's tool set is static). The rules that make that safe,

@@ -13,7 +13,7 @@ describe('agentCanReport', () => {
   it('is false for the CLIs that launch with no Spacron tools', () => {
     // These are briefed to call `report_status` but no MCP config is ever
     // written for them, so the tool does not exist in their session.
-    for (const cli of ['aider', 'goose', 'qwen', 'grok', 'cline', 'amp']) {
+    for (const cli of ['aider', 'goose', 'crush', 'grok', 'cline', 'kimi']) {
       expect(agentCanReport(cli)).toBe(false);
     }
     expect(agentCanReport('')).toBe(false);

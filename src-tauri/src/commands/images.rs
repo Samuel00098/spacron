@@ -113,15 +113,15 @@ fn cancellations() -> &'static Mutex<HashMap<String, watch::Sender<bool>>> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneratedImageFile {
-    path: String,
-    name: String,
-    size: u64,
-    revised_prompt: Option<String>,
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub revised_prompt: Option<String>,
     /// The provider that made it.
-    provider: String,
+    pub provider: String,
     /// One line per provider that was tried first and could not do it, so the
     /// chat can say why a fallback was used (a spent ChatGPT limit, say).
-    skipped: Vec<String>,
+    pub skipped: Vec<String>,
 }
 
 /// Where a generation is saved: `<project>/generations` when a project is
@@ -233,13 +233,35 @@ pub async fn generate_media(
     reference_images: Vec<String>,
     project_root: Option<String>,
 ) -> Result<GeneratedImageFile, String> {
-    let kind = Kind::parse(&kind)?;
+    let made = generate_and_save(
+        &state.config_dir, request_id, &kind, provider, models.unwrap_or_default(), prompt, reference_images, project_root.as_deref(),
+    )
+    .await?;
+    if let Some(dir) = Path::new(&made.path).parent() {
+        let _ = app.asset_protocol_scope().allow_directory(dir, false);
+    }
+    Ok(made)
+}
+
+/// The body of `generate_media` without the webview: also what agents reach
+/// through the MCP server's `generate_image` / `generate_video` tools.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_and_save(
+    config_dir: &Path,
+    request_id: String,
+    kind: &str,
+    provider: Option<String>,
+    models: HashMap<String, String>,
+    prompt: String,
+    reference_images: Vec<String>,
+    project_root: Option<&str>,
+) -> Result<GeneratedImageFile, String> {
+    let kind = Kind::parse(kind)?;
     let noun = if kind == Kind::Video { "video" } else { "image" };
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() { return Err("a prompt is required".into()); }
     if reference_images.len() > MAX_REFERENCES { return Err(format!("at most {MAX_REFERENCES} reference images")); }
-    let config_dir = state.config_dir.clone();
-    let roots = allowed_roots(&config_dir, project_root.as_deref());
+    let roots = allowed_roots(config_dir, project_root);
     let mut references = Vec::new();
     for raw in &reference_images {
         let path = confine_image(raw, &roots)?;
@@ -248,7 +270,6 @@ pub async fn generate_media(
         }
         references.push(path);
     }
-    let models = models.unwrap_or_default();
     let preferred = provider.as_deref().filter(|p| !p.is_empty() && *p != "auto");
 
     let work = async {
@@ -284,9 +305,8 @@ pub async fn generate_media(
     cancellations().lock().unwrap_or_else(|e| e.into_inner()).remove(&request_id);
     let (provider, made, skipped) = result?;
 
-    let dir = output_dir(&config_dir, project_root.as_deref());
+    let dir = output_dir(config_dir, project_root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    let _ = app.asset_protocol_scope().allow_directory(&dir, false);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let name = format!("{stamp}-{}.{}", slug(&prompt), made.extension);
     let dest = dir.join(&name);
