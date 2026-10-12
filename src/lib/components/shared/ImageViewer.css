@@ -277,19 +277,17 @@
   font-size: 12px;
 }
 
-/* The target picker reads as plain text next to "Send to": no box, no ring. */
-.image-viewer-edit-target .dd-trigger,
-.image-viewer-edit-target .dd-trigger:hover:not(:disabled),
-.image-viewer-edit-target .dd-trigger.open,
-.image-viewer-edit-target .dd-trigger:focus-visible {
+/* The target picker reads as plain text next to "Send to": no box, no ring.
+   `!important` because global.css rings and bevels buttons with it. */
+.image-viewer-edit-target .dd-trigger {
   width: auto;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  outline: none;
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 .image-viewer-edit-target .dd-trigger:hover:not(:disabled),
 .image-viewer-edit-target .dd-trigger.open {
-  background: var(--bg-hover);
+  background: var(--bg-hover) !important;
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
-import { sessions, sendPromptToSession, getAgentDisplayName } from '$lib/stores/terminal';
+import { sessions, devSessions, allProjectSessions, sendPromptToSession, getAgentDisplayName, isAgentSession } from '$lib/stores/terminal';
 import { mediaGeneration } from '$lib/stores/settings';
 import { editImageInThread } from '$lib/stores/orchestrator';
 import { getActiveThreadId } from '$lib/stores/chatThreads';
@@ -65,7 +65,11 @@ function agentEditRequest(image: ViewerImage, request: string, markPath?: string
  */
 export default function LibraryPanel() {
   const project = useStore(activeProject);
-  const allSessions = useStore(sessions);
+  const shellSessions = useStore(sessions);
+  // Agents started in the Development layout live in the dev terminal's list,
+  // and the cross-project list covers panes the active list has not synced yet.
+  const devShellSessions = useStore(devSessions);
+  const everySession = useStore(allProjectSessions);
   const mediaSettings = useStore(mediaGeneration);
   const [entries, setEntries] = useState<GenerationEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,8 +102,11 @@ export default function LibraryPanel() {
   );
 
   const agents = useMemo(
-    () => allSessions.filter((s) => s.isRunning && s.agentPreset && !s.hidden && (!project || s.projectId === project.id)),
-    [allSessions, project],
+    () => {
+      const byId = new Map([...everySession, ...shellSessions, ...devShellSessions].map((s) => [s.id, s]));
+      return [...byId.values()].filter((s) => s.isRunning && isAgentSession(s) && !s.hidden && (!project || s.projectId === project.id));
+    },
+    [everySession, shellSessions, devShellSessions, project],
   );
 
   // Kept short on purpose: "Image API" already walks every keyed provider in
@@ -178,7 +185,6 @@ export default function LibraryPanel() {
     <div className="library-panel">
       <header className="library-head">
         <span className="library-count">{entries ? `${entries.length} image${entries.length === 1 ? '' : 's'}` : 'Loading…'}</span>
-        <span className="library-folder" title={`${root}/generations`}>generations/</span>
         <button type="button" className="library-button" onClick={() => void refresh()}>Refresh</button>
       </header>
       {error && <p className="library-error">{error}</p>}

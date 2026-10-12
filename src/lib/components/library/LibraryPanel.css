@@ -21,11 +21,6 @@
   font-weight: 600;
 }
 
-.library-folder {
-  color: var(--text-muted);
-  font-family: var(--font-mono, monospace);
-}
-
 .library-button {
   height: 26px;
   padding: 0 10px;
