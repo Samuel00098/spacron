@@ -14,45 +14,22 @@ import {
 import { serverKey, validateServer } from '$lib/services/mcp-servers';
 import './McpCatalog.css';
 
-/** Relative luminance of a `#rrggbb` colour, 0 (black) to 1 (white). */
-function luminance(hex: string): number {
-  const n = parseInt(hex.replace('#', ''), 16);
-  const channel = (v: number) => {
-    const c = v / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * channel((n >> 16) & 255) + 0.7152 * channel((n >> 8) & 255) + 0.0722 * channel(n & 255);
-}
-
 /**
- * The brand tile. A full-colour logo sits on a neutral tile (its dark-theme
- * variant when it has one); a one-colour Simple Icon is drawn on its brand
- * colour, with a dark glyph when that colour is light.
+ * The vendor's own icon (from its website) on a neutral tile, or a lettered
+ * tile when there is none.
  */
 function CatalogIcon({ entry }: { entry: McpCatalogEntry }) {
-  if (entry.logo) {
+  if (entry.icon) {
     return (
-      <span className="mcp-catalog-icon is-logo" aria-hidden="true">
-        <img className="mcp-logo-light" src={`/mcp-icons/color/${entry.id}.svg`} alt="" draggable={false} />
-        {entry.logo === 'color-dark' && (
-          <img className="mcp-logo-dark" src={`/mcp-icons/color/${entry.id}-dark.svg`} alt="" draggable={false} />
-        )}
+      <span className="mcp-catalog-icon is-image" aria-hidden="true">
+        <img src={`/mcp-icons/${entry.icon}`} alt="" draggable={false} />
       </span>
     );
   }
-  const glyph = luminance(entry.color) > 0.55 ? '#111114' : '#ffffff';
-  const style: CSSProperties = { backgroundColor: entry.color, color: glyph };
-  if (!entry.icon) {
-    return (
-      <span className="mcp-catalog-icon" style={style} aria-hidden="true">
-        <span className="mcp-catalog-letter">{entry.name.charAt(0).toUpperCase()}</span>
-      </span>
-    );
-  }
-  const mask = `url("/mcp-icons/${entry.icon}.svg")`;
+  const style: CSSProperties = { backgroundColor: entry.color ?? 'var(--accent)', color: '#ffffff' };
   return (
     <span className="mcp-catalog-icon" style={style} aria-hidden="true">
-      <span className="mcp-catalog-glyph" style={{ backgroundColor: glyph, WebkitMaskImage: mask, maskImage: mask }} />
+      <span className="mcp-catalog-letter">{entry.name.charAt(0).toUpperCase()}</span>
     </span>
   );
 }

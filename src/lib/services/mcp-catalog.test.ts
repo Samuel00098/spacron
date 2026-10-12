@@ -30,14 +30,12 @@ describe('MCP catalog', () => {
     }
   });
 
-  it('ships an icon file for every entry that names one', () => {
+  it('ships the website icon every entry names', () => {
     const dir = resolve(__dirname, '../../../static/mcp-icons');
-    for (const entry of MCP_CATALOG.filter((e) => e.icon)) {
-      expect(existsSync(resolve(dir, `${entry.icon}.svg`)), entry.id).toBe(true);
-    }
-    for (const entry of MCP_CATALOG.filter((e) => e.logo)) {
-      expect(existsSync(resolve(dir, 'color', `${entry.id}.svg`)), entry.id).toBe(true);
-      if (entry.logo === 'color-dark') expect(existsSync(resolve(dir, 'color', `${entry.id}-dark.svg`)), entry.id).toBe(true);
+    for (const entry of MCP_CATALOG) {
+      expect(entry.icon, entry.id).toBeDefined();
+      expect(existsSync(resolve(dir, entry.icon!)), entry.id).toBe(true);
+      expect(entry.homepage, entry.id).toMatch(/^https:\/\//);
     }
   });
 
