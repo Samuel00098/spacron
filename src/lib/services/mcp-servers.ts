@@ -43,6 +43,8 @@ export interface McpServer {
   enabled: boolean;
   /** Set when the row was installed from the catalog (`services/mcp-catalog.ts`). */
   catalogId?: string;
+  /** Set when the row came from a plugin (`services/plugins.ts`). */
+  pluginId?: string;
   /**
    * Signed in through Spacron (`commands/mcp_oauth.rs`). Agents and the chat
    * then reach it through Spacron's proxy, which adds the token — see

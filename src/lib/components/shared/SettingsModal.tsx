@@ -125,6 +125,7 @@ import { computerUseSupported } from '$lib/stores/computerUse';
 import ComputerUseDetails from './ComputerUseDetails';
 import BrowserToolsDetails from './BrowserToolsDetails';
 import { McpCatalog } from './McpCatalog';
+import { ServerIcon } from './McpPlugins';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { keepAwakeState } from '$lib/services/keep-awake';
@@ -1096,7 +1097,15 @@ function McpSettingsPane() {
       </Section>
 
       <Section title="Catalog">
-        <McpCatalog onOpenUrl={openExternalUrl} />
+        <McpCatalog
+          onOpenUrl={openExternalUrl}
+          onAddCustomServer={() => {
+            startAdd();
+            requestAnimationFrame(() =>
+              document.querySelector('[data-settings-section="your-servers"]')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+            );
+          }}
+        />
       </Section>
 
       <Section title="Your servers">
@@ -1115,10 +1124,11 @@ function McpSettingsPane() {
               return (
                 <div className="agent-row" key={server.id}>
                   <div className="agent-meta">
-                    <div className="agent-name-row">
+                    <div className="agent-name-row mcp-server-name-row">
+                      <ServerIcon server={server} />
                       <span className="agent-name">{server.name || 'Unnamed server'}</span>
-                      <span className="shell-hint" style={{ marginLeft: '8px' }}>
-                        {server.transport === 'stdio' ? 'local' : server.transport.toUpperCase()}
+                      <span className="mcp-catalog-badge">
+                        {server.transport === 'stdio' ? 'Local' : server.transport.toUpperCase()}
                       </span>
                     </div>
                     <small className="shell-hint">

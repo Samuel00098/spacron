@@ -12,6 +12,17 @@ import {
   type McpCatalogEntry,
 } from '$lib/services/mcp-catalog';
 import { serverKey, validateServer } from '$lib/services/mcp-servers';
+import {
+  AddMarketplacePanel,
+  AddMenu,
+  CreatePluginPanel,
+  InstallReview,
+  MarketplacesTab,
+  YourPluginsTab,
+  pickPluginSource,
+  type AddAction,
+} from './McpPlugins';
+import type { PluginOrigin, PluginSummary } from '$lib/services/plugins';
 import './McpCatalog.css';
 
 /**
@@ -76,7 +87,58 @@ type Pending = { id: string; kind: 'token' } | { id: string; kind: 'signing-in' 
  * user's server list, so it reaches every agent CLI and the chat through the
  * existing writers — signed-in ones through Spacron's proxy.
  */
-export function McpCatalog({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
+type Tab = 'catalog' | 'marketplaces' | 'yours';
+type Sheet =
+  | { kind: 'review'; summary: PluginSummary; origin: PluginOrigin }
+  | { kind: 'create' }
+  | { kind: 'marketplace' }
+  | null;
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'catalog', label: 'Catalog' },
+  { id: 'marketplaces', label: 'Marketplaces' },
+  { id: 'yours', label: 'Your plugins' },
+];
+
+export function McpCatalog({
+  onOpenUrl,
+  onAddCustomServer,
+}: {
+  onOpenUrl: (url: string) => void;
+  onAddCustomServer: () => void;
+}) {
+  const [tab, setTab] = useState<Tab>('catalog');
+  const [sheet, setSheet] = useState<Sheet>(null);
+  const [notice, setNotice] = useState('');
+  const [market, setMarket] = useState<string | null>(null);
+
+  const review = (summary: PluginSummary, origin: PluginOrigin) => {
+    setNotice('');
+    setSheet({ kind: 'review', summary, origin });
+  };
+
+  const onAddAction = async (action: AddAction) => {
+    setNotice('');
+    if (action === 'custom') { setSheet(null); onAddCustomServer(); return; }
+    if (action === 'create') { setSheet({ kind: 'create' }); return; }
+    if (action === 'marketplace') { setSheet({ kind: 'marketplace' }); return; }
+    try {
+      const picked = await pickPluginSource('archive');
+      if (picked) review(picked.summary, picked.origin);
+    } catch (e) {
+      setNotice(String(e instanceof Error ? e.message : e));
+    }
+  };
+
+  const uploadFolder = async () => {
+    try {
+      const picked = await pickPluginSource('folder');
+      if (picked) review(picked.summary, picked.origin);
+    } catch (e) {
+      setNotice(String(e instanceof Error ? e.message : e));
+    }
+  };
+
   const servers = useStore(mcpServers);
   const [query, setQuery] = useState('');
   const [pending, setPending] = useState<Pending | null>(null);
@@ -216,20 +278,72 @@ export function McpCatalog({ onOpenUrl }: { onOpenUrl: (url: string) => void }) 
     <div className="mcp-catalog">
       <div className="mcp-catalog-head">
         <p className="mcp-catalog-intro">
-          Add a ready-made server to every agent and the chat in one click. Servers marked{' '}
-          <strong>Sign-in</strong> open your browser so you can sign in first.
+          Give every agent and the chat new tools in one click. Servers marked{' '}
+          <strong>Sign-in</strong> open your browser so you can sign in first; plugins bundle
+          servers with skills.
         </p>
         <label className="mcp-catalog-search">
           <SearchIcon />
           <input
             type="search"
             value={query}
-            placeholder="Search servers"
-            aria-label="Search the MCP catalog"
+            placeholder={tab === 'catalog' ? 'Search servers' : 'Search plugins'}
+            aria-label="Search"
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
+        <AddMenu onPick={(action) => void onAddAction(action)} />
       </div>
+
+      <div className="mcp-tabs" role="tablist" aria-label="Catalog sections">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`mcp-pill${tab === t.id ? ' is-active' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {notice && <p className="mcp-notice">{notice}</p>}
+      {sheet?.kind === 'review' && (
+        <InstallReview
+          key={sheet.summary.path}
+          summary={sheet.summary}
+          origin={sheet.origin}
+          onCancel={() => setSheet(null)}
+          onDone={(message) => { setSheet(null); setNotice(message); setTab('yours'); }}
+        />
+      )}
+      {sheet?.kind === 'create' && (
+        <CreatePluginPanel
+          onCancel={() => setSheet(null)}
+          onDone={(message) => { setSheet(null); setNotice(message); setTab('yours'); }}
+        />
+      )}
+      {sheet?.kind === 'marketplace' && (
+        <AddMarketplacePanel
+          onCancel={() => setSheet(null)}
+          onDone={(m) => { setSheet(null); setMarket(m.id); setTab('marketplaces'); setNotice(`Added ${m.name}.`); }}
+        />
+      )}
+
+      {tab === 'marketplaces' && (
+        <MarketplacesTab query={query} selected={market} onSelect={setMarket} onReview={review} />
+      )}
+      {tab === 'yours' && (
+        <>
+          <YourPluginsTab query={query} onReview={review} onNotice={setNotice} />
+          <button className="settings-link-button mcp-folder-link" onClick={() => void uploadFolder()}>
+            Install a plugin from a folder…
+          </button>
+        </>
+      )}
+      {tab === 'catalog' && <>
 
       {MCP_CATEGORIES.map((category) => {
         const entries = visible.filter((e) => e.category === category.id);
@@ -311,6 +425,7 @@ export function McpCatalog({ onOpenUrl }: { onOpenUrl: (url: string) => void }) 
         );
       })}
       {!visible.length && <p className="mcp-catalog-empty">No servers match “{query}”.</p>}
+      </>}
     </div>
   );
 }

@@ -284,3 +284,327 @@
   font-size: 13px;
   color: var(--text-secondary);
 }
+
+/* ── Add menu ─────────────────────────────────────────────────────────── */
+
+.mcp-add {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.mcp-add-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: var(--text-primary);
+  color: var(--app-surface);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mcp-add-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mcp-add-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--surface-menu);
+  box-shadow: var(--surface-menu-shadow);
+}
+
+.mcp-add-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mcp-add-item:hover,
+.mcp-add-item:focus-visible {
+  background: var(--surface-selected);
+  outline: none;
+}
+
+/* ── Tabs and pills ───────────────────────────────────────────────────── */
+
+.mcp-tabs,
+.mcp-market-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.mcp-pill {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mcp-pill:hover {
+  color: var(--text-primary);
+}
+
+.mcp-pill.is-active {
+  background: var(--surface-selected);
+  color: var(--text-primary);
+}
+
+.mcp-notice {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  box-shadow: var(--surface-outline);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+/* ── Sheets: install review, create, add marketplace ──────────────────── */
+
+.mcp-sheet {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  box-shadow: var(--surface-outline);
+}
+
+.mcp-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mcp-sheet-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mcp-sheet-desc {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.mcp-sheet-desc code,
+.mcp-sheet-servers code {
+  font-size: 12px;
+}
+
+.mcp-sheet-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.mcp-sheet-list > li.is-muted {
+  color: var(--text-secondary);
+}
+
+.mcp-sheet-servers {
+  margin: 4px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-sheet-servers li {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mcp-sheet-server-name {
+  flex: 0 0 auto;
+  font-weight: 500;
+}
+
+.mcp-sheet-servers code {
+  overflow: hidden;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mcp-sheet-vars,
+.mcp-sheet-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.mcp-sheet-var {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.mcp-sheet-var textarea {
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+}
+
+.mcp-sheet-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.mcp-sheet-status {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ── Marketplaces and your plugins ────────────────────────────────────── */
+
+.mcp-market-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+.mcp-market-meta-actions {
+  display: flex;
+  gap: 14px;
+}
+
+.mcp-market-meta-actions .settings-link-button {
+  padding: 0;
+  font-size: 12px;
+}
+
+.mcp-market-warning {
+  margin: 6px 0 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.mcp-catalog-icon.is-letter {
+  background: var(--surface-selected);
+  color: var(--text-primary);
+}
+
+.mcp-catalog-icon.is-accent {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.mcp-creator-promo {
+  margin-top: 8px;
+  padding: 0 12px;
+  border-radius: 10px;
+  box-shadow: var(--surface-outline);
+}
+
+.mcp-plugin-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.mcp-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  border-bottom: 1px solid var(--border-subtle, transparent);
+}
+
+.mcp-folder-link {
+  margin-top: 12px;
+  padding: 0;
+  font-size: 12px;
+}
+
+/* ── Your servers rows (Settings) and responsiveness ─────────────────── */
+
+.mcp-server-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mcp-catalog-icon.is-small,
+.mcp-server-icon .mcp-catalog-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+.mcp-server-icon .mcp-catalog-letter {
+  font-size: 13px;
+}
+
+.mcp-plugin-row .mcp-catalog-text-button + .mcp-catalog-text-button {
+  margin-left: -4px;
+}
+
+.mcp-catalog-text-button,
+.mcp-add-button {
+  min-width: 72px;
+  justify-content: center;
+}
+
+@container (max-width: 760px) {
+  .mcp-catalog-head {
+    flex-wrap: wrap;
+  }
+
+  .mcp-catalog-intro {
+    flex-basis: 100%;
+  }
+
+  .mcp-catalog-search {
+    flex: 1 1 auto;
+  }
+}
+
+@container (max-width: 520px) {
+  .mcp-sheet-actions {
+    flex-wrap: wrap;
+  }
+
+  .mcp-catalog-panel-row {
+    flex-wrap: wrap;
+  }
+}

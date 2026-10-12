@@ -467,6 +467,28 @@ pub async fn mcp_oauth_sign_in(app: tauri::AppHandle, key: String, url: String, 
     sign_in_flow(&app, &key, url.trim(), &name).await
 }
 
+/// Whether a hosted MCP server wants a sign-in: it answers an unauthenticated
+/// initialize with 401. Used when installing a plugin's servers, which carry
+/// no auth hint of their own.
+#[tauri::command]
+pub async fn mcp_oauth_needs_sign_in(url: String) -> Result<bool, String> {
+    let parsed = url::Url::parse(url.trim()).map_err(|_| "that is not a valid URL".to_string())?;
+    if parsed.scheme() != "https" {
+        return Ok(false);
+    }
+    let res = http()
+        .post(parsed.as_str())
+        .header("Accept", "application/json, text/event-stream")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "Spacron", "version": env!("CARGO_PKG_VERSION") } }
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("could not reach {parsed}: {e}"))?;
+    Ok(res.status() == reqwest::StatusCode::UNAUTHORIZED)
+}
+
 #[tauri::command]
 pub fn mcp_oauth_cancel(key: String) {
     if let Some(tx) = cancellations().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {

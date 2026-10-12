@@ -1706,6 +1706,19 @@ async fn generate_media_tool(
     }
 }
 
+/// The Plugin Creator's instructions, the same file the built-in plugin ships
+/// as its skill (`services/plugin-creator-skill.md`). Served as a tool so every
+/// agent can build plugins, not only the ones that read skill folders.
+const PLUGIN_CREATOR_GUIDE: &str = include_str!("../../../src/lib/services/plugin-creator-skill.md");
+
+fn tool_plugin_creator_guide() -> serde_json::Value {
+    serde_json::json!({
+        "name": "plugin_creator_guide",
+        "description": "Get the exact instructions for creating a Spacron plugin (MCP servers and skills packaged for Spacron, Claude Code and Codex). Call this first whenever the user asks you to create, build or edit a plugin.",
+        "inputSchema": { "type": "object", "properties": {} }
+    })
+}
+
 fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
     vec![
         tool_report_status(),
@@ -1728,6 +1741,7 @@ fn all_tools(presets: &[AgentPreset]) -> Vec<serde_json::Value> {
         tool_emulator_logcat(),
         tool_generate_media("image"),
         tool_generate_media("video"),
+        tool_plugin_creator_guide(),
     ]
 }
 
@@ -2652,6 +2666,16 @@ async fn handle_tool_call(
         // ── Media generation ─────────────────────────────────────────────
         "generate_image" => generate_media_tool(id, &params, state, "image").await,
         "generate_video" => generate_media_tool(id, &params, state, "video").await,
+        "plugin_creator_guide" => {
+            let root = state.project_root.lock().await.clone();
+            let place = match root {
+                Some(root) => format!("Create it in this project at {root}/plugins/<plugin-name>/ unless the user names another place."),
+                None => "Create it in a folder the user names.".to_string(),
+            };
+            Json(JsonRpcResponse::success(id, text_content(format!("{PLUGIN_CREATOR_GUIDE}
+
+{place}"))))
+        }
 
         // ── Computer use ─────────────────────────────────────────────────
         // Grants belong to a session, so an anonymous caller is refused rather

@@ -246,7 +246,7 @@ pub async fn custom_provider_icon(id: String) -> Option<String> {
     found
 }
 
-async fn fetch_icon(host: &str) -> Option<String> {
+pub(crate) async fn fetch_icon(host: &str) -> Option<String> {
     use base64::Engine;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(6))
