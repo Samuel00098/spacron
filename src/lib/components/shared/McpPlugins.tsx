@@ -14,6 +14,8 @@ import {
   installPlugin,
   installedPlugins,
   marketplaceId,
+  PLUGIN_GROUPS,
+  pluginGroup,
   pluginMarketplaces,
   readPluginFolder,
   siteIcon,
@@ -394,6 +396,14 @@ export function MarketplacesTab({
     return data.plugins.filter((p) => !q || `${p.title} ${p.name} ${p.description} ${p.category ?? ''}`.toLowerCase().includes(q));
   }, [data, query]);
 
+  const groups = useMemo(
+    () =>
+      PLUGIN_GROUPS.map((g) => ({ ...g, plugins: plugins.filter((p) => pluginGroup(p.category) === g.id) })).filter(
+        (g) => g.plugins.length > 0,
+      ),
+    [plugins],
+  );
+
   const download = async (market: MarketplaceSource, plugin: MarketplacePlugin) => {
     setBusy(plugin.name);
     setError('');
@@ -430,8 +440,8 @@ export function MarketplacesTab({
       <div className="mcp-market-meta">
         <span className="shell-hint">{current.source}</span>
         <span className="mcp-market-meta-actions">
-          <button className="settings-link-button" onClick={() => setListing((l) => { const n = { ...l }; delete n[current.id]; return n; })}>Refresh</button>
-          {!current.builtin && <button className="settings-link-button" onClick={() => removeMarket(current)}>Remove marketplace</button>}
+          <button className="mcp-text-link" onClick={() => setListing((l) => { const n = { ...l }; delete n[current.id]; return n; })}>Refresh</button>
+          {!current.builtin && <button className="mcp-text-link" onClick={() => removeMarket(current)}>Remove marketplace</button>}
         </span>
       </div>
       <p className="mcp-market-warning">Only install plugins you trust: a plugin can run programs and reach services on your behalf.</p>
@@ -439,8 +449,14 @@ export function MarketplacesTab({
       {!data && <p className="mcp-catalog-empty">Loading {current.name}…</p>}
       {data && 'error' in data && <p className="mcp-catalog-error">{data.error}</p>}
       {data && !('error' in data) && (
-        <div className="mcp-catalog-grid">
-          {plugins.map((plugin) => {
+        <>
+          {groups.map((group) => (
+            <section className="mcp-catalog-group" key={group.id} aria-label={group.label}>
+              <h4 className="mcp-catalog-group-title">
+                {group.label} <span className="mcp-group-count">{group.plugins.length}</span>
+              </h4>
+              <div className="mcp-catalog-grid">
+                  {group.plugins.map((plugin) => {
             const isInstalled = installed.some((p) => p.origin.kind === 'marketplace' && p.origin.marketplace === current.id && p.name === plugin.name);
             return (
               <div className="mcp-catalog-item" key={plugin.name}>
@@ -449,7 +465,6 @@ export function MarketplacesTab({
                   <div className="mcp-catalog-text">
                     <div className="mcp-catalog-name">
                       <span className="mcp-catalog-title">{plugin.title}</span>
-                      {plugin.category && <span className="mcp-catalog-badge">{plugin.category}</span>}
                     </div>
                     <div className="mcp-catalog-desc" title={plugin.description}>{plugin.description}</div>
                   </div>
@@ -472,8 +487,11 @@ export function MarketplacesTab({
               </div>
             );
           })}
+              </div>
+            </section>
+          ))}
           {!plugins.length && <p className="mcp-catalog-empty">No plugins match “{query}”.</p>}
-        </div>
+        </>
       )}
     </div>
   );

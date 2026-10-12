@@ -89,7 +89,7 @@ Say how to check the result. Keep it under about 300 lines.
 5. Write the README: what it does, which variables it needs, where to get them.
 6. Check: plugin.json and .mcp.json parse as JSON; every skill has front matter
    with name and description; no secrets are written anywhere.
-7. Tell the user to install it from Spacron: Settings > MCP > Add > Upload
+7. Tell the user to install it from Spacron: Settings > MCP & plugins > Add > Upload
    plugin archive, then choose the plugin folder (or a .zip of it). To share
    it, publish the folder in a GitHub repo with
    `.claude-plugin/marketplace.json`:

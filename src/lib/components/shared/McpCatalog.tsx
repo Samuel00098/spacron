@@ -112,6 +112,14 @@ export function McpCatalog({
   const [notice, setNotice] = useState('');
   const [market, setMarket] = useState<string | null>(null);
 
+  // A confirmation is for the moment it happens, not a banner that follows
+  // the user around the tabs.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(''), 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
   const review = (summary: PluginSummary, origin: PluginOrigin) => {
     setNotice('');
     setSheet({ kind: 'review', summary, origin });
@@ -261,7 +269,7 @@ export function McpCatalog({
         </button>
         <button className="settings-secondary" onClick={() => setPending(null)}>Cancel</button>
       </div>
-      <button className="settings-link-button mcp-catalog-panel-link" onClick={() => onOpenUrl(entry.key!.url)}>
+      <button className="mcp-text-link mcp-catalog-panel-link" onClick={() => onOpenUrl(entry.key!.url)}>
         Get a token
       </button>
     </div>
@@ -302,7 +310,7 @@ export function McpCatalog({
             role="tab"
             aria-selected={tab === t.id}
             className={`mcp-pill${tab === t.id ? ' is-active' : ''}`}
-            onClick={() => setTab(t.id)}
+            onClick={() => { setTab(t.id); setNotice(''); }}
           >
             {t.label}
           </button>
@@ -338,7 +346,7 @@ export function McpCatalog({
       {tab === 'yours' && (
         <>
           <YourPluginsTab query={query} onReview={review} onNotice={setNotice} />
-          <button className="settings-link-button mcp-folder-link" onClick={() => void uploadFolder()}>
+          <button className="mcp-text-link mcp-folder-link" onClick={() => void uploadFolder()}>
             Install a plugin from a folder…
           </button>
         </>
@@ -406,14 +414,14 @@ export function McpCatalog({
                       <div className="mcp-catalog-panel">
                         <p className="mcp-catalog-error">{error}</p>
                         {entry.auth === 'oauth' && !installed && (
-                          <button className="settings-link-button mcp-catalog-panel-link" onClick={() => install(entry)}>
+                          <button className="mcp-text-link mcp-catalog-panel-link" onClick={() => install(entry)}>
                             Add without signing in (each agent signs in itself)
                           </button>
                         )}
                       </div>
                     )}
                     {installed && entry.auth === 'oauth' && signedIn[keyOf(entry)] && (
-                      <button className="settings-link-button mcp-catalog-signout" onClick={() => void signOut(entry)}>
+                      <button className="mcp-text-link mcp-catalog-signout" onClick={() => void signOut(entry)}>
                         Sign out
                       </button>
                     )}

@@ -178,7 +178,7 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering', description: 'Default shell and how terminals render.' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools', description: 'The coding CLI tools Spacron can launch.' },
   { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning', description: 'Orchestrator skills and what it learns.' },
-  { id: 'mcp', label: 'MCP', kicker: 'Tool servers', description: 'Tool servers available to your agents.' },
+  { id: 'mcp', label: 'MCP & plugins', kicker: 'Tools and plugins', description: 'Tool servers and plugins available to your agents.' },
   { id: 'stats', label: 'Usage', kicker: 'Model usage and cost', description: 'Token and cost analytics across the agents.' },
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map', description: 'Keyboard shortcuts across the app.' },
   { id: 'about', label: 'About', kicker: 'Version and reset', description: 'Version details and resetting Spacron.' },
@@ -239,7 +239,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'orchestrator-learned', tab: 'orchestrator', section: 'What it has learned', label: 'What it has learned', keywords: 'orchestrator memory profile preferences forget' },
   { id: 'coding-cli-agents', tab: 'agents', section: 'Coding CLI agents', label: 'Coding CLI agents', keywords: 'custom agent command' },
   { id: 'mcp-builtin', tab: 'mcp', section: 'Built in', label: 'Built-in servers', keywords: 'mcp spacron playwright browser tools' },
-  { id: 'mcp-catalog', tab: 'mcp', section: 'Catalog', label: 'MCP catalog', keywords: 'mcp catalog plugins marketplace install github notion linear figma supabase stripe vercel sentry' },
+  { id: 'mcp-catalog', tab: 'mcp', section: 'Plugins', label: 'Plugins', keywords: 'mcp catalog plugins marketplace install github notion linear figma supabase stripe vercel sentry' },
   { id: 'mcp-servers', tab: 'mcp', section: 'Your servers', label: 'Add an MCP server', keywords: 'mcp model context protocol remote hosted stdio integration linear notion github' },
   { id: 'usage-stats', tab: 'stats', section: 'Usage', label: 'Usage', keywords: 'model tokens spending statistics cost', target: 'section' },
   { id: 'keyboard-shortcuts', tab: 'shortcuts', section: 'Keyboard shortcuts', label: 'Keyboard shortcuts', keywords: 'hotkeys keymap', target: 'section' },
@@ -1096,7 +1096,7 @@ function McpSettingsPane() {
         </div>
       </Section>
 
-      <Section title="Catalog">
+      <Section title="Plugins">
         <McpCatalog
           onOpenUrl={openExternalUrl}
           onAddCustomServer={() => {

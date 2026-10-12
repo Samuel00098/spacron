@@ -1818,7 +1818,7 @@ async fn proxy_handler(
     let not_signed_in = |detail: String| {
         (
             StatusCode::FORBIDDEN,
-            format!("Not signed in to this MCP server ({key}). Sign in from Spacron: Settings > MCP. {detail}"),
+            format!("Not signed in to this MCP server ({key}). Sign in from Spacron: Settings > MCP & plugins. {detail}"),
         )
             .into_response()
     };

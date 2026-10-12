@@ -37,3 +37,21 @@ describe('plugin servers', () => {
     expect(marketplaceId('https://github.com/Anthropics/claude-plugins-official.git')).toBe('anthropics-claude-plugins-official');
   });
 });
+
+describe('marketplace groups', () => {
+  it('maps both marketplaces\' categories onto the catalog groups', async () => {
+    const { pluginGroup } = await import('./plugins');
+    const expected: Record<string, string> = {
+      // Claude's slugs
+      development: 'developer', database: 'databases', monitoring: 'monitoring', security: 'security',
+      deployment: 'cloud', design: 'design', productivity: 'productivity', automation: 'productivity',
+      learning: 'docs', testing: 'developer', migration: 'developer', location: 'design', math: 'docs',
+      // Codex's titles
+      'Developer Tools': 'developer', Productivity: 'productivity', Creativity: 'design', Communication: 'productivity',
+      'Education & Research': 'docs', 'Data & Analytics': 'databases', Finance: 'payments',
+      'Business & Operations': 'productivity', 'Scientific Research': 'docs', Security: 'security',
+    };
+    for (const [category, group] of Object.entries(expected)) expect(pluginGroup(category), category).toBe(group);
+    expect(pluginGroup(null)).toBe('other');
+  });
+});

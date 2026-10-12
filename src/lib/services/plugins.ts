@@ -18,6 +18,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { get, writable } from '$lib/stores/storeCompat';
 import { mcpServers } from '$lib/stores/settings';
 import { serverKey, validateServer, type McpServer } from './mcp-servers';
+import { MCP_CATEGORIES, type McpCatalogCategory } from './mcp-catalog';
 
 export interface PluginSkill {
   name: string;
@@ -307,3 +308,32 @@ export function marketplaceId(source: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
+
+/**
+ * A marketplace's own category, mapped onto the catalog's groups so plugins
+ * from Claude's and Codex's marketplaces read the same way as the catalog.
+ * Claude uses lowercase slugs ("development", "database"), Codex title case
+ * ("Developer Tools"); anything unrecognised lands in "Other".
+ */
+export function pluginGroup(category: string | null | undefined): McpCatalogCategory | 'other' {
+  const c = (category ?? '').toLowerCase();
+  const rules: [RegExp, McpCatalogCategory][] = [
+    [/secur|identity|auth|compliance/, 'security'],
+    [/deploy|cloud|infra|hosting|devops/, 'cloud'],
+    [/data|database|sql|storage/, 'databases'],
+    [/monitor|observ|analytic|logging/, 'monitoring'],
+    [/design|creativ|media|image|video|location|map/, 'design'],
+    [/sales|crm|marketing|support|customer/, 'sales'],
+    [/payment|commerce|finance|billing|shop/, 'payments'],
+    [/learn|research|doc|search|education|math|knowledge/, 'docs'],
+    [/dev|cod|test|migration|engineer|build/, 'developer'],
+    [/product|automation|communication|business|collab|office|workflow/, 'productivity'],
+  ];
+  return rules.find(([pattern]) => pattern.test(c))?.[1] ?? 'other';
+}
+
+/** The marketplace groups in display order, with "Other" last. */
+export const PLUGIN_GROUPS: { id: McpCatalogCategory | 'other'; label: string }[] = [
+  ...MCP_CATEGORIES.filter((g) => g.id !== 'popular'),
+  { id: 'other', label: 'Other' },
+];
