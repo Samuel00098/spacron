@@ -13,6 +13,18 @@
     <link rel="preload" href="/fonts/jetbrains-mono-500.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/inter-800.woff2" as="font" type="font/woff2" crossorigin />
     <title>Spacron</title>
+    <!-- Cold launch only (same marker as src/lib/utils/coldLaunch.ts): paint the
+         launch splash colour before any script loads, so the window doesn't
+         flash white first. LaunchSplash removes it once the app is revealed. -->
+    <script>
+      try {
+        if (!sessionStorage.getItem('spacron_launched')) {
+          var mode = JSON.parse(localStorage.getItem('forge_setting_appearance') || '"system"');
+          var light = mode === 'light' || (mode !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches);
+          document.documentElement.style.background = light ? '#ffffff' : '#000000';
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

@@ -67,6 +67,8 @@ import DesktopGrantHost from '$lib/components/shared/DesktopGrantHost';
 import { applyUiFontSize } from '$lib/services/ui-typography';
 import { ensureWindowUsable, isTauriRuntime } from '$lib/utils/tauri';
 import { isModalOpen } from '$lib/react/useModalFocus';
+import { isColdLaunch } from '$lib/utils/coldLaunch';
+import LaunchSplash from '$lib/components/layout/LaunchSplash.tsx';
 
 const ZOOM_LEVELS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const;
 
@@ -312,6 +314,7 @@ export default function App() {
       {isNewFolderPromptOpen && <NewFolderModal />}
       {isCloneRepoPromptOpen && <CloneRepoModal />}
 
+      {isColdLaunch && <LaunchSplash />}
     </>
   );
 }

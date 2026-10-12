@@ -1,0 +1,100 @@
+/* Cold-launch cover. Solid black on dark, solid white on light; the lockup
+   mirrors the sidebar wordmark (mark + "pacron") at display size. */
+.launch-splash {
+  --splash-bg: #000000;
+  --splash-fg: #ffffff;
+  /* Wordmark size follows the window: small windows get a small lockup, and
+     it stops growing past a modest size on large screens. */
+  --splash-size: clamp(22px, 4.6vmin, 46px);
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--splash-bg);
+  cursor: default;
+  user-select: none;
+  opacity: 1;
+  transition: opacity 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.launch-splash--light {
+  --splash-bg: #ffffff;
+  --splash-fg: #000000;
+}
+
+.launch-splash.is-exit {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.launch-splash-lockup {
+  --splash-shift: 0px;
+  display: flex;
+  align-items: center;
+  column-gap: 0;
+  transform: translateX(var(--splash-shift));
+  transition: transform 750ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.launch-splash:not(.is-enter) .launch-splash-lockup {
+  transform: translateX(0);
+}
+
+.launch-splash-mark {
+  display: block;
+  flex: 0 0 auto;
+  width: calc(var(--splash-size) * 1.16);
+  height: calc(var(--splash-size) * 1.16);
+  margin-right: calc(var(--splash-size) * -0.04);
+  background: var(--splash-fg);
+  -webkit-mask: url('/icon.png') center / contain no-repeat;
+  mask: url('/icon.png') center / contain no-repeat;
+  animation: launch-splash-mark-in 800ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.launch-splash-word {
+  display: inline-flex;
+  font-family: 'Manrope Display', 'Inter', var(--font-sans) !important;
+  font-size: var(--splash-size) !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  color: var(--splash-fg);
+  white-space: pre;
+}
+
+.launch-splash-word > span {
+  opacity: 0;
+  transform: translateY(0.08em);
+  transition:
+    opacity 240ms ease-out,
+    transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.launch-splash-word > span.is-shown {
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes launch-splash-mark-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .launch-splash-lockup,
+  .launch-splash-word > span {
+    transition: none;
+  }
+  .launch-splash-mark {
+    animation: none;
+  }
+}
