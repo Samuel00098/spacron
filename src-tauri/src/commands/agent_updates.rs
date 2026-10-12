@@ -226,16 +226,42 @@ fn channel_for(updater: &SelfUpdater) -> String {
     }
 }
 
-/// A child with no window, piped output, and the PATH a fresh terminal would
-/// have: a desktop app's PATH is frozen at launch, and install scripts shell
-/// out to `node`.
+/// How long a child's PATH may be. cmd.exe stops resolving commands once PATH
+/// passes 8191 characters, and npm runs install scripts through cmd.exe after
+/// prepending a `node_modules\.bin` for every ancestor of the package plus
+/// node-gyp-bin — about 700 characters for dsh's `koffi` build. At the 8000
+/// `search_path` allows, that build failed with "'node' is not recognized".
+const CHILD_PATH_LIMIT: usize = 4000;
+
+/// The PATH for a child: `node`'s own directory first, so install scripts run
+/// the node npm itself runs on, then what a fresh terminal would have (a
+/// desktop app's PATH is frozen at launch), cut to [`CHILD_PATH_LIMIT`].
+fn child_path() -> Option<std::ffi::OsString> {
+    let node_dir = crate::commands::agent_probe::which("node").and_then(|n| n.parent().map(Path::to_path_buf));
+    let full = crate::commands::agent_probe::search_path();
+    let mut seen = HashSet::new();
+    let mut length = 0usize;
+    let kept: Vec<PathBuf> = node_dir
+        .into_iter()
+        .chain(full.iter().flat_map(std::env::split_paths))
+        .filter(|dir| seen.insert(dir.clone()))
+        .take_while(|dir| {
+            length += dir.as_os_str().len() + 1;
+            length <= CHILD_PATH_LIMIT
+        })
+        .collect();
+    std::env::join_paths(kept).ok()
+}
+
+/// A child with no window, piped output, and a PATH install scripts can shell
+/// out to `node` from ([`child_path`]).
 fn hidden_command(program: &Path) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(program);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(path) = crate::commands::agent_probe::search_path() {
+    if let Some(path) = child_path() {
         cmd.env("PATH", path);
     }
     #[cfg(windows)]
@@ -809,6 +835,15 @@ mod tests {
         let string = serde_json::json!({ "name": "@scope/tool", "bin": "cli.js" });
         assert!(manifest_provides(&string, "tool"));
         assert!(!manifest_provides(&serde_json::json!({ "name": "x" }), "x"));
+    }
+
+    #[test]
+    fn child_path_leaves_npm_room_and_leads_with_node() {
+        let path = child_path().expect("a PATH");
+        assert!(path.len() <= CHILD_PATH_LIMIT, "PATH is {} characters", path.len());
+        if let Some(node) = crate::commands::agent_probe::which("node") {
+            assert_eq!(std::env::split_paths(&path).next().as_deref(), node.parent());
+        }
     }
 
     #[test]
