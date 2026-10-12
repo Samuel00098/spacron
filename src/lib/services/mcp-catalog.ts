@@ -27,7 +27,7 @@
  * Icons are each vendor's own current icon, fetched from its website
  * (apple-touch-icon, else its favicon) on 2026-10-12 into `static/mcp-icons/`.
  */
-import type { McpServer } from './mcp-servers';
+import { serverIdentity, serverKey, type McpServer } from './mcp-servers';
 
 export type McpCatalogCategory =
   | 'popular'
@@ -373,8 +373,18 @@ export function catalogServer(entry: McpCatalogEntry, token = ''): McpServer {
 }
 
 /** The installed row for this entry, if any. */
+/**
+ * The row that makes this entry installed: one added from the catalog, or the
+ * same server added any other way (a marketplace plugin, by hand), matched by
+ * URL or by name. Either way the user must not be offered it a second time.
+ */
 export function installedFrom(entry: McpCatalogEntry, servers: McpServer[]): McpServer | undefined {
-  return servers.find((s) => s.catalogId === entry.id);
+  const byCatalog = servers.find((s) => s.catalogId === entry.id);
+  if (byCatalog) return byCatalog;
+  const id = entry.transport === 'stdio' ? null : serverIdentity(entry.url);
+  return servers.find(
+    (s) => (id && s.transport !== 'stdio' && serverIdentity(s.url) === id) || serverKey(s) === serverKey({ name: entry.name }),
+  );
 }
 
 /** Case-insensitive match on name, description and category label. */

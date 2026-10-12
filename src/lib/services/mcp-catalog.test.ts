@@ -51,11 +51,12 @@ describe('MCP catalog', () => {
     expect(catalogServer(linear).headers).toBeUndefined();
   });
 
-  it('finds the installed row by catalog id, not by name', () => {
+  it('prefers the row the catalog itself added', () => {
     const linear = MCP_CATALOG.find((e) => e.id === 'linear')!;
-    const handTyped = { ...catalogServer(linear), catalogId: undefined };
-    expect(installedFrom(linear, [handTyped])).toBeUndefined();
-    expect(installedFrom(linear, [catalogServer(linear)])).toBeDefined();
+    const handTyped = { ...catalogServer(linear), id: 'hand', catalogId: undefined };
+    const fromCatalog = catalogServer(linear);
+    expect(installedFrom(linear, [handTyped, fromCatalog])).toBe(fromCatalog);
+    expect(installedFrom(linear, [handTyped])).toBe(handTyped);
   });
 
   it('searches name, description and category', () => {
@@ -79,5 +80,16 @@ describe('sign-in proxy', () => {
     expect(untouched).toBe(github);
     expect(withSignInProxy([linear], null)[0]).toBe(linear);
     expect(signInProxyUrl('http://127.0.0.1:1/mcp', 'k')).toBe('http://127.0.0.1:1/proxy/k');
+  });
+});
+
+describe('installed anywhere counts as installed', () => {
+  it('sees a catalog server that a plugin or a hand-added row already provides', () => {
+    const context7 = MCP_CATALOG.find((e) => e.id === 'context7')!;
+    const fromPlugin = { id: 'x', name: 'context7-plugin', transport: 'http' as const, url: 'https://mcp.context7.com/mcp?client=claude-code-plugin', enabled: true, pluginId: 'context7' };
+    expect(installedFrom(context7, [fromPlugin])).toBe(fromPlugin);
+    const byHand = { id: 'y', name: 'Linear', transport: 'http' as const, url: 'https://example.com/other', enabled: true };
+    expect(installedFrom(MCP_CATALOG.find((e) => e.id === 'linear')!, [byHand])).toBe(byHand);
+    expect(installedFrom(context7, [byHand])).toBeUndefined();
   });
 });

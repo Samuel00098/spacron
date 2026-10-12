@@ -747,10 +747,41 @@ pub fn plugin_delete_files(path: String) -> Result<(), String> {
 // Skills into agents
 // ---------------------------------------------------------------------------
 
-/// The user-level skill folders of agents that read `SKILL.md` folders.
+/// The user-level skill folders a plugin's skills are copied into, one per
+/// distinct reader so no agent sees a skill twice (checked 2026-10-12):
+///
+/// - `~/.agents/skills`: the shared folder. Codex, Copilot CLI
+///   (`copilot skill --help`), Devin (`devin skills paths`) and Qoder (a probe
+///   skill showed in `qodercli skills list`) all read it.
+/// - `~/.claude/skills`: Claude Code.
+/// - `~/.factory/skills` (droid) and `~/.gemini/skills` (Gemini CLI), only
+///   when that agent's folder already exists.
+///
+/// Not `~/.codex/skills`: Codex reads `~/.agents/skills` too, so writing both
+/// would list every skill twice there.
 fn agent_skill_roots() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else { return Vec::new() };
-    vec![home.join(".claude").join("skills"), home.join(".codex").join("skills")]
+    let mut roots = vec![home.join(".agents").join("skills"), home.join(".claude").join("skills")];
+    for agent in [".factory", ".gemini"] {
+        if home.join(agent).is_dir() {
+            roots.push(home.join(agent).join("skills"));
+        }
+    }
+    roots
+}
+
+/// Everywhere a Spacron skill folder may exist, including `~/.codex/skills`
+/// from builds that wrote there, so a removal also cleans those up.
+fn agent_skill_cleanup_roots() -> Vec<PathBuf> {
+    let mut roots = agent_skill_roots();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".codex").join("skills"));
+        roots.push(home.join(".factory").join("skills"));
+        roots.push(home.join(".gemini").join("skills"));
+    }
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -795,7 +826,7 @@ pub fn plugin_enable_skills(plugin_id: String, path: String) -> Result<Vec<Strin
 #[tauri::command]
 pub fn plugin_disable_skills(plugin_id: String) -> Result<(), String> {
     let prefix = format!("{SKILL_PREFIX}{}-", slug(&plugin_id));
-    for base in agent_skill_roots() {
+    for base in agent_skill_cleanup_roots() {
         let Ok(entries) = std::fs::read_dir(&base) else { continue };
         for entry in entries.flatten() {
             if entry.file_name().to_string_lossy().starts_with(&prefix) {

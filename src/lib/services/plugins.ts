@@ -17,7 +17,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { get, writable } from '$lib/stores/storeCompat';
 import { mcpServers } from '$lib/stores/settings';
-import { serverKey, validateServer, type McpServer } from './mcp-servers';
+import { sameServer, serverKey, validateServer, type McpServer } from './mcp-servers';
 import { MCP_CATEGORIES, type McpCatalogCategory } from './mcp-catalog';
 
 export interface PluginSkill {
@@ -218,6 +218,13 @@ export async function installPlugin(
       warnings.push(`${key}: not a server shape Spacron can run, skipped.`);
       continue;
     }
+    // Already there from the catalog, another plugin or by hand: reuse it,
+    // never add the same server twice.
+    const existing = sameServer(row, current);
+    if (existing) {
+      warnings.push(`${existing.name} was already installed, so it was kept as is.`);
+      continue;
+    }
     if (validateServer(row, [...current, ...rows])) {
       warnings.push(`${key}: ${validateServer(row, [...current, ...rows])}`);
       continue;
@@ -263,6 +270,17 @@ export async function installPlugin(
   return { plugin, warnings };
 }
 
+/**
+ * Whether a marketplace plugin is already installed: as a plugin (from any
+ * marketplace, an archive or a folder), or as a server of the same name from
+ * the catalog or by hand. Matched by name, since a listing does not say which
+ * servers a plugin carries until it is downloaded.
+ */
+export function isPluginInstalled(name: string, installed: InstalledPlugin[], servers: McpServer[]): boolean {
+  const key = serverKey({ name });
+  return installed.some((p) => p.name === name || p.id === name) || servers.some((s) => serverKey(s) === key);
+}
+
 /** Remove a plugin's servers and skills, and its downloaded files. */
 export async function uninstallPlugin(plugin: InstalledPlugin, options: { keepFiles?: boolean } = {}): Promise<void> {
   mcpServers.set(get(mcpServers).filter((s) => s.pluginId !== plugin.id && !plugin.serverIds.includes(s.id)));
@@ -293,7 +311,7 @@ const listingIcons = new Map<string, Promise<string | null>>();
  * avatar. Fetched once per session.
  */
 export function listingIcon(source: string, plugin: string, homepage?: string | null): Promise<string | null> {
-  const key = `${source} ${plugin}`;
+  const key = `${source}|${plugin}`;
   let hit = listingIcons.get(key);
   if (!hit) {
     hit = invoke<string | null>('plugin_listing_icon', { source, plugin, homepage: homepage ?? null }).catch(() => null);

@@ -13,6 +13,7 @@ import {
   fetchMarketplace,
   installPlugin,
   installedPlugins,
+  isPluginInstalled,
   marketplaceId,
   PLUGIN_GROUPS,
   pluginGroup,
@@ -30,6 +31,7 @@ import {
 } from '$lib/services/plugins';
 import { PLUGIN_CREATOR_ICON, PLUGIN_CREATOR_ID, buildPluginRequest, writePluginCreator } from '$lib/services/plugin-creator';
 import { MCP_CATALOG } from '$lib/services/mcp-catalog';
+import { mcpServers } from '$lib/stores/settings';
 import type { McpServer } from '$lib/services/mcp-servers';
 
 const quiet = (message: string) => /^(Error: )?(cancelled|timeout):/.test(message);
@@ -393,6 +395,7 @@ export function MarketplacesTab({
 }) {
   const markets = useStore(pluginMarketplaces);
   const installed = useStore(installedPlugins);
+  const servers = useStore(mcpServers);
   const current = markets.find((m) => m.id === selected) ?? markets[0] ?? null;
   const [listing, setListing] = useState<Record<string, Marketplace | { error: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -473,7 +476,7 @@ export function MarketplacesTab({
               </h4>
               <div className="mcp-catalog-grid">
                   {group.plugins.map((plugin) => {
-            const isInstalled = installed.some((p) => p.origin.kind === 'marketplace' && p.origin.marketplace === current.id && p.name === plugin.name);
+            const isInstalled = isPluginInstalled(plugin.name, installed, servers);
             return (
               <div className="mcp-catalog-item" key={plugin.name}>
                 <div className="mcp-catalog-row">

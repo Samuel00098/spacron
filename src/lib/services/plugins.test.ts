@@ -55,3 +55,13 @@ describe('marketplace groups', () => {
     expect(pluginGroup(null)).toBe('other');
   });
 });
+
+describe('marketplace installed state', () => {
+  it('counts a plugin as installed from any route', async () => {
+    const { isPluginInstalled } = await import('./plugins');
+    const plugin = { id: 'linear', name: 'linear' } as never;
+    expect(isPluginInstalled('linear', [plugin], [])).toBe(true);
+    expect(isPluginInstalled('linear', [], [{ id: 'a', name: 'Linear', transport: 'http', url: 'https://mcp.linear.app/mcp', enabled: true }])).toBe(true);
+    expect(isPluginInstalled('stripe', [plugin], [])).toBe(false);
+  });
+});

@@ -143,6 +143,28 @@ export function withSignInProxy(servers: McpServer[], spacronHttpUrl: string | n
   );
 }
 
+/**
+ * A server URL reduced to what identifies the server: host without `www.`,
+ * path without a trailing slash, no query (vendors tag their plugin URLs with
+ * `?client=…`). Two rows with the same identity are the same server, whichever
+ * route added them.
+ */
+export function serverIdentity(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url.trim());
+    return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return null;
+  }
+}
+
+/** The row already in `servers` that is the same server as `candidate`, if any. */
+export function sameServer(candidate: Pick<McpServer, 'name' | 'url' | 'transport'>, servers: McpServer[]): McpServer | undefined {
+  const id = candidate.transport === 'stdio' ? null : serverIdentity(candidate.url);
+  return servers.find((s) => (id && s.transport !== 'stdio' && serverIdentity(s.url) === id) || serverKey(s) === serverKey(candidate));
+}
+
 /** The servers that should actually be written, keyed and deduplicated. */
 export function enabledServers(servers: McpServer[]): Array<{ key: string; server: McpServer }> {
   const seen = new Set<string>();
