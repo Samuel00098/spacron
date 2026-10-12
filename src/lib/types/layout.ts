@@ -1,6 +1,6 @@
 export type PanelType = 'terminal' | 'editor' | 'explorer' | 'preview' | 'settings';
 
-export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'env' | 'fleet' | 'mobile' | 'sketch' | 'deepseek';
+export type ActiveView = 'editor' | 'terminal' | 'preview' | 'settings' | 'review' | 'http' | 'tasks' | 'orchestrator' | 'db' | 'containers' | 'toolbox' | 'env' | 'fleet' | 'mobile' | 'sketch' | 'library' | 'deepseek';
 
 // Code Review remains an ActiveView for persisted-state compatibility, but the
 // visible panel is now hosted by the unified right-sidebar utility drawer.
@@ -42,6 +42,7 @@ export interface LayoutState {
   envVisible: boolean;
   mobileVisible: boolean;
   sketchVisible: boolean;
+  libraryVisible: boolean;
   deepseekVisible: boolean;
   auxPanelWidth: number;
   auxEditorHeight: number; // percentage split between editor and preview panes

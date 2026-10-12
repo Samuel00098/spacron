@@ -124,6 +124,18 @@ export function failureNotice(error: string, kind: MediaKind): string | null {
   return null;
 }
 
+/**
+ * The provider prompt for an image edit. With a selection the references are
+ * the picture and the same picture with the area painted over, in that order;
+ * the wording tells the model how to read them. The magenta must match the
+ * viewer's `MARK_COLOR`.
+ */
+export function imageEditPrompt(request: string, hasMark: boolean): string {
+  return hasMark
+    ? `${request}\n\nThe first image is the picture to edit. The second is the same picture with the area to change painted over in translucent magenta. Change only that area as described, remove the magenta, and keep everything else exactly as in the first image.`
+    : `Edit this image: ${request}. Keep everything the request does not mention unchanged.`;
+}
+
 /** File type for a generated file, from its extension. */
 export function mediaMimeType(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';

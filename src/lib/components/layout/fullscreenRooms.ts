@@ -20,7 +20,7 @@
  * stage neither is usable. So rather than asking the user to zoom them by hand
  * every time, being the active room IS being expanded for these two.
  */
-export const FULLSCREEN_ROOM_IDS: ReadonlySet<string> = new Set(['tasks', 'sketch']);
+export const FULLSCREEN_ROOM_IDS: ReadonlySet<string> = new Set(['tasks', 'sketch', 'library']);
 
 export function isFullscreenRoom(id: string): boolean {
   return FULLSCREEN_ROOM_IDS.has(id);

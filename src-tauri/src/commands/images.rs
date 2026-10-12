@@ -142,6 +142,48 @@ pub fn allow_generations_dir(app: AppHandle, project_root: String) -> Result<(),
     app.asset_protocol_scope().allow_directory(&dir, false).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationEntry {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    /// Last write, in milliseconds since the epoch.
+    pub modified: u64,
+}
+
+/// Every image in a project's `generations` folder, newest first, for the
+/// Library room. Also grants the folder to the asset protocol so the
+/// thumbnails load. Videos are left out: the Library edits images.
+#[tauri::command]
+pub fn list_generations(app: AppHandle, project_root: String) -> Result<Vec<GenerationEntry>, String> {
+    if project_root.trim().is_empty() { return Ok(Vec::new()); }
+    let dir = PathBuf::from(project_root).join("generations");
+    let Ok(read) = std::fs::read_dir(&dir) else { return Ok(Vec::new()) };
+    let _ = app.asset_protocol_scope().allow_directory(&dir, false);
+    let mut entries: Vec<GenerationEntry> = read
+        .filter_map(Result::ok)
+        .filter(|entry| is_image_path(&entry.path()))
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok().filter(|m| m.is_file())?;
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            Some(GenerationEntry {
+                path: entry.path().to_string_lossy().into_owned(),
+                name: entry.file_name().to_string_lossy().into_owned(),
+                size: meta.len(),
+                modified,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.name.cmp(&a.name)));
+    Ok(entries)
+}
+
 /// The order providers are tried in. ChatGPT (the user's plan) comes first
 /// for images; a provider the user picked in Settings goes to the front.
 fn provider_order(kind: Kind, preferred: Option<&str>) -> Vec<String> {

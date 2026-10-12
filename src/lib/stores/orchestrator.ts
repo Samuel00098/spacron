@@ -161,6 +161,7 @@ import {
   failureNotice,
   fallbackNotice,
   generateMedia,
+  imageEditPrompt,
   mediaMimeType,
   type MediaKind,
 } from '$lib/services/media-generation';
@@ -4213,9 +4214,7 @@ export async function editImageInThread(options: {
   appendChat(options.projectId, { id: pendingId, role: 'assistant', text: 'Editing the image…', ts: Date.now(), pending: true }, options.threadId);
   // With a selection, the first reference is the picture and the second the
   // same picture with the area painted over; the prompt says how to read them.
-  const fullPrompt = options.markPath
-    ? `${prompt}\n\nThe first image is the picture to edit. The second is the same picture with the area to change painted over in translucent magenta. Change only that area as described, remove the magenta, and keep everything else exactly as in the first image.`
-    : `Edit this image: ${prompt}. Keep everything the request does not mention unchanged.`;
+  const fullPrompt = imageEditPrompt(prompt, Boolean(options.markPath));
   const output = await runMediaGeneration({
     projectId: options.projectId,
     threadId: options.threadId,

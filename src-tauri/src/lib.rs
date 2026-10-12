@@ -326,6 +326,7 @@ pub fn run() {
             commands::secrets::agent_turn::ai_agent_probe,
             commands::images::generate_media,
             commands::images::allow_generations_dir,
+            commands::images::list_generations,
             commands::images::save_edit_mark,
             commands::images::generate_image_cancel,
             commands::images::save_image_copy,

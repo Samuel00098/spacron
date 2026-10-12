@@ -268,3 +268,28 @@
   opacity: 0.5;
   cursor: default;
 }
+
+.image-viewer-edit-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* The target picker reads as plain text next to "Send to": no box, no ring. */
+.image-viewer-edit-target .dd-trigger,
+.image-viewer-edit-target .dd-trigger:hover:not(:disabled),
+.image-viewer-edit-target .dd-trigger.open,
+.image-viewer-edit-target .dd-trigger:focus-visible {
+  width: auto;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.image-viewer-edit-target .dd-trigger:hover:not(:disabled),
+.image-viewer-edit-target .dd-trigger.open {
+  background: var(--bg-hover);
+}

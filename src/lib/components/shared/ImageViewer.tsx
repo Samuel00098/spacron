@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { useModalFocus } from '$lib/react/useModalFocus';
 import { copyPngToClipboard } from '$lib/utils/clipboard';
+import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
 import './ImageViewer.css';
 
 export interface ViewerImage {
@@ -26,7 +27,14 @@ interface ImageViewerProps {
    * the change. `markPath` is the picture with that area painted over, saved
    * for the provider; absent means "edit the whole image".
    */
-  onEdit?: (image: ViewerImage, prompt: string, markPath?: string) => void;
+  onEdit?: (image: ViewerImage, prompt: string, markPath?: string, target?: string) => void;
+  /**
+   * Where Edit can send the request (an image provider, the chat, an agent).
+   * With two or more, a picker sits next to Apply and its value reaches
+   * `onEdit` as `target`; without, Edit behaves as it always has.
+   */
+  editTargets?: DropdownOption[];
+  defaultEditTarget?: string;
 }
 
 /** Selection colour; the edit prompt names it, so keep the two in step. */
@@ -55,7 +63,7 @@ const MAX_ZOOM = 8;
  * transformed or blurred ancestor cannot trap its fixed overlay, and mounted
  * only while open, which is what `useModalFocus`'s shortcut gate requires.
  */
-export default function ImageViewer({ images, startIndex = 0, projectRoot, onClose, onUseAsInput, onEdit }: ImageViewerProps) {
+export default function ImageViewer({ images, startIndex = 0, projectRoot, onClose, onUseAsInput, onEdit, editTargets, defaultEditTarget }: ImageViewerProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const [index, setIndex] = useState(() => Math.min(Math.max(0, startIndex), Math.max(0, images.length - 1)));
   // null = fit to the window; a number is an explicit scale (1 = actual pixels).
@@ -73,6 +81,11 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
   const [brush, setBrush] = useState(40);
   const [hasMark, setHasMark] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [editTarget, setEditTarget] = useState(() => defaultEditTarget ?? editTargets?.[0]?.value ?? '');
+  // A target can vanish while the viewer is open (an agent exits); fall back.
+  const target = editTargets?.some((option) => option.value === editTarget && !option.disabled)
+    ? editTarget
+    : editTargets?.find((option) => !option.disabled)?.value ?? '';
   const markRef = useRef<HTMLCanvasElement | null>(null);
   const painting = useRef<{ x: number; y: number } | null>(null);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -191,7 +204,7 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
         const base64 = bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
         markPath = await invoke<string>('save_edit_mark', { pngBase64: base64 });
       }
-      onEdit(image, prompt, markPath);
+      onEdit(image, prompt, markPath, editTargets ? target : undefined);
       onClose();
     } catch (error) {
       setStatus(`Edit failed: ${String(error ?? 'unknown error')}`);
@@ -347,8 +360,14 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
                 <input type="range" min={8} max={160} value={brush} onChange={(event) => setBrush(Number(event.target.value))} />
               </label>
               <button type="button" onClick={clearMark} disabled={!hasMark}>Clear selection</button>
+              {editTargets && editTargets.length > 1 && (
+                <span className="image-viewer-edit-target">
+                  Send to
+                  <Dropdown options={editTargets} value={target} onChange={setEditTarget} ariaLabel="Where to send the edit" direction="up" />
+                </span>
+              )}
               <button type="button" onClick={() => { setEditing(false); clearMark(); }}>Cancel</button>
-              <button type="button" className="primary" onClick={() => void applyEdit()} disabled={!editPrompt.trim() || applying}>
+              <button type="button" className="primary" onClick={() => void applyEdit()} disabled={!editPrompt.trim() || applying || (editTargets !== undefined && !target)}>
                 {applying ? 'Sending…' : 'Apply edit'}
               </button>
             </div>

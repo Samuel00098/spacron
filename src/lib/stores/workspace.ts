@@ -145,6 +145,7 @@ function collectOpenRoomIds(): string[] {
   // so a background project keeps whatever it was left with — the same way the
   // rest of its saved stage behaves.
   if (l.sketchVisible) rooms.push('sketch');
+  if (l.libraryVisible) rooms.push('library');
   if (l.deepseekVisible) rooms.push('deepseek');
   return rooms;
 }
@@ -258,6 +259,7 @@ interface ProjectWorkspaceState {
     envVisible: boolean;
     mobileVisible: boolean;
     sketchVisible: boolean;
+    libraryVisible: boolean;
     deepseekVisible: boolean;
     /** The Terminal room's own open/closed state. Not part of `LayoutState` —
      *  it is its own store — but it is a room like any other, so it has to be
@@ -447,6 +449,7 @@ interface PersistedProjectState {
     terminalRoomOpen?: boolean;
     /**
      * The right utility drawer's open tool, or null/absent for closed. Stored as
+    libraryVisible?: boolean;
      * the tool NAME rather than as its backing booleans: the drawer is one body
      * at a time, `env` needs two flags moved together, and a name round-trips
      * through `applyRightDrawerTool` as one coherent write. Without this the
@@ -586,6 +589,7 @@ function saveProjectStateToStorage(projectId: string) {
       auxPanelWidth: currentLayout.auxPanelWidth,
       auxEditorHeight: currentLayout.auxEditorHeight,
       sidebarVisible: currentLayout.sidebarVisible,
+      libraryVisible: currentLayout.libraryVisible,
       sidebarWidth: currentLayout.sidebarWidth,
       sidebarTab: currentLayout.sidebarTab,
       leftPanelWidth: currentLayout.leftPanelWidth,
@@ -753,6 +757,7 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       sidebarVisible: Boolean(l.sidebarVisible ?? true),
       sidebarWidth: typeof l.sidebarWidth === 'number' ? Math.max(100, Math.min(600, l.sidebarWidth)) : 310,
       sidebarTab: typeof l.sidebarTab === 'string' ? l.sidebarTab : 'files',
+      libraryVisible: Boolean(l.libraryVisible),
       leftPanelWidth: clampLeftPanelWidth(l.leftPanelWidth),
       rightDrawerWidth: typeof l.rightDrawerWidth === 'number' ? Math.max(280, Math.min(720, l.rightDrawerWidth)) : 380,
     };
@@ -877,6 +882,7 @@ export function saveProjectState(projectId: string) {
       sidebarTab: get(layout).sidebarTab,
       leftPanelWidth: get(layout).leftPanelWidth,
       rightDrawerWidth: get(layout).rightDrawerWidth,
+      libraryVisible: get(layout).libraryVisible,
     },
   });
   // Also persist to localStorage so state survives app close
@@ -1008,6 +1014,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       // project must not still be open over the next. Applied AFTER the layout
       // patch above so it owns the drawer flags outright, and via
       // `applyRightDrawerTool` (not `setRightDrawerTool`) so closing the drawer
+        libraryVisible: cached.layout.libraryVisible,
       // doesn't drag `activeView` back to the terminal.
       applyRightDrawerTool(cached.layout.rightDrawerTool ?? null);
       rightSidebarTab.set(
@@ -1122,6 +1129,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           activeView: sanitiseActiveView(persisted.layout!.activeView, 'terminal'),
           editorVisible: persisted.layout!.editorVisible ?? false,
           previewVisible: persisted.layout!.previewVisible ?? false,
+          libraryVisible: false,
           reviewVisible: persisted.layout!.reviewVisible ?? false,
           httpVisible: persisted.layout!.httpVisible ?? false,
           tasksVisible: persisted.layout!.tasksVisible ?? false,
@@ -1153,6 +1161,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
 
       // Unconditional, unlike the layout patch above: a project with no saved
       // state at all must still land with the drawer CLOSED rather than
+          libraryVisible: persisted.layout!.libraryVisible ?? false,
       // inheriting whatever the project we came from had open.
       applyRightDrawerTool(sanitiseRightDrawerTool(persisted?.layout?.rightDrawerTool));
 

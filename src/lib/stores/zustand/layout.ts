@@ -112,6 +112,7 @@ const defaultLayout: LayoutState = {
   auxPanelWidth: 550,
   auxEditorHeight: 50,
   leftPanelWidth: LEFT_PANEL_DEFAULT_WIDTH,
+  libraryVisible: false,
   rightDrawerWidth: RIGHT_DRAWER_DEFAULT_WIDTH,
 };
 
@@ -308,6 +309,7 @@ function showOnlyAux(l: LayoutState, view: AuxView): LayoutState {
     editorSplitPreview: false,
   };
 }
+  library: 'libraryVisible',
 
 function restoreLastAuxView(l: LayoutState): LayoutState {
   const view = (l.lastAuxView in AUX_VIEW_FLAGS ? l.lastAuxView : 'editor') as AuxView;
