@@ -119,6 +119,11 @@ export default function LibraryPanel() {
         value: `${AGENT_TARGET}${s.id}`,
         label: s.agentName ? `${s.agentName} (${product(s.agentPreset)})` : product(s.agentPreset),
       })),
+      // Only agents this window launched can be reached; say so instead of
+      // leaving the agent section silently missing.
+      ...(agents.length === 0
+        ? [{ value: `${AGENT_TARGET}none`, label: 'No agents open in this project', disabled: true, tooltip: 'Start an agent in this project and it appears here' }]
+        : []),
       { value: `${API_TARGET}chatgpt`, label: 'ChatGPT' },
       { value: `${API_TARGET}openai`, label: 'OpenAI API' },
       { value: CHAT_TARGET, label: 'Chat' },
