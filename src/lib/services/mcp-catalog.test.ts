@@ -93,3 +93,13 @@ describe('installed anywhere counts as installed', () => {
     expect(installedFrom(context7, [byHand])).toBeUndefined();
   });
 });
+
+describe('one icon per service everywhere', () => {
+  it('gives a marketplace plugin or a server the catalog tile for the same service', async () => {
+    const { catalogIconFor } = await import('./mcp-catalog');
+    expect(catalogIconFor('linear')).toBe('/mcp-icons/linear.png');
+    expect(catalogIconFor('Hugging Face')).toBe('/mcp-icons/huggingface.ico');
+    expect(catalogIconFor('anything', 'https://mcp.context7.com/mcp?client=claude-code-plugin')).toBe('/mcp-icons/context7.png');
+    expect(catalogIconFor('not-a-catalog-service')).toBeUndefined();
+  });
+});

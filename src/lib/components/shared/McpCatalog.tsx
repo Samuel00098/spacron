@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { get } from '$lib/stores/storeCompat';
@@ -37,9 +37,8 @@ function CatalogIcon({ entry }: { entry: McpCatalogEntry }) {
       </span>
     );
   }
-  const style: CSSProperties = { backgroundColor: entry.color ?? 'var(--accent)', color: '#ffffff' };
   return (
-    <span className="mcp-catalog-icon" style={style} aria-hidden="true">
+    <span className="mcp-catalog-icon is-letter" aria-hidden="true">
       <span className="mcp-catalog-letter">{entry.name.charAt(0).toUpperCase()}</span>
     </span>
   );
@@ -371,7 +370,15 @@ export function McpCatalog({
                 const error = errors[entry.id];
                 return (
                   <div className="mcp-catalog-item" key={entry.id}>
-                    <div className="mcp-catalog-row">
+                    <div
+                      className={`mcp-catalog-row${!installed && !isSigningIn ? ' is-clickable' : ''}`}
+                      onClick={(event) => {
+                        // A click anywhere on the row installs, like its button;
+                        // the buttons inside handle their own clicks.
+                        if ((event.target as HTMLElement).closest('button, input, a, label')) return;
+                        if (!installed && !isSigningIn && pending?.kind !== 'signing-in') onAdd(entry);
+                      }}
+                    >
                       <CatalogIcon entry={entry} />
                       <div className="mcp-catalog-text">
                         <div className="mcp-catalog-name">
@@ -383,17 +390,16 @@ export function McpCatalog({
                         </div>
                       </div>
                       {isSigningIn ? (
-                        <button className="settings-secondary mcp-catalog-text-button" onClick={() => cancelSignIn(entry)}>
+                        <button className="settings-secondary mcp-small-button mcp-row-button" onClick={() => cancelSignIn(entry)}>
                           Cancel
                         </button>
                       ) : needsSignIn ? (
-                        <button className="settings-secondary mcp-catalog-text-button" onClick={() => void signIn(entry)}>
+                        <button className="settings-secondary mcp-small-button mcp-row-button" onClick={() => void signIn(entry)}>
                           Sign in
                         </button>
                       ) : installed ? (
                         <button
                           className="mcp-catalog-action is-installed"
-                          title={`Remove ${entry.name}`}
                           aria-label={`Remove ${entry.name}`}
                           onClick={() => remove(entry)}
                         >
@@ -403,8 +409,7 @@ export function McpCatalog({
                       ) : (
                         <button
                           className="mcp-catalog-action"
-                          title={entry.auth === 'oauth' && !signedIn[keyOf(entry)] ? `Sign in and add ${entry.name}` : `Add ${entry.name}`}
-                          aria-label={`Add ${entry.name}`}
+                          aria-label={`Install ${entry.name}`}
                           aria-expanded={entry.auth === 'key' ? pending?.id === entry.id : undefined}
                           disabled={pending?.kind === 'signing-in'}
                           onClick={() => onAdd(entry)}

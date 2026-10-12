@@ -31,7 +31,7 @@ import {
   type PluginSummary,
 } from '$lib/services/plugins';
 import { PLUGIN_CREATOR_ICON, PLUGIN_CREATOR_ID, buildPluginRequest, writePluginCreator } from '$lib/services/plugin-creator';
-import { MCP_CATALOG } from '$lib/services/mcp-catalog';
+import { MCP_CATALOG, catalogIconFor, installedFrom } from '$lib/services/mcp-catalog';
 import { mcpServers } from '$lib/stores/settings';
 import type { McpServer } from '$lib/services/mcp-servers';
 
@@ -188,7 +188,7 @@ export function InstallReview({
       <div className="mcp-sheet-head">
         <PluginIcon
           title={summary.title}
-          icon={summary.icon}
+          icon={catalogIconFor(summary.name) ?? summary.icon}
           homepage={summary.homepage}
           listing={origin.kind === 'marketplace' ? { source: origin.source, plugin: summary.name } : null}
         />
@@ -365,7 +365,6 @@ export function CreatePluginPanel({ onDone, onCancel }: { onDone: (message: stri
           className="settings-primary"
           onClick={() => void create(true)}
           disabled={busy || !name.trim() || !goal.trim() || !project}
-          title={project ? undefined : 'Open a project to build with the chat'}
         >
           Build with AI
         </button>
@@ -489,8 +488,19 @@ export function MarketplacesTab({
             const isInstalled = isPluginInstalled(plugin.name, installed, servers);
             return (
               <div className="mcp-catalog-item" key={plugin.name}>
-                <div className="mcp-catalog-row">
-                  <PluginIcon title={plugin.title} homepage={plugin.homepage} listing={{ source: current.source, plugin: plugin.name }} />
+                <div
+                  className={`mcp-catalog-row${!isInstalled && plugin.installable && !busy ? ' is-clickable' : ''}`}
+                  onClick={(event) => {
+                    if ((event.target as HTMLElement).closest('button, input, a, label')) return;
+                    if (!isInstalled && plugin.installable && !busy) void download(current, plugin);
+                  }}
+                >
+                  <PluginIcon
+                    title={plugin.title}
+                    icon={catalogIconFor(plugin.name)}
+                    homepage={plugin.homepage}
+                    listing={{ source: current.source, plugin: plugin.name }}
+                  />
                   <div className="mcp-catalog-text">
                     <div className="mcp-catalog-name">
                       <span className="mcp-catalog-title">{plugin.title}</span>
@@ -504,8 +514,7 @@ export function MarketplacesTab({
                   ) : (
                     <button
                       className="mcp-catalog-action"
-                      aria-label={`Add ${plugin.title}`}
-                      title={plugin.installable ? `Add ${plugin.title}` : 'Not hosted on GitHub; Spacron cannot download it'}
+                      aria-label={plugin.installable ? `Install ${plugin.title}` : `${plugin.title} is not hosted on GitHub, so Spacron cannot download it`}
                       disabled={!plugin.installable || !!busy}
                       onClick={() => void download(current, plugin)}
                     >
@@ -607,13 +616,13 @@ export function YourPluginsTab({
         <div className="mcp-plugin-list">
           {list.map((p) => (
             <div className="mcp-plugin-row" key={p.id}>
-              <PluginIcon title={p.title} icon={p.icon} homepage={p.homepage} listing={listingOf(p)} />
+              <PluginIcon title={p.title} icon={catalogIconFor(p.name) ?? p.icon} homepage={p.homepage} listing={listingOf(p)} />
               <div className="mcp-catalog-text">
                 <div className="mcp-catalog-name">
                   <span className="mcp-catalog-title">{p.title}</span>
                   <span className="mcp-catalog-badge">{originLabel(p)}</span>
                 </div>
-                <div className="mcp-catalog-desc" title={p.path}>
+                <div className="mcp-catalog-desc">
                   {p.serverIds.length} server{p.serverIds.length === 1 ? '' : 's'} · {p.skillFolders.length} skill{p.skillFolders.length === 1 ? '' : 's'}
                   {p.claudeOnly.length ? ` · ${p.claudeOnly.join(', ')} (Claude Code only)` : ''}
                   {p.claudeOnly.some((part) => /command|sub-agent/.test(part)) ? ' · Reinstall to share its commands with every agent' : ''}
@@ -639,7 +648,11 @@ export function YourPluginsTab({
 /** The icon for a row of the user's server list: its catalog entry's, its plugin's, or a letter. */
 export function ServerIcon({ server }: { server: McpServer }) {
   const plugins = useStore(installedPlugins);
-  const entry = server.catalogId ? MCP_CATALOG.find((e) => e.id === server.catalogId) : undefined;
+  // The catalog's tile for this service however the row was added, so a
+  // server from a plugin or typed by hand looks the same as the catalog's.
+  const entry = server.catalogId
+    ? MCP_CATALOG.find((e) => e.id === server.catalogId)
+    : MCP_CATALOG.find((e) => installedFrom(e, [server]) === server);
   if (entry?.icon) {
     return (
       <span className="mcp-catalog-icon is-image is-small" aria-hidden="true">

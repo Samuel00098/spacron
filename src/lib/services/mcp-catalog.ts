@@ -387,6 +387,23 @@ export function installedFrom(entry: McpCatalogEntry, servers: McpServer[]): Mcp
   );
 }
 
+/**
+ * The catalog's icon for a server or plugin of the same service, so a
+ * marketplace plugin, an installed plugin and a server row all show the very
+ * same tile as the catalog (Linear is Linear everywhere). Matched by catalog
+ * id, by name, or by server URL.
+ */
+export function catalogIconFor(name: string | null | undefined, url?: string | null): string | undefined {
+  const key = name ? serverKey({ name }) : null;
+  const id = url ? serverIdentity(url) : null;
+  const entry = MCP_CATALOG.find(
+    (e) =>
+      (key && (serverKey({ name: e.id }) === key || serverKey({ name: e.name }) === key)) ||
+      (id && e.transport !== 'stdio' && serverIdentity(e.url) === id),
+  );
+  return entry?.icon ? `/mcp-icons/${entry.icon}` : undefined;
+}
+
 /** Case-insensitive match on name, description and category label. */
 export function matchesCatalogQuery(entry: McpCatalogEntry, query: string): boolean {
   const q = query.trim().toLowerCase();

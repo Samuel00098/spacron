@@ -690,3 +690,84 @@
   line-clamp: 2;
   white-space: normal;
 }
+
+/* ── One icon tile everywhere ─────────────────────────────────────────────
+   Catalog servers, marketplace plugins, Your plugins and Your servers all
+   draw their icon the same way: a neutral rounded tile with a 1px outline and
+   the vendor's mark inset and contained, whether the source is a full-bleed
+   app icon, a transparent favicon, a GitHub avatar or a plugin's own SVG.
+   Letter tiles use the same tile. Declared last so it wins over the
+   per-surface rules above. */
+
+.mcp-catalog .mcp-catalog-icon,
+.mcp-server-icon .mcp-catalog-icon,
+.mcp-catalog-icon.is-small {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: var(--app-surface);
+  box-shadow: var(--surface-outline);
+  color: var(--text-primary);
+}
+
+.mcp-catalog .mcp-catalog-icon img,
+.mcp-server-icon .mcp-catalog-icon img,
+.mcp-catalog-icon.is-small img {
+  display: block;
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.mcp-catalog .mcp-catalog-icon .mcp-catalog-letter,
+.mcp-server-icon .mcp-catalog-letter {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* Your servers is a denser list: the same tile, one step smaller. */
+.mcp-server-icon .mcp-catalog-icon,
+.mcp-catalog-icon.is-small {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.mcp-server-icon .mcp-catalog-icon img,
+.mcp-catalog-icon.is-small img {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+/* ── Rows: spacing, click to install, labelled buttons ────────────────── */
+
+.mcp-catalog-grid {
+  row-gap: 6px;
+}
+
+.mcp-catalog .mcp-catalog-row {
+  margin: 0 -10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.mcp-catalog .mcp-catalog-row.is-clickable {
+  cursor: pointer;
+}
+
+.mcp-catalog .mcp-catalog-row.is-clickable:hover {
+  background: var(--bg-hover);
+}
+
+/* Install / Remove / Sign in: one size, so every row's button lines up. */
+.mcp-catalog .mcp-row-button {
+  flex: 0 0 auto;
+  min-width: 76px;
+}
