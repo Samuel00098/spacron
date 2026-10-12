@@ -285,12 +285,14 @@ export function McpCatalog({
 
   return (
     <div className="mcp-catalog">
+      <p className="mcp-catalog-intro">
+        Give every agent and the chat new tools in one click. Servers marked{' '}
+        <strong>Sign-in</strong> open your browser so you can sign in first; plugins bundle
+        servers with skills.
+      </p>
+
+      <div className="mcp-toolbar">
       <div className="mcp-catalog-head">
-        <p className="mcp-catalog-intro">
-          Give every agent and the chat new tools in one click. Servers marked{' '}
-          <strong>Sign-in</strong> open your browser so you can sign in first; plugins bundle
-          servers with skills.
-        </p>
         <label className="mcp-catalog-search">
           <SearchIcon />
           <input
@@ -316,6 +318,7 @@ export function McpCatalog({
             {t.label}
           </button>
         ))}
+      </div>
       </div>
 
       {notice && <p className="mcp-notice">{notice}</p>}
@@ -375,7 +378,7 @@ export function McpCatalog({
                           <span className="mcp-catalog-title">{entry.name}</span>
                           {status(entry, installed)}
                         </div>
-                        <div className="mcp-catalog-desc" title={entry.note ?? entry.description}>
+                        <div className="mcp-catalog-desc">
                           {isSigningIn ? 'Finish signing in in your browser…' : entry.note ?? entry.description}
                         </div>
                       </div>

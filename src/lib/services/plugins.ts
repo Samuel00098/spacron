@@ -284,6 +284,26 @@ export function isPluginInstalled(name: string, installed: InstalledPlugin[], se
   return installed.some((p) => p.name === name || p.id === name) || servers.some((s) => serverKey(s) === key);
 }
 
+/**
+ * Plugins installed before commands and sub-agents were shared recorded them
+ * as "Claude Code only". Re-copy their parts so every agent gets them, and
+ * fix the record. Runs once per such plugin; failures leave it as it was.
+ */
+export async function upgradeLegacyPlugins(): Promise<void> {
+  const stale = get(installedPlugins).filter((p) => p.claudeOnly.some((part) => /command|sub-agent/.test(part)));
+  for (const plugin of stale) {
+    try {
+      const summary = await readPluginFolder(plugin.path);
+      const skillFolders = await invoke<string[]>('plugin_enable_skills', { pluginId: plugin.id, path: plugin.path });
+      installedPlugins.set(
+        get(installedPlugins).map((p) => (p.id === plugin.id ? { ...p, claudeOnly: summary.claudeOnly, skillFolders } : p)),
+      );
+    } catch (e) {
+      console.warn(`[plugins] Could not share ${plugin.title}'s commands with every agent:`, e);
+    }
+  }
+}
+
 /** Remove a plugin's servers and skills, and its downloaded files. */
 export async function uninstallPlugin(plugin: InstalledPlugin, options: { keepFiles?: boolean } = {}): Promise<void> {
   mcpServers.set(get(mcpServers).filter((s) => s.pluginId !== plugin.id && !plugin.serverIds.includes(s.id)));

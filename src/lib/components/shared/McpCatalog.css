@@ -563,19 +563,6 @@
   justify-content: center;
 }
 
-@container (max-width: 760px) {
-  .mcp-catalog-head {
-    flex-wrap: wrap;
-  }
-
-  .mcp-catalog-intro {
-    flex-basis: 100%;
-  }
-
-  .mcp-catalog-search {
-    flex: 1 1 auto;
-  }
-}
 
 @container (max-width: 520px) {
   .mcp-sheet-actions {
@@ -656,4 +643,49 @@
 .mcp-catalog button:hover svg {
   transform: none !important;
   filter: none !important;
+}
+
+/* ── Toolbar: search, Add and tabs ────────────────────────────────────── */
+
+.mcp-catalog-intro {
+  margin: 0 0 12px;
+}
+
+/* An ordinary block inside the card: it scrolls with everything else, and
+   Add stays right beside the search box. */
+.mcp-toolbar {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-toolbar .mcp-catalog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: none;
+}
+
+/* Search takes the width; Add sits right beside it at a fixed size. */
+.mcp-toolbar .mcp-catalog-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mcp-toolbar .mcp-add {
+  flex: 0 0 auto;
+}
+
+.mcp-toolbar .mcp-tabs {
+  margin-top: 10px;
+}
+
+/* Two lines instead of a tooltip: the native tooltip draws in the OS's own
+   (bluish) style, not the app's. */
+.mcp-catalog-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
 }

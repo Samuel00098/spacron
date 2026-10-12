@@ -22,6 +22,7 @@ import {
   listingIcon,
   uninstallPlugin,
   unpackArchive,
+  upgradeLegacyPlugins,
   type InstalledPlugin,
   type Marketplace,
   type MarketplacePlugin,
@@ -208,7 +209,7 @@ export function InstallReview({
               {Object.entries(summary.mcpServers).map(([key, spec]) => (
                 <li key={key}>
                   <span className="mcp-sheet-server-name">{key}</span>
-                  <code title={describeServer(spec)}>{describeServer(spec)}</code>
+                  <code>{describeServer(spec)}</code>
                 </li>
               ))}
             </ul>
@@ -494,7 +495,7 @@ export function MarketplacesTab({
                     <div className="mcp-catalog-name">
                       <span className="mcp-catalog-title">{plugin.title}</span>
                     </div>
-                    <div className="mcp-catalog-desc" title={plugin.description}>{plugin.description}</div>
+                    <div className="mcp-catalog-desc">{plugin.description}</div>
                   </div>
                   {isInstalled ? (
                     <span className="agents-row-badge" data-tone="ready">Installed</span>
@@ -552,6 +553,9 @@ export function YourPluginsTab({
   const installed = useStore(installedPlugins);
   const [busy, setBusy] = useState<string | null>(null);
   const q = query.trim().toLowerCase();
+  // Older installs listed commands and sub-agents as Claude Code only; share
+  // them with every agent now.
+  useEffect(() => { void upgradeLegacyPlugins(); }, []);
   const list = installed.filter((p) => !q || `${p.title} ${p.description}`.toLowerCase().includes(q));
   const hasCreator = installed.some((p) => p.id === PLUGIN_CREATOR_ID);
 
