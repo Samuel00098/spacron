@@ -41,6 +41,8 @@ export interface McpServer {
   env?: Record<string, string>;
   /** Off keeps the row but writes it nowhere. */
   enabled: boolean;
+  /** Set when the row was installed from the catalog (`services/mcp-catalog.ts`). */
+  catalogId?: string;
 }
 
 /** The namespace every key Spacron writes lives in. See invariant 1 above. */

@@ -1,0 +1,194 @@
+/* Settings > MCP > Catalog. Flat: panel-coloured surfaces, 1px outlines, no shadows. */
+
+.mcp-catalog-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.mcp-catalog-head .shell-hint {
+  flex: 1;
+  margin: 0;
+}
+
+.mcp-catalog-search {
+  flex: 0 0 220px;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--app-surface);
+  box-shadow: var(--surface-outline);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.mcp-catalog-search:focus {
+  outline: none;
+  box-shadow: var(--surface-outline-active);
+}
+
+.mcp-catalog-group {
+  margin-top: 18px;
+}
+
+.mcp-catalog-group-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mcp-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  column-gap: 28px;
+}
+
+.mcp-catalog-item {
+  min-width: 0;
+}
+
+.mcp-catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+}
+
+.mcp-catalog-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+}
+
+.mcp-catalog-glyph {
+  display: block;
+  width: 20px;
+  height: 20px;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.mcp-catalog-letter {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.mcp-catalog-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-catalog-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mcp-catalog-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  box-shadow: var(--surface-outline);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.mcp-catalog-desc {
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mcp-catalog-action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.mcp-catalog-action:hover,
+.mcp-catalog-action:focus-visible {
+  background: var(--surface-selected);
+}
+
+.mcp-catalog-action.is-installed {
+  color: var(--accent);
+}
+
+.mcp-catalog-action .mcp-catalog-remove {
+  display: none;
+}
+
+.mcp-catalog-action.is-installed:hover .mcp-catalog-check,
+.mcp-catalog-action.is-installed:focus-visible .mcp-catalog-check {
+  display: none;
+}
+
+.mcp-catalog-action.is-installed:hover .mcp-catalog-remove,
+.mcp-catalog-action.is-installed:focus-visible .mcp-catalog-remove {
+  display: inline-flex;
+  color: var(--text-primary);
+}
+
+.mcp-catalog-check,
+.mcp-catalog-remove {
+  display: inline-flex;
+}
+
+.mcp-catalog-key {
+  margin: 0 0 10px 48px;
+}
+
+.mcp-catalog-key-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.mcp-catalog-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mcp-catalog-key-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .mcp-catalog-head {
+    flex-direction: column;
+  }
+
+  .mcp-catalog-search {
+    flex-basis: auto;
+    width: 100%;
+  }
+}

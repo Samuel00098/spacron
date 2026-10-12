@@ -124,6 +124,7 @@ import { get } from '$lib/stores/storeCompat';
 import { computerUseSupported } from '$lib/stores/computerUse';
 import ComputerUseDetails from './ComputerUseDetails';
 import BrowserToolsDetails from './BrowserToolsDetails';
+import { McpCatalog } from './McpCatalog';
 import { useStore } from '$lib/react/useStore';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { keepAwakeState } from '$lib/services/keep-awake';
@@ -237,6 +238,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'orchestrator-learned', tab: 'orchestrator', section: 'What it has learned', label: 'What it has learned', keywords: 'orchestrator memory profile preferences forget' },
   { id: 'coding-cli-agents', tab: 'agents', section: 'Coding CLI agents', label: 'Coding CLI agents', keywords: 'custom agent command' },
   { id: 'mcp-builtin', tab: 'mcp', section: 'Built in', label: 'Built-in servers', keywords: 'mcp spacron playwright browser tools' },
+  { id: 'mcp-catalog', tab: 'mcp', section: 'Catalog', label: 'MCP catalog', keywords: 'mcp catalog plugins marketplace install github notion linear figma supabase stripe vercel sentry' },
   { id: 'mcp-servers', tab: 'mcp', section: 'Your servers', label: 'Add an MCP server', keywords: 'mcp model context protocol remote hosted stdio integration linear notion github' },
   { id: 'usage-stats', tab: 'stats', section: 'Usage', label: 'Usage', keywords: 'model tokens spending statistics cost', target: 'section' },
   { id: 'keyboard-shortcuts', tab: 'shortcuts', section: 'Keyboard shortcuts', label: 'Keyboard shortcuts', keywords: 'hotkeys keymap', target: 'section' },
@@ -1000,8 +1002,8 @@ function MediaGenerationSection() {
  *
  * Spacron's own server and the Playwright one are shown but not editable here
  * — they are owned by the app and by the Browser tools setting respectively.
- * Everything below them is the user's list, written into each CLI's own config
- * file on the next project open or agent launch. See `services/mcp-servers.ts`
+ * Everything below them is the user's list (typed in, or installed from the
+ * catalog), written into each CLI's own config file as soon as it changes. See `services/mcp-servers.ts`
  * for the dialects and the namespace rule that makes removal safe.
  */
 function McpSettingsPane() {
@@ -1093,11 +1095,16 @@ function McpSettingsPane() {
         </div>
       </Section>
 
+      <Section title="Catalog">
+        <McpCatalog onOpenUrl={openExternalUrl} />
+      </Section>
+
       <Section title="Your servers">
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
           Add a hosted server by URL, or a local one by command. Each is written into every agent
-          CLI's own config, so Claude Code, Codex, Gemini, droid, opencode and Cursor all get it.
-          Changes apply the next time a project opens or an agent launches. The chat can use them
+          CLI's own config, so Claude Code, Codex, Gemini, Copilot, Qwen, Amp, Devin, Antigravity
+          and the rest all get it. Changes are written straight away; an agent that is already
+          running picks them up when it restarts. The chat can use them
           too: tools a server marks read-only run straight away, and anything else asks you first
           unless the chat has Full access.
         </p>
