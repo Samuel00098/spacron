@@ -435,6 +435,16 @@ fn restrict_existing_token_file(path: &std::path::Path) {
     }
 }
 
+/// Spacron's config directory, the parent of the token file.
+pub(crate) fn config_dir() -> PathBuf {
+    mcp_token_path().parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Write a secret owner-only. Also used for MCP sign-in grants.
+pub(crate) fn write_private_file(path: &Path, text: &str) -> std::io::Result<()> {
+    write_token_file(path, text)
+}
+
 fn write_token_file(path: &std::path::Path, token: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut opts = fs::OpenOptions::new();
@@ -568,6 +578,9 @@ pub fn start(
                 .get(streamable_no_stream)
                 .delete(streamable_no_stream),
         )
+        // Signed-in remote servers, reached through Spacron so the agent never
+        // holds the OAuth token. See `commands::mcp_oauth`.
+        .route("/proxy/{key}", axum::routing::any(proxy_handler))
         .with_state(server_state);
 
     tauri::async_runtime::spawn(async move {
@@ -1654,10 +1667,7 @@ async fn generate_media_tool(
     } else {
         (settings.image_provider, settings.image_models)
     };
-    let config_dir = mcp_token_path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let config_dir = config_dir();
     let request_id = format!("mcp-{}", uuid::Uuid::new_v4().simple());
     let work = crate::commands::images::generate_and_save(
         &config_dir,
@@ -1734,6 +1744,99 @@ async fn root_handler() -> impl IntoResponse {
         "status": "ok",
         "server": "spacron-mcp"
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Signed-in server proxy
+// ---------------------------------------------------------------------------
+
+/// Request headers worth forwarding to a remote MCP server. Everything else —
+/// above all the caller's own `Authorization` — is dropped.
+const PROXY_REQUEST_HEADERS: &[&str] = &["content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id"];
+const PROXY_RESPONSE_HEADERS: &[&str] = &["content-type", "mcp-session-id", "mcp-protocol-version", "cache-control"];
+
+fn proxy_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    // No overall timeout: a streamable-HTTP GET is a long-lived SSE stream.
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+async fn proxy_send(
+    method: &axum::http::Method,
+    headers: &HeaderMap,
+    body: &axum::body::Bytes,
+    grant: &crate::commands::mcp_oauth::Grant,
+) -> Result<reqwest::Response, String> {
+    let method = reqwest::Method::from_bytes(method.as_str().as_bytes()).map_err(|e| e.to_string())?;
+    let mut req = proxy_client()
+        .request(method, &grant.resource)
+        .bearer_auth(&grant.access_token)
+        .body(body.to_vec());
+    for name in PROXY_REQUEST_HEADERS {
+        if let Some(value) = headers.get(*name) {
+            req = req.header(*name, value.as_bytes());
+        }
+    }
+    req.send().await.map_err(|e| e.to_string())
+}
+
+/// Forward an agent's MCP request to the server the user signed in to under
+/// `key`, with a fresh access token. The target is the grant's own URL, so a
+/// caller cannot point this anywhere else.
+async fn proxy_handler(
+    State(state): State<Arc<ServerState>>,
+    axum::extract::Path(key): axum::extract::Path<String>,
+    Query(query): Query<AuthQuery>,
+    method: axum::http::Method,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(rejection) = authorize(&state, &headers, &query) {
+        return rejection;
+    }
+    // 403, not 401: a 401 would send the agent's own OAuth client looking for
+    // sign-in metadata on 127.0.0.1, which is not where the sign-in lives.
+    let not_signed_in = |detail: String| {
+        (
+            StatusCode::FORBIDDEN,
+            format!("Not signed in to this MCP server ({key}). Sign in from Spacron: Settings > MCP. {detail}"),
+        )
+            .into_response()
+    };
+    let grant = match crate::commands::mcp_oauth::fresh_grant(&key, false).await {
+        Ok(grant) => grant,
+        Err(e) => return not_signed_in(e),
+    };
+    let mut upstream = match proxy_send(&method, &headers, &body, &grant).await {
+        Ok(res) => res,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("Could not reach {}: {e}", grant.resource)).into_response(),
+    };
+    // The token can be revoked or expire early; one forced refresh, then give up.
+    if upstream.status() == reqwest::StatusCode::UNAUTHORIZED {
+        match crate::commands::mcp_oauth::fresh_grant(&key, true).await {
+            Ok(fresh) => match proxy_send(&method, &headers, &body, &fresh).await {
+                Ok(res) => upstream = res,
+                Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+            },
+            Err(e) => return not_signed_in(e),
+        }
+        if upstream.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return not_signed_in("The server rejected the saved sign-in.".into());
+        }
+    }
+    let mut out = Response::builder().status(upstream.status().as_u16());
+    for name in PROXY_RESPONSE_HEADERS {
+        if let Some(value) = upstream.headers().get(*name) {
+            out = out.header(*name, value.as_bytes());
+        }
+    }
+    out.body(axum::body::Body::from_stream(upstream.bytes_stream()))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
 }
 
 /// `/.well-known/oauth-authorization-server` (RFC 8414).

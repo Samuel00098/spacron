@@ -10,7 +10,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
 import { mcpServers } from '$lib/stores/settings';
-import { enabledServers, serverKey, type McpServer } from '$lib/services/mcp-servers';
+import { enabledServers, serverKey, withSignInProxy, type McpServer } from '$lib/services/mcp-servers';
 import { setMcpServerNames } from './brain-tools';
 
 export interface McpToolInfo {
@@ -26,7 +26,14 @@ export interface McpCallResult {
   isError: boolean;
 }
 
-function specOf(server: McpServer) {
+let spacronHttpUrl: string | null = null;
+
+/** A signed-in server is reached through Spacron's proxy, as agents reach it. */
+async function specOf(input: McpServer) {
+  if (input.oauth && spacronHttpUrl === null) {
+    spacronHttpUrl = await invoke<string>('mcp_server_http_url').catch(() => null);
+  }
+  const [server] = withSignInProxy([input], spacronHttpUrl);
   return {
     transport: server.transport,
     url: server.url,
@@ -61,11 +68,13 @@ export function unknownServerMessage(name: string): string {
 }
 
 export function listMcpTools(server: McpServer): Promise<McpToolInfo[]> {
-  return invoke<McpToolInfo[]>('mcp_client_list_tools', { serverId: server.id, spec: specOf(server) });
+  return specOf(server).then((spec) => invoke<McpToolInfo[]>('mcp_client_list_tools', { serverId: server.id, spec }));
 }
 
 export function callMcpTool(server: McpServer, tool: string, args: Record<string, unknown>): Promise<McpCallResult> {
-  return invoke<McpCallResult>('mcp_client_call_tool', { serverId: server.id, spec: specOf(server), tool, arguments: args });
+  return specOf(server).then((spec) =>
+    invoke<McpCallResult>('mcp_client_call_tool', { serverId: server.id, spec, tool, arguments: args }),
+  );
 }
 
 /** Compact schema text for the model: property names, types and required. */

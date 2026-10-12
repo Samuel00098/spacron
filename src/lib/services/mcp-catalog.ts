@@ -23,8 +23,9 @@
  * - `key`: the user pastes a token, which becomes a request header.
  * - `none`: works as is.
  *
- * Icons are Simple Icons (CC0) 13.21.0 in `static/mcp-icons/`; an entry
- * without `icon` gets a lettered tile.
+ * Logos: full-colour marks from svgl (svgl.app, MIT) in `static/mcp-icons/color/`
+ * where it has the brand, else Simple Icons 16.35.0 (CC0) in `static/mcp-icons/`,
+ * else a lettered tile. Both fetched 2026-10-12.
  */
 import type { McpServer } from './mcp-servers';
 
@@ -49,8 +50,13 @@ export interface McpCatalogEntry {
   name: string;
   description: string;
   category: McpCatalogCategory;
-  /** File stem in `static/mcp-icons/`. */
+  /** File stem in `static/mcp-icons/` (Simple Icons, drawn in `color`). */
   icon?: string;
+  /**
+   * A full-colour logo in `static/mcp-icons/color/<id>.svg` (svgl), preferred
+   * over `icon`. `color-dark` also has `<id>-dark.svg` for dark themes.
+   */
+  logo?: 'color' | 'color-dark';
   /** Tile colour: the brand colour, or a lighter brand accent where the logo colour is near-black. */
   color: string;
   auth: 'oauth' | 'key' | 'none';
@@ -77,10 +83,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   // ── Popular ──────────────────────────────────────────────────────────────
   {
     id: 'github',
+    logo: 'color-dark',
     name: 'GitHub',
     description: 'Repos, pull requests, issues and CI',
     category: 'popular',
-    icon: 'github',
     color: '#181717',
     auth: 'key',
     key: {
@@ -94,10 +100,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'notion',
+    logo: 'color',
     name: 'Notion',
     description: 'Docs, tasks and databases',
     category: 'popular',
-    icon: 'notion',
     color: '#000000',
     auth: 'oauth',
     transport: 'http',
@@ -105,10 +111,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'linear',
+    logo: 'color',
     name: 'Linear',
     description: 'Issues, projects and cycles',
     category: 'popular',
-    icon: 'linear',
     color: '#5E6AD2',
     auth: 'oauth',
     transport: 'http',
@@ -116,10 +122,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'figma',
+    logo: 'color',
     name: 'Figma',
     description: 'Read designs, ship them to code',
     category: 'popular',
-    icon: 'figma',
     color: '#F24E1E',
     auth: 'oauth',
     transport: 'http',
@@ -127,10 +133,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'supabase',
+    logo: 'color',
     name: 'Supabase',
     description: 'Manage and query databases',
     category: 'popular',
-    icon: 'supabase',
     color: '#3FCF8E',
     auth: 'oauth',
     transport: 'http',
@@ -138,10 +144,11 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'stripe',
+    // Simple Icons: the svgl mark is unreadable at tile size on a dark panel.
+    icon: 'stripe',
     name: 'Stripe',
     description: 'Payments, customers and billing',
     category: 'popular',
-    icon: 'stripe',
     color: '#635BFF',
     auth: 'oauth',
     transport: 'http',
@@ -151,10 +158,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   // ── Developer tools ──────────────────────────────────────────────────────
   {
     id: 'vercel',
+    logo: 'color-dark',
     name: 'Vercel',
     description: 'Projects, deployments and logs',
     category: 'developer',
-    icon: 'vercel',
     color: '#000000',
     auth: 'oauth',
     transport: 'http',
@@ -162,10 +169,11 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'sentry',
+    // Simple Icons: the svgl mark is unreadable at tile size on a dark panel.
+    icon: 'sentry',
     name: 'Sentry',
     description: 'Errors, issues and traces',
     category: 'developer',
-    icon: 'sentry',
     color: '#362D59',
     auth: 'oauth',
     transport: 'http',
@@ -173,10 +181,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'cloudflare',
+    logo: 'color',
     name: 'Cloudflare',
     description: 'The Cloudflare API: Workers, DNS, R2',
     category: 'developer',
-    icon: 'cloudflare',
     color: '#F38020',
     auth: 'oauth',
     transport: 'http',
@@ -184,10 +192,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'netlify',
+    logo: 'color',
     name: 'Netlify',
     description: 'Sites, deploys and forms',
     category: 'developer',
-    icon: 'netlify',
     color: '#00C7B7',
     auth: 'oauth',
     transport: 'http',
@@ -195,10 +203,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'railway',
+    logo: 'color-dark',
     name: 'Railway',
     description: 'Services, deploys and variables',
     category: 'developer',
-    icon: 'railway',
     color: '#0B0D0E',
     auth: 'oauth',
     transport: 'http',
@@ -206,10 +214,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'gitlab',
+    logo: 'color',
     name: 'GitLab',
     description: 'Projects, merge requests and pipelines',
     category: 'developer',
-    icon: 'gitlab',
     color: '#FC6D26',
     auth: 'oauth',
     transport: 'http',
@@ -217,6 +225,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'neon',
+    logo: 'color',
     name: 'Neon',
     description: 'Serverless Postgres and branches',
     category: 'developer',
@@ -227,10 +236,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   },
   {
     id: 'firebase',
+    logo: 'color',
     name: 'Firebase',
     description: 'Projects, Firestore, Auth and hosting',
     category: 'developer',
-    icon: 'firebase',
     color: '#DD2C00',
     auth: 'none',
     transport: 'stdio',
@@ -252,10 +261,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   // ── Design ───────────────────────────────────────────────────────────────
   {
     id: 'canva',
+    logo: 'color',
     name: 'Canva',
     description: 'Create, review and edit designs',
     category: 'design',
-    icon: 'canva',
     color: '#00C4CC',
     auth: 'oauth',
     transport: 'http',
@@ -276,10 +285,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   // ── Productivity ─────────────────────────────────────────────────────────
   {
     id: 'atlassian',
+    logo: 'color',
     name: 'Atlassian',
     description: 'Jira issues and Confluence pages',
     category: 'productivity',
-    icon: 'atlassian',
     color: '#0052CC',
     auth: 'oauth',
     transport: 'http',
@@ -332,10 +341,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   // ── Data & monitoring ────────────────────────────────────────────────────
   {
     id: 'posthog',
+    logo: 'color',
     name: 'PostHog',
     description: 'Product analytics, flags and errors',
     category: 'data',
-    icon: 'posthog',
     color: '#F54E00',
     auth: 'oauth',
     transport: 'http',

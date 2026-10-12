@@ -43,6 +43,12 @@ export interface McpServer {
   enabled: boolean;
   /** Set when the row was installed from the catalog (`services/mcp-catalog.ts`). */
   catalogId?: string;
+  /**
+   * Signed in through Spacron (`commands/mcp_oauth.rs`). Agents and the chat
+   * then reach it through Spacron's proxy, which adds the token — see
+   * `withSignInProxy`.
+   */
+  oauth?: boolean;
 }
 
 /** The namespace every key Spacron writes lives in. See invariant 1 above. */
@@ -109,6 +115,30 @@ export function validateServer(server: McpServer, others: McpServer[] = []): str
     return 'The URL must start with http:// or https://.';
   }
   return null;
+}
+
+/**
+ * Spacron's proxy URL for a signed-in server: the app's own streamable-HTTP
+ * URL (`…/mcp?token=…`) with the path swapped for `/proxy/<key>`. The proxy
+ * holds the OAuth token and refreshes it, so the agent never has to.
+ */
+export function signInProxyUrl(spacronHttpUrl: string, key: string): string {
+  return spacronHttpUrl.replace(/\/mcp(\?|$)/, `/proxy/${key}$1`);
+}
+
+/**
+ * The list as agents and the chat should see it: a server signed in through
+ * Spacron points at the proxy instead of its own URL, with no headers. Others
+ * are unchanged. Without Spacron's URL (server not up) they are left as is,
+ * which still lets an agent run its own sign-in.
+ */
+export function withSignInProxy(servers: McpServer[], spacronHttpUrl: string | null | undefined): McpServer[] {
+  if (!spacronHttpUrl) return servers;
+  return servers.map((server) =>
+    server.oauth && server.transport !== 'stdio'
+      ? { ...server, transport: 'http', url: signInProxyUrl(spacronHttpUrl, serverKey(server)), headers: undefined }
+      : server,
+  );
 }
 
 /** The servers that should actually be written, keyed and deduplicated. */

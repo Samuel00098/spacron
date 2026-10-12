@@ -84,6 +84,7 @@ short enough that it says what the note is *about*, never what it says.
 - [orchestrator-vision](orchestrator-vision.md) — which models get images (Rust decides), the folder allowlist, and the per-provider wire shapes
 - [model-capabilities](model-capabilities.md) — where model vision/reasoning/tools come from, where they are saved, and what triggers the background refresh
 - [mcp-server-list](mcp-server-list.md) - user-managed MCP servers: the key-namespace rule that makes deleting one safe, and the rules that keep the chat's MCP client safe
+- [mcp-oauth-proxy](mcp-oauth-proxy.md) — signing in to MCP servers from Settings, and the proxy agents reach them through: the cross-file key rule and what was verified live
 - [vercel-ai-gateway](vercel-ai-gateway.md) — the `vercel` provider across chat, dictation, media and realtime voice: what was verified live, what still needs a key
 - [orchestrator-skills-and-app-commands](orchestrator-skills-and-app-commands.md) — where brain skills and palette-command control live, and the three pieces that keep risky commands behind an approval click
 

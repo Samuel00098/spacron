@@ -31,8 +31,13 @@ describe('MCP catalog', () => {
   });
 
   it('ships an icon file for every entry that names one', () => {
+    const dir = resolve(__dirname, '../../../static/mcp-icons');
     for (const entry of MCP_CATALOG.filter((e) => e.icon)) {
-      expect(existsSync(resolve(__dirname, '../../../static/mcp-icons', `${entry.icon}.svg`)), entry.id).toBe(true);
+      expect(existsSync(resolve(dir, `${entry.icon}.svg`)), entry.id).toBe(true);
+    }
+    for (const entry of MCP_CATALOG.filter((e) => e.logo)) {
+      expect(existsSync(resolve(dir, 'color', `${entry.id}.svg`)), entry.id).toBe(true);
+      if (entry.logo === 'color-dark') expect(existsSync(resolve(dir, 'color', `${entry.id}-dark.svg`)), entry.id).toBe(true);
     }
   });
 
@@ -61,5 +66,20 @@ describe('MCP catalog', () => {
     expect(matchesCatalogQuery(github, 'pull')).toBe(true);
     expect(matchesCatalogQuery(github, 'popular')).toBe(true);
     expect(matchesCatalogQuery(github, 'figma')).toBe(false);
+  });
+});
+
+describe('sign-in proxy', () => {
+  it('points a signed-in server at Spacron and drops its headers', async () => {
+    const { withSignInProxy, signInProxyUrl } = await import('./mcp-servers');
+    const linear = { ...catalogServer(MCP_CATALOG.find((e) => e.id === 'linear')!), oauth: true, headers: { A: 'b' } };
+    const github = catalogServer(MCP_CATALOG.find((e) => e.id === 'github')!, 't');
+    const url = 'http://127.0.0.1:51379/mcp?token=abc';
+    const [proxied, untouched] = withSignInProxy([linear, github], url);
+    expect(proxied.url).toBe('http://127.0.0.1:51379/proxy/spacron-linear?token=abc');
+    expect(proxied.headers).toBeUndefined();
+    expect(untouched).toBe(github);
+    expect(withSignInProxy([linear], null)[0]).toBe(linear);
+    expect(signInProxyUrl('http://127.0.0.1:1/mcp', 'k')).toBe('http://127.0.0.1:1/proxy/k');
   });
 });

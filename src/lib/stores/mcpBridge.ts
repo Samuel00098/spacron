@@ -53,6 +53,7 @@ import {
   qwenEntry,
   standardEntry,
   untypedEntry,
+  withSignInProxy,
   type McpServer,
 } from '$lib/services/mcp-servers';
 // ---------------------------------------------------------------------------
@@ -860,7 +861,9 @@ function wantsBrowserTools(): boolean {
 function userServers(): McpServer[] {
   try {
     const value = get(mcpServers);
-    return Array.isArray(value) ? value : [];
+    // Every writer fetches the HTTP URL before calling this, so the cache is
+    // warm; signed-in servers then go through Spacron's proxy.
+    return Array.isArray(value) ? withSignInProxy(value, serverHttpUrl) : [];
   } catch {
     return [];
   }
