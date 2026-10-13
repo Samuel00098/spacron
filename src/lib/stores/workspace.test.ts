@@ -28,6 +28,16 @@ describe('persisted stage arrangement', () => {
     expect(sanitise({ layout: { rightDrawerTool: 'review' } })?.layout?.rightSidebarTab).toBe('review');
     expect(sanitise({ layout: { rightSidebarTab: 'unknown' } })?.layout?.rightSidebarTab).toBe('files');
   });
+  it('keeps whether the right sidebar was open and where Preview sat', () => {
+    // Both were app-global, so a docked Preview and an open sidebar followed
+    // you into projects that had neither.
+    const kept = sanitise({ layout: { rightSidebarOpen: true, previewDocked: true } })?.layout;
+    expect(kept?.rightSidebarOpen).toBe(true);
+    expect(kept?.previewDocked).toBe(true);
+    const legacy = sanitise({ layout: { previewVisible: true } })?.layout;
+    expect(legacy?.rightSidebarOpen).toBe(false);
+    expect(legacy?.previewDocked).toBe(false);
+  });
   it('keeps the backend run that saved pane ids belong to', () => {
     // Without it every restore after a relaunch treats saved PTY ids as live and
     // re-attaches to whatever session now holds the same number.

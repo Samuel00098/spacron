@@ -54,6 +54,15 @@ describe('native agent transport', () => {
     expect(transport.state.textFallback).toBe(true);
   });
 
+  it('gives the ChatGPT subscription adapter Spacron text tools even when the model advertises native tools', async () => {
+    caps.value = { nativeTools: true };
+    const transport = new AgentTransport('chatgpt', 'gpt-5.6-luna');
+    invoke.mockResolvedValue({ text: '{"tool_calls":[{"id":"w1","name":"write_file","args":{"path":"note.txt","content":"A note"}}]}', calls: [], assistant: { role: 'assistant' } });
+    const raw = await transport.request('Use the listed Spacron tool_calls protocol.', 'Create note.txt');
+    expect(invoke.mock.calls[0][1].request).toMatchObject({ textMode: true, tools: [], systemPrompt: 'Use the listed Spacron tool_calls protocol.' });
+    expect(JSON.parse(raw).tool_calls[0]).toMatchObject({ name: 'write_file', args: { path: 'note.txt' } });
+  });
+
   it('retries once in text mode when the provider rejects native tools on the first round', async () => {
     const transport = new AgentTransport('openrouter', 'tool-less');
     invoke.mockRejectedValueOnce('unsupported_tools: openrouter / tool-less (404): No endpoints found that support tool use')

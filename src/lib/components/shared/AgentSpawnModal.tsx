@@ -13,7 +13,6 @@ import {
   type DetectedAgent,
 } from '$lib/stores/usage';
 import { isTauriRuntime } from '$lib/utils/tauri';
-import { invoke } from '@tauri-apps/api/core';
 import { get } from '$lib/stores/storeCompat';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -31,7 +30,11 @@ import { hasCustomizedYoloAgents } from '$lib/services/agent-permissions';
 import { runAgentSignIn, shouldOfferSignIn } from '$lib/services/agent-signin';
 import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
-import { createTaskWorktree, removeTaskWorktree } from '$lib/services/orchestrator/worktree-manager';
+import {
+  createTaskWorktree,
+  removeTaskWorktree,
+  worktreeUnavailableReason,
+} from '$lib/services/orchestrator/worktree-manager';
 import { adoptSpawnedAgent } from '$lib/stores/orchestrator';
 import { DEEPSEEK_HARNESS_COMMAND, isDeepSeekHarness, openDeepSeekHarnessPanel } from '$lib/services/deepseek-harness';
 import {
@@ -89,6 +92,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const [activeCommand, setActiveCommand] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [gitRepositoryAvailable, setGitRepositoryAvailable] = useState<boolean | null>(null);
+  const [worktreeUnavailable, setWorktreeUnavailable] = useState<string | null>(null);
 
   // A newly-created blank project is a real folder but is not a Git
   // repository. Worktrees require a repository and a resolved HEAD, while a
@@ -104,13 +108,13 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     }
 
     setGitRepositoryAvailable(null);
-    void invoke('workspace_git_status', { projectId })
-      .then(() => {
-        if (!cancelled) setGitRepositoryAvailable(true);
-      })
-      .catch(() => {
-        if (!cancelled) setGitRepositoryAvailable(false);
-      });
+    // A `.git` folder is not enough: a repo with no commits has no HEAD to
+    // branch a worktree from either.
+    void worktreeUnavailableReason(projectId).then((reason) => {
+      if (cancelled) return;
+      setWorktreeUnavailable(reason);
+      setGitRepositoryAvailable(reason === null);
+    });
 
     return () => {
       cancelled = true;
@@ -776,7 +780,7 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                   </div>
                   <small>
                     {gitRepositoryAvailable === false
-                      ? 'Unavailable: this project is not a Git repository'
+                      ? `Unavailable: ${worktreeUnavailable ?? 'this project is not a Git repository'}`
                       : 'Dedicated worktree & branch'}
                   </small>
                 </button>

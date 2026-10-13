@@ -47,6 +47,7 @@ import {
   backgroundImageEnabled,
   interfaceTransparency,
   backgroundImageBlur,
+  backgroundGlassOpacity,
   uiVibrancy,
   uiContrast,
   applyColorGrading,
@@ -57,6 +58,7 @@ import {
   applyBackgroundImage,
   applyInterfaceFrost,
   applyBackgroundAppearance,
+  applyWallpaperGlass,
 } from '$lib/stores/background';
 import { initNavigationHistory } from '$lib/stores/navigation';
 import { initApiKeyCache } from '$lib/services/ai-keychain';
@@ -175,6 +177,7 @@ export default function App() {
       applyBackgroundAppearance(get(backgroundImageBlur));
     };
     const unsubBgBlur = backgroundImageBlur.subscribe(applyAppearanceLive);
+    const unsubGlass = backgroundGlassOpacity.subscribe(applyWallpaperGlass);
 
     const applyGrading = () => applyColorGrading(get(uiVibrancy), get(uiContrast));
     const unsubVibrancy = uiVibrancy.subscribe(applyGrading);
@@ -287,6 +290,7 @@ export default function App() {
       unsubFrost();
       unsubBgEnabled();
       unsubBgBlur();
+      unsubGlass();
       unsubVibrancy();
       unsubContrast();
     };

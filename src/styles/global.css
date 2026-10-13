@@ -730,7 +730,7 @@ body {
    actual editor/terminal output and authored document content keep their own
    typography controls. The exclusions are descendants as well as roots so a
    nested span cannot accidentally pick the application size back up. */
-:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading, .settings-header h2, .launch-splash-word, .launch-splash-word *):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
+:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading, .settings-header h2, .launch-splash-word, .launch-splash-word *):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.chat-file-viewer-doc, .chat-file-viewer-doc *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
   font-family: var(--font-sans) !important;
   font-size: inherit !important;
   font-weight: var(--ui-font-weight) !important;
@@ -740,7 +740,7 @@ body {
 
 /* Retain a small amount of hierarchy without returning to the heavy 600-800
    weights that made labels look wide and crowded. */
-:is(#app, body > :where(*):not(#app)) :where(strong, b, h1, h2, h3, h4, h5, h6):not(.code-editor-container *):not(.cm-tooltip *):not(.xterm-container *):not(.markdown-preview *):not(.floating-text *):not(.shape-text-container *):not(.chat-mode-empty-heading):not(.settings-header h2) {
+:is(#app, body > :where(*):not(#app)) :where(strong, b, h1, h2, h3, h4, h5, h6):not(.code-editor-container *):not(.cm-tooltip *):not(.xterm-container *):not(.markdown-preview *):not(.chat-file-viewer-doc *):not(.floating-text *):not(.shape-text-container *):not(.chat-mode-empty-heading):not(.settings-header h2) {
   font-weight: 500 !important;
 }
 
@@ -812,12 +812,14 @@ html.has-bg-image.bg-palette-light:not(.has-bg-media) {
 }
 
 :root.has-bg-media.light-theme {
-  --text-primary: #334155 !important;
-  --text-primary-rgb: 51, 65, 85 !important;
-  --text-secondary: #3e4c60 !important;
-  --text-secondary-rgb: 62, 76, 96 !important;
-  --text-muted: #475569 !important;
-  --text-muted-rgb: 71, 85, 105 !important;
+  /* Deeper than the solid light palette: these sit on glass, and a dark pocket
+     of the image under a panel pulls its field down toward mid-grey. */
+  --text-primary: #0f172a !important;
+  --text-primary-rgb: 15, 23, 42 !important;
+  --text-secondary: #1e293b !important;
+  --text-secondary-rgb: 30, 41, 59 !important;
+  --text-muted: #334155 !important;
+  --text-muted-rgb: 51, 65, 85 !important;
   --text-placeholder: #475569 !important;
   --text-placeholder-rgb: 71, 85, 105 !important;
 }
@@ -1156,15 +1158,17 @@ input:where(:not([type='range'])):focus {
   --panel-veil: rgba(28, 32, 44, 0.13);
 }
 
-/* Unknown wallpapers can be pure white or black behind a label. Give custom
-   backgrounds a stronger panel surface while leaving the wallpaper visible
-   across the workspace outside the panels. */
+/* A custom image turns the panels to glass (see "Custom-image glass" at the
+   end of this file); the floating panels take the same opacity from the
+   Settings "Panel opacity" slider. No veil: the blur already separates them. */
 :root.has-bg-media {
-  --panel-tint: 0.94;
+  --panel-tint-rgb: var(--app-surface-rgb);
+  --panel-tint: var(--wallpaper-glass-dark, 0.6);
+  --panel-veil: transparent;
 }
 
 :root.has-bg-media.light-theme {
-  --panel-veil: rgba(28, 32, 44, 0.04);
+  --panel-tint: var(--wallpaper-glass-light, 0.7);
 }
 
 /* The floating panels. Each ships its own hand-rolled frost recipe in its own
@@ -1206,10 +1210,13 @@ input:where(:not([type='range'])):focus {
   --panel-veil: rgba(28, 32, 44, 0.07);
 }
 
-/* Custom wallpapers must not wash out the window controls. Keep this chrome
-   on the selected theme's opaque surface, independent of image luminance. */
+/* Custom wallpapers: the title bar is glass like the panels. Its ink is pinned
+   to the panel text palette, independent of image luminance, so the window
+   controls never wash out. */
 :root.has-bg-media .titlebar {
-  background: rgb(var(--bg-secondary-rgb)) !important;
+  background: var(--wallpaper-glass-surface) !important;
+  backdrop-filter: var(--wallpaper-glass-filter) !important;
+  -webkit-backdrop-filter: var(--wallpaper-glass-filter) !important;
   --titlebar-text: var(--text-primary) !important;
   --titlebar-text-rgb: var(--text-primary-rgb);
   --text-secondary: #d8dee9 !important;
@@ -1218,8 +1225,8 @@ input:where(:not([type='range'])):focus {
 
 :root.has-bg-media.light-theme .titlebar {
   --titlebar-text: var(--text-primary) !important;
-  --text-secondary: #3e4c60 !important;
-  --text-muted: #475569 !important;
+  --text-secondary: #1e293b !important;
+  --text-muted: #334155 !important;
 }
 
 :root.has-bg-media .titlebar :is(.nav-btn, .icon-btn, .github-push-btn, .wc-btn, .search-icon, .ws-caret) {
@@ -1980,10 +1987,11 @@ input[type='range']::-webkit-slider-thumb:active {
   background: transparent !important;
 }
 
+/* Not `.search-input`: it sits inside `.search-input-wrap`, which already
+   draws the box, so outlining it too drew a second ring inside the first. */
 .right-utility-panel :is(
   .sc-commit-input,
   .search-include,
-  .search-input,
   .env-input
 ) {
   background: transparent !important;
@@ -1991,7 +1999,7 @@ input[type='range']::-webkit-slider-thumb:active {
   box-shadow: var(--surface-outline) !important;
 }
 
-.right-utility-panel :is(.sc-commit-input, .search-include, .search-input, .env-input):focus {
+.right-utility-panel :is(.sc-commit-input, .search-include, .env-input):focus {
   box-shadow: var(--surface-outline-active) !important;
 }
 
@@ -2008,4 +2016,104 @@ input[type='range']::-webkit-slider-thumb:active {
 }
 .right-utility-panel .containers-panel .action-grid > button:hover:not(:disabled) {
   background: var(--bg-hover) !important;
+}
+
+/* ══ Custom-image glass ═════════════════════════════════════════════════════
+   With the user's own background image showing (`html.has-bg-media`, set by
+   `applyBackgroundImage`), every panel is frosted glass over the image instead
+   of the flat --app-surface fill, in both modes. Only the ink changes between
+   light and dark (the has-bg-media text palettes above).
+
+   Readability rests on three things together, so do not drop one:
+   - the blur, which turns any image behind a panel into soft colour fields;
+   - the fill, `--app-surface` at the Settings "Panel opacity" (30–90%, light
+     10 points more solid — see `applyWallpaperGlass`);
+   - the text palette, pinned per mode, never sampled from the image.
+
+   Menus, popovers and dialogs are deliberately NOT glass: they open over busy
+   panel content, where a second translucent layer would put text over text.
+   They keep the solid surface from the "Every floating panel and modal" list.
+
+   Selectors start `html:root.has-bg-media` to outrank the solid-theme and
+   frosted rules for the same panels (both `!important`, up to (0,4,0)) while
+   staying below the off-stage / layout-switching rules in AppShell.css, which
+   must keep switching the blur OFF for hidden and moving panes. */
+:root.has-bg-media {
+  --wallpaper-glass-surface: rgba(var(--app-surface-rgb), var(--wallpaper-glass-dark, 0.6));
+  --wallpaper-glass-filter: blur(28px) saturate(140%);
+}
+
+:root.has-bg-media.light-theme {
+  --wallpaper-glass-surface: rgba(var(--app-surface-rgb), var(--wallpaper-glass-light, 0.7));
+  --wallpaper-glass-filter: blur(28px) saturate(160%);
+}
+
+/* No working backdrop blur (some Linux compositors, old webviews): the image
+   would sit sharp behind text, so the fill carries readability on its own. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root.has-bg-media {
+    --wallpaper-glass-surface: rgba(var(--app-surface-rgb), 0.86);
+  }
+  :root.has-bg-media.light-theme {
+    --wallpaper-glass-surface: rgba(var(--app-surface-rgb), 0.9);
+  }
+}
+
+html:root.has-bg-media .app-shell .room-panel,
+html:root.has-bg-media .app-shell .left-utility-panel,
+html:root.has-bg-media .app-shell .right-utility-panel,
+html:root.has-bg-media .app-shell .chat-mode-panel,
+html:root.has-bg-media .app-shell .room-dock,
+html:root.has-bg-media .floating-prompt-shell .floating-prompt-bar:not(.voice-active):not(.transcribing),
+html:root.has-bg-media .app-shell .composer-strip .floating-prompt-bar:not(.voice-active):not(.transcribing),
+html:root.has-bg-media :is(.inbox-panel, .project-hud) {
+  background: var(--wallpaper-glass-surface) !important;
+  backdrop-filter: var(--wallpaper-glass-filter) !important;
+  -webkit-backdrop-filter: var(--wallpaper-glass-filter) !important;
+}
+
+/* Surfaces that sit INSIDE a glass panel and used to repeat its opaque fill.
+   Left opaque they would cover the glass they sit on; clear, the panel's own
+   frost shows through. */
+html:root.has-bg-media :is(
+  .terminal-pane.agent-pane,
+  .app-shell .chat-file-viewer,
+  .library-panel,
+  .env-overlay.embedded .env-modal
+) {
+  background: transparent !important;
+}
+
+/* Settings is a full page laid out like the workspace, over its own copy of
+   the image (SettingsModal.css), so its sidebar and panel are glass too. The
+   menus and dialogs it opens stay solid like everywhere else. */
+html:root.has-bg-media .settings-modal.settings-page :is(.settings-sidebar, .settings-panel) {
+  background: var(--wallpaper-glass-surface) !important;
+  backdrop-filter: var(--wallpaper-glass-filter) !important;
+  -webkit-backdrop-filter: var(--wallpaper-glass-filter) !important;
+}
+
+/* The terminal is a dark well in both modes — its ANSI palette is light ink
+   (see buildTerminalTheme) — so it keeps a dark scrim of its own over the
+   glass. Dark mode needs only a touch; light mode needs a real well because the
+   panel around it is pale. WebGL terminals paint opaque regardless. */
+html:root.has-bg-media .terminal-pane .xterm-container {
+  background: rgba(var(--terminal-surface-rgb, 0, 0, 0), 0.28) !important;
+}
+
+html:root.has-bg-media.light-theme .terminal-pane .xterm-container {
+  background: rgba(0, 0, 0, 0.82) !important;
+}
+
+/* The empty stage has no panel behind its prompt, so on an image its text would
+   sit straight on the picture. Shrink the full-stage overlay to a glass card
+   around the content. */
+html:root.has-bg-media .app-shell .stage-layers > .stage-empty-cta {
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  padding: 28px 36px;
+  border-radius: var(--bento-radius, 16px);
+  background: var(--wallpaper-glass-surface);
+  backdrop-filter: var(--wallpaper-glass-filter);
+  -webkit-backdrop-filter: var(--wallpaper-glass-filter);
 }

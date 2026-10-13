@@ -1,6 +1,8 @@
 import { useModalFocus } from '$lib/react/useModalFocus';
 import { useEffect, useRef, useState } from 'react';
 import { newFolderPromptOpen, createProjectFolder } from '$lib/stores/workspace';
+import { useStore } from '$lib/react/useStore';
+import { createProjectFromChat, projectFromChat } from '$lib/services/standalone-chat';
 import './NewFolderModal.css';
 
 function getFilename(p: string): string {
@@ -24,6 +26,7 @@ function nameError(name: string): string | null {
 }
 
 export default function NewFolderModal() {
+  const sourceChatId = useStore(projectFromChat);
   const [name, setName] = useState('');
   const [parentDir, setParentDir] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,6 +45,7 @@ export default function NewFolderModal() {
   const canCreate = !!parentDir && !!name.trim() && !validationError && !busy;
 
   function close() {
+    projectFromChat.set(null);
     newFolderPromptOpen.set(false);
     setName('');
     setParentDir(null);
@@ -73,7 +77,8 @@ export default function NewFolderModal() {
     setBusy(true);
     setError(null);
     try {
-      await createProjectFolder(parentDir!, name.trim());
+      if (sourceChatId) await createProjectFromChat(sourceChatId, parentDir!, name.trim());
+      else await createProjectFolder(parentDir!, name.trim());
       close();
     } catch (e) {
       setError(typeof e === 'string' ? e : e instanceof Error ? e.message : 'Failed to create folder.');
@@ -131,8 +136,8 @@ export default function NewFolderModal() {
             </svg>
           </div>
           <div className="nf-head-text">
-            <h2 className="nf-title">Create a project</h2>
-            <p className="nf-subtitle">Start a fresh project in a new folder.</p>
+            <h2 className="nf-title">{sourceChatId ? 'Create project from chat' : 'Create a project'}</h2>
+            <p className="nf-subtitle">{sourceChatId ? 'Keep this conversation as a project thread. Continue in Chat or switch to Code whenever you choose.' : 'Start a fresh project in a new folder.'}</p>
           </div>
         </div>
 

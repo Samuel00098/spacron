@@ -241,7 +241,10 @@
   padding: 0 5px;
   border-radius: 999px;
   background: var(--text-primary, #ffffff);
-  color: var(--bg-primary, #000000);
+  /* Not --bg-primary: with transparency on (always, over a custom image) that
+     token is ~10% alpha, and the number vanished into the pill. --app-surface
+     is the same mode-correct colour, always opaque. */
+  color: var(--app-surface, #000000);
   font-size: 10px;
   font-weight: 750;
   line-height: 1;

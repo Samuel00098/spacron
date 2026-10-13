@@ -1,7 +1,7 @@
 # Voice output is realtime-only; TTS is gone
 
-Since 2026-08-25 Spacron never synthesizes speech itself. Two separate paths,
-no overlap:
+Since 2026-08-25 Spacron never synthesizes speech *on its own*. Two separate
+paths, no overlap, plus one user-pressed exception (below):
 
 - **Transcription** (`transcription-hotkey.ts`) — speech-to-text only, lands
   text at the caret or in a terminal. Never speaks. See
@@ -67,3 +67,15 @@ any other key — rather than "Alt was involved". Don't loosen it further.
 
 `Ctrl+Shift+M` (`launchVoiceMode`) is a second, separate entry point and still
 goes through AppShell's normal bubble handler, so it DOES stand down for modals.
+
+## Exception: Read aloud (2026-10-13)
+
+The chat's per-message **Read aloud** button speaks one reply when, and only
+when, the user presses it (`services/read-aloud.ts`). Engines: the OS voices
+via Web Speech (free, robotic; WebView2 on Windows exposes only the old SAPI
+voices), or a cloud voice through `commands/speech.rs` (`read_aloud_speak`:
+OpenAI `gpt-4o-mini-tts` on the OpenAI key, ElevenLabs on its own
+`elevenlabs` keychain key). Choice lives in `stores/readAloud.ts`, set in
+Settings > Voice > Read aloud. It is NOT a revival of reply TTS: nothing
+auto-speaks, there is no voice brain, and agent completion cues stay a chime.
+Don't wire it into turn completion.

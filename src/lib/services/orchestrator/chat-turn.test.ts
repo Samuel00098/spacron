@@ -499,6 +499,30 @@ describe('Chat turn presentation', () => {
       expect(composed).not.toContain('### What is working');
     });
 
+    it('keeps a chat reply conversational: no file recap or summary line, failures and checks stay', () => {
+      const wrote = toolResult({ id: 'a', name: 'write_file', output: 'Wrote school-plan.md (1200 chars).' });
+      const plain = composeTurnReply('I drafted the plan.', 'Changed school-plan.md\nFull detail in Work details above.', undefined, [wrote], { conversational: true });
+      expect(plain).toBe('I drafted the plan.');
+
+      const failed = composeTurnReply(
+        'Updated the lookup.',
+        'Changed src/auth.ts',
+        undefined,
+        [
+          toolResult({ id: 'b', name: 'edit_file', output: 'Edited src/auth.ts (replaced 12 chars).' }),
+          toolResult({ id: 'c', name: 'run_command', ok: false, output: 'exit 1 in 2.0s: `npm test`\n1 failed' }),
+        ],
+        { conversational: true },
+      );
+      expect(failed).not.toContain('### What is working');
+      expect(failed).toContain('### What is not working');
+      expect(failed).toContain('Tests: FAILED');
+
+      const readOnly = composeTurnReply('It uses JWTs.', 'Reviewed src/auth.ts\nFull detail in Work details above.', undefined,
+        [toolResult({ id: 'd', name: 'read_file', output: 'src/auth.ts' })], { conversational: true });
+      expect(readOnly).toBe('It uses JWTs.');
+    });
+
     it('never prints a section the model already headed itself', () => {
       const composed = composeTurnReply(
         'Done.\n\n### What is working\n- The lookup is fixed.',

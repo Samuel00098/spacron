@@ -252,3 +252,30 @@ describe('legacy video wallpapers', () => {
     expect(dom.bgImage()).not.toContain('loop.mp4');
   });
 });
+
+describe('custom-image glass', () => {
+  it('turns the frosted pipeline on while a custom image shows, and off again when it is hidden', async () => {
+    const { background, settings } = await bootWith('/home/me/wallpaper.png');
+    settings.interfaceTransparency.set(0);
+    settings.backgroundImageEnabled.set(true);
+    background.applyBackgroundImage();
+    vi.runAllTimers();
+    expect(dom.hasClass('solid-theme')).toBe(false);
+
+    settings.backgroundImageEnabled.set(false);
+    background.applyBackgroundImage();
+    vi.runAllTimers();
+    expect(dom.hasClass('solid-theme')).toBe(true);
+  });
+
+  it('writes the panel opacity per mode, clamped to its range', async () => {
+    const { background } = await bootWith(null);
+    background.applyWallpaperGlass(60);
+    expect(dom.property('--wallpaper-glass-dark')).toBe('0.60');
+    expect(dom.property('--wallpaper-glass-light')).toBe('0.70');
+    background.applyWallpaperGlass(5);
+    expect(dom.property('--wallpaper-glass-dark')).toBe('0.30');
+    background.applyWallpaperGlass(100);
+    expect(dom.property('--wallpaper-glass-light')).toBe('0.95');
+  });
+});

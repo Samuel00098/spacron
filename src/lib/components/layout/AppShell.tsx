@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { isWebkitGtk, viewTransitionsReliable } from '$lib/utils/tauri';
 import TitleBar from './TitleBar.tsx';
@@ -19,7 +19,8 @@ import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
 import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
-import ToolsMenu, { type ToolMenuGroup } from '$lib/components/layout/ToolsMenu.tsx';
+import { type ToolMenuGroup } from '$lib/components/layout/ToolsMenu.tsx';
+import AgentQuickAdd from '$lib/components/shared/AgentQuickAdd';
 import {
   getSplitPaneStyle,
   getSplitStageStyle,
@@ -64,6 +65,7 @@ import {
   toggleSidebarTab,
   toggleEditorVisible,
   togglePreviewVisible,
+  setPreviewDocked,
   toggleTerminal,
   toggleReviewVisible,
   toggleHttpVisible,
@@ -272,7 +274,9 @@ type ShellLayoutKeys =
   | 'auxPanelWidth'
   | 'auxEditorHeight'
   | 'leftPanelWidth'
-  | 'rightDrawerWidth';
+  | 'rightDrawerWidth'
+  | 'previewDocked'
+  | 'previewDrawerWidth';
 
 type ShellLayoutState = Pick<LayoutState, Exclude<ShellLayoutKeys, 'agentSpawnOpen' | 'envManagerOpen'>> & {
   agentSpawnOpen: boolean;
@@ -422,6 +426,11 @@ function AuxTab({
 }
 
 function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
+  // Sketch's window key handler retains its callback between renders. Keep it
+  // stable while forwarding to the current Chat/Code close action.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const handleClose = useCallback(() => onCloseRef.current?.(), []);
   if (id === 'editor') {
     return (
       <Suspense fallback={null}>
@@ -448,7 +457,7 @@ function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
   if (id === 'sketch') {
     return (
       <Suspense fallback={null}>
-        <SketchPanel onClose={onClose} />
+        <SketchPanel onClose={handleClose} />
       </Suspense>
     );
   }
@@ -492,6 +501,7 @@ import { useGlobalTooltips } from '$lib/react/useGlobalTooltips.ts';
 
 export default function AppShell() {
   useGlobalTooltips();
+  const isSettingsOpen = useLayoutStore((s) => s.settingsOpen);
 
   function withTransition(action: () => void) {
     const startViewTransition = (document as Document & {
@@ -615,6 +625,8 @@ export default function AppShell() {
         auxEditorHeight: s.auxEditorHeight,
         leftPanelWidth: s.leftPanelWidth,
         rightDrawerWidth: s.rightDrawerWidth,
+        previewDocked: s.previewDocked,
+        previewDrawerWidth: s.previewDrawerWidth,
       }),
     ),
   );
@@ -630,6 +642,15 @@ export default function AppShell() {
   const switchingPhase = useWorkspaceStore((s) => s.switchingPhase);
   const openProjectIdList = useWorkspaceStore((s) => s.openProjectIds);
   const activeProjectIdValue = useWorkspaceStore((s) => s.activeProjectId);
+  // The open flags are shared with Code. This only remembers which tool is
+  // covering Chat; the return arrow dismisses that cover without closing it.
+  const [chatPanelRoom, setChatPanelRoom] = useState<'tasks' | 'sketch' | 'library' | null>(null);
+  const activeChatPanel = currentInteractionMode === 'chat' && chatPanelRoom && layoutState[PANEL_VISIBILITY_KEYS[chatPanelRoom]]
+    ? chatPanelRoom
+    : null;
+  useEffect(() => {
+    setChatPanelRoom(null);
+  }, [activeProjectIdValue, workspaceId]);
   useEffect(() => {
     hoveredStageRoom.set(null);
     return () => hoveredStageRoom.set(null);
@@ -765,6 +786,7 @@ export default function AppShell() {
   const sidebarResizeRef = useRef({ startX: 0, startWidth: 0 });
   const leftPanelResizeRef = useRef({ startX: 0, startWidth: 0 });
   const rightDrawerResizeRef = useRef({ startX: 0, startWidth: 0, active: false });
+  const rightToolTabsRef = useRef<HTMLDivElement | null>(null);
   const auxResizeRef = useRef({ startX: 0, startWidth: 0 });
   const auxRowResizeRef = useRef({ startY: 0, startHeight: 0 });
   const layoutSwitchTimerRef = useRef<number | null>(null);
@@ -849,7 +871,8 @@ export default function AppShell() {
     () =>
       [
         { id: 'editor' as const, visible: layoutState.editorVisible },
-        { id: 'preview' as const, visible: layoutState.previewVisible },
+        // A docked Preview lives in the right sidebar, not on the stage.
+        { id: 'preview' as const, visible: layoutState.previewVisible && !layoutState.previewDocked },
         { id: 'tasks' as const, visible: layoutState.tasksVisible },
         { id: 'sketch' as const, visible: layoutState.sketchVisible },
         { id: 'library' as const, visible: layoutState.libraryVisible },
@@ -1163,6 +1186,14 @@ export default function AppShell() {
     if (layoutCommand.type !== 'room') return;
 
     const wanted = layoutCommand.room.trim().toLowerCase();
+    // A docked Preview is not a room, so the resolver below would not find it.
+    // "Focus preview" (an agent, a terminal link, revealPreview) means "show it"
+    // wherever it lives.
+    if (wanted === 'preview' && layoutState.previewVisible && layoutState.previewDocked) {
+      if (layoutCommand.op === 'close') togglePreviewVisible();
+      else if (layoutCommand.op === 'focus' || layoutCommand.op === 'expand' || layoutCommand.op === 'restore') showDockedPreview();
+      return;
+    }
     const resolveRoom = (): RoomId | null => {
       if (!wanted) return null;
       if (['last', 'it', 'that', 'that one', 'focused', 'active', 'current'].includes(wanted)) {
@@ -1686,11 +1717,10 @@ export default function AppShell() {
     // leftwards (negative deltaX) widens it.
     const delta = (rightDrawerResizeRef.current.startX - event.clientX) / scale;
     const maxAllowedWidth = Math.min(RIGHT_DRAWER_MAX_WIDTH, windowWidth / scale - 250 - 48);
-    useLayoutStore.setState({
-      rightDrawerWidth: clampRightDrawerWidth(
-        Math.min(maxAllowedWidth, rightDrawerResizeRef.current.startWidth + delta),
-      ),
-    });
+    const width = clampRightDrawerWidth(
+      Math.min(maxAllowedWidth, rightDrawerResizeRef.current.startWidth + delta),
+    );
+    useLayoutStore.setState(showingDockedPreview ? { previewDrawerWidth: width } : { rightDrawerWidth: width });
   }
 
   function endRightDrawerResize() {
@@ -1701,7 +1731,9 @@ export default function AppShell() {
     document.body.style.userSelect = '';
     // Persist the final width — the live drag wrote straight to the store, which
     // does not touch storage. This is the only place the new width is saved.
-    useLayoutStore.getState().setRightDrawerWidth(useLayoutStore.getState().rightDrawerWidth);
+    const state = useLayoutStore.getState();
+    if (showingDockedPreview) state.setPreviewDrawerWidth(state.previewDrawerWidth);
+    else state.setRightDrawerWidth(state.rightDrawerWidth);
   }
 
   // --- LEFT workspace rail -------------------------------------------------
@@ -1721,6 +1753,39 @@ export default function AppShell() {
     (tool) => tool !== 'snapshots' || showSnapshotsTab,
   );
   const rightSidebarOpen = useStore(rightSidebarVisible);
+  // Preview can be docked in this sidebar instead of being a stage room. It
+  // stays mounted while another tab is showing — hiding it is a visibility
+  // change, so the page inside never reloads (the same rule the stage applies
+  // through `isPersistentRoomId`).
+  const previewDockedOpen = layoutState.previewVisible && layoutState.previewDocked;
+  const showingDockedPreview =
+    previewDockedOpen && rightSidebarTab === 'preview' && rightDrawerToolOf(layoutState) === null;
+  // The docked Preview keeps its own, wider width. See `previewDrawerWidth`.
+  const rightSidebarWidth = showingDockedPreview ? layoutState.previewDrawerWidth : layoutState.rightDrawerWidth;
+
+  function showDockedPreview() {
+    rightSidebarVisible.set(true);
+    rightSidebarTabStore.set('preview');
+    // `apply…`, not `setRightDrawerTool`: closing a utility to make room for
+    // the Preview tab must not also move the stage.
+    if (rightDrawerToolOf(useLayoutStore.getState()) !== null) {
+      useLayoutStore.getState().applyRightDrawerTool(null);
+    }
+  }
+
+  // Bring the sidebar up on the Preview tab whenever Preview newly opens there,
+  // whichever path opened it (dock button, shortcut, an agent, a dev server).
+  // Not when a project switch restored it: that project's own sidebar state
+  // was restored with it, and forcing the sidebar open would override it. The
+  // restore is async and lands across several renders, so the id check alone
+  // misses it; `projectSwitching` covers the whole restore.
+  const prevPreviewDockedOpenRef = useRef({ open: previewDockedOpen, projectId: activeProjectIdValue });
+  useEffect(() => {
+    const was = prevPreviewDockedOpenRef.current;
+    prevPreviewDockedOpenRef.current = { open: previewDockedOpen, projectId: activeProjectIdValue };
+    if (projectSwitching || was.projectId !== activeProjectIdValue) return;
+    if (previewDockedOpen && !was.open) showDockedPreview();
+  }, [previewDockedOpen, activeProjectIdValue, projectSwitching]);
 
   // Drawer widths as rendered: the saved widths, squeezed only when the window
   // is too narrow to also give the stage a usable width. Gutters are the 20px
@@ -1729,7 +1794,7 @@ export default function AppShell() {
     available:
       windowWidth / (zoom / 100) - 16 - (leftDrawerOpen ? 20 : 0) - (rightSidebarOpen ? 20 : 0),
     left: layoutState.leftPanelWidth,
-    right: layoutState.rightDrawerWidth,
+    right: rightSidebarWidth,
     leftOpen: leftDrawerOpen,
     rightOpen: rightSidebarOpen,
   });
@@ -1948,6 +2013,39 @@ export default function AppShell() {
     else selectRightTool(tool);
   }
 
+  /** The selected right-sidebar tab names itself beside its icon. */
+  function rightTabLabel(active: boolean, title: string) {
+    return active ? <span className="drawer-tab-label">{title}</span> : null;
+  }
+
+  const revealSelectedRightToolTab = useCallback(() => {
+    const strip = rightToolTabsRef.current;
+    const selected = strip?.querySelector<HTMLElement>('.drawer-tab-btn.active');
+    if (!strip || !selected) return;
+    const stripBounds = strip.getBoundingClientRect();
+    const tabBounds = selected.getBoundingClientRect();
+    const scale = strip.offsetWidth > 0 ? stripBounds.width / strip.offsetWidth : 1;
+    // Scroll this strip only, after the selected label has expanded. Rects
+    // include UI zoom, while scrollLeft uses the strip's own CSS pixels.
+    if (tabBounds.left < stripBounds.left) {
+      strip.scrollLeft += (tabBounds.left - stripBounds.left) / scale;
+    } else if (tabBounds.right > stripBounds.right) {
+      strip.scrollLeft += (tabBounds.right - stripBounds.right) / scale;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!rightSidebarOpen) return;
+    const strip = rightToolTabsRef.current;
+    const selected = strip?.querySelector<HTMLElement>('.drawer-tab-btn.active');
+    if (!strip || !selected) return;
+    revealSelectedRightToolTab();
+    const observer = new ResizeObserver(revealSelectedRightToolTab);
+    observer.observe(strip);
+    observer.observe(selected);
+    return () => observer.disconnect();
+  }, [rightSidebarOpen, rightSidebarTab, rightActiveTool, showingDockedPreview, rightDrawerWidthFit, showSnapshotsTab, revealSelectedRightToolTab]);
+
   function renderRightUtilityPanel() {
     if (!rightSidebarOpen) return null;
     return (
@@ -1967,22 +2065,32 @@ export default function AppShell() {
           aria-orientation="vertical"
         />
         <header className="drawer-header right-sidebar-header">
-          <div className="right-sidebar-tool-tabs">
+          <div className="right-sidebar-tool-tabs" ref={rightToolTabsRef} onClick={() => requestAnimationFrame(revealSelectedRightToolTab)}>
             <div className="drawer-tabs" aria-label="Project navigation tools">
               {rightNavigatorTools.map((tool) => (
                 <button
                   key={tool}
-                  className={`drawer-tab-btn${!rightDrawerOpen && rightNavigatorTool === tool ? ' active' : ''}`}
+                  className={`drawer-tab-btn${!rightDrawerOpen && !showingDockedPreview && rightNavigatorTool === tool ? ' active' : ''}`}
                   onClick={() => selectRightNavigatorTool(tool)}
                   title={LEFT_TOOL_META[tool].title}
                   aria-label={LEFT_TOOL_META[tool].title}
                 >
                   {LEFT_TOOL_META[tool].icon}
+                  {rightTabLabel(!rightDrawerOpen && !showingDockedPreview && rightNavigatorTool === tool, LEFT_TOOL_META[tool].title)}
                 </button>
               ))}
             </div>
             <div className="right-sidebar-tool-divider" aria-hidden="true" />
             <div className="drawer-tabs" aria-label="Utility tools">
+              <button
+                className={`drawer-tab-btn${showingDockedPreview ? ' active' : ''}`}
+                onClick={() => (previewDockedOpen ? showDockedPreview() : setPreviewDocked(true))}
+                title="Preview"
+                aria-label="Preview"
+              >
+                <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>
+                {rightTabLabel(showingDockedPreview, 'Preview')}
+              </button>
               {RIGHT_TOOLS_ALL.map((tool) => (
                 <button
                   key={tool}
@@ -1992,6 +2100,7 @@ export default function AppShell() {
                   aria-label={RIGHT_TOOL_META[tool].title}
                 >
                   {RIGHT_TOOL_META[tool].icon}
+                  {rightTabLabel(rightActiveTool === tool, RIGHT_TOOL_META[tool].title)}
                 </button>
               ))}
             </div>
@@ -2006,7 +2115,14 @@ export default function AppShell() {
           </button>
         </header>
         <div className="drawer-body">
-          {projectSwitching
+          {previewDockedOpen && (
+            <div className="right-sidebar-preview" hidden={!showingDockedPreview}>
+              <PreviewPanel />
+            </div>
+          )}
+          {showingDockedPreview
+            ? null
+            : projectSwitching
             ? <div role="status">Loading project tools…</div>
             : rightActiveTool
             ? <PanelHost id={rightActiveTool} onClose={() => closeRoom(rightActiveTool)} />
@@ -2049,9 +2165,15 @@ export default function AppShell() {
     const carryZoom = open && zoomedRoom !== null && zoomedRoom !== id;
     const run = open && (carryZoom || willRetileSplit(id)) ? withStageRetile : withRoomTransition;
     run(() => {
+      if (id === 'tasks' || id === 'sketch' || id === 'library') {
+        setChatPanelRoom((current) => open ? id : current === id ? null : current);
+      }
       const key = PANEL_VISIBILITY_KEYS[id];
       persistLayoutPatch({
         [key]: open,
+        // This action opens a stage room. A closed sidebar Preview may retain
+        // its old docking flag after the preference changes to Room.
+        ...(id === 'preview' && open ? { previewDocked: false } : {}),
         activeView: open ? id : 'terminal',
         lastAuxView: id,
         editorSplitPreview: false,
@@ -2075,12 +2197,37 @@ export default function AppShell() {
   }
 
   function togglePanelRoom(id: AuxPanelId) {
+    if (currentInteractionMode === 'chat' && (id === 'tasks' || id === 'sketch' || id === 'library')) {
+      if (layoutState[PANEL_VISIBILITY_KEYS[id]] && activeChatPanel !== id) {
+        setChatPanelRoom(id);
+        focusRoom(id);
+      } else {
+        setPanelRoomOpen(id, activeChatPanel !== id);
+      }
+      return;
+    }
     if (id === 'review') {
       toggleRightTool('review');
       return;
     }
+    if (id === 'preview') {
+      if (previewDockedOpen) {
+        // Showing → close it; open but hidden behind another tab → show it.
+        if (showingDockedPreview && rightSidebarOpen) {
+          togglePreviewVisible();
+          closeRightSidebar();
+        }
+        else showDockedPreview();
+        return;
+      }
+      if (!layoutState.previewVisible && useSettingsStore.getState().previewPlacement === 'sidebar') {
+        setPreviewDocked(true);
+        return;
+      }
+    }
     const isOpen = Boolean(layoutState[PANEL_VISIBILITY_KEYS[id]]);
     if (isOpen && activeRoom !== id) {
+      if (id === 'tasks' || id === 'sketch' || id === 'library') setChatPanelRoom(id);
       focusRoom(id);
       return;
     }
@@ -2344,10 +2491,15 @@ export default function AppShell() {
   function beginRoomDrag(id: RoomId, event: React.PointerEvent<HTMLElement>) {
     if (
       event.button !== 0 ||
+      activeChatPanel !== null ||
       ambientLayout !== 'gallery' ||
       stageExpandedRoom !== null ||
       splitRooms.length < 2 ||
-      (event.target as HTMLElement).closest('.room-actions')
+      (event.target as HTMLElement).closest('.room-actions') ||
+      // React bubbles events from a portal through its React parent, so a press
+      // in a menu portaled out of the header (the "+" agent menu) lands here
+      // too. Capturing it would steal the pointerup and the item's click.
+      !event.currentTarget.contains(event.target as Node)
     ) {
       return;
     }
@@ -2432,6 +2584,9 @@ export default function AppShell() {
 
 
   function minimizeRoom(id: RoomId) {
+    if (activeChatPanel === id) {
+      return;
+    }
     withRoomTransition(() => {
       if (expandedRoom === id) {
         setExpandedRoom(null);
@@ -2501,6 +2656,7 @@ export default function AppShell() {
   }
 
   function closeRoom(id: RoomId) {
+    if (currentInteractionMode === 'chat' && isFullscreenRoom(id) && activeChatPanel !== id) return;
     // Ask before killing live shells. Cancelling leaves the room open rather
     // than hiding it: a hidden room whose processes are still running is the
     // ghost state this whole path exists to remove.
@@ -2545,7 +2701,7 @@ export default function AppShell() {
   const tasksItem: ActivityItem = {
     id: 'tasks',
     title: 'Tasks',
-    active: layoutState.tasksVisible && activeRoom === 'tasks',
+    active: currentInteractionMode === 'chat' ? activeChatPanel === 'tasks' : layoutState.tasksVisible && activeRoom === 'tasks',
     onClick: () => togglePanelRoom('tasks'),
     icon: <Icon><rect x="3" y="3" width="5" height="18" rx="1" /><rect x="10" y="3" width="5" height="12" rx="1" /><rect x="17" y="3" width="5" height="8" rx="1" /></Icon>,
   };
@@ -2638,7 +2794,7 @@ export default function AppShell() {
   const sketchItem: ActivityItem = {
     id: 'sketch',
     title: 'Sketch',
-    active: layoutState.sketchVisible && activeRoom === 'sketch',
+    active: currentInteractionMode === 'chat' ? activeChatPanel === 'sketch' : layoutState.sketchVisible && activeRoom === 'sketch',
     onClick: () => togglePanelRoom('sketch'),
     icon: <Icon><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 9.5-9.5z" /></Icon>,
   };
@@ -2648,7 +2804,7 @@ export default function AppShell() {
   const libraryItem: ActivityItem = {
     id: 'library',
     title: 'Library',
-    active: layoutState.libraryVisible && activeRoom === 'library',
+    active: currentInteractionMode === 'chat' ? activeChatPanel === 'library' : layoutState.libraryVisible && activeRoom === 'library',
     onClick: () => togglePanelRoom('library'),
     icon: <Icon><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></Icon>,
   };
@@ -2669,8 +2825,8 @@ export default function AppShell() {
     icon: LEFT_TOOL_META[tool].icon,
   }));
 
-  // Launcher buttons for the right utility drawer's tools (incl. Orchestrator) —
-  // the Utilities group of the Tools menu.
+  // Launcher entries for the right utility drawer's tools (incl. Orchestrator) —
+  // the palette's Utilities group.
   const drawerToolItems: ActivityItem[] = RIGHT_TOOLS_ALL.map((tool) => ({
     id: tool,
     title: RIGHT_TOOL_META[tool].title,
@@ -2683,8 +2839,7 @@ export default function AppShell() {
   // into their own group.
   const roomLauncherItems = panelItems.filter((item) => !drawerToolIds.has(item.id));
 
-  // The prompt-bar Tools menu contains room and utility launchers. Workspace
-  // navigation is split between the small left rail and the right sidebar.
+  // Room and utility launchers, grouped for the command palette.
   const toolMenuGroups: ToolMenuGroup[] = [
     { id: 'rooms', label: 'Rooms', items: roomLauncherItems },
     {
@@ -2693,13 +2848,16 @@ export default function AppShell() {
       items: [...rightNavigatorItems, ...drawerToolItems],
     },
   ].filter((group) => group.items.length > 0);
+  // Keep Editor, Terminal and Preview available directly from the prompt bar.
+  // Preview uses the saved opening destination; utilities stay in the sidebar.
+  const roomShortcutItems = panelItems.filter((item) => item.id === 'editor' || item.id === 'terminal' || item.id === 'preview');
   const paletteToolGroups: ToolMenuGroup[] = [
     { id: 'projects', label: 'Projects', items: leftNavDockItems },
     { id: 'workspace-tools', label: 'Project tools', items: rightNavigatorItems },
     ...toolMenuGroups,
   ];
 
-  // Layout actions stay as bare icons next to the Tools menu: they are pressed
+  // Layout actions stay as bare icons in the prompt bar: they are pressed
   // constantly while arranging panes, so a popover round-trip would cost more
   // than the chrome they take up. Spawn leads the list in code mode and is
   // filtered out in chat mode, where spawning is disabled anyway.
@@ -3102,11 +3260,11 @@ export default function AppShell() {
   // stays clickable.
   function renderRoomFrame(id: RoomId, featured = false) {
     const title = roomTitle(id);
-    const isThisExpanded = stageExpandedRoom === id;
+    const isThisExpanded = stageExpandedRoom === id || activeChatPanel === id;
     // Tasks and Sketch have no grid to restore to, so they get no zoom control
     // at all — a restore button that put the room back exactly where it already
     // was would read as broken. Minimize and Close still get you out.
-    const isThisForcedFullscreen = forcedFullscreenRoom === id;
+    const isThisForcedFullscreen = forcedFullscreenRoom === id || activeChatPanel === id;
     // Agent rooms carry their CLI's real logo to the left of the title.
     const agentSession = isAgentRoomId(id) ? getAgentSessionForRoom(id) : null;
     // The same active-work light belongs to every place terminal work can run,
@@ -3148,6 +3306,17 @@ export default function AppShell() {
           onPointerUp={endRoomDrag}
           onPointerCancel={endRoomDrag}
         >
+          {activeChatPanel === id && (
+            <button
+              type="button"
+              className="room-action chat-panel-back"
+              onClick={() => setChatPanelRoom(null)}
+              title="Back to chat"
+              aria-label="Back to chat"
+            >
+              <Icon><path d="m12 19-7-7 7-7" /><path d="M5 12h14" /></Icon>
+            </button>
+          )}
           <button
             className={`room-title${agentSession || roomGlyph ? ' has-brand' : ''}`}
             onClick={() => {
@@ -3155,7 +3324,7 @@ export default function AppShell() {
                 roomDragClickGuardRef.current = false;
                 return;
               }
-              focusRoom(id);
+              if (activeChatPanel !== id) focusRoom(id);
             }}
             title={
               isThisExpanded
@@ -3179,6 +3348,9 @@ export default function AppShell() {
             <span className="room-name">{title}</span>
           </button>
           <div className="room-actions">
+            {/* DeepSeek Harness is an agent too, but its room is a web panel
+                with no agent session behind it. */}
+            {(agentSession || id === 'deepseek') && <AgentQuickAdd className="room-action" />}
             {isThisForcedFullscreen ? null : isThisExpanded ? (
               <button
                 className="room-action"
@@ -3208,11 +3380,11 @@ export default function AppShell() {
                 </svg>
               </button>
             )}
-            <button className="room-action" onClick={() => minimizeRoom(id)} title="Minimize" aria-label={`Minimize ${title}`}>
+            {activeChatPanel !== id && <button className="room-action" onClick={() => minimizeRoom(id)} title="Minimize" aria-label={`Minimize ${title}`}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                 <path d="M5 12h14" />
               </svg>
-            </button>
+            </button>}
             <button className="room-action danger" onClick={() => closeRoom(id)} title="Close" aria-label={`Close ${title}`}>
               <XIcon />
             </button>
@@ -3455,7 +3627,7 @@ export default function AppShell() {
 
   function renderAmbientLayout() {
     const isSplit = ambientLayout === 'gallery';
-    const isExpanded = stageExpandedRoom !== null;
+    const isExpanded = activeChatPanel !== null || stageExpandedRoom !== null;
 
     // The terminal rooms also stay mounted (hidden, off the stage) while another
     // project still has a live shell in them: the room is per project, and
@@ -3463,7 +3635,7 @@ export default function AppShell() {
     // dispose every other project's parked xterm with it.
     const persistentStageRooms: RoomId[] = [
       ...(['terminal', 'dev-terminal', 'preview', 'sketch', 'deepseek'] as RoomId[]).filter((room) =>
-        openRooms.includes(room) ||
+        openRooms.includes(room) || activeChatPanel === room ||
         (room === 'terminal' && backgroundShellProjects.terminal.length > 0) ||
         (room === 'dev-terminal' && backgroundShellProjects.dev.length > 0),
       ),
@@ -3472,7 +3644,9 @@ export default function AppShell() {
       ),
     ];
 
-    const stageRooms: RoomId[] = stageExpandedRoom
+    const stageRooms: RoomId[] = activeChatPanel
+      ? [activeChatPanel]
+      : stageExpandedRoom
       ? [stageExpandedRoom]
       : isSplit
         ? splitRooms
@@ -3649,7 +3823,9 @@ export default function AppShell() {
             what broke running agents' rendering). `home-hidden` hides it with
             visibility, never display, so the panes keep their measured size and
             are instantly correct when Home closes. */}
-        <div className="zoom-content">
+        {/* Keep every workspace pane mounted and measured while Settings covers
+            it; inert prevents focus and interaction with the hidden workspace. */}
+        <div className="zoom-content" inert={isSettingsOpen} aria-hidden={isSettingsOpen || undefined}>
         <div className={`workspace-layer${currentInteractionMode === 'chat' ? ' interaction-chat' : ''}`}>
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
@@ -3668,16 +3844,20 @@ export default function AppShell() {
               <div className="rooms-content-horizontal">
                 {renderLeftUtilityPanel()}
 
-                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${projectVeiled ? ' project-veiled' : projectVeil === 'reveal' ? ' project-revealing' : ''}${currentInteractionMode === 'chat' ? ' interaction-chat' : ''}${
+                <main ref={roomsTableRef} className={`rooms-table ambient-${ambientLayout}${layoutSwitching ? ' layout-switching' : ''}${projectVeiled ? ' project-veiled' : projectVeil === 'reveal' ? ' project-revealing' : ''}${currentInteractionMode === 'chat' ? ' interaction-chat' : ''}${activeChatPanel ? ' chat-tool-open' : ''}${
                   (ambientLayout === 'preview' && visibleRooms.filter((room) => room === 'terminal' || isAgentRoomId(room)).length === 0) ||
                   (ambientLayout === 'development' && visibleRooms.filter((room) => room === 'dev-terminal' || isAgentRoomId(room)).length === 0)
                     ? ` ${ambientLayout}-solo`
                     : ''
                 }`} aria-label="Spacron ambient layout">
-                  <div className="cli-mode-layer">
+                  <div className="cli-mode-layer" inert={currentInteractionMode === 'chat' && !activeChatPanel} aria-hidden={currentInteractionMode === 'chat' && !activeChatPanel || undefined}>
                     {renderAmbientLayout()}
                   </div>
-                  {currentInteractionMode === 'chat' && <ChatModePanel />}
+                  {currentInteractionMode === 'chat' && (
+                    <div className="chat-mode-layer" inert={Boolean(activeChatPanel)} aria-hidden={Boolean(activeChatPanel) || undefined}>
+                      <ChatModePanel />
+                    </div>
+                  )}
                 </main>
 
                 {renderRightUtilityPanel()}
@@ -3687,9 +3867,9 @@ export default function AppShell() {
               {currentInteractionMode === 'cli' && renderMinimizedRooms()}
 
               <div ref={overlaysRef} className="workspace-overlays">
-              {/* The room dock used to sit here as its own strip. Its launchers
-                  now live in the prompt bar's Tools menu, and its layout
-                  actions inline beside it. */}
+              {/* The room dock used to sit here as its own strip. Its layout
+                  actions and the Editor/Terminal launchers now sit in the
+                  prompt bar; the other launchers are right-sidebar tabs. */}
               <div ref={setLayoutControlHost} className="stage-layout-control-host" />
               <div className="composer-strip">
                 <FloatingPromptBar
@@ -3699,7 +3879,7 @@ export default function AppShell() {
                         .filter((item) => item.id !== 'spawnAgent' || currentInteractionMode === 'cli')
                         .map((item) => <ActivityButton key={item.id} item={item} />)}
                       <div className="prompt-trailing-separator" />
-                      <ToolsMenu groups={toolMenuGroups} />
+                      {roomShortcutItems.map((item) => <ActivityButton key={item.id} item={item} />)}
                     </div>
                   }
                 />

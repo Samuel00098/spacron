@@ -32,6 +32,10 @@ pub struct PtySession {
     /// resolve a pid (e.g. some Windows conpty edge cases); the row then shows
     /// no numbers instead of a fabricated one.
     pub pid: Option<u32>,
+    /// The folder the shell was started in. Lets a project folder rename find
+    /// and close every session parked inside it, including ones the webview
+    /// has lost track of.
+    pub cwd: std::path::PathBuf,
     output_buffer: Arc<Mutex<Vec<u8>>>,
     data_subscribers: Arc<Mutex<Vec<Box<dyn DataSink>>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
@@ -65,6 +69,7 @@ pub fn spawn(
         cmd.arg(arg);
     }
     cmd.cwd(&cwd);
+    let spawn_cwd = std::path::PathBuf::from(&cwd);
     if let Some(env_vars) = env {
         for (k, v) in env_vars {
             cmd.env(k, v);
@@ -194,6 +199,7 @@ pub fn spawn(
         writer,
         killer,
         pid,
+        cwd: spawn_cwd,
         output_buffer,
         data_subscribers,
         exit_code,

@@ -16,6 +16,7 @@ import {
   removeThreadMessage,
   removeThreadMessagesFrom,
   renameChatThread,
+  renameChatImageAttachments,
   repairThreadSummaries,
   resetChatThreadsForTests,
   selectChatThread,
@@ -33,7 +34,39 @@ beforeEach(() => {
   invoke.mockReset();
 });
 
+describe('renameChatImageAttachments', () => {
+  it('updates every saved reference to the renamed image while preserving unrelated attachments', () => {
+    const first = createChatThread('project-a');
+    const second = createChatThread('project-b');
+    const source = 'C:/Project/generations/old.png';
+    const attachment = { id: 'generated-1', name: 'old.png', type: 'image/png', size: 42, path: source, generated: true };
+    for (const thread of [first, second]) {
+      appendThreadMessage({ id: `message-${thread.id}`, threadId: thread.id, role: 'assistant', type: 'agent', text: '', ts: 100,
+        attachments: [attachment, { ...attachment, id: 'other', name: 'other.png', path: 'C:/Project/generations/other.png' }],
+      });
+    }
+    renameChatImageAttachments('c:\\project\\generations\\old.png', 'C:\\Project\\generations\\red-fox.png', 'red-fox.png');
+    const saved = JSON.parse(JSON.stringify(get(chatThreadState)));
+    for (const thread of [first, second]) {
+      const attachments = saved.messagesByThread[thread.id][0].attachments;
+      expect(attachments[0]).toEqual({ ...attachment, path: 'C:/Project/generations/red-fox.png', name: 'red-fox.png' });
+      expect(attachments[1].path).toBe('C:/Project/generations/other.png');
+    }
+  });
+});
+
 describe('migrateLegacyChat', () => {
+  it('keeps the files a reply wrote and drops malformed entries', () => {
+    const migrated = migrateLegacyChat({
+      'project-a': [{ id: 'a', role: 'assistant', text: 'Drafted it.', ts: 1,
+        files: [{ path: 'plan.md', action: 'created' }, { path: 'src/a.ts', action: 'edited' }, { action: 'created' }, 'junk'] }],
+    });
+    const thread = migrated.threadsByProject['project-a'][0];
+    const [message] = migrated.messagesByThread[thread.id];
+    expect(message.files).toEqual([{ path: 'plan.md', action: 'created' }, { path: 'src/a.ts', action: 'edited' }]);
+    expect(message.legacy).toBeUndefined();
+  });
+
   it('moves each project into its own default thread and preserves message data', () => {
     const migrated = migrateLegacyChat(
       {
@@ -372,6 +405,25 @@ describe('chat thread state', () => {
     const next = createChatThread('project-a', {}, 300);
     expect(next).toMatchObject({ provider: 'openrouter', model: 'openai/gpt-5' });
     expect(get(chatThreadState).pendingNewThreadSettingsByProject).toEqual({});
+  });
+
+  it('closing the open conversation opens a fresh one instead of an old one', () => {
+    const old = createChatThread('project-a', { title: 'Old' }, 100);
+    appendThreadMessage({ id: 'old-1', threadId: old.id, type: 'user', role: 'user', text: 'Earlier work', ts: 110 });
+    const open = createChatThread('project-a', { title: 'Open' }, 200);
+    appendThreadMessage({ id: 'open-1', threadId: open.id, type: 'user', role: 'user', text: 'Current work', ts: 210 });
+
+    expect(closeChatThread(open.id)).toBe(true);
+    const active = get(chatThreadState).activeThreadByProject['project-a'];
+    expect(active).not.toBe(old.id);
+    expect(get(chatThreadState).messagesByThread[active!]).toEqual([]);
+
+    // A second close reuses that blank conversation rather than adding another.
+    const count = get(chatThreadState).threadsByProject['project-a'].length;
+    selectChatThread('project-a', old.id);
+    expect(closeChatThread(old.id)).toBe(true);
+    expect(get(chatThreadState).activeThreadByProject['project-a']).toBe(active);
+    expect(get(chatThreadState).threadsByProject['project-a']).toHaveLength(count - 1);
   });
 
   it('keeps file attachments on the user message in the selected thread', () => {

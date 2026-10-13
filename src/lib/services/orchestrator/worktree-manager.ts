@@ -157,6 +157,22 @@ export async function renameTaskWorktree(
   }
 }
 
+/**
+ * Whether an isolated worktree can be made for this project. A worktree
+ * branches from HEAD, so the repo needs at least one commit, not just a
+ * `.git` folder: `workspace_git_log` is an empty list for a repo with no
+ * commits and an error for a folder that is not a repo. Lets a spawn surface
+ * offer the main folder up front instead of failing at `createTaskWorktree`.
+ */
+export async function worktreeUnavailableReason(projectId: string): Promise<string | null> {
+  try {
+    const log = await backendInvoke<unknown[]>('workspace_git_log', { projectId });
+    return Array.isArray(log) && log.length > 0 ? null : 'the repository has no commits yet';
+  } catch {
+    return 'this project is not a Git repository';
+  }
+}
+
 /** Create the requested isolated checkout; failure must never change placement. */
 export async function createTaskWorktree(args: {
   projectId: string;

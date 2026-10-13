@@ -65,6 +65,8 @@ import { activeTheme } from '$lib/stores/theme';
 import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 
 
+import { useLayoutStore } from '$lib/stores/zustand/layout';
+import { setPreviewDocked } from '$lib/stores/layout';
 import './PreviewPanel.css';
 
 /** Explicit percentage, or 'fit' to auto-scale the viewport into the pane. */
@@ -328,6 +330,7 @@ function getInspectorScript(): string {
 }
 
 export default function PreviewPanel() {
+  const previewDocked = useLayoutStore((s) => s.previewDocked);
   const tabs = useStore(previewTabs);
   const activeTabId = useStore(activePreviewTabId);
   const currentUrlValue = useStore(currentUrl);
@@ -1689,6 +1692,24 @@ export default function PreviewPanel() {
             </svg>
           </button>
         </div>
+        {/* Moves this Preview between the right sidebar and a stage room. */}
+        <button
+          className="preview-placement-btn"
+          onClick={() => setPreviewDocked(!previewDocked)}
+          title={previewDocked ? 'Open Preview as a room' : 'Back to right sidebar'}
+          aria-label={previewDocked ? 'Open Preview as a room' : 'Back to right sidebar'}
+        >
+          {previewDocked ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" />
+            </svg>
+          )}
+          <span className="preview-placement-label">{previewDocked ? 'Open as room' : 'Back to right sidebar'}</span>
+        </button>
       </div>
 
       <div className="browser-bar">

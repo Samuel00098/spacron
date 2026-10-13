@@ -83,6 +83,17 @@ export interface ChatAttachment {
   generated?: boolean;
 }
 
+/**
+ * A file the orchestrator wrote during a turn, shown as a card under its reply
+ * that opens the file viewer. `path` is relative to the conversation's root
+ * (project or standalone file area) so it still resolves after a standalone
+ * chat becomes a project; only a document saved with no root open is absolute.
+ */
+export interface ChatFileRef {
+  path: string;
+  action: 'created' | 'edited';
+}
+
 export interface ChatDispatchReference {
   taskId: string;
   agent: string;
@@ -122,11 +133,16 @@ export interface ChatMessage {
   completion?: ChatCompletion | null;
   inlineRequest?: ChatInlineRequest | null;
   attachments?: ChatAttachment[];
+  /** Files this reply's turn created or edited. */
+  files?: ChatFileRef[];
   /** Fields not understood by the first migration remain recoverable here. */
   legacy?: Record<string, unknown>;
 }
 
 export interface ChatThread {
+  /** Standalone conversation with its own app-managed file area. */
+  standalone?: boolean;
+  standaloneWorkspaceId?: string;
   agentCheckpoint?: import('../services/orchestrator/agent-transport').AgentCheckpoint;
   agentBudgets?: import('../services/orchestrator/agent-transport').AgentBudgets;
   id: string;

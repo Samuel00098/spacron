@@ -48,4 +48,11 @@ export interface LayoutState {
   auxEditorHeight: number; // percentage split between editor and preview panes
   leftPanelWidth: number; // width of the left utility panel (Files/Search/Git/Snapshots/Snippets/Review)
   rightDrawerWidth: number; // width of the right utility panel (Toolbox/HTTP/DB/Containers/Env)
+  /** Preview lives in the right sidebar rather than as a stage room. Only
+   *  meaningful while `previewVisible`; the next open re-reads the
+   *  `previewPlacement` setting. */
+  previewDocked: boolean;
+  /** Right sidebar width while it is showing the docked Preview. Kept apart from
+   *  `rightDrawerWidth` so a wide browser does not leave Files wide too. */
+  previewDrawerWidth: number;
 }

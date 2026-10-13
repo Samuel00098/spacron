@@ -111,8 +111,7 @@ impl WorkspaceManager {
             ));
         }
 
-        std::fs::rename(&old_root, &target)
-            .map_err(|error| format!("Failed to rename the project folder: {}", error.kind()))?;
+        rename_folder_with_retry(&old_root, &target).map_err(|error| describe_rename_error(&error))?;
         let new_root =
             crate::commands::clean_path_buf(std::fs::canonicalize(&target).unwrap_or(target));
         let mut renamed = project;
@@ -167,6 +166,16 @@ impl WorkspaceManager {
             .collect()
     }
 
+    /// A chat needs the same confined file/terminal tools as a project, but it
+    /// must never enter Recents or replace the user's active project.
+    pub fn register_chat_workspace(&self, workspace_id: &str, root_path: PathBuf) -> Project {
+        let mut project = Project::new(root_path);
+        project.id = format!("chat-{workspace_id}");
+        project.name = "Chat".to_string();
+        self.projects.insert(project.id.clone(), project.clone());
+        project
+    }
+
     pub fn get_recent_projects(&self) -> Vec<RecentProject> {
         self.recent_projects
             .read()
@@ -200,6 +209,39 @@ impl WorkspaceManager {
             recents.clear();
         }
         self.save_recent();
+    }
+}
+
+/// Windows refuses to rename a folder while any process holds a handle inside
+/// it. Brief holds (antivirus, OneDrive, the indexer) clear on their own, so a
+/// few short retries absorb them; a terminal parked in the folder does not.
+fn rename_folder_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < 3 && is_folder_in_use(&error) => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn is_folder_in_use(error: &std::io::Error) -> bool {
+    // 5 = ERROR_ACCESS_DENIED, 32 = ERROR_SHARING_VIOLATION. std reports the
+    // latter as "uncategorized error", which told the user nothing.
+    cfg!(windows) && matches!(error.raw_os_error(), Some(5) | Some(32))
+}
+
+fn describe_rename_error(error: &std::io::Error) -> String {
+    if is_folder_in_use(error) {
+        "The project folder is in use, so Windows won't rename it. Close this project's \
+         terminals and agents (and any editor or Explorer window open inside it), then try again."
+            .to_string()
+    } else {
+        format!("Failed to rename the project folder: {error}")
     }
 }
 

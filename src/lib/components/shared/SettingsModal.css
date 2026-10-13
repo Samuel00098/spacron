@@ -1,10 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
-   Settings Modal — always solid/opaque, regardless of whether
-   the user has transparency mode enabled globally. The modal
-   surfaces must never be see-through.
+   Settings page — fills the window below the native title bar.
+   Keep the workspace mounted underneath and the page fully opaque.
    ═══════════════════════════════════════════════════════════════ */
 
-.settings-overlay {
+.settings-page-host {
   position: fixed;
   top: 38px;
   left: 0;
@@ -12,87 +11,86 @@
   bottom: 0;
   z-index: 9000;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  /* The overlay starts below the 38px title bar, leaving it undimmed. */
-  --settings-gutter: clamp(12px, 3vmin, 40px);
-  padding: var(--settings-gutter);
-  background: rgba(0, 0, 0, 0.78);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
   overscroll-behavior: none;
 }
 
-/* Modal is ALWAYS fully opaque — uses raw RGB tokens + alpha=1 so the
-   global transparency override (global.css :root:not(.solid-theme)) can
-   never make it see-through. */
+/* Keep the existing .settings-modal boundary for portaled pickers and shared
+   theme rules. It now describes the full page, with no dialog/backdrop. */
 .settings-modal {
   position: relative;
-  width: min(1120px, 88%);
-  height: min(900px, 82%);
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   color: var(--text-primary);
-  /* Flat casing — an opaque base plus one even frost tint. No diagonal gloss
-     sheen: the user wants the panel a single flat colour, no gradient. Solid
-     theme flattens it further via global.css (`:root.solid-theme *` drops the
-     blur and `--frost-surface` resolves to 1). */
+  --settings-divider: color-mix(in srgb, var(--text-primary) 6%, transparent);
   background-color: rgb(var(--bg-secondary-rgb, 18, 18, 22));
-  background-image:
-    linear-gradient(
-      color-mix(in srgb, var(--bg-secondary) calc(var(--frost-surface, 0.55) * 100%), transparent),
-      color-mix(in srgb, var(--bg-secondary) calc(var(--frost-surface, 0.55) * 100%), transparent)
-    );
-  backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 40px)) saturate(var(--glass-saturate, 210%));
-  /* No drawn edge — a 3D rim plus the modal's deep ambient shadow. */
-  border: 1px solid transparent;
-  border-radius: var(--radius-lg, 12px);
-  box-shadow:
-    inset 0 1px 0 var(--edge-hi),
-    inset 0 -1px 0 var(--edge-lo),
-    0 32px 80px rgba(0, 0, 0, 0.5);
-  animation: settingsScaleUp 0.3s var(--ease-spring);
-  view-transition-name: spacron-settings-modal;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   isolation: isolate;
-  /* Settings is portaled outside .app-shell, so give it the same UI type
-     directly. Changing UI text size must not resize or zoom the modal. */
+  /* Settings lives outside .app-shell, so inherit the app's UI type directly. */
   font-family: var(--font-sans);
   font-size: var(--ui-font-size, 14px);
   font-weight: 400;
-  /* Inner layout responds to the modal's own width (see the @container
-     rules near the end), not the viewport — the window never gets narrow
-     enough for viewport breakpoints to fire, but the modal does. */
+  /* Inner layout responds to the page width. */
   container: settings-modal / inline-size;
 }
 
-/* Light-theme modal gets a brighter, crisper shadow */
-:root.light-theme .settings-modal {
-  box-shadow:
-    inset 0 1px 0 var(--edge-hi),
-    inset 0 -1px 0 var(--edge-lo),
-    0 32px 80px rgba(0, 0, 0, 0.18),
-    0 2px 8px rgba(0, 0, 0, 0.1);
+:root .settings-modal.settings-page {
+  background: var(--bg-primary) !important;
 }
 
-@keyframes settingsScaleUp {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+:root.light-theme .settings-page {
+  --settings-divider: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+/* With a custom wallpaper the page shows it behind its sidebar and panel, the
+   way the workspace does. The page covers the workspace, so it can't just go
+   transparent: it paints its own copy of the wallpaper (same image, blur and
+   scrim as body::before + #app::before in global.css). The copy reaches up
+   under the title bar (host is top: 38px) so `cover` sizes it to the whole
+   window, which keeps it lined up with the real wallpaper. (`has-bg-media`
+   marks a user-chosen image, not a video: wallpapers are images only.) */
+html.has-bg-image .settings-modal.settings-page {
+  background: transparent !important;
+}
+
+html.has-bg-image .settings-modal.settings-page::before {
+  content: '';
+  position: absolute;
+  top: -38px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.06) 0%, rgba(0, 0, 0, 0.09) 40%, rgba(0, 0, 0, 0.13) 100%),
+    var(--user-bg-image, none);
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+  filter: blur(var(--user-bg-blur, 0px));
+  pointer-events: none;
+}
+
+html.has-bg-image.light-theme .settings-modal.settings-page::before {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.22) 100%),
+    var(--user-bg-image, none);
 }
 
 /* ── Header ── */
 .settings-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-shrink: 0;
-  min-height: 72px;
-  padding: 18px 26px;
-  gap: 20px;
-  border-bottom: 1px solid var(--hairline);
-  /* Transparent so the modal's frosted-glass surface reads across the header. */
+  min-height: 64px;
+  padding: 14px 16px;
   background: transparent;
+  box-shadow: none;
+  margin-bottom: 12px;
 }
 
 .settings-eyebrow {
@@ -107,7 +105,7 @@
 
 .settings-header h2 {
   margin: 0;
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text-primary);
@@ -115,9 +113,10 @@
 
 .settings-search-wrap {
   position: relative;
-  flex: 1 1 320px;
-  max-width: 560px;
-  margin-left: auto;
+  flex: 0 0 auto;
+  width: calc(100% - 32px);
+  margin: 0 auto 12px;
+  z-index: 1;
 }
 
 .settings-search-icon {
@@ -183,6 +182,9 @@
   left: 0;
   z-index: 20;
   display: grid;
+  max-height: min(420px, calc(100vh - 200px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: 3px;
   padding: 6px;
   border: 1px solid transparent;
@@ -232,33 +234,47 @@
   font-size: 11px;
 }
 
-.settings-close {
+.settings-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-heading-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.settings-back {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--bg-hover);
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 14px;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
   line-height: 1;
   transition: color var(--dur-base) var(--ease-out),
     background var(--dur-base) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out),
-    transform var(--dur-base) var(--ease-out);
+    border-color var(--dur-base) var(--ease-out);
 }
 
-.settings-close:hover {
+.settings-back:hover {
   color: var(--text-primary);
   background: var(--bg-active);
   border-color: var(--border-focus);
-  transform: scale(1.06);
 }
 
-.settings-close:focus-visible {
+.settings-back:focus-visible {
   outline: 2px solid var(--focus-ring, var(--accent));
   outline-offset: 2px;
 }
@@ -270,6 +286,23 @@
   min-height: 0;
   flex: 1;
   overflow: hidden;
+  gap: 12px;
+  padding: 16px 20px 20px;
+}
+
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-sidebar,
+.settings-panel {
+  background: var(--major-panel-surface);
+  border-radius: 10px;
+  box-shadow: var(--major-panel-shadow);
 }
 
 /* ── Tab Sidebar ── */
@@ -277,12 +310,10 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
   min-height: 0;
-  padding: 18px 12px;
-  border-right: 1px solid var(--border);
-  /* A whisper of tint keeps the nav rail distinct from the content pane while
-     still letting the modal's frosted glass show through. */
-  background: rgba(var(--bg-primary-rgb, 24, 24, 30), 0.18);
+  padding: 4px 12px 12px;
+  background: transparent;
   overflow-y: auto;
   overscroll-behavior: none;
 }
@@ -337,11 +368,10 @@
 .settings-panel {
   min-width: 0;
   min-height: 0;
-  padding: 32px 40px;
+  /* Keep the room full width, with a comfortable content width inside it. */
+  padding: 32px max(36px, calc((100% - 760px) / 2));
   overflow-y: auto;
   overscroll-behavior: none;
-  /* Transparent so the modal's frosted-glass surface reads across the content. */
-  background: transparent;
 }
 
 .settings-panel::-webkit-scrollbar,
@@ -364,25 +394,39 @@
 /* ── Section Cards ── */
 .settings-card {
   max-width: none;
-  margin: 0 0 24px;
-  /* Flat: a plain 1px outline, no raised rim or drop shadow. It is drawn as a
-     ring because the global edge rules (global.css) clear border colours on
-     every -card/-panel/-tile, so a border would not show. */
-  border: 1px solid transparent;
-  box-shadow: inset 0 0 0 1px var(--border);
-  border-radius: var(--radius-lg, 12px);
-  background: var(--bg-hover) !important;
+  margin: 0 0 40px;
+  /* The title sits above a subtly outlined group, all on the room's fill. */
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+  background: transparent !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   overflow: visible;
 }
 
-/* Section cards follow the Usage tab's layout: a plain label on the card, then
-   the rows in a bordered inner box (like Usage's "By model" and "Recent
-   sessions" blocks), rather than a solid black header strip. */
+.settings-page :is(.stats-card, .stats-tile, .stats-panel, .stats-provider-card, .custom-provider-row) {
+  background: transparent !important;
+  border: 0;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px var(--settings-divider) !important;
+}
+
+/* Usage groups its toolbar and analytics without a section heading inside
+   the card, so it needs the outline on the enclosing group. */
+.settings-page .usage-stats > .settings-card {
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px var(--settings-divider);
+}
+
+.settings-page .stats-head {
+  margin-bottom: 28px;
+}
+
+/* Keep section headings outside the faint card outline, like the reference. */
 .settings-card h3 {
   margin: 0;
-  padding: 14px 18px 10px;
+  padding: 0 0 14px;
   color: var(--text-secondary);
   font-size: 12.5px;
   font-weight: 600;
@@ -390,30 +434,28 @@
 }
 
 .settings-card > h3 + .settings-card-body {
-  margin: 0 18px 18px;
-  /* Same colour as the card, set apart only by a flat 1px outline (a ring,
-     for the same reason as the card's). */
-  border: 1px solid transparent;
-  box-shadow: inset 0 0 0 1px var(--border);
-  border-radius: 10px;
+  margin: 0;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--settings-divider);
+  border-radius: 16px;
   background: transparent;
   /* No overflow clip: pickers inside open their menus past the box. The first
      and last rows round their own hover fill instead. */
 }
 
 .settings-card > h3 + .settings-card-body > :first-child {
-  border-top-left-radius: 10px;
-  border-top-right-radius: 10px;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
 }
 
 .settings-card > h3 + .settings-card-body > :last-child {
-  border-bottom-left-radius: 10px;
-  border-bottom-right-radius: 10px;
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
 }
 
 /* Page header above each tab's cards — matches Usage's "Usage Analytics". */
 .settings-page-head {
-  margin-bottom: 14px;
+  margin-bottom: 28px;
 }
 
 .settings-page-title {
@@ -436,13 +478,15 @@
 
 /* ── Control rows ── */
 .settings-control-row {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   gap: 40px;
   align-items: center;
   min-height: 70px;
   padding: 20px 28px;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 0;
+  box-shadow: none;
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 
@@ -450,8 +494,15 @@
   background-color: var(--bg-hover);
 }
 
-.settings-control-row:last-child {
-  border-bottom: none;
+.settings-control-row:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 0;
+  height: 1px;
+  background: var(--settings-divider);
+  pointer-events: none;
 }
 
 .settings-control-copy {
@@ -784,10 +835,11 @@ details.settings-github-note pre {
 
 .shortcut-group {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg, 12px);
+  border: 0;
+  border-radius: 16px;
   overflow: hidden;
-  background: var(--bg-hover) !important;
+  background: transparent !important;
+  box-shadow: inset 0 0 0 1px var(--settings-divider);
 }
 
 .shortcut-group h4 {
@@ -992,6 +1044,45 @@ details.settings-github-note pre {
   font-size: 11px;
   line-height: 1.35;
   color: var(--text-muted);
+}
+
+.window-close-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+
+.window-close-option .option-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+}
+
+.window-close-indicator {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--text-muted);
+}
+
+.window-close-indicator.checked {
+  color: var(--on-accent, #000000);
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.window-close-status {
+  margin: 0;
+  padding: 0 14px 14px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 /* ── Number Stepper Control ── */
@@ -1230,70 +1321,50 @@ details.settings-github-note pre {
 }
 
 /* ── Responsive ──
-   Width tiers key off the modal's own width (container `settings-modal`), so
+   Width tiers key off the page's own width (container `settings-modal`), so
    the layout is right at every window size the app can open in, from the
-   960px minimum up to 4K. Height tiers use the viewport, since the modal's
+   960px minimum up to 4K. Height tiers use the viewport, since the page's
    height simply tracks it. */
 
-/* Compact desktop: the modal is narrower than the roomy layout needs. */
+/* Compact desktop. */
 @container settings-modal (max-width: 1180px) {
   .settings-body { grid-template-columns: 240px minmax(0, 1fr); }
-  .settings-panel { padding: 24px; }
   .settings-control-row { gap: 24px; padding: 18px 20px; }
-  .settings-search-wrap { max-width: 420px; }
 }
 
 /* Short windows: reclaim vertical space so more rows fit above the fold. */
 @media (max-height: 760px) {
   .settings-header { min-height: 60px; padding-block: 12px; }
-  .settings-tabs { padding-block: 12px; gap: 4px; }
+  .settings-tabs { gap: 4px; }
   .settings-tabs button { min-height: 44px; padding-block: 7px; }
   .settings-panel { padding-top: 20px; }
   .settings-control-row { min-height: 60px; padding-block: 14px; }
 }
 
-@media (max-width: 1000px) {
-  .settings-overlay { --settings-gutter: 10px; }
-}
-
 @container settings-modal (max-width: 960px) {
-  .settings-header { flex-wrap: wrap; }
-
-  .settings-search-wrap {
-    order: 3;
-    flex-basis: 100%;
-    max-width: none;
-    margin-left: 0;
-  }
-
-  .settings-body {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .settings-tabs {
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    padding: 12px;
-  }
-
-  .settings-tabs button {
-    min-width: 150px;
-    border-left: none;
-    border-bottom: 2px solid transparent;
-  }
-
-  .settings-tabs button.active {
-    border-left-color: transparent;
-    border-bottom-color: var(--accent);
-  }
-
   .settings-control-row { grid-template-columns: 1fr; gap: 10px; }
 
   .shortcut-groups { grid-template-columns: 1fr; }
+}
+
+/* Keep the category rail at the desktop minimum width; stack the panels only
+   when Settings is genuinely narrower than a desktop page. */
+@container settings-modal (max-width: 760px) {
+  .settings-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 200px) minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .settings-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-tabs button {
+    min-width: 0;
+  }
+
 }
 
 @container settings-modal (max-width: 520px) {

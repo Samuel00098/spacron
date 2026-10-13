@@ -25,6 +25,12 @@ reason.
   `stores/zustand/layout.ts`.
 - The **Terminal** room is neither: `terminalRoomOpen` is its own writable in
   `stores/layout.ts`. It has to be saved and restored by name.
+- The **right sidebar's open state** (`rightSidebarVisible`, saved as
+  `rightSidebarOpen`) is the same kind of writable. **`previewDocked`** must
+  travel with `previewVisible`: restore one without the other and a Preview
+  from one project shows up docked in the next. AppShell's "docked Preview
+  newly opened → show the sidebar" effect skips while `isProjectSwitching`,
+  or the restore itself would force the sidebar open.
 - `sketchVisible` is still **not** per-project. It is
   app-global, so opening Sketch in one project leaves it open in the next.
   Closing it does survive a switch (nothing puts it back), so this shows up

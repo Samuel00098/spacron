@@ -265,6 +265,7 @@ function createSettingsState() {
     backgroundImageEnabled: persistentValue('backgroundImageEnabled', false),
     backgroundImageOpacity: persistentValue('backgroundImageOpacity', 100),
     backgroundImageBlur: persistentValue('backgroundImageBlur', 0),
+    backgroundGlassOpacity: persistentValue('backgroundGlassOpacity', 60),
     uiVibrancy: persistentValue('uiVibrancy', 100),
     uiContrast: persistentValue('uiContrast', 100),
     terminalShell: persistentValue('terminalShell', ''),
@@ -274,6 +275,9 @@ function createSettingsState() {
     // See the note on `terminalRenderer` in stores/settings.ts for why canvas.
     terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
+    // Where a newly opened Preview lands: docked in the right sidebar, or as a
+    // room on the stage. Either can be moved to the other from its own header.
+    previewPlacement: persistentValue<'sidebar' | 'room'>('previewPlacement', 'sidebar'),
     // Agent permissions & launch overrides — see stores/settings.ts and
     // services/agent-permissions.ts for the full picture.
     agentPermissionMode: persistentValue<'yolo' | 'manual'>('agentPermissionMode', 'yolo'),
@@ -413,6 +417,7 @@ const defaults: SettingsValues = {
   backgroundImageEnabled: false,
   backgroundImageOpacity: 100,
   backgroundImageBlur: 0,
+  backgroundGlassOpacity: 60,
   uiVibrancy: 100,
   uiContrast: 100,
   terminalShell: '',
@@ -421,6 +426,7 @@ const defaults: SettingsValues = {
   terminalFontSize: 14,
   terminalRenderer: 'canvas',
   showSnapshotsTab: false,
+  previewPlacement: 'sidebar',
   agentPermissionMode: 'yolo',
   agentCmdOverrides: {},
   agentDefaultArgs: {},
@@ -503,6 +509,7 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       terminalFontSize: 'terminalFontSize',
       terminalRenderer: 'terminalRenderer',
       showSnapshotsTab: 'showSnapshotsTab',
+      previewPlacement: 'previewPlacement',
       agentPermissionMode: 'agentPermissionMode',
       agentCmdOverrides: 'agentCmdOverrides',
       agentDefaultArgs: 'agentDefaultArgs',

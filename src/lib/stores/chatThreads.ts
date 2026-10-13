@@ -25,6 +25,7 @@ import type {
   ChatAccessMode,
   ChatReasoningEffort,
   ChatAttachment,
+  ChatFileRef,
 } from '$lib/types/chat';
 
 export type {
@@ -41,10 +42,67 @@ export type {
   ChatAccessMode,
   ChatReasoningEffort,
   ChatAttachment,
+  ChatFileRef,
 } from '$lib/types/chat';
 
 export const CHAT_THREADS_STORAGE_KEY = 'spacron_chat_threads_v1';
 export const LEGACY_CHAT_STORAGE_KEY = 'spacron_orchestrator_chat';
+
+// A reserved conversation bucket, never a filesystem project. Existing thread
+// persistence/lifecycle works for this scope without inventing a project root.
+export const STANDALONE_CHAT_SCOPE = 'spacron:standalone-chats';
+
+/** Move the same conversation into a real project, preserving its message IDs. */
+export function moveStandaloneChatToProject(threadId: string, projectId: string): boolean {
+  if (!projectId || projectId === STANDALONE_CHAT_SCOPE) return false;
+  let moved = false;
+  chatThreadState.update((state) => {
+    const thread = Object.values(state.threadsByProject).flat().find((entry) => entry.id === threadId);
+    if (!thread || !isStandaloneChat(thread)) return state;
+    const source = state.threadsByProject[thread.projectId] ?? [];
+    if (thread.status === 'working' || thread.status === 'needs-input' || thread.projectId === projectId) return state;
+    const remaining = source.filter((entry) => entry.id !== threadId);
+    moved = true;
+    return {
+      ...state,
+      threadsByProject: {
+        ...state.threadsByProject,
+        [thread.projectId]: remaining,
+        [projectId]: [...(state.threadsByProject[projectId] ?? []), { ...thread, projectId, standalone: false, standaloneWorkspaceId: undefined, agentCheckpoint: undefined, taskId: null, sessionId: null, updatedAt: Date.now() }],
+      },
+      activeThreadByProject: {
+        ...state.activeThreadByProject,
+        [thread.projectId]: state.activeThreadByProject[thread.projectId] === threadId
+          ? remaining[0]?.id ?? null : state.activeThreadByProject[thread.projectId] ?? null,
+        [projectId]: threadId,
+      },
+    };
+  });
+  return moved;
+}
+
+export function isStandaloneChat(thread: ChatThread): boolean {
+  return thread.standalone === true || thread.projectId === STANDALONE_CHAT_SCOPE;
+}
+
+export function getStandaloneChats(state: ChatThreadState): ChatThread[] {
+  return Object.values(state.threadsByProject).flat().filter(isStandaloneChat);
+}
+
+/** Upgrade an older rootless chat to a private file area, retaining its IDs. */
+export function bindStandaloneChatWorkspace(threadId: string, projectId: string, workspaceId: string): void {
+  chatThreadState.update((state) => {
+    const thread = Object.values(state.threadsByProject).flat().find((entry) => entry.id === threadId);
+    if (!thread || !isStandaloneChat(thread)) return state;
+    const next = { ...thread, projectId, standalone: true, standaloneWorkspaceId: workspaceId };
+    const source = (state.threadsByProject[thread.projectId] ?? []).filter((entry) => entry.id !== threadId);
+    return {
+      ...state,
+      threadsByProject: { ...state.threadsByProject, [thread.projectId]: source, [projectId]: [...(projectId === thread.projectId ? source : state.threadsByProject[projectId] ?? []), next] },
+      activeThreadByProject: { ...state.activeThreadByProject, [thread.projectId]: source[0]?.id ?? null, [projectId]: threadId },
+    };
+  });
+}
 
 type LegacyChatMessage = {
   id?: unknown;
@@ -230,12 +288,24 @@ function copyAttachments(value: unknown): ChatAttachment[] | undefined {
   return attachments.length ? attachments : undefined;
 }
 
+function copyFiles(value: unknown): ChatFileRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const files = value
+    .filter(isRecord)
+    .map((entry): ChatFileRef | null => {
+      const path = asString(entry.path);
+      return path ? { path, action: entry.action === 'edited' ? 'edited' : 'created' } : null;
+    })
+    .filter((entry): entry is ChatFileRef => entry !== null);
+  return files.length ? files : undefined;
+}
+
 function migrateMessage(threadId: string, raw: LegacyChatMessage, index: number, now: number): ChatMessage {
   const id = asString(raw.id) ?? `${threadId}-message-${index}`;
   const ts = asNumber(raw.ts) ?? now;
   const knownKeys = new Set([
     'id', 'role', 'text', 'ts', 'pending', 'dispatched', 'dispatchedTaskId',
-    'dispatchedAgent', 'reconSummary', 'completion', 'inlineRequest', 'attachments',
+    'dispatchedAgent', 'reconSummary', 'completion', 'inlineRequest', 'attachments', 'files',
   ]);
   const legacy = Object.fromEntries(Object.entries(raw).filter(([key]) => !knownKeys.has(key)));
   return {
@@ -253,6 +323,7 @@ function migrateMessage(threadId: string, raw: LegacyChatMessage, index: number,
     completion: copyCompletion(raw.completion),
     inlineRequest: copyInlineRequest(raw.inlineRequest),
     attachments: copyAttachments(raw.attachments),
+    ...(copyFiles(raw.files) ? { files: copyFiles(raw.files) } : {}),
     ...(Object.keys(legacy).length ? { legacy } : {}),
   };
 }
@@ -338,6 +409,8 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
   return {
     id,
     projectId,
+    standalone: raw.standalone === true,
+    standaloneWorkspaceId: asString(raw.standaloneWorkspaceId) ?? undefined,
     title: asString(raw.title) || 'New thread',
     agentName: asString(raw.agentName),
     agentPreset: asString(raw.agentPreset),
@@ -348,7 +421,8 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
     reasoningEffort: asReasoningEffort(raw.reasoningEffort),
     taskId: asString(raw.taskId),
     sessionId: asNumber(raw.sessionId),
-    status: validStatus,
+    // A standalone response has no resumable project execution checkpoint.
+    status: projectId === STANDALONE_CHAT_SCOPE && validStatus === 'working' ? 'idle' : validStatus,
     createdAt,
     updatedAt,
     lastActivityAt: asNumber(raw.lastActivityAt) ?? updatedAt,
@@ -391,6 +465,7 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
       .filter((thread): thread is ChatThread => thread !== null);
     if (normalized.length) state.threadsByProject[projectId] = normalized;
   }
+  const standaloneThreadIds = new Set((state.threadsByProject[STANDALONE_CHAT_SCOPE] ?? []).map((thread) => thread.id));
   for (const [threadId, messages] of Object.entries(raw.messagesByThread)) {
     if (!Array.isArray(messages)) continue;
     state.messagesByThread[threadId] = messages
@@ -411,9 +486,10 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
             type === 'activity' || type === 'approval' || type === 'input' || type === 'completion' ||
             type === 'failure' || type === 'system' ? type : 'system',
           role: role === 'user' || role === 'assistant' || role === 'orchestrator' || role === 'system' ? role : 'system',
-          text: asString(message.text) ?? '',
+          text: standaloneThreadIds.has(threadId) && message.pending === true && !asString(message.text)?.trim()
+            ? 'Response interrupted. Send another message to continue.' : asString(message.text) ?? '',
           ts: asNumber(message.ts) ?? now,
-          pending: message.pending === true,
+          pending: message.pending === true && !standaloneThreadIds.has(threadId),
           dispatched: copyDispatches(message.dispatched),
           dispatchedTaskId: asString(message.dispatchedTaskId),
           dispatchedAgent: asString(message.dispatchedAgent),
@@ -421,6 +497,7 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
           completion: copyCompletion(message.completion),
           inlineRequest: copyInlineRequest(message.inlineRequest),
           attachments: copyAttachments(message.attachments),
+          ...(copyFiles(message.files) ? { files: copyFiles(message.files) } : {}),
           ...(legacy ? { legacy } : {}),
         } satisfies ChatMessage;
       })
@@ -584,7 +661,7 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
 
 export function createChatThread(
   projectId: string,
-  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'workMode' | 'reasoningEffort' | 'taskId' | 'sessionId'>> = {},
+  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'workMode' | 'reasoningEffort' | 'taskId' | 'sessionId' | 'standalone' | 'standaloneWorkspaceId'>> = {},
   now = Date.now(),
 ): ChatThread {
   const state = get(chatThreadState);
@@ -596,6 +673,8 @@ export function createChatThread(
   const thread: ChatThread = {
     id,
     projectId,
+    standalone: overrides.standalone,
+    standaloneWorkspaceId: overrides.standaloneWorkspaceId,
     title: overrides.title?.trim() || 'New thread',
     agentName: overrides.agentName ?? null,
     agentPreset: overrides.agentPreset ?? null,
@@ -719,14 +798,27 @@ export function deleteChatThread(threadId: string): boolean {
   return deleted;
 }
 
-/** Delete a user-closed thread and leave its project ready in a fresh thread
- * when it was the project's last conversation. Ordinary deletion remains
- * available separately for callers that must preserve an empty project. */
+/** Delete a user-closed thread. Closing the open conversation (or the last
+ * one) leaves the project in a fresh thread, the way ChatGPT and Claude open a
+ * new chat after a delete; an untouched thread is reused instead of adding a
+ * second blank one. Ordinary deletion remains available separately for
+ * callers that must preserve an empty project. */
 export function closeChatThread(threadId: string): boolean {
   const thread = getChatThread(threadId);
+  const wasOpen = thread ? get(chatThreadState).activeThreadByProject[thread.projectId] === threadId : false;
   if (!thread || !deleteChatThread(threadId)) return false;
 
-  if ((get(chatThreadState).threadsByProject[thread.projectId] ?? []).length === 0) {
+  const state = get(chatThreadState);
+  const remaining = state.threadsByProject[thread.projectId] ?? [];
+  const blank = remaining.find((entry) => !(state.messagesByThread[entry.id] ?? []).length);
+  if (wasOpen && blank) {
+    // Not selectChatThread: that clears the deleted thread's provider/model
+    // that deleteChatThread just saved for the project's next new thread.
+    chatThreadState.update((current) => ({
+      ...current,
+      activeThreadByProject: { ...current.activeThreadByProject, [thread.projectId]: blank.id },
+    }));
+  } else if (wasOpen || remaining.length === 0) {
     createChatThread(thread.projectId, {
       provider: thread.provider,
       model: thread.model,
@@ -740,6 +832,32 @@ export function closeChatThread(threadId: string): boolean {
 
 export function setThreadDraft(threadId: string, draft: string): boolean {
   return updateChatThread(threadId, { draft, updatedAt: Date.now() });
+}
+
+/** Keep saved messages usable when an image is renamed in Chat or Library. */
+export function renameChatImageAttachments(previousPath: string, path: string, name: string): void {
+  const normalize = (value: string) => {
+    const slashes = value.replace(/\\/g, '/');
+    return /^[a-z]:\//i.test(slashes) || slashes.startsWith('//') ? slashes.toLowerCase() : slashes;
+  };
+  const previous = normalize(previousPath);
+  chatThreadState.update((state) => {
+    let changed = false;
+    const messagesByThread = Object.fromEntries(Object.entries(state.messagesByThread).map(([id, messages]) => [
+      id,
+      messages.map((message) => {
+        let matched = false;
+        const attachments = message.attachments?.map((attachment) => {
+          if (!attachment.path || normalize(attachment.path) !== previous) return attachment;
+          matched = true;
+          return { ...attachment, path: path.replace(/\\/g, '/'), name };
+        });
+        changed ||= matched;
+        return matched ? { ...message, attachments } : message;
+      }),
+    ]));
+    return changed ? { ...state, messagesByThread } : state;
+  });
 }
 
 export function appendThreadMessage(message: ChatMessage): boolean {
@@ -1095,6 +1213,18 @@ export function editChatMessage(threadId: string, messageId: string, text: strin
     };
   });
   return edited;
+}
+
+/** Correct a completed response without resending or removing later messages. */
+export async function editAssistantChatMessage(threadId: string, messageId: string, text: string): Promise<boolean> {
+  const nextText = text.trim();
+  const thread = getChatThread(threadId);
+  const message = get(chatThreadState).messagesByThread[threadId]?.find((entry) => entry.id === messageId);
+  if (!nextText || !thread || thread.status === 'working' || thread.status === 'needs-input' || !message || message.role !== 'assistant' || message.pending) return false;
+  await deleteAgentCheckpoint(threadId);
+  if (!patchThreadMessage(threadId, messageId, { text: nextText })) return false;
+  updateChatThread(threadId, { agentCheckpoint: undefined, updatedAt: Date.now() });
+  return true;
 }
 
 export function clearProjectThreadMessages(projectId: string): void {

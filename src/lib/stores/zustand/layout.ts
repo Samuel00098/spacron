@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { LayoutState, ActiveView, SidebarTab, SettingsTab } from '$lib/types/layout';
 import { loadJson } from '$lib/utils/storage';
 import { requestRoomControl } from '../layoutControl';
+import { useSettingsStore } from './settings';
 
 export type { ActiveView, SidebarTab };
 
@@ -27,6 +28,9 @@ const LAYOUT_KEY = 'spacron_layout';
 export const RIGHT_DRAWER_MIN_WIDTH = 280;
 export const RIGHT_DRAWER_MAX_WIDTH = 720;
 export const RIGHT_DRAWER_DEFAULT_WIDTH = 380;
+// A docked Preview opens wider than the other tools: at 380px nearly every site
+// falls back to its phone layout.
+export const PREVIEW_DRAWER_DEFAULT_WIDTH = 560;
 
 // The left Navigator's width, on the same terms: one definition for the
 // default, the setter and the load-time sanitiser in `workspace.ts`.
@@ -114,7 +118,22 @@ const defaultLayout: LayoutState = {
   auxEditorHeight: 50,
   leftPanelWidth: LEFT_PANEL_DEFAULT_WIDTH,
   rightDrawerWidth: RIGHT_DRAWER_DEFAULT_WIDTH,
+  previewDocked: false,
+  previewDrawerWidth: PREVIEW_DRAWER_DEFAULT_WIDTH,
 };
+
+/** Where Preview should land when it opens: wherever it already is if it is
+ *  open, otherwise the user's `previewPlacement` setting. */
+function previewOpenPatch(l: LayoutState): Pick<LayoutState, 'previewVisible' | 'previewDocked' | 'lastAuxView'> {
+  const docked = l.previewVisible ? l.previewDocked : useSettingsStore.getState().previewPlacement === 'sidebar';
+  return { previewVisible: true, previewDocked: docked, lastAuxView: 'preview' };
+}
+
+/** A docked Preview is not a stage room, so the stage toggles that clear every
+ *  other room's flag must leave it alone. */
+function keepDockedPreview(l: LayoutState): boolean {
+  return l.previewVisible && l.previewDocked;
+}
 
 // The right utility drawer hosts the "summoned tool" panels. They are mutually
 // exclusive among themselves (one drawer body at a time) but, unlike the aux
@@ -208,6 +227,8 @@ function loadLayout(): LayoutState {
     // older build, by a narrower window, or as `null` (what JSON.stringify makes
     // of a NaN) otherwise reaches the panel's inline style untouched.
     parsed.rightDrawerWidth = clampRightDrawerWidth(parsed.rightDrawerWidth);
+    parsed.previewDrawerWidth = clampRightDrawerWidth(parsed.previewDrawerWidth ?? PREVIEW_DRAWER_DEFAULT_WIDTH);
+    parsed.previewDocked = Boolean(parsed.previewDocked);
     return parsed;
   } catch {
     return defaultLayout;
@@ -244,6 +265,10 @@ interface LayoutActions {
   toggleSidebarTab: (tab: SidebarTab) => void;
   toggleEditorSplitPreview: () => void;
   revealPreview: () => void;
+  /** Move an open Preview between the right sidebar (true) and a stage room
+   *  (false), or open it there if it is closed. */
+  setPreviewDocked: (docked: boolean) => void;
+  setPreviewDrawerWidth: (width: number) => void;
   /** Open the DeepSeek Harness room and bring it on stage. */
   revealDeepSeek: () => void;
   setSidebarWidth: (width: number) => void;
@@ -303,6 +328,7 @@ function showOnlyAux(l: LayoutState, view: AuxView): LayoutState {
   return {
     ...l,
     ...clearedAuxFlags(),
+    previewVisible: keepDockedPreview(l),
     [AUX_VIEW_FLAGS[view]]: true,
     activeView: view,
     lastAuxView: view,
@@ -381,7 +407,8 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
         return next;
       }
       if (view === 'preview') {
-        const next: LayoutState = { ...l, activeView: 'preview' as const, lastAuxView: 'preview' as const, previewVisible: true };
+        const patch = previewOpenPatch(l);
+        const next: LayoutState = { ...l, ...patch, activeView: patch.previewDocked ? l.activeView : 'preview' as const };
         persistLayout(next);
         return next;
       }
@@ -466,7 +493,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
     set((l) => {
       const next: LayoutState = l.editorVisible
         ? { ...l, editorVisible: false, editorSplitPreview: false, activeView: 'terminal' as const }
-        : { ...l, editorVisible: true, lastAuxView: 'editor' as const, previewVisible: false, reviewVisible: false, httpVisible: false, tasksVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, editorSplitPreview: false, activeView: 'editor' as const };
+        : { ...l, editorVisible: true, lastAuxView: 'editor' as const, previewVisible: keepDockedPreview(l), reviewVisible: false, httpVisible: false, tasksVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, editorSplitPreview: false, activeView: 'editor' as const };
       persistLayout(next);
       return next;
     });
@@ -474,9 +501,16 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
 
   togglePreviewVisible: () => {
     set((l) => {
-      const next: LayoutState = l.previewVisible
-        ? { ...l, previewVisible: false, editorSplitPreview: false, activeView: 'terminal' as const }
-        : { ...l, previewVisible: true, lastAuxView: 'preview' as const, editorVisible: false, reviewVisible: false, httpVisible: false, tasksVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, editorSplitPreview: false, activeView: 'preview' as const };
+      if (l.previewVisible) {
+        const next: LayoutState = { ...l, previewVisible: false, editorSplitPreview: false, activeView: l.previewDocked ? l.activeView : 'terminal' as const };
+        persistLayout(next);
+        return next;
+      }
+      const patch = previewOpenPatch(l);
+      // Docked, it sits beside the stage, so the stage rooms stay as they are.
+      const next: LayoutState = patch.previewDocked
+        ? { ...l, ...patch }
+        : { ...l, ...patch, editorVisible: false, reviewVisible: false, httpVisible: false, tasksVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, editorSplitPreview: false, activeView: 'preview' as const };
       persistLayout(next);
       return next;
     });
@@ -507,7 +541,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
     set((l) => {
       const next: LayoutState = l.tasksVisible
         ? { ...l, tasksVisible: false, activeView: 'terminal' as const }
-        : { ...l, tasksVisible: true, lastAuxView: 'tasks' as const, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, editorSplitPreview: false, activeView: 'tasks' as const };
+        : { ...l, tasksVisible: true, lastAuxView: 'tasks' as const, editorVisible: false, previewVisible: keepDockedPreview(l), reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, editorSplitPreview: false, activeView: 'tasks' as const };
       persistLayout(next);
       return next;
     });
@@ -628,7 +662,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
       });
     } else {
       set((l) => {
-        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, editorVisible: false, previewVisible: false, reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, fleetVisible: false, editorSplitPreview: false };
+        const next = { ...l, activeView: 'mobile' as const, lastAuxView: 'mobile' as const, mobileVisible: true, editorVisible: false, previewVisible: keepDockedPreview(l), reviewVisible: false, httpVisible: false, dbVisible: false, containersVisible: false, toolboxVisible: false, envVisible: false, envManagerOpen: false, fleetVisible: false, editorSplitPreview: false };
         persistLayout(next);
         return next;
       });
@@ -676,7 +710,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   toggleEditorSplitPreview: () => {
     set((l) => {
       const nextSplit = !l.editorSplitPreview;
-      const next: LayoutState = { ...l, editorSplitPreview: nextSplit, editorVisible: true, previewVisible: nextSplit, reviewVisible: false, httpVisible: false, containersVisible: false, activeView: (nextSplit ? 'preview' : 'editor') as ActiveView };
+      const next: LayoutState = { ...l, editorSplitPreview: nextSplit, editorVisible: true, previewVisible: nextSplit, previewDocked: nextSplit ? false : l.previewDocked, reviewVisible: false, httpVisible: false, containersVisible: false, activeView: (nextSplit ? 'preview' : 'editor') as ActiveView };
       persistLayout(next);
       return next;
     });
@@ -691,15 +725,43 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
   revealPreview: () => {
     set((l) => {
       if (l.previewVisible) return l;
-      const next: LayoutState = l.editorVisible
-        ? { ...l, editorSplitPreview: true, previewVisible: true, lastAuxView: 'preview' as const, activeView: 'preview' as const }
-        : { ...l, previewVisible: true, lastAuxView: 'preview' as const, activeView: 'preview' as const };
+      const patch = previewOpenPatch(l);
+      const next: LayoutState = patch.previewDocked
+        ? { ...l, ...patch }
+        : l.editorVisible
+        ? { ...l, ...patch, editorSplitPreview: true, activeView: 'preview' as const }
+        : { ...l, ...patch, activeView: 'preview' as const };
       persistLayout(next);
       return next;
     });
     // Ask the room system to focus the preview room so it appears in-view
-    // (not just added to the room list in the background).
+    // (not just added to the room list in the background). AppShell reads the
+    // same command as "show the sidebar's Preview tab" when it is docked.
     requestRoomControl('focus', 'preview');
+  },
+
+  setPreviewDocked: (docked: boolean) => {
+    set((l) => {
+      const next: LayoutState = {
+        ...l,
+        previewVisible: true,
+        previewDocked: docked,
+        lastAuxView: 'preview' as const,
+        editorSplitPreview: false,
+        activeView: docked ? (l.activeView === 'preview' ? 'terminal' as const : l.activeView) : 'preview' as const,
+      };
+      persistLayout(next);
+      return next;
+    });
+    requestRoomControl('focus', 'preview');
+  },
+
+  setPreviewDrawerWidth: (width: number) => {
+    set((l) => {
+      const next: LayoutState = { ...l, previewDrawerWidth: clampRightDrawerWidth(width) };
+      persistLayout(next);
+      return next;
+    });
   },
 
   revealDeepSeek: () => {

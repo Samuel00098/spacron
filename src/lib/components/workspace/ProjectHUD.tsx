@@ -4,6 +4,7 @@ import { useStore } from '$lib/react/useStore';
 import {
   recentWorkspaces,
   renameProject,
+  isProjectFolderInUseError,
   reorderRecentWorkspaces,
   reorderWorkspaceProject,
   openWorkspace,
@@ -54,6 +55,8 @@ import {
 } from './projectListPrefs';
 import './ProjectHUD.css';
 import PinIcon from '$lib/components/shared/PinIcon';
+import StandaloneChatsSidebar from './StandaloneChatsSidebar';
+import { showProjectChat } from '$lib/stores/chatNavigation';
 
 function getFilename(path: string): string {
   const normalized = path.replace(/\\/g, '/');
@@ -528,11 +531,39 @@ export default function ProjectHUD() {
     setRenamingProjectPath(null);
     setRenamingProjectName('');
     if (!name) return;
+    const { showToast } = await import('$lib/stores/notification');
+    const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
     try {
       await renameProject(projectPath, name);
     } catch (error) {
-      const { showToast } = await import('$lib/stores/notification');
-      showToast(error instanceof Error ? error.message : String(error), 'error', 5000);
+      const message = messageOf(error);
+      if (!isProjectFolderInUseError(message)) {
+        showToast(message, 'error', 5000);
+        return;
+      }
+      showToast(
+        "Can't rename while this project's terminals are open.",
+        'warning',
+        12000,
+        false,
+        {
+          label: 'Close & rename',
+          onClick: () => {
+            void renameProject(projectPath, name, { closeTerminals: true }).catch((retryError) => {
+              const retryMessage = messageOf(retryError);
+              // This window's terminals are gone, so whatever still holds the
+              // folder lives outside it.
+              showToast(
+                isProjectFolderInUseError(retryMessage)
+                  ? 'The folder is still in use by another program: another Spacron window, an editor, or File Explorer. Close it there and try again.'
+                  : retryMessage,
+                'error',
+                10000,
+              );
+            });
+          },
+        },
+      );
     }
   }
 
@@ -596,6 +627,7 @@ export default function ProjectHUD() {
 
   // Handle open project
   async function handleOpen(wsId: string, path: string) {
+    showProjectChat();
     if (wsId !== activeWsId) {
       if (path) {
         recentWorkspaces.update((list) =>
@@ -1516,6 +1548,8 @@ export default function ProjectHUD() {
             </div>
           );
         })()}
+
+        {currentInteractionMode === 'chat' && <StandaloneChatsSidebar />}
 
         {/* Global Empty Search State */}
         {search && filteredProjects.length === 0 && (

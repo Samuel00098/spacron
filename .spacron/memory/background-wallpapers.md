@@ -132,3 +132,15 @@ Contrast bar for a new palette: UI text (`text-primary/secondary/muted`) and the
 semantic colours should clear 4.5:1 against both `bg-primary` and `bg-secondary`.
 Syntax tokens in the existing presets run **2.7–4.9:1** and were clearly never
 held to 4.5 — don't fail a new theme for matching that.
+
+## A custom image (not a preset wallpaper) turns the panels to glass
+
+Since 2026-10-13, `html.has-bg-media` (the user's own image showing) makes the
+rooms, drawers (every tab), Library, Settings page, title bar, prompt bar, chat panel, inbox and HUD frosted glass;
+menus, popovers and dialogs stay solid on purpose. Two halves must agree:
+`background.ts` forces the frosted pipeline on (`applyInterfaceFrost` treats a
+transparency of 0 as 50 while a custom image is active — `.solid-theme` kills
+every `backdrop-filter`), and the "Custom-image glass" block at the end of
+`global.css` paints the glass. The Settings "Panel opacity" slider
+(`backgroundGlassOpacity`) drives it through `--wallpaper-glass-dark/-light`.
+Preset-theme wallpapers (`has-bg-image` only) are unaffected.

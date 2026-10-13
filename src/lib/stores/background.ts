@@ -1,6 +1,6 @@
 import { get, writable } from '$lib/stores/storeCompat';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { backgroundImageEnabled, interfaceTransparency, backgroundImageBlur } from './settings';
+import { backgroundImageEnabled, interfaceTransparency, backgroundImageBlur, backgroundGlassOpacity } from './settings';
 import { showToast } from './notification';
 import { useBackgroundStore } from './zustand/background';
 import { useThemeStore } from './zustand/theme';
@@ -184,6 +184,11 @@ export function applyBackgroundImage(): void {
   }
 
   root.classList.toggle('has-bg-media', active);
+  applyWallpaperGlass(get(backgroundGlassOpacity));
+  // The glass look needs the frosted pipeline (live backdrop blur, translucent
+  // surface tokens), which a transparency of 0 switches off. Re-run the frost
+  // so turning the image on or off flips between glass and solid at once.
+  applyInterfaceFrost(get(interfaceTransparency));
   // Restore the entire visible background, not just its URL. The custom blur
   // remains saved so enabling the image again restores the user's choice.
   applyBackgroundAppearance(active ? get(backgroundImageBlur) : (theme?.backgroundBlur ?? 0));
@@ -211,6 +216,11 @@ export function applyInterfaceFrost(transparency: number): void {
 
   const run = () => {
     const root = document.documentElement;
+    // A custom image always gets glass panels — that is the point of setting
+    // one. The slider's 0 ("solid") would otherwise kill every backdrop blur
+    // and leave see-through panels with nothing frosting the image behind the
+    // text. Same fallback the preset wallpapers use in `theme.ts`.
+    if (transparency === 0 && userBackgroundActive()) transparency = 50;
     if (transparency === 0) {
       root.classList.add('solid-theme');
       root.style.setProperty('--frost-base', '1.000');
@@ -255,6 +265,20 @@ export function applyInterfaceFrost(transparency: number): void {
   } else {
     frostTimeout = setTimeout(run, throttleMs - timeSinceLastRun);
   }
+}
+
+/**
+ * How solid the glass panels are over a custom image (30–90%). Light mode sits
+ * 10 points more solid than dark: dark ink needs a brighter field under it than
+ * light ink needs a dark one, because a dark wallpaper pocket costs dark text
+ * more contrast than a bright pocket costs light text.
+ */
+export function applyWallpaperGlass(percent: number): void {
+  if (typeof document === 'undefined') return;
+  const p = Math.min(90, Math.max(30, Number.isFinite(percent) ? percent : 60)) / 100;
+  const root = document.documentElement;
+  root.style.setProperty('--wallpaper-glass-dark', p.toFixed(2));
+  root.style.setProperty('--wallpaper-glass-light', Math.min(0.95, p + 0.1).toFixed(2));
 }
 
 let appearanceTimeout: any = null;

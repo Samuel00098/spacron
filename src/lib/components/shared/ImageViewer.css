@@ -1,6 +1,6 @@
 .image-viewer-overlay {
   position: fixed;
-  inset: 0;
+  inset: 38px 0 0;
   z-index: 9000;
   background: rgba(0, 0, 0, 0.55);
   /* Blur the app behind so the frame reads as its own surface. The viewer
@@ -10,12 +10,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 3vh 3vw;
+  padding: clamp(16px, 3vmin, 36px);
+  overscroll-behavior: none;
 }
 
 .image-viewer {
-  width: 100%;
-  height: 100%;
+  /* A centred viewing surface with breathing room below the title bar. */
+  width: 96%;
+  height: 94%;
   display: flex;
   flex-direction: column;
   /* Themes with a translucent --bg-primary let the app show through the bar
@@ -42,6 +44,7 @@
 }
 
 .image-viewer-name {
+  flex: 1;
   font-weight: 600;
   font-size: 13px;
   overflow: hidden;
@@ -64,6 +67,7 @@
 }
 
 .image-viewer-tools {
+  flex-shrink: 0;
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -140,10 +144,14 @@
   image-rendering: auto;
 }
 
-.image-viewer-step {
+.image-viewer .image-viewer-step,
+.image-viewer .image-viewer-step:hover,
+.image-viewer .image-viewer-step:active {
   position: absolute;
   top: 50%;
-  transform: translateY(-50%);
+  /* Global button hover/press transforms must not replace this centering. */
+  transform: translateY(-50%) !important;
+  transition: background var(--dur-fast, 120ms) var(--ease-out, ease-out) !important;
   width: 36px;
   height: 56px;
   border: none;
@@ -154,12 +162,38 @@
   cursor: pointer;
 }
 
-.image-viewer-step:hover {
+.image-viewer .image-viewer-step:hover {
   background: rgba(0, 0, 0, 0.55);
 }
 
 .image-viewer-step.prev { left: 12px; }
 .image-viewer-step.next { right: 12px; }
+
+.image-viewer-rename {
+  flex: 0 1 300px;
+  max-width: 300px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.image-viewer-rename input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.image-viewer-rename input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 .image-viewer-foot {
   display: flex;

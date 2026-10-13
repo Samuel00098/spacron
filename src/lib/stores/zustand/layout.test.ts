@@ -8,6 +8,7 @@ import {
   LEFT_PANEL_MIN_WIDTH,
   RIGHT_DRAWER_MIN_WIDTH,
 } from './layout';
+import { useSettingsStore } from './settings';
 
 // The editor is a room, not just a visibility flag. Flipping `editorVisible`
 // leaves it wherever it was — off stage, or minimized — so revealing the editor
@@ -92,5 +93,54 @@ describe('fitDrawerWidths', () => {
     const fit = fitDrawerWidths({ ...both, rightOpen: false, available: 700 });
     expect(fit.left).toBe(700 - STAGE_MIN_WIDTH);
     expect(fit.right).toBe(380);
+  });
+});
+
+// Preview can be docked in the right sidebar instead of being a stage room.
+// Docked, it sits beside the stage, so opening it must not move the stage and
+// the stage's single-room toggles must not close it.
+describe('docked preview', () => {
+  beforeEach(() => {
+    layoutControlCommand.set(null);
+    useLayoutStore.setState({ previewVisible: false, previewDocked: false, editorVisible: false, activeView: 'terminal' });
+  });
+
+  it('opens in the sidebar when that is the placement setting, leaving the stage alone', () => {
+    useSettingsStore.setState({ previewPlacement: 'sidebar' });
+    useLayoutStore.getState().togglePreviewVisible();
+
+    const l = useLayoutStore.getState();
+    expect(l.previewVisible).toBe(true);
+    expect(l.previewDocked).toBe(true);
+    expect(l.activeView).toBe('terminal');
+  });
+
+  it('opens as a room when that is the placement setting', () => {
+    useSettingsStore.setState({ previewPlacement: 'room' });
+    useLayoutStore.getState().revealPreview();
+
+    const l = useLayoutStore.getState();
+    expect(l.previewDocked).toBe(false);
+    expect(l.activeView).toBe('preview');
+    expect(get(layoutControlCommand)).toMatchObject({ type: 'room', op: 'focus', room: 'preview' });
+  });
+
+  it('survives opening the editor while docked, but not while it is a room', () => {
+    useLayoutStore.setState({ previewVisible: true, previewDocked: true });
+    useLayoutStore.getState().toggleEditorVisible();
+    expect(useLayoutStore.getState().previewVisible).toBe(true);
+
+    useLayoutStore.setState({ previewVisible: true, previewDocked: false, editorVisible: false });
+    useLayoutStore.getState().toggleEditorVisible();
+    expect(useLayoutStore.getState().previewVisible).toBe(false);
+  });
+
+  it('moves between the sidebar and a room without closing', () => {
+    useLayoutStore.setState({ previewVisible: true, previewDocked: true });
+    useLayoutStore.getState().setPreviewDocked(false);
+    expect(useLayoutStore.getState()).toMatchObject({ previewVisible: true, previewDocked: false, activeView: 'preview' });
+
+    useLayoutStore.getState().setPreviewDocked(true);
+    expect(useLayoutStore.getState()).toMatchObject({ previewVisible: true, previewDocked: true, activeView: 'terminal' });
   });
 });

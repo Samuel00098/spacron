@@ -16,6 +16,7 @@ use crate::state::AppState;
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager, State};
@@ -98,11 +99,122 @@ fn allowed_roots(config_dir: &Path, project_root: Option<&str>) -> Vec<PathBuf> 
 fn slug(prompt: &str) -> String {
     let words: Vec<String> = prompt
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| !w.is_empty())
+        .filter(|w| !w.is_empty() && !["a", "an", "the", "of", "please", "create", "generate", "draw", "make", "image", "picture", "edit", "this", "attached", "video", "clip"].contains(&w.to_ascii_lowercase().as_str()))
         .take(6)
         .map(|w| w.to_ascii_lowercase())
         .collect();
-    if words.is_empty() { "image".into() } else { words.join("-").chars().take(48).collect() }
+    let stem: String = if words.is_empty() { "image".into() } else { words.join("-").chars().take(64).collect() };
+    if ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"].contains(&stem.as_str()) {
+        format!("image-{stem}")
+    } else { stem }
+}
+
+/// Allocate a descriptive filename without replacing another agent's generation.
+fn save_named_media(dir: &Path, stem: &str, extension: &str, bytes: &[u8]) -> Result<(PathBuf, String), String> {
+    if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("invalid generated media extension".into());
+    }
+    for number in 1..=10_000 {
+        let name = if number == 1 { format!("{stem}.{extension}") } else { format!("{stem}-{number}.{extension}") };
+        let path = dir.join(&name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(bytes) {
+                    drop(file);
+                    let _ = std::fs::remove_file(&path);
+                    return Err(format!("could not save the generated media: {error}"));
+                }
+                return Ok((path, name));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("could not save the generated media: {error}")),
+        }
+    }
+    Err("too many generated files with the same name".into())
+}
+
+struct NamingImage(PathBuf);
+
+impl Drop for NamingImage {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+}
+
+async fn name_generated_image(provider: &str, made: &media::Media) -> Option<String> {
+    if made.bytes.len() as u64 > MAX_REFERENCE_BYTES { return None; }
+    let naming_provider = match provider {
+        "openai" | "google" | "openrouter" | "vercel" => provider,
+        _ if crate::commands::chatgpt::signed_in() => "chatgpt",
+        _ => return None,
+    };
+    // Reuse vision's narrow temp-folder scope rather than widening what it may read.
+    let dir = crate::commands::file_system::pasted_images_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    let stem = format!("image-name-{}", uuid::Uuid::new_v4().simple());
+    let (path, _) = save_named_media(&dir, &stem, &made.extension, &made.bytes).ok()?;
+    let scratch = NamingImage(path);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(25),
+        crate::commands::secrets::agent_turn::generated_media_name(naming_provider, Some(scratch.0.to_str()?), ""),
+    ).await.ok()?.ok()
+}
+
+async fn name_generated_video(provider: &str, description: &str) -> Option<String> {
+    let naming_provider = match provider {
+        "openai" | "google" | "openrouter" | "vercel" => provider,
+        _ if crate::commands::chatgpt::signed_in() => "chatgpt",
+        _ => return None,
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(25),
+        crate::commands::secrets::agent_turn::generated_media_name(naming_provider, None, description),
+    ).await.ok()?.ok()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamedImageFile {
+    pub path: String,
+    pub name: String,
+}
+
+fn rename_image_file(path: &str, name: &str, roots: &[PathBuf]) -> Result<RenamedImageFile, String> {
+    let source = confine_image(path, roots)?;
+    let extension = source.extension().and_then(|e| e.to_str()).ok_or("image has no extension")?;
+    let input = name.trim();
+    let stem = input.rsplit_once('.').filter(|(stem, suffix)| !stem.is_empty() && suffix.eq_ignore_ascii_case(extension))
+        .map(|(stem, _)| stem).unwrap_or(input);
+    let reserved = stem.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if stem.is_empty() || stem.chars().count() > 120 || stem.ends_with('.')
+        || stem.chars().any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+        || ["CON", "PRN", "AUX", "NUL"].contains(&reserved.as_str())
+        || (reserved.len() == 4 && (reserved.starts_with("COM") || reserved.starts_with("LPT"))
+            && matches!(reserved.as_bytes()[3], b'1'..=b'9'))
+    {
+        return Err("Use an image name without path separators or reserved filename characters".into());
+    }
+    let name = format!("{stem}.{extension}");
+    let destination = source.with_file_name(&name);
+    if destination != source && cfg!(windows) && source.file_name().is_some_and(|old| old.to_string_lossy().eq_ignore_ascii_case(&name)) {
+        // Windows identifies these as the same file; permit a casing-only rename.
+        std::fs::rename(&source, &destination).map_err(|e| format!("could not rename the image: {e}"))?;
+    } else if destination != source {
+        // Both paths are in the same directory. A hard link atomically refuses
+        // an existing destination; unlike rename on Unix, it cannot overwrite it.
+        std::fs::hard_link(&source, &destination).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists { "An image with that name already exists".into() }
+            else { format!("could not rename the image: {e}") }
+        })?;
+        if let Err(error) = std::fs::remove_file(&source) {
+            let _ = std::fs::remove_file(&destination);
+            return Err(format!("could not rename the image: {error}"));
+        }
+    }
+    Ok(RenamedImageFile { path: destination.to_string_lossy().into_owned(), name })
+}
+
+#[tauri::command]
+pub fn rename_image(state: State<'_, AppState>, path: String, name: String, project_root: Option<String>) -> Result<RenamedImageFile, String> {
+    rename_image_file(&path, &name, &allowed_roots(&state.config_dir, project_root.as_deref()))
 }
 
 fn cancellations() -> &'static Mutex<HashMap<String, watch::Sender<bool>>> {
@@ -234,7 +346,7 @@ fn short_reason(error: &str) -> String {
     rest.chars().take(220).collect()
 }
 
-async fn generate_on(provider: &str, kind: Kind, model: &str, prompt: &str, references: &[PathBuf]) -> Result<media::Media, String> {
+async fn generate_on(provider: &str, kind: Kind, model: &str, prompt: &str, references: &[PathBuf]) -> Result<(media::Media, Option<String>), String> {
     if provider == "chatgpt" {
         if kind == Kind::Video {
             return Err("unsupported: the ChatGPT plan cannot make videos".into());
@@ -249,10 +361,10 @@ async fn generate_on(provider: &str, kind: Kind, model: &str, prompt: &str, refe
                 .decode(image.base64.trim())
                 .map_err(|_| "protocol: the generated image was not valid base64".to_string())?,
         };
-        return Ok(media::Media { bytes, extension: "png".into(), revised_prompt: image.revised_prompt });
+        return Ok((media::Media { bytes, extension: "png".into(), revised_prompt: image.revised_prompt }, image.suggested_name));
     }
     let key = crate::commands::secrets::media_api_key(provider)?;
-    media::generate(provider, kind, model, prompt, references, &key).await
+    media::generate(provider, kind, model, prompt, references, &key).await.map(|made| (made, None))
 }
 
 /// Generate an image or a video and save it (see `output_dir`).
@@ -320,7 +432,16 @@ pub async fn generate_and_save(
         for provider in provider_order(kind, preferred) {
             let model = models.get(&provider).map(String::as_str).unwrap_or("");
             match generate_on(&provider, kind, model, &prompt, &references).await {
-                Ok(made) => return Ok((provider, made, skipped)),
+                Ok((made, suggested_name)) => {
+                    // Naming is best effort: a successful generation still arrives
+                    // if its naming model is offline or out of quota.
+                    let name = match (kind, suggested_name) {
+                        (Kind::Image, None) => name_generated_image(&provider, &made).await,
+                        (Kind::Video, None) => name_generated_video(&provider, made.revised_prompt.as_deref().unwrap_or(&prompt)).await,
+                        (_, name) => name,
+                    };
+                    return Ok((provider, made, skipped, name));
+                }
                 Err(error) if should_fall_back(&error) => {
                     quota_hit |= error.starts_with("quota:");
                     let reason = if error.starts_with("not_configured:") { "no API key saved".to_string() }
@@ -345,14 +466,15 @@ pub async fn generate_and_save(
         _ = rx.changed() => Err("cancelled: stopped by user".into()),
     };
     cancellations().lock().unwrap_or_else(|e| e.into_inner()).remove(&request_id);
-    let (provider, made, skipped) = result?;
+    let (provider, made, skipped, suggested_name) = result?;
 
     let dir = output_dir(config_dir, project_root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let name = format!("{stamp}-{}.{}", slug(&prompt), made.extension);
-    let dest = dir.join(&name);
-    std::fs::write(&dest, &made.bytes).map_err(|e| format!("could not save the {noun}: {e}"))?;
+    let title = suggested_name.as_deref().filter(|s| !s.trim().is_empty())
+        .or(made.revised_prompt.as_deref()).unwrap_or(&prompt);
+    let stem = slug(title);
+    let stem = if kind == Kind::Video && stem == "image" { "video" } else { &stem };
+    let (dest, name) = save_named_media(&dir, stem, &made.extension, &made.bytes)?;
     Ok(GeneratedImageFile {
         path: dest.to_string_lossy().into_owned(),
         name,
@@ -445,8 +567,70 @@ mod tests {
 
     #[test]
     fn slug_is_short_and_safe() {
-        assert_eq!(slug("A flat, blue circle on white!"), "a-flat-blue-circle-on-white");
+        assert_eq!(slug("A flat, blue circle on white!"), "flat-blue-circle-on-white");
+        assert_eq!(slug("Please generate a video of ocean waves at sunset"), "ocean-waves-at-sunset");
+        assert_eq!(slug("CON"), "image-con");
         assert_eq!(slug("..//\\"), "image");
+    }
+
+    #[test]
+    fn descriptive_image_and_video_names_never_overwrite_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for extension in ["png", "mp4"] {
+            let (first, name) = save_named_media(dir.path(), "ocean-waves-at-sunset", extension, b"first").unwrap();
+            assert_eq!(name, format!("ocean-waves-at-sunset.{extension}"));
+            let (second, name) = save_named_media(dir.path(), "ocean-waves-at-sunset", extension, b"second").unwrap();
+            assert_eq!(name, format!("ocean-waves-at-sunset-2.{extension}"));
+            assert_eq!(std::fs::read(first).unwrap(), b"first");
+            assert_eq!(std::fs::read(second).unwrap(), b"second");
+        }
+    }
+
+    #[test]
+    fn concurrent_generations_receive_distinct_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let saves: Vec<_> = (0..8).map(|number| {
+            let root = dir.path().to_path_buf();
+            std::thread::spawn(move || save_named_media(&root, "red-fox-in-snow", "png", &[number]).unwrap())
+        }).collect();
+        let paths: std::collections::HashSet<_> = saves.into_iter().map(|save| save.join().unwrap().0).collect();
+        assert_eq!(paths.len(), 8);
+    }
+
+    #[test]
+    fn rename_preserves_the_image_and_refuses_collisions_or_unsafe_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("old.png");
+        std::fs::write(&source, b"original image").unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+        for name in ["", "../escape", "bad:name", "NUL", "COM1", "trailing.", "bad\nname"] {
+            assert!(rename_image_file(source.to_str().unwrap(), name, &roots).is_err());
+            assert_eq!(std::fs::read(&source).unwrap(), b"original image");
+        }
+        std::fs::write(dir.path().join("taken.png"), b"other image").unwrap();
+        assert!(rename_image_file(source.to_str().unwrap(), "taken", &roots).is_err());
+        assert_eq!(std::fs::read(dir.path().join("taken.png")).unwrap(), b"other image");
+        let renamed = rename_image_file(source.to_str().unwrap(), "Golden sunset.png", &roots).unwrap();
+        assert_eq!(renamed.name, "Golden sunset.png");
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&renamed.path).unwrap(), b"original image");
+        assert!(rename_image_file(&renamed.path, "Golden sunset", &roots).is_ok());
+        if cfg!(windows) {
+            let case_rename = rename_image_file(&renamed.path, "golden sunset", &roots).unwrap();
+            assert_eq!(case_rename.name, "golden sunset.png");
+            assert_eq!(std::fs::read(case_rename.path).unwrap(), b"original image");
+        }
+        assert!(rename_image_file(&renamed.path, "escape", &[]).is_err());
+    }
+
+    #[test]
+    fn naming_scratch_files_are_removed_when_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("naming.png");
+        std::fs::write(&path, b"preview").unwrap();
+        let scratch = NamingImage(path.clone());
+        drop(scratch);
+        assert!(!path.exists());
     }
 
     #[test]

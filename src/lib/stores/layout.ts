@@ -73,12 +73,14 @@ export const terminalRoomOpen = writable(false);
 export const rightSidebarVisible = writable(false);
 export const RIGHT_SIDEBAR_NAVIGATOR_TABS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
 export type RightSidebarNavigatorTab = (typeof RIGHT_SIDEBAR_NAVIGATOR_TABS)[number];
-export type RightSidebarTab = RightSidebarNavigatorTab | RightDrawerTool;
+// 'preview' is the docked Preview. It is not a drawer tool: it has no aux flag,
+// and it stays mounted while another tab is showing so the page never reloads.
+export type RightSidebarTab = RightSidebarNavigatorTab | RightDrawerTool | 'preview';
 export function sanitiseRightSidebarTab(
   value: unknown,
   fallback: RightSidebarTab = 'files',
 ): RightSidebarTab {
-  return ([...RIGHT_SIDEBAR_NAVIGATOR_TABS, ...RIGHT_DRAWER_TOOLS] as readonly string[]).includes(value as string)
+  return ([...RIGHT_SIDEBAR_NAVIGATOR_TABS, ...RIGHT_DRAWER_TOOLS, 'preview'] as readonly string[]).includes(value as string)
     ? value as RightSidebarTab
     : fallback;
 }
@@ -144,6 +146,7 @@ export function setActiveView(view: ActiveView) {
 export function showTerminal() { withTransition(() => { useLayoutStore.getState().showTerminal(); }); }
 export function toggleEditorVisible() { withTransition(() => { useLayoutStore.getState().toggleEditorVisible(); }); }
 export function togglePreviewVisible() { withTransition(() => { useLayoutStore.getState().togglePreviewVisible(); }); }
+export function setPreviewDocked(docked: boolean) { withTransition(() => { useLayoutStore.getState().setPreviewDocked(docked); }); }
 export function toggleReviewVisible() {
   withTransition(() => {
     // Code Review is a right-sidebar utility now. Make sure a command or

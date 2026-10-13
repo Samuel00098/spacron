@@ -348,6 +348,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.app-shell .chat-mode-empty > .chat-mode-empty-heading {
+  font-size: clamp(20px, 2.2vw, 26px) !important;
+}
+
 .app-shell .chat-mode-message {
   max-width: min(760px, 82%);
   margin: 0 0 16px;
@@ -2394,6 +2398,22 @@
 }
 .app-shell .chat-agent-model-trigger.open {
   box-shadow: var(--surface-outline-active) !important;
+}
+/* The composer's selectors (chat mode and standalone) keep their plain
+   outline while open or focused: no highlight ring around the button. */
+.app-shell .chat-mode-composer-footer .chat-agent-model-trigger.open,
+.app-shell .chat-mode-composer-footer .dd-trigger.open,
+.app-shell .chat-mode-composer-footer .reasoning-slider-trigger[aria-expanded='true'] {
+  border-color: transparent;
+  box-shadow: var(--surface-outline) !important;
+}
+.app-shell .chat-mode-composer-footer .chat-agent-model-trigger:focus,
+.app-shell .chat-mode-composer-footer .chat-agent-model-trigger:focus-visible,
+.app-shell .chat-mode-composer-footer .dd-trigger:focus,
+.app-shell .chat-mode-composer-footer .dd-trigger:focus-visible,
+.app-shell .chat-mode-composer-footer .reasoning-slider-trigger:focus,
+.app-shell .chat-mode-composer-footer .reasoning-slider-trigger:focus-visible {
+  outline: none;
 }
 .chat-agent-model-menu {
   /* No edge fade on the frame itself: it faded the outline and corners. */

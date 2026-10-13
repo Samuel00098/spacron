@@ -113,6 +113,11 @@ export const enableLsp = persistentWritable('enableLsp', true);
 export const showHidden = persistentWritable('showHidden', false);
 export const showSnapshotsTab = persistentWritable('showSnapshotsTab', false);
 
+// Preview
+// Where a newly opened Preview lands. See `previewDocked` in zustand/layout.ts.
+export type PreviewPlacement = 'sidebar' | 'room';
+export const previewPlacement = persistentWritable<PreviewPlacement>('previewPlacement', 'sidebar');
+
 // Notifications
 export const notificationsEnabled = persistentWritable('notificationsEnabled', true);
 
@@ -1323,6 +1328,10 @@ export const backgroundImageEnabled = persistentWritable<boolean>('backgroundIma
 // softens it for legibility. Pure CSS on the html::before layer — no backend.
 export const backgroundImageOpacity = persistentWritable<number>('backgroundImageOpacity', 100);
 export const backgroundImageBlur = persistentWritable<number>('backgroundImageBlur', 0);
+// How solid the frosted panels are while a custom background image is showing,
+// 30–90 (percent). Lower lets more of the image through; the text palette and
+// the panels' backdrop blur keep labels readable across the whole range.
+export const backgroundGlassOpacity = persistentWritable<number>('backgroundGlassOpacity', 60);
 
 // Whole-app colour grading, in percent (100 = untouched). Applied as one CSS
 // `filter` on <html> by `applyColorGrading` — see there for why the root.
@@ -1433,6 +1442,7 @@ export function resetSettingsToDefault() {
   enableLsp.set(true);
   showHidden.set(false);
   showSnapshotsTab.set(false);
+  previewPlacement.set('sidebar');
   notificationsEnabled.set(true);
   agentWorktrees.set(true);
   autoStageAgentChanges.set(false);
@@ -1475,6 +1485,7 @@ export function resetSettingsToDefault() {
   backgroundImageEnabled.set(false);
   backgroundImageOpacity.set(100);
   backgroundImageBlur.set(0);
+  backgroundGlassOpacity.set(60);
   uiVibrancy.set(100);
   uiContrast.set(100);
   terminalShell.set('');

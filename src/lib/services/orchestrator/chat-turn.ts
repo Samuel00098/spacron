@@ -1106,6 +1106,7 @@ export function composeTurnReply(
   summary: string | null,
   todos?: ChatTurnTodoItem[],
   results?: BrainToolResult[],
+  options?: { conversational?: boolean },
 ): string {
   const parts: string[] = [];
   const body = reply.trim();
@@ -1122,11 +1123,16 @@ export function composeTurnReply(
   // The structured report REPLACES the one-line summary for a turn that did
   // work. An empty render (nothing worth a section) falls back to the summary
   // rather than dropping the evidence line entirely.
-  const structured = results && isReportableTurn(results)
-    ? formatStructuredReport(buildCompletionReport(results, todos ?? []), body).trim()
+  // Chat replies read like a conversation: the files a turn wrote are shown as
+  // viewable cards under the reply, and the tool trail lives in Work details,
+  // so only what the user must act on (a failure, a measured check) is added.
+  const conversational = options?.conversational === true;
+  const report = results && isReportableTurn(results) ? buildCompletionReport(results, todos ?? []) : null;
+  const structured = report
+    ? formatStructuredReport(conversational ? { ...report, completed: [] } : report, body).trim()
     : '';
   if (structured) parts.push(structured);
-  else if (summary && summary.trim()) parts.push(summary.trim());
+  else if ((!conversational || !body) && summary && summary.trim()) parts.push(summary.trim());
 
   return parts.join('\n\n');
 }

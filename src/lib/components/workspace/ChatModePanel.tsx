@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { customProviders } from '$lib/stores/customProviders';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -16,6 +16,7 @@ import {
   appendThreadMessage,
   createChatThread,
   ensureProjectThread,
+  editAssistantChatMessage,
   getPendingNewThreadSettings,
   removeThreadMessage,
   setThreadDraft,
@@ -61,7 +62,8 @@ import {
   type RealtimeVoiceSession,
   type RealtimeVoiceState,
 } from '$lib/services/realtime-voice';
-import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessage, ChatReasoningEffort } from '$lib/types/chat';
+import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, ChatMessage, ChatReasoningEffort, ChatThread } from '$lib/types/chat';
+import type { Project } from '$lib/types/workspace';
 import { reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
 import ModelCapabilityBadges, { ModelCapabilityIcons, forgetModelVision } from './ModelCapabilityBadges';
 import { modelCapabilitiesVersion } from '$lib/services/model-capabilities';
@@ -83,9 +85,17 @@ import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import ChatAgentRuns from './ChatAgentRuns';
-import ChatNoProject from './ChatNoProject';
+import StandaloneChatPanel from './StandaloneChatPanel';
+import { chatScope, showProjectChat, startStandaloneChat } from '$lib/stores/chatNavigation';
+import { beginProjectFromChat, projectFromChat } from '$lib/services/standalone-chat';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
+import ChatFileGlyph from './ChatFileGlyph';
+import { readAloudMessageId, readAloudSupported, stopReadAloud, toggleReadAloud } from '$lib/services/read-aloud';
 import './ChatModePanel.css';
+import './ChatFileViewer.css';
+
+// The viewer pulls in CodeMirror; load it the first time a file is opened.
+const ChatFileViewer = lazy(() => import('./ChatFileViewer'));
 
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_ATTACHMENT_TEXT = 120_000;
@@ -160,6 +170,14 @@ function CopyIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2" /></svg>;
 }
 
+function SpeakerIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>;
+}
+
+function StopSpeakingIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>;
+}
+
 function EditIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16.5-.7 3.9 3.9-.7L18.8 8.1a2.2 2.2 0 0 0-3.1-3.1z" /><path d="m14.4 6.8 2.8 2.8" /></svg>;
 }
@@ -221,7 +239,7 @@ function linkifyProjectPaths(root: HTMLElement): void {
       link.dataset.chatFilePath = path;
       link.tabIndex = 0;
       link.setAttribute('role', 'link');
-      link.title = 'Open in editor';
+      link.title = 'Open file';
       link.textContent = path;
       fragment.appendChild(link);
       cursor = start + path.length;
@@ -232,39 +250,18 @@ function linkifyProjectPaths(root: HTMLElement): void {
   }
 }
 
-/** Open a chat-mentioned project path in the editor, resolving it against the active project root. */
-async function openChatFilePath(rawPath: string): Promise<void> {
-  const path = rawPath.trim();
-  if (!path) return;
-  const project = get(activeProject);
-  if (!project?.root_path) {
-    showToast('No active project to open the file in.', 'warning', 4000);
-    return;
-  }
+/** Open an absolute path in the editor (Code mode). */
+async function openPathInEditor(path: string): Promise<void> {
   try {
-    await openFile(resolveProjectFilePath(path, project.root_path));
+    await openFile(path);
     setActiveView('editor');
   } catch {
     showToast(`Couldn't open ${path}`, 'error', 4000);
   }
 }
 
-function handleChatMarkdownClick(event: ReactMouseEvent<HTMLDivElement>): void {
-  const link = (event.target as HTMLElement | null)?.closest?.('[data-chat-file-path]') as HTMLElement | null;
-  if (!link) return;
-  event.preventDefault();
-  void openChatFilePath(link.dataset.chatFilePath ?? '');
-}
-
-function handleChatMarkdownKeydown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  const path = (event.target as HTMLElement | null)?.dataset?.chatFilePath;
-  if (!path) return;
-  event.preventDefault();
-  void openChatFilePath(path);
-}
-
-function ChatMarkdownBody({ text, pending }: { text: string; pending?: boolean }) {
+/** Paths a reply names open through `onOpenFile` (the chat's file viewer). */
+export function ChatMarkdownBody({ text, pending, onOpenFile }: { text: string; pending?: boolean; onOpenFile?: (path: string) => void }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => {
     try {
@@ -274,8 +271,13 @@ function ChatMarkdownBody({ text, pending }: { text: string; pending?: boolean }
       return DOMPurify.sanitize(text || '');
     }
   }, [text]);
+  // One object per `html`: a fresh `{ __html }` each render makes React
+  // rewrite innerHTML, which wiped the linkified paths and table wrappers.
+  const innerHtml = useMemo(() => ({ __html: html }), [html]);
 
-  useEffect(() => {
+  // Runs after every render (both passes are idempotent), so anything that
+  // does reset the markup still gets its links and scroll regions back.
+  useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
@@ -290,8 +292,8 @@ function ChatMarkdownBody({ text, pending }: { text: string; pending?: boolean }
       scrollRegion.appendChild(table);
     });
 
-    linkifyProjectPaths(container);
-  }, [html]);
+    if (onOpenFile) linkifyProjectPaths(container);
+  });
 
   if (pending && !text.trim()) {
     return <span className="chat-mode-pending"><i /><i /><i /></span>;
@@ -300,9 +302,21 @@ function ChatMarkdownBody({ text, pending }: { text: string; pending?: boolean }
     <div
       ref={containerRef}
       className="chat-mode-message-markdown"
-      onClick={handleChatMarkdownClick}
-      onKeyDown={handleChatMarkdownKeydown}
-      dangerouslySetInnerHTML={{ __html: html }}
+      onClick={onOpenFile ? (event: ReactMouseEvent<HTMLDivElement>) => {
+        const link = (event.target as HTMLElement | null)?.closest?.('[data-chat-file-path]') as HTMLElement | null;
+        const path = link?.dataset.chatFilePath?.trim();
+        if (!path) return;
+        event.preventDefault();
+        onOpenFile(path);
+      } : undefined}
+      onKeyDown={onOpenFile ? (event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const path = (event.target as HTMLElement | null)?.dataset?.chatFilePath?.trim();
+        if (!path) return;
+        event.preventDefault();
+        onOpenFile(path);
+      } : undefined}
+      dangerouslySetInnerHTML={innerHtml}
     />
   );
 }
@@ -517,9 +531,26 @@ function ChatInputDialog({
 
 export default function ChatModePanel() {
   const project = useStore(activeProject);
+  const scope = useStore(chatScope);
+  const sourceChatId = useStore(projectFromChat);
+  const previousProject = useRef(project?.id);
+  useEffect(() => {
+    if (previousProject.current !== project?.id && project && !sourceChatId) showProjectChat();
+    previousProject.current = project?.id;
+  }, [project?.id, sourceChatId]);
+  return !project || scope === 'standalone' ? <StandaloneChatPanel /> : <ProjectChatModePanel />;
+}
+
+export function ProjectChatModePanel({ chatProject, standalone = false, onCreateStandaloneThread }: {
+  chatProject?: Project;
+  standalone?: boolean;
+  onCreateStandaloneThread?: (overrides: Parameters<typeof createChatThread>[1]) => ChatThread;
+} = {}) {
+  const activeProjectValue = useStore(activeProject);
+  const project = chatProject ?? activeProjectValue;
   const workspace = useStore(activeWorkspace);
   const pendingProjectPath = workspace?.active_project_path ?? workspace?.project_paths?.[0];
-  const projectName = project?.name ?? pendingProjectPath?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  const projectName = standalone ? undefined : project?.name ?? pendingProjectPath?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
   const threadState = useStore(chatThreadState);
   const allTasks = useStore(orchestratorTasks);
   const defaultProvider = useStore(aiProvider);
@@ -611,6 +642,27 @@ export default function ChatModePanel() {
   const activeThreadId = project ? threadState.activeThreadByProject[project.id] ?? null : null;
   const thread = projectThreads.find((entry) => entry.id === activeThreadId) ?? projectThreads[0] ?? null;
   const messages = thread ? threadState.messagesByThread[thread.id] ?? [] : [];
+  // The file open in the side viewer: `label` is the path as the conversation
+  // names it, `path` the absolute file under this chat's root.
+  const [viewerFile, setViewerFile] = useState<{ path: string; label: string } | null>(null);
+  const viewerRoot = project?.root_path ?? '';
+  const openFileInViewer = useCallback((path: string) => {
+    if (!viewerRoot && !/^(?:[a-zA-Z]:)?[\\/]/.test(path)) {
+      showToast('No folder to open this file from.', 'warning', 3000);
+      return;
+    }
+    setViewerFile({ path: resolveProjectFilePath(path, viewerRoot), label: path });
+  }, [viewerRoot]);
+  useEffect(() => { setViewerFile(null); }, [thread?.id, project?.id]);
+  const readingMessageId = useStore(readAloudMessageId);
+  const canReadAloud = useMemo(() => readAloudSupported(), []);
+  // A read belongs to the conversation on screen; leaving it stops the voice.
+  useEffect(() => () => stopReadAloud(), [thread?.id]);
+  const openAbsoluteInViewer = useCallback((absolutePath: string) => {
+    const root = viewerRoot.replace(/\\/g, '/').replace(/\/$/, '');
+    const normalized = absolutePath.replace(/\\/g, '/');
+    setViewerFile({ path: absolutePath, label: root && normalized.toLowerCase().startsWith(root.toLowerCase() + '/') ? normalized.slice(root.length + 1) : normalized });
+  }, [viewerRoot]);
   // What is waiting to run in this thread: rendered as the queue strip above
   // the composer, with per-row steer/remove.
   const queuedMessages = (thread ? messageQueues[thread.id] ?? [] : []) as QueuedChatMessage[];
@@ -838,8 +890,8 @@ export default function ChatModePanel() {
   }, [ensureLiveModels]);
 
   useEffect(() => {
-    if (project) ensureProjectThread(project.id);
-  }, [project?.id]);
+    if (project && !standalone) ensureProjectThread(project.id);
+  }, [project?.id, standalone]);
 
   useEffect(() => {
     setEditingMessageId(null);
@@ -943,21 +995,34 @@ export default function ChatModePanel() {
   }
 
   function selectAccess(nextAccess: string) {
-    if (!thread) return;
-    updateChatThread(thread.id, {
+    const target = ensureConversationThread();
+    if (!target) return;
+    updateChatThread(target.id, {
       accessMode: nextAccess === 'full-access' ? 'full-access' : 'inherit',
       updatedAt: Date.now(),
     });
   }
 
   function updateDraft(value: string) {
-    if (thread) setThreadDraft(thread.id, value);
+    const target = thread ?? (value ? ensureConversationThread() : null);
+    if (target) setThreadDraft(target.id, value);
+  }
+
+  function ensureConversationThread(): ChatThread | null {
+    return thread ?? onCreateStandaloneThread?.({ provider: selectedProvider, model: selectedModel, accessMode, workMode }) ?? null;
   }
 
   function beginEditMessage(message: ChatMessage) {
-    if (message.role !== 'user') return;
+    if (message.pending || (message.role !== 'user' && message.role !== 'assistant')) return;
     setEditingMessageId(message.id);
     setEditingMessageDraft(message.text);
+  }
+
+  async function saveEditedResponse(messageId: string) {
+    if (!thread || !editingMessageDraft.trim()) return;
+    try {
+      if (await editAssistantChatMessage(thread.id, messageId, editingMessageDraft)) cancelEditMessage();
+    } catch (error) { showToast(`Could not save the response: ${String(error)}`, 'error'); }
   }
 
   function cancelEditMessage() {
@@ -1030,6 +1095,10 @@ export default function ChatModePanel() {
 
   function startNewThread() {
     if (!project) return;
+    if (standalone) {
+      startStandaloneChat();
+      return;
+    }
     const pendingSettings = getPendingNewThreadSettings(project.id);
     createChatThread(project.id, {
       provider: pendingSettings?.provider ?? selectedProvider,
@@ -1250,7 +1319,7 @@ export default function ChatModePanel() {
     try {
       await sendChatMessage(project.id, project.root_path, request, {
         projectName: project.name,
-        threadId: thread?.id,
+        threadId: voiceThreadIdRef.current ?? thread?.id,
         orchestratorProvider: selectedProvider,
         orchestratorModel: selectedModel,
         accessMode,
@@ -1297,12 +1366,14 @@ export default function ChatModePanel() {
       text,
       ts: Date.now(),
     });
+    if (standalone && role === 'assistant') updateChatThread(threadId, { status: 'idle', turnEndedAt: Date.now() });
     return id;
   }
 
   async function startChatVoiceMode() {
-    if (!project || !thread) return;
-    voiceThreadIdRef.current = thread.id;
+    const target = ensureConversationThread();
+    if (!project || !target) return;
+    voiceThreadIdRef.current = target.id;
     const engineConfig = getRealtimeEngineConfig(get(voiceConversationEngine));
     const { provider, label, keyProvider } = engineConfig;
     if (!isRealtimeVoiceSupported(provider)) {
@@ -1415,7 +1486,7 @@ export default function ChatModePanel() {
   // The floating bar owns the bare-Alt gesture globally; in conversational
   // mode it routes the tap here instead of opening its own (hidden) call.
   // Consume the counter so Alt toggles the composer's voice session.
-  const lastChatVoiceRequestRef = useRef(0);
+  const lastChatVoiceRequestRef = useRef(chatVoiceRequest);
   useEffect(() => {
     if (chatVoiceRequest === lastChatVoiceRequestRef.current) return;
     lastChatVoiceRequestRef.current = chatVoiceRequest;
@@ -1623,13 +1694,14 @@ export default function ChatModePanel() {
       await answerPendingRequest(requestDraft);
       return;
     }
-    const text = thread?.draft.trim() || (attachments.length ? 'Please review the attached files.' : '');
-    if (!project || !thread || !text || pendingSendCount > 0) return;
+    const target = thread ?? (attachments.length ? ensureConversationThread() : null);
+    const text = target?.draft.trim() || (attachments.length ? 'Please review the attached files.' : '');
+    if (!project || !target || !text || pendingSendCount > 0) return;
     // previewUrl is a live blob: URL for thumbnails only — strip it before the
     // attachments are recorded, then revoke so the blobs don't leak.
     const messageAttachments = attachments.map(({ previewUrl: _preview, ...rest }) => rest);
     revokeAttachmentPreviews(attachments);
-    setThreadDraft(thread.id, '');
+    setThreadDraft(target.id, '');
     setFileMention(null);
     setAttachments([]);
     setPendingSendCount((count) => count + 1);
@@ -1639,7 +1711,7 @@ export default function ChatModePanel() {
       // "Send now" (steer: hand it to the running turn) and "×".
       await enqueueChatMessage(project.id, project.root_path, text, {
         projectName: project.name,
-        threadId: thread.id,
+        threadId: target.id,
         orchestratorProvider: selectedProvider,
         orchestratorModel: selectedModel,
         accessMode,
@@ -1653,16 +1725,26 @@ export default function ChatModePanel() {
     }
   }
 
-  // The chat lives inside a project; with none open, help pick one.
-  if (!project) return <ChatNoProject />;
+  if (!project) return null;
 
   return (
-    <section className={`chat-mode-panel${messages.length === 0 ? ' empty' : ''}`} aria-label="Chat">
+    <section className={`chat-mode-panel${standalone ? ' standalone-chat-panel' : ''}${messages.length === 0 ? ' empty' : ''}${viewerFile ? ' has-file-viewer' : ''}`} aria-label="Chat">
+      {viewerFile && (
+        <Suspense fallback={null}>
+          <ChatFileViewer
+            path={viewerFile.path}
+            label={viewerFile.label}
+            onClose={() => setViewerFile(null)}
+            onOpenInEditor={standalone ? undefined : () => void openPathInEditor(viewerFile.path)}
+            onOpenFile={openAbsoluteInViewer}
+          />
+        </Suspense>
+      )}
       <div className="chat-mode-room-header">
         <div className="chat-mode-room-title">
           <span className="chat-mode-room-icon" aria-hidden="true"><VoiceModeIcon /></span>
           <span className="chat-mode-room-kind">Chat</span>
-          <strong>{thread?.title ?? 'Conversation'}</strong>
+          <strong>{standalone && (!thread || thread.title === 'New thread') ? 'New chat' : thread?.title ?? 'Conversation'}</strong>
           {/* Chat-level activity only ("Working", "Idle", "Needs input") — never a
               single agent's name. The thread can drive several agents at once,
               so naming one here reads as "that agent is working" and hides
@@ -1670,7 +1752,9 @@ export default function ChatModePanel() {
           <span className={`chat-mode-live-status ${liveStatusClass}`} aria-live="polite">{liveStatusText}</span>
         </div>
         <div className="chat-mode-room-actions">
-          {project && <button type="button" onClick={startNewThread}>New conversation</button>}
+          {standalone && project && <button type="button" onClick={() => void invoke('chat_workspace_reveal', { workspaceId: thread?.standaloneWorkspaceId ?? project.id.replace(/^chat-/, '') }).catch((error) => showToast(String(error), 'error'))}>Files</button>}
+          {standalone && thread && messages.some((message) => message.role === 'user') && <button type="button" disabled={thread.status === 'working' || thread.status === 'needs-input' || pendingSendCount > 0 || voiceActive} onClick={() => beginProjectFromChat(thread.id)}>Create project from chat</button>}
+          {project && <button type="button" onClick={startNewThread}>{standalone ? 'New chat' : 'New conversation'}</button>}
         </div>
       </div>
 
@@ -1692,7 +1776,7 @@ export default function ChatModePanel() {
             )}
             {messages.length === 0 ? (
               <div className="chat-mode-empty">
-                <h2 className="chat-mode-empty-heading">{projectName ? `What should we work on in ${projectName}?` : 'What should we work on?'}</h2>
+                <h2 className="chat-mode-empty-heading">{standalone ? 'What are we working on?' : projectName ? `What should we work on in ${projectName}?` : 'What should we work on?'}</h2>
               </div>
             ) : messages.map((message) => {
               // An agent's turn-end record stays in the thread (its card reads
@@ -1725,7 +1809,7 @@ export default function ChatModePanel() {
                       />
                       <div className="chat-mode-message-edit-actions">
                         <button type="button" onClick={cancelEditMessage}>Cancel</button>
-                        {editingMessageDraft.trim() !== message.text.trim() && (
+                        {message.role === 'user' && editingMessageDraft.trim() !== message.text.trim() && (
                           <button
                             type="button"
                             className="primary"
@@ -1737,9 +1821,28 @@ export default function ChatModePanel() {
                             {pendingSendCount > 0 ? 'Resending…' : 'Resend'}
                           </button>
                         )}
+                        {message.role === 'assistant' && <button type="button" className="primary" disabled={!editingMessageDraft.trim() || thread?.status === 'working' || thread?.status === 'needs-input'} onClick={() => void saveEditedResponse(message.id)}>Save</button>}
                       </div>
                     </div>
-                  ) : <ChatMarkdownBody text={message.text} pending={message.pending} />}
+                  ) : <ChatMarkdownBody text={message.text} pending={message.pending} onOpenFile={openFileInViewer} />}
+                  {message.files?.length && !message.pending ? (
+                    <div className="chat-file-cards">
+                      {message.files.map((file) => {
+                        const name = file.path.replace(/\\/g, '/').split('/').pop() || file.path;
+                        const active = viewerFile?.label === file.path;
+                        return (
+                          <button key={file.path} type="button" className={`chat-file-card${active ? ' active' : ''}`} onClick={() => active ? setViewerFile(null) : openFileInViewer(file.path)} title={`Open ${file.path}`}>
+                            <ChatFileGlyph />
+                            <span className="chat-file-card-text">
+                              <strong>{name}</strong>
+                              <span>{file.action === 'created' ? 'Created' : 'Edited'}{file.path !== name ? ` · ${file.path}` : ''}</span>
+                            </span>
+                            <span className="chat-file-card-open" aria-hidden="true">{active ? 'Close' : 'Open'}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   <InlineCard
                     message={message}
                     onOption={message.inlineRequest && !message.inlineRequest.answeredAt
@@ -1802,8 +1905,14 @@ export default function ChatModePanel() {
                       <button type="button" onClick={() => void copyMessage(message)} title="Copy message" aria-label="Copy message">
                         <CopyIcon />
                       </button>
+                      {message.role === 'assistant' && canReadAloud && message.text.trim() && (
+                        <button type="button" className={readingMessageId === message.id ? 'active' : undefined} onClick={() => toggleReadAloud(message.id, message.text)} title={readingMessageId === message.id ? 'Stop reading' : 'Read aloud'} aria-label={readingMessageId === message.id ? 'Stop reading' : 'Read aloud'} aria-pressed={readingMessageId === message.id}>
+                          {readingMessageId === message.id ? <StopSpeakingIcon /> : <SpeakerIcon />}
+                        </button>
+                      )}
+                      {/* Replies are the model's record of the turn; only your own messages can be edited and resent. */}
                       {message.role === 'user' && (
-                        <button type="button" onClick={() => beginEditMessage(message)} title="Edit message" aria-label="Edit message">
+                        <button type="button" disabled={thread?.status === 'working' || thread?.status === 'needs-input'} onClick={() => beginEditMessage(message)} title="Edit message" aria-label="Edit message">
                           <EditIcon />
                         </button>
                       )}
@@ -2023,15 +2132,16 @@ export default function ChatModePanel() {
                   <ModelCapabilityIcons provider={provider} model={modelId} siblings={modelIds} />
                 )}
                 onChange={(provider, model) => {
-                  if (!thread || !providerIds.has(provider as AiProviderId)) return;
+                  const target = ensureConversationThread();
+                  if (!target || !providerIds.has(provider as AiProviderId)) return;
                   const nextProvider = provider as AiProviderId;
-                  clearPendingNewThreadSettings(thread.projectId);
-                  updateChatThread(thread.id, { provider: nextProvider, model, updatedAt: Date.now() });
+                  clearPendingNewThreadSettings(target.projectId);
+                  updateChatThread(target.id, { provider: nextProvider, model, updatedAt: Date.now() });
                   aiProvider.set(nextProvider);
                   setAiModel(nextProvider, model);
                   ensureLiveModels(nextProvider);
                 }}
-                disabled={!thread}
+                disabled={!thread && !standalone}
               />
               <div className="chat-mode-access-dropdown">
                 <Dropdown
@@ -2042,7 +2152,7 @@ export default function ChatModePanel() {
                   ] as DropdownOption[]}
                   onChange={selectAccess}
                   ariaLabel="Orchestrator agent access"
-                  disabled={!thread}
+                  disabled={!thread && !standalone}
                   boundarySelector=".chat-mode-panel"
                 />
               </div>
@@ -2051,8 +2161,9 @@ export default function ChatModePanel() {
                   { value: 'build', label: 'Build', tooltip: 'Inspect and carry out the task using this thread’s access setting.' },
                   { value: 'plan', label: 'Plan', tooltip: 'Inspect the project and propose a plan without edits or agent dispatch.' },
                 ]} onChange={(value) => {
-                  if (thread) updateChatThread(thread.id, { workMode: value === 'plan' ? 'plan' : 'build', updatedAt: Date.now() });
-                }} ariaLabel="Chat work mode" disabled={!thread} boundarySelector=".chat-mode-panel" />
+                  const target = ensureConversationThread();
+                  if (target) updateChatThread(target.id, { workMode: value === 'plan' ? 'plan' : 'build', updatedAt: Date.now() });
+                }} ariaLabel="Chat work mode" disabled={!thread && !standalone} boundarySelector=".chat-mode-panel" />
               </div>
               {reasoningLevels.length > 0 && (
                 <div className="chat-mode-reasoning-dropdown">
@@ -2060,9 +2171,10 @@ export default function ChatModePanel() {
                     value={selectedReasoning}
                     levels={reasoningLevels}
                     onChange={(value) => {
-                      if (thread) updateChatThread(thread.id, { reasoningEffort: value, updatedAt: Date.now() });
+                      const target = ensureConversationThread();
+                      if (target) updateChatThread(target.id, { reasoningEffort: value, updatedAt: Date.now() });
                     }}
-                    disabled={!thread}
+                    disabled={!thread && !standalone}
                     dropdown
                   />
                 </div>
@@ -2082,7 +2194,7 @@ export default function ChatModePanel() {
             </div>
             <span className="chat-mode-composer-spacer" aria-hidden="true" />
             <div className="chat-mode-composer-actions">
-              <button type="button" className="chat-mode-composer-icon-btn" onClick={() => fileInputRef.current?.click()} disabled={!project || attachmentBusy || attachments.length >= 5} title="Attach files or images (or drag and drop files here, paste images)" aria-label="Attach files or images"><PaperclipIcon /></button>
+              <button type="button" className="chat-mode-composer-icon-btn" onClick={() => { if (standalone) ensureConversationThread(); fileInputRef.current?.click(); }} disabled={!project || attachmentBusy || attachments.length >= 5} title="Attach files or images (or drag and drop files here, paste images)" aria-label="Attach files or images"><PaperclipIcon /></button>
               <button type="button" className={`chat-mode-composer-icon-btn${dictationLive ? ' active' : ''}`} onClick={toggleDictation} disabled={!project || transcriptionPhase === 'processing' || voiceActive} title={dictationLive ? 'Stop dictation and put the transcript in the composer' : 'Dictate a message'} aria-label="Dictate a message"><VoiceInputIcon className="chat-mode-composer-action-icon chat-mode-microphone-icon" /></button>
               <button type="button" className={`chat-mode-composer-icon-btn${voiceActive ? ' active' : ''}`} onClick={toggleChatVoiceMode} disabled={!project} title="Start voice mode" aria-label="Start voice mode"><VoiceModeIcon /></button>
               {dictationLive && (
@@ -2115,7 +2227,7 @@ export default function ChatModePanel() {
                 <button
                   type="submit"
                   className="chat-mode-send"
-                  disabled={dictationLive || pendingSendCount > 0 || !thread || !(thread.draft.trim() || attachments.length)}
+                  disabled={dictationLive || pendingSendCount > 0 || !(thread?.draft.trim() || attachments.length)}
                   aria-label="Send message"
                 >
                 {pendingSendCount > 0 ? (
@@ -2141,6 +2253,13 @@ export default function ChatModePanel() {
           startIndex={viewer.index}
           projectRoot={project?.root_path ?? null}
           onClose={() => setViewer(null)}
+          onRename={(previous, renamed) => {
+            setViewer((current) => current ? {
+              ...current, images: current.images.map((entry) => entry.path === previous.path ? renamed : entry),
+            } : null);
+            setAttachments((current) => current.map((entry) => entry.path?.replace(/\\/g, '/') === previous.path?.replace(/\\/g, '/')
+              ? { ...entry, path: renamed.path, name: renamed.name } : entry));
+          }}
           onUseAsInput={useImageAsInput}
           onEdit={editImage}
         />

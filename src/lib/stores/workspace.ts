@@ -5,7 +5,7 @@ import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths, cancelCreate, cancelRename, hideContextMenu } from './explorer';
 import { resetSettingsToDefault } from './settings';
-import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, sanitiseRightSidebarTab, currentRightDrawerTool, applyRightDrawerTool, rightSidebarTab, terminalRoomOpen, homeScreenOpen, toggleSidebarTab, type RightDrawerTool } from './layout';
+import { resetLayoutToDefault, layout, sanitiseActiveView, sanitiseSidebarTab, sanitiseRightDrawerTool, sanitiseRightSidebarTab, currentRightDrawerTool, applyRightDrawerTool, rightSidebarTab, rightSidebarVisible, terminalRoomOpen, homeScreenOpen, toggleSidebarTab, type RightDrawerTool } from './layout';
 import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayout } from './layoutControl';
 import { isSafePresetId } from '$lib/components/layout/split-layout';
 import { isTauriRuntime } from '$lib/utils/tauri';
@@ -269,6 +269,13 @@ interface ProjectWorkspaceState {
     rightDrawerTool: RightDrawerTool | null;
     /** The last tab selected in the unified right sidebar for this project. */
     rightSidebarTab: string;
+    /** Whether the right sidebar was open. Its own store, like the Terminal
+     *  room, so it is saved by name or it follows you between projects. */
+    rightSidebarOpen: boolean;
+    /** Preview in the right sidebar (true) or on the stage. Saved beside
+     *  `previewVisible`: restoring one without the other showed a stage
+     *  Preview docked in the sidebar of the next project. */
+    previewDocked: boolean;
     lastAuxView: string;
     editorSplitPreview: boolean;
     auxPanelWidth: number;
@@ -457,6 +464,8 @@ interface PersistedProjectState {
      */
     rightDrawerTool?: string | null;
     rightSidebarTab?: string;
+    rightSidebarOpen?: boolean;
+    previewDocked?: boolean;
     lastAuxView?: string;
     editorSplitPreview: boolean;
     auxPanelWidth: number;
@@ -585,6 +594,8 @@ function saveProjectStateToStorage(projectId: string) {
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       rightSidebarTab: get(rightSidebarTab),
+      rightSidebarOpen: get(rightSidebarVisible),
+      previewDocked: currentLayout.previewDocked,
       lastAuxView: currentLayout.lastAuxView,
       editorSplitPreview: currentLayout.editorSplitPreview,
       auxPanelWidth: currentLayout.auxPanelWidth,
@@ -751,6 +762,8 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
       terminalRoomOpen: l.terminalRoomOpen === undefined ? true : Boolean(l.terminalRoomOpen),
       rightDrawerTool: sanitiseRightDrawerTool(l.rightDrawerTool),
       rightSidebarTab: sanitiseRightSidebarTab(l.rightSidebarTab ?? l.rightDrawerTool),
+      rightSidebarOpen: Boolean(l.rightSidebarOpen),
+      previewDocked: Boolean(l.previewDocked),
       lastAuxView: typeof l.lastAuxView === 'string' ? l.lastAuxView : undefined,
       editorSplitPreview: Boolean(l.editorSplitPreview),
       auxPanelWidth: typeof l.auxPanelWidth === 'number' ? Math.max(180, Math.min(2000, l.auxPanelWidth)) : 550,
@@ -874,6 +887,8 @@ export function saveProjectState(projectId: string) {
       terminalRoomOpen: get(terminalRoomOpen),
       rightDrawerTool: currentRightDrawerTool(),
       rightSidebarTab: get(rightSidebarTab),
+      rightSidebarOpen: get(rightSidebarVisible),
+      previewDocked: get(layout).previewDocked,
       lastAuxView: get(layout).lastAuxView,
       editorSplitPreview: get(layout).editorSplitPreview,
       auxPanelWidth: get(layout).auxPanelWidth,
@@ -987,6 +1002,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         activeView: sanitiseActiveView(cached.layout.activeView, l.activeView),
         editorVisible: cached.layout.editorVisible,
         previewVisible: cached.layout.previewVisible,
+        previewDocked: cached.layout.previewDocked,
         reviewVisible: cached.layout.reviewVisible,
         httpVisible: cached.layout.httpVisible,
         tasksVisible: cached.layout.tasksVisible,
@@ -1020,6 +1036,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
       rightSidebarTab.set(
         sanitiseRightSidebarTab(cached.layout.rightSidebarTab ?? cached.layout.rightDrawerTool),
       );
+      rightSidebarVisible.set(cached.layout.rightSidebarOpen);
 
       // The Terminal room is not a `LayoutState` flag, so the patch above can't
       // carry it — restore it on its own or closing it leaks across projects.
@@ -1100,6 +1117,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           activeView: 'terminal',
           editorVisible: false,
           previewVisible: false,
+          previewDocked: false,
           reviewVisible: false,
           httpVisible: false,
           tasksVisible: false,
@@ -1124,12 +1142,14 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           rightDrawerWidth: 380,
         }));
         rightSidebarTab.set('files');
+        rightSidebarVisible.set(false);
       } else {
         layout.update((l) => ({
           ...l,
           activeView: sanitiseActiveView(persisted.layout!.activeView, 'terminal'),
           editorVisible: persisted.layout!.editorVisible ?? false,
           previewVisible: persisted.layout!.previewVisible ?? false,
+          previewDocked: persisted.layout!.previewDocked ?? false,
           reviewVisible: persisted.layout!.reviewVisible ?? false,
           httpVisible: persisted.layout!.httpVisible ?? false,
           tasksVisible: persisted.layout!.tasksVisible ?? false,
@@ -1156,6 +1176,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         rightSidebarTab.set(
           sanitiseRightSidebarTab(persisted.layout!.rightSidebarTab ?? persisted.layout!.rightDrawerTool),
         );
+        rightSidebarVisible.set(persisted.layout!.rightSidebarOpen ?? false);
         terminalRoomOpen.set(persisted.layout.terminalRoomOpen ?? true);
         restoredLayout = true;
       }
@@ -1944,9 +1965,24 @@ export function renameWorkspace(workspaceId: string, newName: string) {
   );
 }
 
+/** Matches the backend's error when Windows refuses the rename because a
+ * process (usually one of the project's terminals) is inside the folder. Keep
+ * in sync with `describe_rename_error` in src-tauri/src/workspace/manager.rs. */
+export function isProjectFolderInUseError(message: string): boolean {
+  return message.includes('project folder is in use');
+}
+
 /** Rename a local project's root folder and rebase every persisted path while
- * retaining the project id, live terminals, chat history, and panel state. */
-export async function renameProject(projectPath: string, newName: string): Promise<Project> {
+ * retaining the project id, live terminals, chat history, and panel state.
+ *
+ * With `closeTerminals`, the project's terminals and agents are shut down
+ * first. Windows cannot rename a folder that a running shell sits in, so this
+ * is the way through when a plain rename reports the folder is in use. */
+export async function renameProject(
+  projectPath: string,
+  newName: string,
+  options: { closeTerminals?: boolean } = {},
+): Promise<Project> {
   const name = newName.trim();
   if (!projectPath || !name) throw new Error('Project name cannot be empty.');
   const { invoke } = await import('@tauri-apps/api/core');
@@ -1960,11 +1996,39 @@ export async function renameProject(projectPath: string, newName: string): Promi
   if (isRemoteProjectId(project.id)) throw new Error('Remote workspace folders cannot be renamed here.');
   if (getFilename(project.root_path) === name) return project;
 
+  if (options.closeTerminals) {
+    const projectSessions = [
+      ...getTerminalProjectState(project.id).sessions,
+      ...getTerminalProjectState(project.id, true).sessions,
+    ];
+    await Promise.all(projectSessions.map((session) => killSession(session.id)));
+  }
+  // Saved after any terminals are closed, so the restore below doesn't try to
+  // reattach sessions that no longer exist.
   if (get(activeProjectId) === project.id) saveProjectState(project.id);
-  const renamed = await invoke<Project>('workspace_rename_project', {
+  const invokeRename = () => invoke<Project>('workspace_rename_project', {
     projectId: project.id,
     newName: name,
+    closeTerminals: Boolean(options.closeTerminals),
   });
+  let renamed: Project;
+  if (options.closeTerminals) {
+    // A killed shell's process can take a moment to release the folder after
+    // its pty closes, so give it a few seconds before reporting failure.
+    let attempt = 0;
+    for (;;) {
+      try {
+        renamed = await invokeRename();
+        break;
+      } catch (error) {
+        if (attempt >= 6 || !isProjectFolderInUseError(String(error))) throw error;
+        attempt += 1;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+  } else {
+    renamed = await invokeRename();
+  }
   const oldRoot = project.root_path;
   const newRoot = renamed.root_path;
 

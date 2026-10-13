@@ -21,7 +21,7 @@ short enough that it says what the note is *about*, never what it says.
 - [agent-inbox-unread](agent-inbox-unread.md) — why "read" and "dismissed" have to stay separate bits
 - [notification-card-design](notification-card-design.md) — colour rules for the agent notification card; never tint a whole surface
 - [transcription-hotkey](transcription-hotkey.md) — F9 dictation: pause/end semantics and its lifecycle ordering traps
-- [voice-is-realtime-only](voice-is-realtime-only.md) — TTS is deleted app-wide; speech-to-speech is realtime-engine only
+- [voice-is-realtime-only](voice-is-realtime-only.md) — reply TTS is deleted; speech-to-speech is realtime-only; the one exception is the user-pressed Read aloud button
 - [transcript-quality](transcript-quality.md) — the two cleanup stages for dictated text, and why the deterministic one stays conservative
 - [voice-history](voice-history.md) — the two durable voice logs, and where retention lives
 - [prompt-bar-is-voice-only](prompt-bar-is-voice-only.md) — the floating bar has no text input; staged prompts replace it
@@ -53,7 +53,7 @@ short enough that it says what the note is *about*, never what it says.
 - [terminal-fit-host-padding](terminal-fit-host-padding.md) — FitAddon cannot see container padding; open xterm into a zero-padding host
 - [session-close-label](session-close-label.md) — name a closed terminal from a snapshot, never from its process-wide id
 - [edge-light-gating](edge-light-gating.md) — the traveling edge light runs only while a room is working
-- [background-wallpapers](background-wallpapers.md) — adding a wallpaper pair; dimming is two scrims, not `backgroundOpacity`
+- [background-wallpapers](background-wallpapers.md) — adding a wallpaper pair; dimming is two scrims, not `backgroundOpacity`; how a custom image turns panels to glass
 - [website-logo-sync](website-logo-sync.md) — website/public copies the app icon and website/lib copies agentBrands; re-stamp both when the app side changes
 - [pricing-license-model](pricing-license-model.md) — $49 one-time license; Lemon Squeezy checkout + key-gated downloads wired (env vars pending); app-side activation not built yet
 - [website-motion-layer](website-motion-layer.md) — the html.js pre-paint gate behind the site's scroll reveals, and why every data-reveal page must mount ScrollFX

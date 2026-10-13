@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { renameChatImageAttachments } from '$lib/stores/chatThreads';
 import { useModalFocus } from '$lib/react/useModalFocus';
 import { copyPngToClipboard } from '$lib/utils/clipboard';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
@@ -20,6 +21,7 @@ interface ImageViewerProps {
   /** The active project, so images inside it pass the backend's path check. */
   projectRoot?: string | null;
   onClose: () => void;
+  onRename?: (previous: ViewerImage, renamed: ViewerImage) => void;
   /** Offer "Use as input" (adds the image to the next message's attachments). */
   onUseAsInput?: (image: ViewerImage) => void;
   /**
@@ -63,7 +65,7 @@ const MAX_ZOOM = 8;
  * transformed or blurred ancestor cannot trap its fixed overlay, and mounted
  * only while open, which is what `useModalFocus`'s shortcut gate requires.
  */
-export default function ImageViewer({ images, startIndex = 0, projectRoot, onClose, onUseAsInput, onEdit, editTargets, defaultEditTarget }: ImageViewerProps) {
+export default function ImageViewer({ images, startIndex = 0, projectRoot, onClose, onRename, onUseAsInput, onEdit, editTargets, defaultEditTarget }: ImageViewerProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const [index, setIndex] = useState(() => Math.min(Math.max(0, startIndex), Math.max(0, images.length - 1)));
   // null = fit to the window; a number is an explicit scale (1 = actual pixels).
@@ -73,8 +75,13 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
   const [fitScale, setFitScale] = useState(1);
   const [status, setStatus] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const image = images[index];
+  const [renameName, setRenameName] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const renameState = useRef({ name: renameName, saving: renaming });
+  renameState.current = { name: renameName, saving: renaming };
   // Edit mode: pointer strokes paint the selection instead of panning.
   const [editing, setEditing] = useState(false);
   const [editPrompt, setEditPrompt] = useState('');
@@ -90,21 +97,28 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
   const painting = useRef<{ x: number; y: number } | null>(null);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
-  useModalFocus(dialogRef, onClose);
+  useModalFocus(dialogRef, () => {
+    if (renameState.current.name !== null) {
+      if (!renameState.current.saving) setRenameName(null);
+    } else onClose();
+  });
 
   const step = useCallback((delta: number) => {
-    if (images.length < 2) return;
+    if (images.length < 2 || renaming) return;
     setIndex((current) => (current + delta + images.length) % images.length);
-  }, [images.length]);
+  }, [images.length, renaming]);
 
-  // Each image opens fitted and centred.
+  // Centre each image while preserving the viewer's chosen zoom.
   useEffect(() => {
-    setZoom(null);
     setOffset({ x: 0, y: 0 });
-    setNatural(null);
+    // Cached images may load before this effect; retain their measured size.
+    const loaded = imageRef.current;
+    setNatural(loaded?.complete && loaded.naturalWidth
+      ? { width: loaded.naturalWidth, height: loaded.naturalHeight } : null);
     setStatus(null);
     setEditing(false);
     setHasMark(false);
+    setRenameName(null);
   }, [index]);
 
   useEffect(() => {
@@ -214,6 +228,8 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
 
   function onPointerDown(event: ReactPointerEvent) {
     if (event.button !== 0) return;
+    // Capturing a navigation button's pointer redirects its click to the stage.
+    if (event.target instanceof Element && event.target.closest('button')) return;
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     if (editing) {
       const point = markPoint(event);
@@ -254,15 +270,25 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
     await copyPngToClipboard(new Uint8Array(await response.arrayBuffer()));
   });
 
-  const saveAs = () => run('Saved', async () => {
-    if (!image.path) return;
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    const destination = await save({ defaultPath: image.name, filters: [{ name: 'Image', extensions: [image.name.split('.').pop() || 'png'] }] });
-    if (!destination) throw new Error('cancelled');
-    await invoke('save_image_copy', { source: image.path, destination, projectRoot: projectRoot ?? null });
-  });
-
   const reveal = () => run('Opened the folder', () => invoke('reveal_image', { path: image.path, projectRoot: projectRoot ?? null }));
+
+  async function rename() {
+    if (!image.path || !renameName?.trim() || renaming || !onRename) return;
+    setRenaming(true);
+    try {
+      const result = await invoke<{ path: string; name: string }>('rename_image', {
+        path: image.path, name: renameName.trim(), projectRoot: projectRoot ?? null,
+      });
+      renameChatImageAttachments(image.path, result.path, result.name);
+      onRename(image, { ...result, src: convertFileSrc(result.path) });
+      setRenameName(null);
+      setStatus('Image renamed');
+    } catch (error) {
+      setStatus(`Rename failed: ${String(error ?? 'unknown error')}`);
+    } finally {
+      setRenaming(false);
+    }
+  }
 
   if (!image) return null;
 
@@ -277,7 +303,24 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
         onClick={(event) => event.stopPropagation()}
       >
         <header className="image-viewer-bar">
-          <span className="image-viewer-name" title={image.path ?? image.name}>{image.name}</span>
+          {renameName !== null ? (
+            <div className="image-viewer-rename">
+              <input
+                autoFocus
+                aria-label="Image name"
+                value={renameName}
+                disabled={renaming}
+                maxLength={120}
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => setRenameName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') { event.preventDefault(); void rename(); }
+                  if (event.key === 'Escape') { event.stopPropagation(); if (!renaming) setRenameName(null); }
+                }}
+              />
+              <span>{image.name.match(/\.[^.]+$/)?.[0]}</span>
+            </div>
+          ) : <span className="image-viewer-name" title={image.path ?? image.name}>{image.name}</span>}
           {images.length > 1 && <span className="image-viewer-count">{index + 1} / {images.length}</span>}
           <div className="image-viewer-tools">
             <button type="button" onClick={() => zoomBy(0.8)} aria-label="Zoom out">−</button>
@@ -287,7 +330,12 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
             <button type="button" onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }); }} className={zoom === 1 ? 'active' : ''}>100%</button>
             <span className="image-viewer-divider" aria-hidden />
             <button type="button" onClick={copy}>Copy</button>
-            {image.path && <button type="button" onClick={saveAs}>Save as…</button>}
+            {image.path && onRename && (renameName !== null ? (
+              <>
+                <button type="button" onClick={() => void rename()} disabled={renaming || !renameName.trim()}>{renaming ? 'Saving…' : 'Save'}</button>
+                <button type="button" onClick={() => setRenameName(null)} disabled={renaming}>Cancel</button>
+              </>
+            ) : <button type="button" onClick={() => setRenameName(image.name.replace(/\.[^.]+$/, ''))}>Rename</button>)}
             {image.path && <button type="button" onClick={reveal}>Show in folder</button>}
             {onEdit && image.path && !editing && (
               <button type="button" className="primary" onClick={() => setEditing(true)} title="Select an area and describe a change">Edit</button>
@@ -306,9 +354,14 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
-          onDoubleClick={() => { if (editing) return; setZoom(zoom === null ? 1 : null); setOffset({ x: 0, y: 0 }); }}
+          onDoubleClick={(event) => {
+            if (editing || (event.target instanceof Element && event.target.closest('button'))) return;
+            setZoom(zoom === null ? 1 : null);
+            setOffset({ x: 0, y: 0 });
+          }}
         >
           <img
+            ref={imageRef}
             src={image.src}
             alt={image.name}
             draggable={false}
@@ -335,8 +388,8 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
           )}
           {images.length > 1 && (
             <>
-              <button type="button" className="image-viewer-step prev" onClick={() => step(-1)} aria-label="Previous image">‹</button>
-              <button type="button" className="image-viewer-step next" onClick={() => step(1)} aria-label="Next image">›</button>
+              <button type="button" className="image-viewer-step prev" onClick={() => step(-1)} disabled={renaming} aria-label="Previous image">‹</button>
+              <button type="button" className="image-viewer-step next" onClick={() => step(1)} disabled={renaming} aria-label="Next image">›</button>
             </>
           )}
         </div>

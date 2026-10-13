@@ -6,6 +6,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { customProviders, saveCustomProvider, deleteCustomProvider, type CustomProvider } from '$lib/stores/customProviders';
 import { explainError, type ExplainedError } from '$lib/utils/explainError';
 import { jevAgentUsage, type JevAgentUsage } from '$lib/stores/jevAgentTool';
+import { readAloudSettings, readAloudVoiceFor, OPENAI_READ_ALOUD_VOICES, ELEVENLABS_DEFAULT_VOICE, type ReadAloudEngine, type ReadAloudSettings } from '$lib/stores/readAloud';
+import { previewReadAloud } from '$lib/services/read-aloud';
 import { listen } from '@tauri-apps/api/event';
 import {
   aiBaseUrlByProvider,
@@ -26,6 +28,7 @@ import {
   agentFailoverCrossProvider,
   agentFailoverHeadroomPercent,
   backgroundImageBlur,
+  backgroundGlassOpacity,
   uiVibrancy,
   uiContrast,
   backgroundImageEnabled,
@@ -54,6 +57,8 @@ import {
   setVoiceInputModel,
   showHidden,
   showSnapshotsTab,
+  previewPlacement,
+  type PreviewPlacement,
   tabSize,
   terminalCursorStyle,
   terminalFontSize,
@@ -224,6 +229,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'voice-input', tab: 'voice', section: 'Voice input', label: 'Voice input', keywords: 'speech transcription dictation', target: 'section' },
   { id: 'smart-voice-detection', tab: 'voice', section: 'Voice input', label: 'Smart voice detection', keywords: 'vad speaking silence' },
   { id: 'voice-refinement', tab: 'voice', section: 'Voice refinement', label: 'Voice refinement', keywords: 'transcript cleanup' },
+  { id: 'read-aloud', tab: 'voice', section: 'Read aloud', label: 'Read aloud', keywords: 'speak reply voice tts text to speech elevenlabs openai human natural', target: 'section' },
   { id: 'conversation-engine', tab: 'voice', section: 'Conversation engine', label: 'Conversation engine', keywords: 'realtime voice assistant', target: 'section' },
   { id: 'terminal-font-size', tab: 'terminal', section: 'Appearance', label: 'Font size', keywords: 'terminal text' },
   { id: 'terminal-cursor', tab: 'terminal', section: 'Appearance', label: 'Cursor', keywords: 'terminal caret' },
@@ -619,6 +625,120 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3>{title}</h3>
       <div className="settings-card-body">{children}</div>
     </section>
+  );
+}
+
+/**
+ * Settings > Voice > Read aloud. The voice behind the chat's Read aloud
+ * button: the free system voice, or a human-sounding cloud voice that uses a
+ * saved key (OpenAI's from AI Connections, or an ElevenLabs key saved here).
+ */
+function ReadAloudSection() {
+  const settings = useStore(readAloudSettings) as ReadAloudSettings;
+  const engine = settings.engine;
+  const voice = readAloudVoiceFor(settings);
+  const [keyInput, setKeyInput] = useState('');
+  const [keyExists, setKeyExists] = useState<boolean | null>(null);
+  const [keyError, setKeyError] = useState('');
+  const [elevenVoices, setElevenVoices] = useState<{ id: string; label: string }[]>([]);
+  const [voicesError, setVoicesError] = useState('');
+  const keyProvider = engine === 'system' ? null : engine;
+
+  useEffect(() => {
+    let active = true;
+    setKeyExists(null);
+    if (!keyProvider) return;
+    void invoke<boolean>('provider_api_key_exists', { provider: keyProvider })
+      .then((exists) => { if (active) setKeyExists(exists); })
+      .catch(() => { if (active) setKeyExists(false); });
+    return () => { active = false; };
+  }, [keyProvider]);
+
+  useEffect(() => {
+    let active = true;
+    setVoicesError('');
+    if (engine !== 'elevenlabs' || !keyExists) return;
+    void invoke<{ id: string; name: string; detail?: string | null }[]>('read_aloud_voices', { provider: 'elevenlabs' })
+      .then((list) => { if (active) setElevenVoices(list.map((v) => ({ id: v.id, label: v.detail ? `${v.name} (${v.detail})` : v.name }))); })
+      .catch((error) => { if (active) setVoicesError(explainError(error).summary); });
+    return () => { active = false; };
+  }, [engine, keyExists]);
+
+  const setEngine = (next: ReadAloudEngine) => readAloudSettings.update((s: ReadAloudSettings) => ({ ...s, engine: next }));
+  const setVoice = (next: string) => readAloudSettings.update((s: ReadAloudSettings) => ({ ...s, voices: { ...s.voices, [s.engine]: next } }));
+
+  const saveKey = async (value: string) => {
+    setKeyError('');
+    try {
+      await invoke(value.trim() ? 'provider_api_key_set' : 'provider_api_key_delete',
+        value.trim() ? { provider: 'elevenlabs', apiKey: value.trim() } : { provider: 'elevenlabs' });
+      setKeyExists(Boolean(value.trim()));
+      setKeyInput('');
+    } catch (error) {
+      setKeyError(explainError(error).summary);
+    }
+  };
+
+  const voiceOptions = engine === 'openai'
+    ? OPENAI_READ_ALOUD_VOICES
+    : engine === 'elevenlabs'
+      ? (elevenVoices.length ? elevenVoices : [{ id: voice, label: voice === ELEVENLABS_DEFAULT_VOICE ? 'Rachel' : voice }])
+      : [];
+  const vendor = engine === 'openai' ? 'OpenAI' : 'ElevenLabs';
+  const status = engine === 'system'
+    ? 'Uses the voices built into your computer. Free and offline, but robotic.'
+    : keyExists === null
+      ? 'Checking for a key…'
+      : keyExists
+        ? `Using your saved ${vendor} key. ${vendor} bills each reply you have read aloud.`
+        : engine === 'openai'
+          ? 'No OpenAI key is saved. Add one under AI Connections > Provider connections.'
+          : 'No ElevenLabs key is saved yet. Paste one below.';
+
+  return (
+    <Section title="Read aloud">
+      <p className="shell-hint">
+        The voice used when you press Read aloud on a chat reply. Nothing is read out unless you press it.
+      </p>
+      <SettingRow title="Voice engine" detail={status}>
+        <SelectField
+          value={engine}
+          options={[
+            { id: 'system' as const, label: 'System voice (free)' },
+            { id: 'openai' as const, label: 'OpenAI (natural)' },
+            { id: 'elevenlabs' as const, label: 'ElevenLabs (most human)' },
+          ]}
+          onChange={setEngine}
+          ariaLabel="Read aloud voice engine"
+        />
+      </SettingRow>
+      {engine !== 'system' && (
+        <SettingRow title="Voice" detail={voicesError || undefined}>
+          <SelectField value={voice} options={voiceOptions} onChange={setVoice} ariaLabel="Read aloud voice" />
+        </SettingRow>
+      )}
+      {engine === 'elevenlabs' && (
+        <>
+          <SettingRow title="ElevenLabs key">
+            <input
+              type="password"
+              value={keyInput}
+              onChange={(event) => setKeyInput(event.target.value)}
+              placeholder={keyExists ? 'ElevenLabs key saved in OS keychain' : 'Paste your ElevenLabs key'}
+            />
+          </SettingRow>
+          <div className="settings-action-row">
+            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={!keyInput.trim()}>Save key</button>
+            <button className="settings-secondary" onClick={() => void saveKey('')} disabled={!keyExists}>Clear key</button>
+            <button className="settings-link-button" onClick={() => openExternalUrl('https://elevenlabs.io/app/settings/api-keys')}>Get a key</button>
+          </div>
+        </>
+      )}
+      <div className="settings-action-row">
+        <button className="settings-secondary" onClick={() => previewReadAloud(engine, voice)} disabled={engine !== 'system' && !keyExists}>Test voice</button>
+      </div>
+      {keyError && <p className="shell-hint">{keyError}</p>}
+    </Section>
   );
 }
 
@@ -1796,6 +1916,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   const currentActiveTheme = useStore(activeTheme);
   const bgPresent = useStore(backgroundImagePresent);
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   const github = useGithubSignIn();
@@ -1812,8 +1933,33 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }
 
-  // Focus trap + Escape + register the modal so app-wide shortcuts stand down.
-  useModalFocus(panelRef, onclose);
+  // The workspace stays mounted behind this page. Reuse the focus/shortcut
+  // guard for the page's lifetime, with a separate ref for content scrolling.
+  useModalFocus(pageRef);
+
+  useEffect(() => {
+    function handleSettingsKeyDown(event: KeyboardEvent) {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (!pageRef.current?.contains(target) && !target.closest('.sselect-panel, .dd-menu')) return;
+
+      // Inert keeps the workspace out of focus, but its window key listeners
+      // are still alive. Consume the page's keys before they reach those panes.
+      event.stopPropagation();
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      // Let a portaled picker close itself before leaving Settings.
+      if (document.querySelector('.sselect-panel, .dd-menu')) return;
+      event.preventDefault();
+      const search = pageRef.current?.querySelector<HTMLInputElement>('.settings-search-input');
+      if (search?.value) {
+        setSettingsQuery('');
+      } else {
+        onclose();
+      }
+    }
+    document.addEventListener('keydown', handleSettingsKeyDown);
+    return () => document.removeEventListener('keydown', handleSettingsKeyDown);
+  }, [onclose]);
 
   const currentFontSize = useStore(fontSize);
   const currentFontFamily = useStore(fontFamily);
@@ -1825,6 +1971,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentEnableLsp = useStore(enableLsp);
   const currentShowHidden = useStore(showHidden);
   const currentShowSnapshotsTab = useStore(showSnapshotsTab);
+  const currentPreviewPlacement = useStore(previewPlacement);
   const currentNotifications = useStore(notificationsEnabled);
   const currentAgentWorktrees = useStore(agentWorktrees);
   const currentAutoStage = useStore(autoStageAgentChanges);
@@ -1855,6 +2002,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentAppearance = useStore(appearance);
   const bgEnabled = useStore(backgroundImageEnabled);
   const bgBlur = useStore(backgroundImageBlur);
+  const glassOpacity = useStore(backgroundGlassOpacity);
   const vibrancy = useStore(uiVibrancy);
   const contrast = useStore(uiContrast);
   const shortcuts = useStore(userShortcuts);
@@ -2382,82 +2530,82 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }
 
   return (
-    <div className="settings-overlay" onClick={(e) => {
-      if (e.target === e.currentTarget) {
-        onclose();
-      }
-    }}>
-      <div className="settings-modal" ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header className="settings-header">
-          <div>
-            <h2 id="settings-title">Settings</h2>
-          </div>
-          <div className="settings-search-wrap">
-            <svg className="settings-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
-              <path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-            <input
-              className="settings-search-input"
-              value={settingsQuery}
-              onChange={(event) => setSettingsQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') setSettingsQuery('');
-                if (event.key === 'Enter' && settingsSearchResults[0]) {
-                  event.preventDefault();
-                  selectSettingsSearchResult(settingsSearchResults[0]);
-                }
-              }}
-              placeholder="Search settings"
-              aria-label="Search settings"
-              autoComplete="off"
-            />
-            {settingsQuery && (
-              <button
-                type="button"
-                className="settings-search-clear"
-                onClick={() => setSettingsQuery('')}
-                aria-label="Clear settings search"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </button>
-            )}
-            {settingsQuery && (
-              <div className="settings-search-results" role="listbox" aria-label="Matching settings">
-                {settingsSearchResults.length > 0 ? settingsSearchResults.map((result) => (
-                  <button
-                    type="button"
-                    className="settings-search-result"
-                    key={result.id}
-                    onClick={() => selectSettingsSearchResult(result)}
-                  >
-                    <span>{result.label}</span>
-                    <small>{tabs.find((tab) => tab.id === result.tab)?.label ?? result.tab} · {result.section}</small>
-                  </button>
-                )) : (
-                  <p className="settings-search-empty">No matching settings</p>
-                )}
-              </div>
-            )}
-          </div>
-          <button className="settings-close" type="button" onClick={onclose} aria-label="Close settings" title="Close settings">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          </button>
-        </header>
-
+    <div className="settings-page-host">
+      <div className="settings-modal settings-page" ref={pageRef} role="region" aria-labelledby="settings-title">
         <div className="settings-body">
-          <nav className="settings-tabs" aria-label="Settings sections">
-            {tabs.map((tab) => (
-              <button key={tab.id} className={activeTab === tab.id ? 'active' : undefined} onClick={() => setActiveTab(tab.id)}>
-                <span>{tab.label}</span>
-                <small>{tab.kicker}</small>
-              </button>
-            ))}
-          </nav>
+          <aside className="settings-sidebar" aria-label="Settings navigation">
+            <header className="settings-header">
+              <div className="settings-heading">
+                <button className="settings-back" type="button" onClick={onclose} aria-label="Back to workspace" title="Back to workspace (Esc)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="m12 5-7 7 7 7M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <svg className="settings-heading-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+                <h2 id="settings-title">Settings</h2>
+              </div>
+            </header>
+            <div className="settings-search-wrap">
+              <svg className="settings-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+                <path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+              <input
+                className="settings-search-input"
+                value={settingsQuery}
+                onChange={(event) => setSettingsQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && settingsSearchResults[0]) {
+                    event.preventDefault();
+                    selectSettingsSearchResult(settingsSearchResults[0]);
+                  }
+                }}
+                placeholder="Search settings"
+                aria-label="Search settings"
+                autoComplete="off"
+              />
+              {settingsQuery && (
+                <button
+                  type="button"
+                  className="settings-search-clear"
+                  onClick={() => setSettingsQuery('')}
+                  aria-label="Clear settings search"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
+              {settingsQuery && (
+                <div className="settings-search-results" role="listbox" aria-label="Matching settings">
+                  {settingsSearchResults.length > 0 ? settingsSearchResults.map((result) => (
+                    <button
+                      type="button"
+                      className="settings-search-result"
+                      key={result.id}
+                      onClick={() => selectSettingsSearchResult(result)}
+                    >
+                      <span>{result.label}</span>
+                      <small>{tabs.find((tab) => tab.id === result.tab)?.label ?? result.tab} · {result.section}</small>
+                    </button>
+                  )) : (
+                    <p className="settings-search-empty">No matching settings</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <nav className="settings-tabs" aria-label="Settings sections">
+              {tabs.map((tab) => (
+                <button key={tab.id} className={activeTab === tab.id ? 'active' : undefined} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => setActiveTab(tab.id)}>
+                  <span>{tab.label}</span>
+                  <small>{tab.kicker}</small>
+                </button>
+              ))}
+            </nav>
+          </aside>
 
           <main className="settings-panel" ref={panelRef}>
             {/* Page header in the Usage tab's style: title and one line of context
@@ -2521,6 +2669,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <SettingRow title="Show Workspace Snapshots" detail="Show snapshots tab in the sidebar activity bar">
                     <Toggle label="Toggle workspace snapshots" checked={currentShowSnapshotsTab} onChange={showSnapshotsTab.set} />
                   </SettingRow>
+                  <SettingRow title="Open Preview in" detail="Where the browser preview opens. You can move an open Preview from its header.">
+                    <StyledSelect<PreviewPlacement>
+                      value={currentPreviewPlacement}
+                      options={[
+                        { id: 'sidebar', label: 'Right sidebar' },
+                        { id: 'room', label: 'Room' },
+                      ]}
+                      onChange={previewPlacement.set}
+                      ariaLabel="Open Preview in"
+                    />
+                  </SettingRow>
                   <SettingRow title="Notifications" detail="System alerts for agent activity and process exits">
                     <Toggle
                       label="Toggle notifications"
@@ -2534,7 +2693,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 </Section>
 
                 <Section title="Window">
-                  <div className="option-cards" style={{ padding: '14px', gap: '10px', display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                  <div className="option-cards window-close-options" role="radiogroup" aria-label="When closing the window">
                     {([
                       { id: 'quit' as const,     label: 'Quit Spacron',    desc: 'Close the app and stop live terminals.' },
                       { id: 'minimize' as const, label: 'Keep running',  desc: 'Minimize and keep terminals and agents alive.' },
@@ -2542,14 +2701,26 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <button
                         key={opt.id}
                         type="button"
-                        className={`option-card${currentCloseBehavior === opt.id ? ' selected' : ''}`}
+                        role="radio"
+                        aria-checked={currentCloseBehavior === opt.id}
+                        className={`option-card window-close-option${currentCloseBehavior === opt.id ? ' selected' : ''}`}
                         onClick={() => closeBehavior.set(opt.id)}
                       >
-                        <span className="option-title">{opt.label}</span>
+                        <span className="option-title">
+                          {opt.label}
+                          <span className={`window-close-indicator${currentCloseBehavior === opt.id ? ' checked' : ''}`} aria-hidden="true">
+                            {currentCloseBehavior === opt.id && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4 10-10" /></svg>}
+                          </span>
+                        </span>
                         <span className="option-desc">{opt.desc}</span>
                       </button>
                     ))}
                   </div>
+                  <p className="window-close-status" aria-live="polite">
+                    {currentCloseBehavior === 'minimize'
+                      ? 'When you close the window, Spacron will minimize and keep terminals and agents running.'
+                      : 'When you close the window, Spacron will quit and stop live terminals.'}
+                  </p>
                 </Section>
 
                 <Section title="GitHub">
@@ -2789,6 +2960,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <SettingRow title="Blur" detail={`${bgBlur}px`}>
                     <input type="range" min="0" max="24" step="1" value={bgBlur} onChange={(event) => backgroundImageBlur.set(Number(event.target.value))} disabled={!bgPresent} />
                   </SettingRow>
+                  <SettingRow title="Panel opacity" detail={`${glassOpacity}%. Lower shows more of your image; raise it if text is hard to read.`}>
+                    <input type="range" min="30" max="90" step="5" value={glassOpacity} onChange={(event) => backgroundGlassOpacity.set(Number(event.target.value))} disabled={!bgPresent || !bgEnabled} aria-label="Panel opacity" />
+                  </SettingRow>
                 </Section>
               </>
             )}
@@ -2959,6 +3133,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'voice' && voiceView === 'settings' && (
               <>
+                <ReadAloudSection />
                 <Section title="Voice input">
                   <SettingRow title="Provider">
                     <SelectField value={voiceInput} options={[...voiceInputProviders, ...aiProviders.filter((item) => item.custom).map((item) => ({ id: item.id as VoiceInputProviderId, label: item.label }))]} onChange={voiceInputProvider.set} ariaLabel="Voice input provider" renderIcon={providerIcon} />

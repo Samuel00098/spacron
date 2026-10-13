@@ -106,7 +106,7 @@ import { turnEndIsSilent } from '$lib/services/orchestrator/agent-capabilities';
 import type { HookSignal } from '$lib/services/orchestrator/agent-hook-signals';
 import { effectiveReasoningEffort } from '$lib/services/orchestrator/reasoning-levels';
 import { estimateFileOverlap } from '$lib/services/jev';
-import type { ChatAccessMode, ChatAttachment, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
+import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { agentTurnStates, noteAgentTurnEnded, turnEndWasCounted } from '$lib/stores/agentTurnState';
 import { getSessionHeaderSummary } from '$lib/stores/terminal';
@@ -2726,6 +2726,8 @@ export interface ChatMessage {
   completion?: CompletionSummary | null;
   inlineRequest?: ChatInlineRequest | null;
   attachments?: ChatAttachment[];
+  /** Files this reply's turn created or edited (see ChatFileRef). */
+  files?: ChatFileRef[];
 }
 
 const CHAT_STORAGE_KEY = 'spacron_orchestrator_chat';
@@ -5498,6 +5500,14 @@ export async function sendChatMessage(
   let turnTodos: ChatTurnTodoItem[] = [];
   // Files this turn changed directly, keyed by scopeKey: the undo record.
   const turnEditLog = new Map<string, TurnEditRecord>();
+  // Every file this turn wrote (edits, new files, saved documents), in order:
+  // rendered as viewable cards under the reply.
+  const turnFiles = new Map<string, ChatFileRef>();
+  const noteTurnFile = (path: string, created: boolean): void => {
+    const key = scopeKey(path);
+    const first = turnFiles.get(key);
+    turnFiles.set(key, { path, action: first?.action === 'created' || created ? 'created' : 'edited' });
+  };
   // Where this turn's time goes; shown as the last Work details row.
   const turnTiming = createTurnTiming();
   const legacyProviderAgent = opts?.provider && isChatAgentProvider(opts.provider)
@@ -5552,6 +5562,7 @@ export async function sendChatMessage(
         const key = scopeKey(path);
         const first = turnEditLog.get(key);
         turnEditLog.set(key, { path, original: first ? first.original : previous, written });
+        noteTurnFile(path, previous === null);
       };
       // Messages steered into this turn; drained at the top of each tool round.
       const steeringInbox: QueuedChatMessage[] = [];
@@ -5762,11 +5773,13 @@ export async function sendChatMessage(
                 if (!rel) return { output: `error: docs/ already holds too many files named like ${filename}; choose a different filename.` };
                 checkActive();
                 await backendInvoke('fs_write_file_checked', { path: joinRootPath(rootPath, rel), content });
+                noteTurnFile(rel, true);
                 return { output: `Saved ${rel} in the project (${content.length} chars).` };
               }
               // No project open: fall back to the user's Documents folder.
               checkActive();
               const savedPath = await invoke<string>('save_document_file', { filename, content });
+              noteTurnFile(savedPath, true);
               return { output: `Saved ${savedPath} (${content.length} chars).` };
             } catch (error) {
               return { output: `error: document save failed: ${String(error ?? 'unknown')}` };
@@ -6416,6 +6429,7 @@ export async function sendChatMessage(
           }
         }
         const routed = await routeOrchestratorRequest(promptText, agents, {
+          standalone: chatThread?.standalone,
           projectName: opts?.projectName,
           projectRoot: rootPath,
           recentUserMessages,
@@ -6429,7 +6443,7 @@ export async function sendChatMessage(
           taskOutputs: getAgentOutputRefs(projectId),
           readAgentTranscript: (request) => readAgentTranscriptFor(projectId, request),
           profile: getProfileLines(projectId),
-          appState: getAppContextSnapshot(projectId, rootPath),
+          appState: getAppContextSnapshot(projectId, rootPath, !chatThread?.standalone),
           llmConfig,
           conversational: conversationalMode,
           voice: opts?.voiceConversation === true,
@@ -6646,7 +6660,9 @@ export async function sendChatMessage(
       reply: cleanOrchestratorReply(result.reply),
     };
   }
-  if (turnEditLog.size && result.reply) {
+  // Chat shows the written files as cards (and still honours "undo"); the
+  // spelled-out offer is for surfaces without them.
+  if (turnEditLog.size && result.reply && !conversationalMode) {
     const changed = [...turnEditLog.values()].map((record) => record.path);
     result = { ...result, reply: `${result.reply}\n\n_Changed ${changed.length} file${changed.length === 1 ? '' : 's'} directly (${changed.join(', ')}). Say "undo" to restore ${changed.length === 1 ? 'it' : 'them'}._` };
   }
@@ -6654,7 +6670,7 @@ export async function sendChatMessage(
   // A steered/stopped turn leaves no error bubble behind: its pending row was
   // already removed in the abort path above.
   if (result.reply || result.actions.length || !result.failed) {
-    patchChat(projectId, assistantId, { text: result.reply, pending: false });
+    patchChat(projectId, assistantId, { text: result.reply, pending: false, ...(turnFiles.size ? { files: [...turnFiles.values()] } : {}) });
     if (chatThreadId) moveThreadMessageToEnd(chatThreadId, assistantId);
   }
   if (result.failed && chatThreadId) updateChatThread(chatThreadId, { status: 'failed' });
@@ -7325,7 +7341,7 @@ async function executeRoutedOrchestratorPlan(args: {
     if (!opts?.voiceConversation) {
       // turnEvidence lets a turn that did work present itself as a structured
       // report (files changed + measured verification) instead of one line.
-      patchChat(projectId, assistantId, { text: composeTurnReply(result.reply, summaryText, turnTodos, turnEvidence) });
+      patchChat(projectId, assistantId, { text: composeTurnReply(result.reply, summaryText, turnTodos, turnEvidence, { conversational: args.conversationalMode }) });
     }
     updateChatThread(chatThreadId, {
       turnEndedAt: Date.now(),

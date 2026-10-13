@@ -5,6 +5,7 @@ vi.mock('$lib/services/backend', () => ({ backendInvoke }));
 
 import {
   createTaskWorktree,
+  worktreeUnavailableReason,
   reclaimWorktree,
   stageBaseline,
   deriveTaskBranch,
@@ -414,5 +415,22 @@ describe('createTaskWorktree', () => {
   it.each(['This project is not a Git repository.', 'The repository has no commits yet.', 'Permission denied'])('surfaces %s instead of allowing a main-repo fallback', async (reason) => {
     backendInvoke.mockRejectedValue(reason);
     await expect(createTaskWorktree({ projectId: 'p', taskId: 't' })).rejects.toThrow(reason);
+  });
+});
+
+describe('worktreeUnavailableReason', () => {
+  it('allows a worktree once the repository has a commit', async () => {
+    backendInvoke.mockResolvedValue([{ graph: '*', hash: 'abc1234' }]);
+    await expect(worktreeUnavailableReason('p')).resolves.toBeNull();
+  });
+
+  it('refuses a repository with no commits, which has no HEAD to branch from', async () => {
+    backendInvoke.mockResolvedValue([]);
+    await expect(worktreeUnavailableReason('p')).resolves.toMatch(/no commits/);
+  });
+
+  it('refuses a folder that is not a repository', async () => {
+    backendInvoke.mockRejectedValue('This project is not a Git repository.');
+    await expect(worktreeUnavailableReason('p')).resolves.toMatch(/not a Git repository/);
   });
 });

@@ -1897,6 +1897,28 @@ describe('orchestrator chat actions', () => {
       expect(threadMessages(thread.id).at(-1)?.text).toBe('Restored 2 files: a.ts, notes/new.md.');
     });
 
+    it('shows a chat turn\'s written files as cards instead of the undo sentence, and undo still works', async () => {
+      const files = mountFiles({ '/repo/a.ts': 'const a = 1;\n' });
+      const thread = createChatThread('project-1', { provider: 'deepseek' });
+      routeOrchestratorRequest.mockImplementation(async (_text, _agents, context) => {
+        await context.toolExecutor({ id: 'r', name: 'read_file', args: { path: 'a.ts' } });
+        await context.toolExecutor({ id: 'e', name: 'edit_file', args: { path: 'a.ts', old_string: 'const a = 1;', new_string: 'const a = 2;' } });
+        await context.toolExecutor({ id: 'w', name: 'write_file', args: { path: 'plan.md', content: '# Plan' } });
+        return { reply: 'Set a to 2 and drafted the plan.', actions: [], viaLLM: true };
+      });
+
+      await sendChatMessage('project-1', '/repo', 'Set a to 2 and write a plan', { ...fullAccess(thread.id), conversationalMode: true });
+
+      const reply = threadMessages(thread.id).find((m) => m.role === 'assistant' && m.text.startsWith('Set a to 2'));
+      expect(reply?.files).toEqual([{ path: 'a.ts', action: 'edited' }, { path: 'plan.md', action: 'created' }]);
+      expect(reply?.text).not.toContain('Say "undo"');
+      expect(reply?.text).not.toContain('What is working');
+
+      await sendChatMessage('project-1', '/repo', 'undo', { ...fullAccess(thread.id), conversationalMode: true });
+      expect(files.get('/repo/a.ts')).toBe('const a = 1;\n');
+      expect(files.has('/repo/plan.md')).toBe(false);
+    });
+
     it('capability audit: every direct tool works end to end in one turn', async () => {
       const files = mountFiles({ '/repo/src/app.ts': 'export const port = 3000;\n', '/repo/package.json': '{"name":"demo"}' });
       const base = invoke.getMockImplementation();

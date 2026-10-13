@@ -189,8 +189,11 @@ fn base_url_provider_label(provider: &str) -> String {
 // stored like any other key but are never chat providers.
 const MEDIA_KEY_PROVIDERS: &[&str] = &["fal", "replicate", "typesafe"];
 
+// Keys only the chat's Read aloud voices use (`commands::speech`).
+const SPEECH_KEY_PROVIDERS: &[&str] = &["elevenlabs"];
+
 fn is_key_provider(provider: &str) -> bool {
-    is_known_provider(provider) || MEDIA_KEY_PROVIDERS.contains(&provider)
+    is_known_provider(provider) || MEDIA_KEY_PROVIDERS.contains(&provider) || SPEECH_KEY_PROVIDERS.contains(&provider)
 }
 
 /// The saved key for an image/video provider, read backend-side only.
@@ -644,7 +647,7 @@ async fn ok_json(response: reqwest::Response, who: &str) -> Result<serde_json::V
 /// the frontend. Covers the key prefixes used by every supported provider:
 /// `sk-` (OpenRouter / OpenAI / Anthropic `sk-ant-`), `AIza` (Google),
 /// `gsk_` (Groq) and `pplx-` (Perplexity).
-fn redact_secrets(s: &str) -> String {
+pub(crate) fn redact_secrets(s: &str) -> String {
     const PREFIXES: &[&str] = &["sk-", "AIza", "gsk_", "xai-", "fw_", "csk-", "nvapi-", "pplx-"];
 
     let mut out = String::new();
@@ -676,7 +679,7 @@ fn redact_secrets(s: &str) -> String {
 
 /// Format a reqwest error for the frontend without leaking the request URL,
 /// which for some providers (Google) carries the API key as a query param.
-fn safe_request_error(context: &str, err: reqwest::Error) -> String {
+pub(crate) fn safe_request_error(context: &str, err: reqwest::Error) -> String {
     let stripped = err.without_url();
     format!("{context}: {}", redact_secrets(&stripped.to_string()))
 }

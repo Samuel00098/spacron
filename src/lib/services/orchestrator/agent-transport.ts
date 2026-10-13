@@ -286,7 +286,12 @@ export class AgentTransport {
   }
   private async persist() { await this.save?.(structuredClone(this.state)); }
   /** Text tool protocol: chosen in Task limits, or fallen back to for a tool-less model. */
-  private get textMode(): boolean { return this.budgets.toolMode === 'text' || this.state.textFallback === true; }
+  private get textMode(): boolean {
+    // Codex subscription completions return text, not native tool calls. Give
+    // this adapter Spacron's text tool protocol even if the model itself has
+    // native tools; its built-in filesystem is deliberately read-only.
+    return this.provider === 'chatgpt' || this.budgets.toolMode === 'text' || this.state.textFallback === true;
+  }
   /**
    * `outputTokensOverride` raises this request's visible-output budget above
    * the turn's configured one. The brain uses it for the JSON protocol

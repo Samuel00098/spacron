@@ -277,14 +277,33 @@ pub fn workspace_create_project(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+// Async so a slow or retried folder rename runs off the main thread instead of
+// freezing the webview.
+#[tauri::command(async)]
 pub fn workspace_rename_project(
     project_id: String,
     new_name: String,
+    close_terminals: Option<bool>,
     state: State<AppState>,
 ) -> Result<Project, String> {
     let new_name = new_name.trim();
     validate_project_folder_name(new_name)?;
+    if close_terminals.unwrap_or(false) {
+        // Windows won't rename a folder a shell is sitting in. The webview
+        // closes the sessions it knows about first; this also catches any the
+        // backend still runs that the webview lost track of.
+        let root = state
+            .workspace_manager
+            .list_projects()
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.root_path);
+        if let Some(root) = root {
+            for id in state.pty_manager.close_under(&root) {
+                state.write_rate_limiter.remove(id);
+            }
+        }
+    }
     state
         .workspace_manager
         .rename_project(&project_id, new_name)
@@ -297,7 +316,7 @@ pub fn workspace_get_active(state: State<AppState>) -> Option<Project> {
 
 #[tauri::command]
 pub fn workspace_list_projects(state: State<AppState>) -> Vec<Project> {
-    state.workspace_manager.list_projects()
+    state.workspace_manager.list_projects().into_iter().filter(|project| !project.id.starts_with("chat-")).collect()
 }
 
 #[tauri::command]

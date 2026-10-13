@@ -151,6 +151,12 @@ Three rules that only make sense together:
   checklist is rendered beside the report and the two would otherwise repeat
   each other line for line.
 
+Chat turns (`conversational: true`, typed Chat and standalone chats) differ
+on purpose: the written files travel as `ChatMessage.files` and render as
+cards that open `ChatFileViewer`, so the "What is working" list, the
+`formatTurnSummary` line and the "Say \"undo\"" sentence are all dropped there
+(undo itself still works). Failures and measured verification still print.
+
 The store passes `turnEvidence` as that fourth argument: the report must be built
 from the same results the summary and the plan closure use, or the card and the
 phase-4 evidence disagree.

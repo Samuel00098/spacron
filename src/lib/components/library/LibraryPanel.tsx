@@ -229,6 +229,12 @@ export default function LibraryPanel() {
           startIndex={viewer.index}
           projectRoot={root}
           onClose={() => setViewer(null)}
+          onRename={(previous, renamed) => {
+            setViewer((current) => current ? {
+              ...current, images: current.images.map((entry) => entry.path === previous.path ? renamed : entry),
+            } : null);
+            void refresh();
+          }}
           onEdit={onEdit}
           editTargets={editTargets}
           defaultEditTarget={`${API_TARGET}auto`}

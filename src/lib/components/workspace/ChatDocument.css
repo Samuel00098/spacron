@@ -1,0 +1,207 @@
+/* A Markdown file rendered as a document in the chat file viewer. Type sizes
+   work only because `.chat-file-viewer-doc` is excluded from global.css's
+   font-size/weight reset (see .spacron/memory/global-css-overrides.md). */
+.app-shell .chat-doc {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 28px 32px 64px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.app-shell .chat-doc > :first-child { margin-top: 0; }
+.app-shell .chat-doc > :last-child { margin-bottom: 0; }
+
+.app-shell .chat-doc h1,
+.app-shell .chat-doc h2,
+.app-shell .chat-doc h3,
+.app-shell .chat-doc h4,
+.app-shell .chat-doc h5,
+.app-shell .chat-doc h6 {
+  margin: 1.6em 0 0.6em;
+  color: var(--text-primary);
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 12px;
+}
+.app-shell .chat-doc h1 {
+  margin-top: 0.4em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--border);
+  font-size: 26px;
+  font-weight: 700;
+}
+.app-shell .chat-doc h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  font-size: 20px;
+}
+.app-shell .chat-doc h3 { font-size: 16.5px; }
+.app-shell .chat-doc h4 { font-size: 14.5px; }
+.app-shell .chat-doc h5,
+.app-shell .chat-doc h6 { font-size: 13px; color: var(--text-secondary); }
+
+.app-shell .chat-doc p,
+.app-shell .chat-doc ul,
+.app-shell .chat-doc ol,
+.app-shell .chat-doc blockquote,
+.app-shell .chat-doc pre,
+.app-shell .chat-doc .chat-doc-table,
+.app-shell .chat-doc details {
+  margin: 0 0 1em;
+}
+.app-shell .chat-doc p,
+.app-shell .chat-doc li { color: var(--text-secondary); }
+.app-shell .chat-doc strong,
+.app-shell .chat-doc b { color: var(--text-primary); font-weight: 650; }
+.app-shell .chat-doc em { font-style: italic; }
+.app-shell .chat-doc del { color: var(--text-muted); }
+
+.app-shell .chat-doc a {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--text-muted) 60%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.app-shell .chat-doc a:hover { text-decoration-color: var(--text-primary); }
+
+.app-shell .chat-doc ul,
+.app-shell .chat-doc ol { padding-left: 1.6em; }
+.app-shell .chat-doc ul { list-style: disc; }
+.app-shell .chat-doc ol { list-style: decimal; }
+.app-shell .chat-doc ul ul { list-style: circle; }
+.app-shell .chat-doc li + li { margin-top: 0.25em; }
+.app-shell .chat-doc li > ul,
+.app-shell .chat-doc li > ol { margin: 0.25em 0 0; }
+.app-shell .chat-doc li::marker { color: var(--text-muted); }
+/* Task lists: GFM renders `- [x]` as a disabled checkbox. */
+.app-shell .chat-doc li:has(> input[type='checkbox']) { list-style: none; margin-left: -1.4em; }
+.app-shell .chat-doc li > input[type='checkbox'] {
+  margin: 0 0.5em 0 0;
+  vertical-align: -1px;
+  accent-color: var(--accent);
+}
+
+.app-shell .chat-doc blockquote {
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--text-secondary);
+}
+.app-shell .chat-doc blockquote > :last-child { margin-bottom: 0; }
+
+.app-shell .chat-doc hr {
+  height: 1px;
+  margin: 2em 0;
+  border: 0;
+  background: var(--border);
+}
+
+.app-shell .chat-doc img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.app-shell .chat-doc code {
+  padding: 0.12em 0.4em;
+  border-radius: 5px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-family: var(--editor-font-family, var(--font-mono));
+  font-size: 0.86em;
+}
+.app-shell .chat-doc pre {
+  overflow: hidden;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  box-shadow: var(--surface-outline) !important;
+}
+.app-shell .chat-doc pre > code {
+  display: block;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+}
+.app-shell .chat-doc .chat-doc-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px 5px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.app-shell .chat-doc .chat-doc-code-bar button {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.app-shell .chat-doc .chat-doc-code-bar button:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.app-shell .chat-doc .chat-doc-table {
+  overflow-x: auto;
+  border-radius: 9px;
+  box-shadow: var(--surface-outline) !important;
+}
+.app-shell .chat-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.app-shell .chat-doc th,
+.app-shell .chat-doc td {
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  text-align: left;
+  vertical-align: top;
+}
+.app-shell .chat-doc th {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.app-shell .chat-doc td { color: var(--text-secondary); }
+.app-shell .chat-doc tbody tr:last-child td { border-bottom: 0; }
+.app-shell .chat-doc th[align='center'],
+.app-shell .chat-doc td[align='center'] { text-align: center; }
+.app-shell .chat-doc th[align='right'],
+.app-shell .chat-doc td[align='right'] { text-align: right; }
+
+/* Code tokens (lezer classHighlighter), in the editor's syntax colours. */
+.app-shell .chat-doc .tok-keyword { color: var(--syntax-keyword, #ff7b72); }
+.app-shell .chat-doc .tok-operator { color: var(--syntax-operator, #79c0ff); }
+.app-shell .chat-doc .tok-punctuation { color: var(--syntax-punctuation, var(--text-muted)); }
+.app-shell .chat-doc .tok-string,
+.app-shell .chat-doc .tok-string2 { color: var(--syntax-string, #a5d6ff); }
+.app-shell .chat-doc .tok-number,
+.app-shell .chat-doc .tok-bool,
+.app-shell .chat-doc .tok-atom { color: var(--syntax-number, #d2a8ff); }
+.app-shell .chat-doc .tok-variableName { color: var(--syntax-variable, var(--text-primary)); }
+.app-shell .chat-doc .tok-function,
+.app-shell .chat-doc .tok-variableName.tok-definition { color: var(--syntax-function, #d2a8ff); }
+.app-shell .chat-doc .tok-typeName,
+.app-shell .chat-doc .tok-className,
+.app-shell .chat-doc .tok-namespace { color: var(--syntax-type, #7ee787); }
+.app-shell .chat-doc .tok-propertyName { color: var(--syntax-variable, #79c0ff); }
+.app-shell .chat-doc .tok-comment { color: var(--syntax-comment, var(--text-muted)); font-style: italic; }
+.app-shell .chat-doc .tok-meta,
+.app-shell .chat-doc .tok-macroName { color: var(--syntax-constant, #ffa657); }
+.app-shell .chat-doc .tok-heading { color: var(--text-primary); font-weight: 600; }
+.app-shell .chat-doc .tok-inserted { color: #7ee787; }
+.app-shell .chat-doc .tok-deleted { color: #ff7b72; }

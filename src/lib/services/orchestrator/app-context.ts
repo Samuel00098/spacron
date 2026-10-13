@@ -66,11 +66,11 @@ function relativise(path: string | null | undefined, rootPath: string): string |
  * the run presets available. Fed to the orchestrator brain so it can answer
  * questions about the app and decide which app-control action to take.
  */
-export function getAppContextSnapshot(projectId: string, rootPath = ''): AppStateRef {
+export function getAppContextSnapshot(projectId: string, rootPath = '', includeProjectContent = true): AppStateRef {
   const l = get(layout);
   const cache = get(fileCache);
-  const open = get(openFiles);
-  const active = get(activeFile);
+  const open = includeProjectContent ? get(openFiles) : [];
+  const active = includeProjectContent ? get(activeFile) : null;
 
   const dirtyFiles = open.filter((p) => cache.get(p)?.isDirty);
 
@@ -124,7 +124,7 @@ export function getAppContextSnapshot(projectId: string, rootPath = ''): AppStat
   const editorFocused = l.activeView === 'editor' && l.editorVisible;
   const rawContent = activeEntry && activeEntry.kind !== 'image' ? (activeEntry.content ?? '') : '';
   const truncatedContent = rawContent.length > MAX_FILE_CONTENT;
-  const selectionText = editorFocused ? get(activeSelection).trim() : '';
+  const selectionText = includeProjectContent && editorFocused ? get(activeSelection).trim() : '';
 
   return {
     activeView: l.activeView,
@@ -143,8 +143,8 @@ export function getAppContextSnapshot(projectId: string, rootPath = ''): AppStat
       selection: selectionText ? selectionText.slice(0, MAX_SELECTION) : null,
     },
     terminals,
-    preview: { url: previewUrl || null, running: get(proxyStarted) },
-    branch,
+    preview: includeProjectContent ? { url: previewUrl || null, running: get(proxyStarted) } : undefined,
+    branch: includeProjectContent ? branch : undefined,
     availableViews: [...NAVIGABLE_VIEWS],
     availableRuns,
     settings: getAgentSettingsSnapshot(),

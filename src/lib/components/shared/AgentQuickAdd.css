@@ -1,0 +1,30 @@
+/* Extras for the "+" agent menu; the menu itself uses Dropdown's .dd-menu. */
+.agent-quick-add-menu {
+  min-width: 180px;
+  max-width: 280px;
+  max-height: 320px;
+}
+
+.agent-quick-add-brand {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.agent-quick-add-brand svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agent-quick-add-divider {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--border);
+}
+
+.agent-quick-add-empty {
+  padding: 7px 9px;
+  font-size: 12px;
+  color: var(--text-muted);
+}

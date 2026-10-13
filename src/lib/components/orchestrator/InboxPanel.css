@@ -237,15 +237,16 @@
   border-color: var(--border);
 }
 
+/* Hover lifts the surface only. The border stays `--border`: `--border-focus`
+   is the focus-ring colour, a bright ring around the card in dark mode. */
 .inbox-row.unread:hover {
   background: var(--bg-tertiary);
-  border-color: var(--border-focus, var(--border));
 }
 
 /* An open row is a card too, read or not — it is the thing being looked at. */
 .inbox-row.expanded {
   background: var(--bg-secondary);
-  border-color: var(--border-focus, var(--border));
+  border-color: var(--border);
 }
 
 /* In light themes the near-white rgb wash barely separates an unread card

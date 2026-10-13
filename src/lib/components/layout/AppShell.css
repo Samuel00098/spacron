@@ -144,6 +144,19 @@
   min-height: 0;
 }
 
+/* The docked Preview fills the sidebar and owns its own scrolling. While
+   another tab is showing it stays mounted but `hidden`, so the page inside
+   keeps its state. */
+.app-shell .right-utility-panel .drawer-body > .right-sidebar-preview {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell .right-utility-panel .drawer-body > .right-sidebar-preview[hidden] {
+  display: none;
+}
+
 /* FileExplorer owns the tree scroll area. The drawer must not compete with it
    for wheel and trackpad input when the pointer is over the file list. */
 .app-shell .left-utility-panel .drawer-body > .file-explorer {
@@ -657,10 +670,44 @@
   height: 100%;
 }
 
-.app-shell .rooms-table.interaction-chat > .chat-mode-panel {
+.app-shell .chat-mode-layer {
+  display: contents;
+}
+
+.app-shell .rooms-table.interaction-chat > .chat-mode-layer > .chat-mode-panel {
   z-index: 100;
   isolation: isolate;
   pointer-events: auto;
+}
+
+/* Reuse the room stage for Chat's Library, Tasks and Sketch views. Both the
+   conversation and the live Code rooms retain their existing mount points. */
+.app-shell .rooms-table.interaction-chat.chat-tool-open > .cli-mode-layer {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  clip-path: none;
+}
+
+.app-shell .rooms-table.chat-tool-open > .chat-mode-layer {
+  display: block;
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.app-shell .chat-panel-back {
+  flex-shrink: 0;
+}
+
+.app-shell .chat-panel-back svg {
+  width: 16px;
+  height: 16px;
+}
+
+.app-shell .chat-panel-back + .room-title {
+  margin-right: auto;
 }
 
 /* The Split layout control is rendered by the stage but portaled into the
@@ -3533,6 +3580,9 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .left-sidebar-nav-label {
+  /* Button line-height: 1 clips descenders when this label ellipsizes. */
+  line-height: 1.4;
+  padding-block: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3833,6 +3883,21 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .right-sidebar-tool-tabs .drawer-tab-btn {
   width: 29px;
   height: 29px;
+}
+
+/* The selected tab shows its name, so the pill hugs icon + label. */
+.app-shell .right-sidebar-tool-tabs .drawer-tab-btn.active {
+  width: auto;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 0 10px 0 7px;
+}
+
+.app-shell .right-sidebar-tool-tabs .drawer-tab-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .app-shell .right-sidebar-header .drawer-close-btn {

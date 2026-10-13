@@ -61,7 +61,7 @@ type CodeEditorProps = {
   language: string;
 };
 
-const customTheme = EditorView.theme({
+export const customTheme = EditorView.theme({
   "&": {
     color: "var(--text-primary)",
     backgroundColor: "transparent",
@@ -134,7 +134,7 @@ const customTheme = EditorView.theme({
   },
 }, { dark: true });
 
-const customHighlightStyle = HighlightStyle.define([
+export const customHighlightStyle = HighlightStyle.define([
   { tag: t.keyword, color: "var(--syntax-keyword, #ff7b72)", fontWeight: "500" },
   { tag: t.operator, color: "var(--syntax-operator, #79c0ff)" },
   { tag: t.punctuation, color: "var(--syntax-punctuation, var(--text-muted))" },
@@ -199,7 +199,7 @@ const languageCache = new Map<string, Extension>();
 /** In-flight loads, so opening three .ts files at once fetches the pack once. */
 const languageInFlight = new Map<string, Promise<Extension | null>>();
 
-function loadLanguageExtension(lang: string): Promise<Extension | null> {
+export function loadLanguageExtension(lang: string): Promise<Extension | null> {
   const cached = languageCache.get(lang);
   if (cached) return Promise.resolve(cached);
 

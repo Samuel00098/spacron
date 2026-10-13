@@ -1,0 +1,272 @@
+/* Chat file viewer: a flat side pane beside the conversation (see
+   ChatModePanel.css `.has-file-viewer`, which narrows the transcript). */
+.app-shell .chat-mode-panel {
+  --chat-file-viewer-width: min(620px, 48%);
+}
+.app-shell .chat-mode-panel.has-file-viewer {
+  padding-right: calc(var(--chat-file-viewer-width) + var(--chat-mode-panel-gutter));
+}
+/* The narrowed composer wraps its pickers onto a second line instead of
+   squeezing them until their labels overlap. */
+.app-shell .chat-mode-panel.has-file-viewer .chat-mode-composer-footer { flex-wrap: wrap; row-gap: 6px; }
+.app-shell .chat-mode-panel.has-file-viewer .chat-mode-composer-settings { flex-wrap: wrap; row-gap: 6px; }
+.app-shell .chat-mode-panel.has-file-viewer .chat-mode-composer-settings > * { flex-shrink: 0; }
+.app-shell .chat-file-viewer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  width: var(--chat-file-viewer-width);
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--major-panel-surface, var(--bg-secondary));
+  outline: none;
+}
+.app-shell .chat-file-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.app-shell .chat-file-glyph {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.app-shell .chat-file-viewer-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.app-shell .chat-file-viewer-title strong,
+.app-shell .chat-file-viewer-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-shell .chat-file-viewer-title strong {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.app-shell .chat-file-viewer-title span {
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+.app-shell .chat-file-viewer-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--bg-hover);
+}
+.app-shell .chat-file-viewer-toggle button {
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.app-shell .chat-file-viewer-toggle button[aria-pressed='true'] {
+  background: var(--major-panel-surface, var(--bg-secondary));
+  color: var(--text-primary);
+}
+.app-shell .chat-file-viewer-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+.app-shell .chat-file-viewer-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.app-shell .chat-file-viewer-actions button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.app-shell .chat-file-viewer-actions button:disabled { opacity: 0.45; cursor: default; }
+.app-shell .chat-file-viewer-actions svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.app-shell .chat-file-viewer-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: none;
+}
+.app-shell .chat-file-viewer-code {
+  height: 100%;
+}
+.app-shell .chat-file-viewer-code .cm-editor { height: 100%; }
+.app-shell .chat-file-viewer-code .cm-content { padding: 12px 16px 40px 4px; }
+.app-shell .chat-file-viewer-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+.app-shell .chat-file-viewer-image {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 16px;
+}
+.app-shell .chat-file-viewer-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.app-shell .chat-file-viewer-message {
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* File cards under a reply. */
+.app-shell .chat-file-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 460px;
+  margin-top: 10px;
+}
+.app-shell .chat-file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  /* The flat Settings outline; `!important` outranks global.css's button
+     outline reset (see Dropdown.css). */
+  box-shadow: var(--surface-outline) !important;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
+}
+.app-shell .chat-file-card:hover { background: var(--bg-hover); }
+/* The open card is told apart by its "Close" label only: no ring, no fill,
+   and no focus ring either (the user asked for no highlight around it). */
+.app-shell .chat-file-card.active,
+.app-shell .chat-file-card:focus,
+.app-shell .chat-file-card:focus-visible {
+  outline: none;
+  box-shadow: var(--surface-outline) !important;
+}
+.app-shell .chat-file-card .chat-file-glyph {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
+  stroke: var(--accent);
+}
+.app-shell .chat-file-card-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.app-shell .chat-file-card-text strong,
+.app-shell .chat-file-card-text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-shell .chat-file-card-text strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.app-shell .chat-file-card-text span {
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+.app-shell .chat-file-card-open {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+/* Edit mode. */
+.app-shell .chat-file-viewer-dirty { color: var(--accent); }
+.app-shell .chat-file-viewer-edit-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+.app-shell .chat-file-viewer-edit-actions button,
+.app-shell .chat-file-viewer-confirm button {
+  height: 26px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: var(--surface-outline) !important;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.app-shell .chat-file-viewer-edit-actions button:hover:not(:disabled),
+.app-shell .chat-file-viewer-confirm button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.app-shell .chat-file-viewer-edit-actions button.primary {
+  background: var(--accent);
+  box-shadow: none !important;
+  /* Accent is white in the dark theme and black in the light one. */
+  color: var(--major-panel-surface, var(--bg-secondary));
+  font-weight: 600;
+}
+.app-shell .chat-file-viewer-edit-actions button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--major-panel-surface, var(--bg-secondary));
+  opacity: 0.88;
+}
+.app-shell .chat-file-viewer-edit-actions button:disabled { opacity: 0.5; cursor: default; }
+.app-shell .chat-file-viewer-code.editing .cm-content { caret-color: var(--accent); }
+.app-shell .chat-file-viewer-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--warning, #fbbf24) 8%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.app-shell .chat-file-viewer-confirm span { flex: 1 1 auto; min-width: 0; }
+.app-shell .chat-file-viewer-confirm button.danger { color: var(--error, #f87171); }
