@@ -26,11 +26,24 @@
  *
  * Icons are each vendor's own current icon, fetched from its website
  * (apple-touch-icon, else its favicon) on 2026-10-12 into `static/mcp-icons/`.
+ *
+ * ## Google Workspace
+ *
+ * The Google entries come from Google's own guide
+ * (developers.google.com/workspace/guides/configure-mcp-servers, read
+ * 2026-10-13), which lists the URLs and the scopes copied below. Probed live
+ * that day: each answers tools/list and publishes RFC 9728 metadata naming
+ * accounts.google.com, which has NO dynamic registration — so they are
+ * `oauth` with `ownClient`: the user pastes an OAuth client from their own
+ * Google Cloud project once, and Spacron reuses it for every Google server.
+ * Google labels them Developer Preview. Icons are Google's product marks from
+ * gstatic.com/images/branding/product, fetched 2026-10-13.
  */
 import { serverIdentity, serverKey, type McpServer } from './mcp-servers';
 
 export type McpCatalogCategory =
   | 'popular'
+  | 'google'
   | 'developer'
   | 'cloud'
   | 'databases'
@@ -79,10 +92,17 @@ export interface McpCatalogEntry {
   args?: string[];
   /** Shown instead of the description, e.g. a prerequisite. */
   note?: string;
+  /**
+   * The authorization server takes no dynamic registration, so sign-in needs
+   * an OAuth client the user created (asked for once per authorization
+   * server, then reused). `scopes` replaces the server's advertised list.
+   */
+  ownClient?: { guide: string; scopes: string[] };
 }
 
 export const MCP_CATEGORIES: { id: McpCatalogCategory; label: string }[] = [
   { id: 'popular', label: 'Popular' },
+  { id: 'google', label: 'Google Workspace' },
   { id: 'developer', label: 'Developer tools' },
   { id: 'cloud', label: 'Cloud & deploy' },
   { id: 'databases', label: 'Databases & data' },
@@ -98,12 +118,30 @@ export const MCP_CATEGORIES: { id: McpCatalogCategory; label: string }[] = [
 type Remote = Pick<McpCatalogEntry, 'id' | 'name' | 'description' | 'category' | 'icon' | 'homepage' | 'url'> &
   Partial<Pick<McpCatalogEntry, 'note' | 'headers'>>;
 
+const GOOGLE_MCP_GUIDE = 'https://developers.google.com/workspace/guides/configure-mcp-servers';
+
 /** A hosted server the user signs in to. */
 const signIn = (e: Remote): McpCatalogEntry => ({ ...e, auth: 'oauth', transport: 'http' });
 /** A hosted server that needs no account. */
 const open = (e: Remote): McpCatalogEntry => ({ ...e, auth: 'none', transport: 'http' });
 
 export const MCP_CATALOG: McpCatalogEntry[] = [
+  // ── Google Workspace (see "Google Workspace" above) ─────────────────────────
+  ...([
+    ['gmail', 'Gmail', 'Search, read and draft email', 'gmail.png', 'https://mail.google.com', 'gmailmcp', ['gmail.readonly', 'gmail.compose']],
+    ['googledrive', 'Google Drive', 'Search and read your files', 'googledrive.png', 'https://drive.google.com', 'drivemcp', ['drive.readonly', 'drive.file']],
+    ['googledocs', 'Google Docs', 'Read and edit documents', 'googledocs.png', 'https://docs.google.com', 'docsmcp', ['drive.readonly', 'drive.file', 'documents.readonly', 'documents']],
+    ['googlesheets', 'Google Sheets', 'Read and edit spreadsheets', 'googlesheets.png', 'https://sheets.google.com', 'sheetsmcp', ['drive.readonly', 'drive.file', 'spreadsheets.readonly', 'spreadsheets']],
+    ['googleslides', 'Google Slides', 'Read and edit presentations', 'googleslides.png', 'https://slides.google.com', 'slidesmcp', ['drive.readonly', 'drive.file', 'presentations.readonly', 'presentations']],
+    ['googlecalendar', 'Google Calendar', 'Calendars, events and free time', 'googlecalendar.png', 'https://calendar.google.com', 'calendarmcp', ['calendar.calendarlist.readonly', 'calendar.events.freebusy', 'calendar.events.readonly']],
+    ['googlechat', 'Google Chat', 'Read spaces and send messages', 'googlechat.png', 'https://chat.google.com', 'chatmcp', ['chat.spaces.readonly', 'chat.memberships.readonly', 'chat.messages.readonly', 'chat.messages.create', 'chat.users.readstate']],
+    ['googlecontacts', 'Google Contacts', 'Contacts and your directory', 'googlecontacts.png', 'https://contacts.google.com', 'people', ['directory.readonly', 'userinfo.profile', 'contacts.readonly']],
+  ] as const).map(([id, name, description, icon, homepage, host, scopes]): McpCatalogEntry => ({
+    ...signIn({ id, name, description, category: 'google', icon, homepage, url: `https://${host}.googleapis.com/mcp/v1` }),
+    ...(id === 'googlechat' ? { note: 'Needs a Chat app set up in your Google Cloud project' } : {}),
+    ownClient: { guide: GOOGLE_MCP_GUIDE, scopes: scopes.map((scope) => `https://www.googleapis.com/auth/${scope}`) },
+  })),
+
   // ── Popular ──────────────────────────────────────────────────────────────
   {
     id: 'github',

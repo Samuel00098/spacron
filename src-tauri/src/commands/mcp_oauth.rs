@@ -10,6 +10,10 @@
 //!    protected-resource metadata (RFC 9728), from the server's 401
 //!    `WWW-Authenticate` or its well-known path, then RFC 8414 metadata.
 //! 2. Register Spacron as a public client (RFC 7591 dynamic registration).
+//!    An authorization server without it (Google) instead takes an OAuth
+//!    client the user created themselves: they paste it once, it is kept per
+//!    authorization server (`clients/<host>.json`), and every other server
+//!    behind that authorization server signs in with it.
 //! 3. Open the user's own browser on the authorize URL (PKCE S256), and catch
 //!    the redirect on a one-shot loopback listener (RFC 8252).
 //! 4. Exchange the code and keep the grant in `<config>/mcp-oauth/<key>.json`,
@@ -88,6 +92,36 @@ fn save_grant(key: &str, grant: &Grant) -> Result<(), String> {
     std::fs::create_dir_all(store_dir()).map_err(|e| format!("could not create the sign-in store: {e}"))?;
     let text = serde_json::to_string(grant).map_err(|e| e.to_string())?;
     crate::mcp::write_private_file(&grant_path(key), &text).map_err(|e| format!("could not save the sign-in: {e}"))
+}
+
+/// An OAuth client the user registered themselves, for authorization servers
+/// that do not offer dynamic registration.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OwnClient {
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+}
+
+/// Saved own clients are keyed by the authorization endpoint's host, which
+/// comes from discovery, never from the UI; still, keep it to host characters.
+fn client_path(host: &str) -> Option<PathBuf> {
+    let ok = !host.is_empty() && host.len() <= 253 && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    ok.then(|| store_dir().join("clients").join(format!("{host}.json")))
+}
+
+fn load_own_client(host: &str) -> Option<OwnClient> {
+    let text = std::fs::read_to_string(client_path(host)?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn save_own_client(host: &str, client: &OwnClient) -> Result<(), String> {
+    let path = client_path(host).ok_or_else(|| format!("invalid authorization server host: {host}"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("could not create the sign-in store: {e}"))?;
+    }
+    let text = serde_json::to_string(client).map_err(|e| e.to_string())?;
+    crate::mcp::write_private_file(&path, &text).map_err(|e| format!("could not save the OAuth client: {e}"))
 }
 
 fn http() -> &'static reqwest::Client {
@@ -307,7 +341,14 @@ async fn token_request(endpoint: &str, form: &[(&str, &str)]) -> Result<TokenRes
     serde_json::from_str(&text).map_err(|_| "the token response was not understood".to_string())
 }
 
-async fn sign_in_flow(app: &tauri::AppHandle, key: &str, resource_text: &str, server_name: &str) -> Result<(), String> {
+async fn sign_in_flow(
+    app: &tauri::AppHandle,
+    key: &str,
+    resource_text: &str,
+    server_name: &str,
+    own_client: Option<OwnClient>,
+    scopes: Vec<String>,
+) -> Result<(), String> {
     let resource = url::Url::parse(resource_text).map_err(|_| "that is not a valid URL".to_string())?;
     if resource.scheme() != "https" {
         return Err("only https servers can be signed in to".into());
@@ -315,9 +356,20 @@ async fn sign_in_flow(app: &tauri::AppHandle, key: &str, resource_text: &str, se
     let (meta, resource_scopes) = discover(&resource).await?;
     let authorization_endpoint = meta.authorization_endpoint.clone().unwrap_or_default();
     let token_endpoint = meta.token_endpoint.clone().unwrap_or_default();
-    let registration_endpoint = meta.registration_endpoint.clone().ok_or_else(|| {
-        format!("{server_name} does not let new apps register, so Spacron cannot sign in to it. Agents that have their own sign-in for it (Claude Code, Codex) still can.")
-    })?;
+    let auth_host = url::Url::parse(&authorization_endpoint)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    // A client the user just pasted wins; then dynamic registration; then the
+    // client they pasted for this authorization server before.
+    let saved_client = if own_client.is_none() && meta.registration_endpoint.is_none() {
+        Some(load_own_client(&auth_host).ok_or_else(|| {
+            format!("needs_client: {server_name} does not let new apps register, so it needs an OAuth client of your own.")
+        })?)
+    } else {
+        None
+    };
+    let pasted_client = own_client.is_some();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -329,7 +381,10 @@ async fn sign_in_flow(app: &tauri::AppHandle, key: &str, resource_text: &str, se
         #[serde(default)]
         client_secret: Option<String>,
     }
-    let registration: Registration = {
+    let registration: Registration = if let Some(client) = own_client.or(saved_client) {
+        Registration { client_id: client.client_id, client_secret: client.client_secret.filter(|s| !s.is_empty()) }
+    } else {
+        let registration_endpoint = meta.registration_endpoint.clone().unwrap_or_default();
         let res = http()
             .post(&registration_endpoint)
             .json(&serde_json::json!({
@@ -352,7 +407,15 @@ async fn sign_in_flow(app: &tauri::AppHandle, key: &str, resource_text: &str, se
 
     let (verifier, challenge) = pkce_pair();
     let state = uuid::Uuid::new_v4().simple().to_string();
-    let scopes = if !resource_scopes.is_empty() { resource_scopes } else { meta.scopes_supported.clone() };
+    // Scopes the catalog names win over the server's whole advertised list,
+    // which for Google includes full mailbox access.
+    let scopes = if !scopes.is_empty() {
+        scopes
+    } else if !resource_scopes.is_empty() {
+        resource_scopes
+    } else {
+        meta.scopes_supported.clone()
+    };
     let mut authorize = url::Url::parse(&authorization_endpoint).map_err(|_| "bad authorization endpoint".to_string())?;
     {
         let mut q = authorize.query_pairs_mut();
@@ -365,6 +428,11 @@ async fn sign_in_flow(app: &tauri::AppHandle, key: &str, resource_text: &str, se
             .append_pair("resource", resource.as_str());
         if !scopes.is_empty() {
             q.append_pair("scope", &scopes.join(" "));
+        }
+        // Google only returns a refresh token for offline access, and only on
+        // a consent screen; without one the sign-in dies with the first token.
+        if auth_host == "accounts.google.com" {
+            q.append_pair("access_type", "offline").append_pair("prompt", "consent");
         }
     }
 
@@ -398,6 +466,14 @@ async fn sign_in_flow(app: &tauri::AppHandle, key: &str, resource_text: &str, se
         form.push(("client_secret", secret));
     }
     let tokens = token_request(&token_endpoint, &form).await?;
+    // Kept only once it has actually worked, so a mistyped client is never
+    // reused for the next server.
+    if pasted_client {
+        save_own_client(
+            &auth_host,
+            &OwnClient { client_id: registration.client_id.clone(), client_secret: registration.client_secret.clone() },
+        )?;
+    }
     save_grant(
         key,
         &Grant {
@@ -460,11 +536,26 @@ pub async fn fresh_grant(key: &str, force: bool) -> Result<Grant, String> {
 
 /// Sign in to an MCP server in the user's browser. Resolves once the grant is
 /// saved, or with an error (`cancelled:` / `timeout:` prefixes are the user's
-/// doing and need no alarm).
+/// doing and need no alarm; `needs_client:` asks for an OAuth client of the
+/// user's own, passed back as `client_id` / `client_secret`).
+///
+/// `scopes`, when given, replaces the scopes the server advertises.
 #[tauri::command]
-pub async fn mcp_oauth_sign_in(app: tauri::AppHandle, key: String, url: String, name: String) -> Result<(), String> {
+pub async fn mcp_oauth_sign_in(
+    app: tauri::AppHandle,
+    key: String,
+    url: String,
+    name: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    scopes: Option<Vec<String>>,
+) -> Result<(), String> {
     valid_key(&key)?;
-    sign_in_flow(&app, &key, url.trim(), &name).await
+    let own_client = client_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .map(|client_id| OwnClient { client_id, client_secret: client_secret.map(|s| s.trim().to_string()) });
+    sign_in_flow(&app, &key, url.trim(), &name, own_client, scopes.unwrap_or_default()).await
 }
 
 /// Whether a hosted MCP server wants a sign-in: it answers an unauthenticated

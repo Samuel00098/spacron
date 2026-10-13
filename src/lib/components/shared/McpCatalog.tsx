@@ -75,7 +75,14 @@ const keyOf = (entry: McpCatalogEntry) => serverKey({ name: entry.name });
 /** Errors that are the user's own doing and need no explanation. */
 const quietFailure = (message: string) => /^(cancelled|timeout):/.test(message);
 
-type Pending = { id: string; kind: 'token' } | { id: string; kind: 'signing-in' };
+type Pending =
+  | { id: string; kind: 'token' }
+  | { id: string; kind: 'signing-in' }
+  /** Asking for the user's own OAuth client (see `McpCatalogEntry.ownClient`). */
+  | { id: string; kind: 'client' };
+
+/** Sign-in found no way to register and no saved client of the user's own. */
+const needsClient = (message: string) => /^needs_client:/.test(message);
 
 /**
  * Settings > MCP > Catalog: one-click installs of ready-made servers.
@@ -150,6 +157,8 @@ export function McpCatalog({
   const [query, setQuery] = useState('');
   const [pending, setPending] = useState<Pending | null>(null);
   const [token, setToken] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [signedIn, setSignedIn] = useState<Record<string, boolean>>({});
 
@@ -194,18 +203,36 @@ export function McpCatalog({
     else install(entry, { oauth: true });
   };
 
-  const signIn = async (entry: McpCatalogEntry) => {
+  const askForClient = (entry: McpCatalogEntry) => {
+    setError(entry.id, null);
+    setClientId('');
+    setClientSecret('');
+    setPending({ id: entry.id, kind: 'client' });
+  };
+
+  /** `client` is an OAuth client the user just pasted; without it the backend
+   * registers, or reuses one pasted earlier for the same authorization server. */
+  const signIn = async (entry: McpCatalogEntry, client?: { id: string; secret: string }) => {
     setError(entry.id, null);
     setPending({ id: entry.id, kind: 'signing-in' });
+    let askClient = false;
     try {
-      await invoke('mcp_oauth_sign_in', { key: keyOf(entry), url: entry.url, name: entry.name });
+      await invoke('mcp_oauth_sign_in', {
+        key: keyOf(entry),
+        url: entry.url,
+        name: entry.name,
+        clientId: client?.id.trim() || null,
+        clientSecret: client?.secret.trim() || null,
+        scopes: entry.ownClient?.scopes ?? null,
+      });
       markSignedIn(entry);
       await refreshStatus();
     } catch (e) {
       const message = String(e);
-      if (!quietFailure(message)) setError(entry.id, message);
+      if (needsClient(message) && entry.ownClient) askClient = true;
+      else if (!quietFailure(message)) setError(entry.id, message);
     } finally {
-      setPending((p) => (p?.id === entry.id ? null : p));
+      setPending((p) => (p?.id === entry.id ? (askClient ? { id: entry.id, kind: 'client' } : null) : p));
     }
   };
 
@@ -270,6 +297,54 @@ export function McpCatalog({
       </div>
       <button className="settings-secondary mcp-small-button mcp-catalog-panel-link" onClick={() => onOpenUrl(entry.key!.url)}>
         Get a token
+      </button>
+    </div>
+  );
+
+  const submitClient = (entry: McpCatalogEntry) => {
+    if (!clientId.trim()) return;
+    void signIn(entry, { id: clientId, secret: clientSecret });
+  };
+
+  const clientPanel = (entry: McpCatalogEntry) => (
+    <div className="mcp-catalog-panel">
+      <p className="mcp-catalog-panel-label">
+        {entry.name} needs an OAuth client from your own Google Cloud project. Create one of type
+        Desktop app, then paste it here; it is kept on this computer and reused for the other
+        Google servers.
+      </p>
+      <div className="mcp-catalog-panel-row">
+        <input
+          aria-label="OAuth client ID"
+          value={clientId}
+          autoFocus
+          placeholder="Client ID"
+          onChange={(event) => setClientId(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') submitClient(entry);
+            if (event.key === 'Escape') setPending(null);
+          }}
+        />
+      </div>
+      <div className="mcp-catalog-panel-row mcp-catalog-panel-row-gap">
+        <input
+          aria-label="OAuth client secret"
+          type="password"
+          value={clientSecret}
+          placeholder="Client secret"
+          onChange={(event) => setClientSecret(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') submitClient(entry);
+            if (event.key === 'Escape') setPending(null);
+          }}
+        />
+        <button className="settings-primary" disabled={!clientId.trim()} onClick={() => submitClient(entry)}>
+          Sign in
+        </button>
+        <button className="settings-secondary" onClick={() => setPending(null)}>Cancel</button>
+      </div>
+      <button className="settings-secondary mcp-small-button mcp-catalog-panel-link" onClick={() => onOpenUrl(entry.ownClient!.guide)}>
+        How to set it up
       </button>
     </div>
   );
@@ -419,9 +494,15 @@ export function McpCatalog({
                       )}
                     </div>
                     {pending?.id === entry.id && pending.kind === 'token' && !installed && tokenPanel(entry)}
+                    {pending?.id === entry.id && pending.kind === 'client' && clientPanel(entry)}
                     {error && (
                       <div className="mcp-catalog-panel">
                         <p className="mcp-catalog-error">{error}</p>
+                        {entry.ownClient && (
+                          <button className="settings-secondary mcp-small-button mcp-catalog-panel-link" onClick={() => askForClient(entry)}>
+                            Use a different OAuth client
+                          </button>
+                        )}
                         {entry.auth === 'oauth' && !installed && (
                           <button className="settings-secondary mcp-small-button mcp-catalog-panel-link" onClick={() => install(entry)}>
                             Add without signing in (each agent signs in itself)

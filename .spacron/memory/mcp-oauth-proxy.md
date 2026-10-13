@@ -22,4 +22,27 @@ metadata and offer dynamic registration; Linear accepted a registration with a
 sign-in and a proxied tool call have NOT been run end to end yet — suspect the
 proxy's header forwarding first if one fails.
 
+## Own OAuth clients (Google, 2026-10-13)
+
+Google's authorization server has no dynamic registration, so the Google
+Workspace catalog entries carry `ownClient`. The contract spans
+`mcp_oauth.rs` and `McpCatalog.tsx`:
+
+- No registration endpoint and no saved client → the sign-in fails with the
+  `needs_client:` prefix; the UI answers by asking for a client ID/secret and
+  calling sign-in again with them.
+- A pasted client is saved per authorization-endpoint host
+  (`mcp-oauth/clients/<host>.json`) only after a successful token exchange,
+  so every later Google server signs in without asking and a typo is never
+  kept.
+- `accounts.google.com` gets `access_type=offline&prompt=consent`, or Google
+  issues no refresh token and the grant dies after an hour.
+- The user's client must be type **Desktop app**: Google's guide says Web
+  application, but a Web client cannot use the random loopback port.
+
+NOT verified end to end: no real Google client was available. Endpoints,
+metadata and the missing registration endpoint were probed live; whether
+Google accepts the RFC 8707 `resource` parameter was not (it rejects the
+dummy client first). Suspect that first if a real sign-in fails.
+
 Related: [[mcp-server-list]].

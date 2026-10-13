@@ -771,3 +771,8 @@
   flex: 0 0 auto;
   min-width: 76px;
 }
+
+/* The OAuth client panel stacks two fields; space the second row. */
+.mcp-catalog-panel-row-gap {
+  margin-top: 6px;
+}
