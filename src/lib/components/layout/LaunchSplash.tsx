@@ -7,13 +7,13 @@ import './LaunchSplash.css';
 const WORD = 'pacron';
 
 /** Per-letter delays (ms). Uneven on purpose, so it reads as typed, not ticked. */
-const LETTER_DELAYS = [260, 200, 300, 180, 250, 220];
+const LETTER_DELAYS = [190, 140, 220, 130, 180, 160];
 
 // Keep these in step with the matching durations in LaunchSplash.css.
-const ENTER_MS = 800;
-const SLIDE_MS = 750;
-const HOLD_MS = 900;
-const EXIT_MS = 600;
+const ENTER_MS = 600;
+const SLIDE_MS = 560;
+const HOLD_MS = 600;
+const EXIT_MS = 480;
 
 type Phase = 'enter' | 'slide' | 'type' | 'hold' | 'exit';
 
