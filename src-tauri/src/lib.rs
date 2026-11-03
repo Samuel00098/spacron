@@ -1,4 +1,5 @@
 mod commands;
+mod acp;
 mod desktop;
 mod error;
 mod lsp;
@@ -439,6 +440,11 @@ pub fn run() {
             commands::env_vars::env_vault_set,
             commands::env_vars::env_vault_import_dotenv,
             commands::terminal::terminal_create,
+            commands::acp::acp_start,
+            commands::acp::acp_request,
+            commands::acp::acp_respond,
+            commands::acp::acp_notify,
+            commands::acp::acp_close,
             commands::terminal::terminal_attach,
             commands::terminal::terminal_instance_id,
             commands::terminal::terminal_write,

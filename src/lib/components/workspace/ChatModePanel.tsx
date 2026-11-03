@@ -15,10 +15,12 @@ import {
   clearChatTurnTicker,
   appendThreadMessage,
   createChatThread,
+  createSubagentChatThread,
   ensureProjectThread,
   editAssistantChatMessage,
   getPendingNewThreadSettings,
   removeThreadMessage,
+  selectChatThread,
   setThreadDraft,
   updateChatThread,
 } from '$lib/stores/chatThreads';
@@ -53,6 +55,10 @@ import {
   type AgentPlacementRequest,
 } from '$lib/stores/agentPlacement';
 import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import { getAgentRoster } from '$lib/stores/runs';
+import { getCustomAgents } from '$lib/stores/customAgents';
+import { acpDisabledCommands, acpRegistryEnabled, isAcpEnabled } from '$lib/stores/acpRegistry';
+import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import AgentLaunchConfigFields from '$lib/components/shared/AgentLaunchConfigFields';
 import {
@@ -339,6 +345,12 @@ function statusLabel(status: string): string {
   }
 }
 
+function isUsageLimitFailure(message: ChatMessage): boolean {
+  if (message.type !== 'failure' && message.completion?.status !== 'failed') return false;
+  return /(?:usage|rate)[ -]?limit|quota|out of credits?|insufficient[_ ]quota|credit balance|payment required/i
+    .test(`${message.text} ${message.completion?.reason ?? ''}`);
+}
+
 function liveTaskStatusLabel(status: string, stalled: boolean): string {
   if (stalled && status === 'in-progress') return 'Possibly stalled';
   switch (status) {
@@ -552,6 +564,8 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const pendingProjectPath = workspace?.active_project_path ?? workspace?.project_paths?.[0];
   const projectName = standalone ? undefined : project?.name ?? pendingProjectPath?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
   const threadState = useStore(chatThreadState);
+  const acpChatEnabled = useStore(acpRegistryEnabled);
+  const disabledAcpCommands = useStore(acpDisabledCommands);
   const allTasks = useStore(orchestratorTasks);
   const defaultProvider = useStore(aiProvider);
   const defaultModel = useStore(currentAiModel);
@@ -607,8 +621,11 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const [pendingSendCount, setPendingSendCount] = useState(0);
   const [answeringRequest, setAnsweringRequest] = useState(false);
   const answeringRequestRef = useRef(false);
+  const [subagentPrompt, setSubagentPrompt] = useState('');
   const [liveModelsByProvider, setLiveModelsByProvider] = useState<Record<string, AiModelOption[]>>({});
   const [loadingModelsFor, setLoadingModelsFor] = useState<string | null>(null);
+  const [liveModelsByAgent, setLiveModelsByAgent] = useState<Record<string, AgentProviderModel[]>>({});
+  const [loadingAgentModelsFor, setLoadingAgentModelsFor] = useState<string | null>(null);
   const [modelErrors, setModelErrors] = useState<Record<string, string>>({});
   const lastModelRefreshRef = useRef<Record<string, number>>({});
   // Providers whose last live fetch failed, with the failure timestamp. A
@@ -641,6 +658,13 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const projectThreads = project ? threadState.threadsByProject[project.id] ?? [] : [];
   const activeThreadId = project ? threadState.activeThreadByProject[project.id] ?? null : null;
   const thread = projectThreads.find((entry) => entry.id === activeThreadId) ?? projectThreads[0] ?? null;
+  const threadGroupParentId = thread?.parentThreadId ?? thread?.id;
+  const subagentThreads = useMemo(
+    () => project && threadGroupParentId
+      ? projectThreads.filter((entry) => entry.parentThreadId === threadGroupParentId)
+      : [],
+    [projectThreads, project, threadGroupParentId],
+  );
   const messages = thread ? threadState.messagesByThread[thread.id] ?? [] : [];
   // The file open in the side viewer: `label` is the path as the conversation
   // names it, `path` the absolute file under this chat's root.
@@ -779,6 +803,37 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   }, [liveModels, providerDef.models, selectedModel]);
   const accessMode: ChatAccessMode = thread?.accessMode === 'full-access' ? 'full-access' : 'inherit';
   const workMode = thread?.workMode === 'plan' ? 'plan' : 'build';
+  const acpAgents = useMemo(() => {
+    void acpChatEnabled;
+    void disabledAcpCommands;
+    const custom = getCustomAgents();
+    const customAcp = new Set(custom.filter((agent) => agent.supportsAcp).map((agent) => agent.command));
+    return getAgentRoster()
+      .filter((agent) => isAcpEnabled(agent.command))
+      .filter((agent) => isChatAgentProvider(agent.command) || customAcp.has(agent.command))
+      .map((agent) => ({ command: agent.command, name: agent.name }));
+  }, [threadState, project?.id, acpChatEnabled, disabledAcpCommands]);
+  const selectedAcpAgent = thread?.agentPreset && acpAgents.some((agent) => agent.command === thread.agentPreset)
+    ? thread.agentPreset
+    : acpAgents[0]?.command ?? '';
+  const selectedAcpModel = thread?.model?.trim()
+    || liveModelsByAgent[selectedAcpAgent]?.find((entry) => entry.isDefault)?.id
+    || liveModelsByAgent[selectedAcpAgent]?.[0]?.id
+    || 'default';
+
+  const ensureAgentModels = useCallback((command: string, force = false) => {
+    if (!command || (!force && Object.prototype.hasOwnProperty.call(liveModelsByAgent, command))) return;
+    if (loadingAgentModelsFor === command) return;
+    setLoadingAgentModelsFor(command);
+    void loadLiveAgentProviderModels(command)
+      .then((models) => setLiveModelsByAgent((current) => ({ ...current, [command]: models })))
+      .catch(() => setLiveModelsByAgent((current) => ({ ...current, [command]: [] })))
+      .finally(() => setLoadingAgentModelsFor((current) => current === command ? null : current));
+  }, [liveModelsByAgent, loadingAgentModelsFor]);
+
+  useEffect(() => {
+    if (selectedAcpAgent) ensureAgentModels(selectedAcpAgent);
+  }, [selectedAcpAgent, ensureAgentModels]);
 
   useEffect(() => {
     if (!project || !fileMention) { setFileMatches([]); return; }
@@ -1099,10 +1154,14 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
       startStandaloneChat();
       return;
     }
+
     const pendingSettings = getPendingNewThreadSettings(project.id);
     createChatThread(project.id, {
+      agentPreset: selectedAcpAgent || null,
+      agentName: acpAgents.find((agent) => agent.command === selectedAcpAgent)?.name ?? null,
+      model: selectedAcpModel,
       provider: pendingSettings?.provider ?? selectedProvider,
-      model: pendingSettings?.model ?? selectedModel,
+      ...(selectedAcpAgent ? {} : { model: pendingSettings?.model ?? selectedModel }),
       accessMode,
       workMode,
     });
@@ -1111,6 +1170,94 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
       return [];
     });
     setRequestDraft('');
+  }
+
+  async function createSubagentThread() {
+    const prompt = subagentPrompt.trim();
+    if (!project || !thread || !prompt) {
+      showToast('Describe the work for the sub-agent first.', 'warning', 4000);
+      return;
+    }
+    const normalizedPrompt = prompt.toLowerCase().replace(/[`"'()[\],:;]/g, ' ').replace(/\s+/g, ' ');
+    const requestedAgent = getAgentRoster().find((entry) =>
+      normalizedPrompt.includes(entry.command.toLowerCase()) || normalizedPrompt.includes(entry.name.toLowerCase()));
+    const agent = acpAgents.find((entry) => entry.command === requestedAgent?.command)
+      ?? (requestedAgent ? null : acpAgents.find((entry) => entry.command === selectedAcpAgent));
+    if (requestedAgent && !agent) {
+      showToast(`${requestedAgent.name} is not enabled as an ACP Chat agent. Enable it in Settings > Agents.`, 'warning', 5000);
+      return;
+    }
+    if (!agent) return;
+    ensureAgentModels(agent.command);
+    let available = liveModelsByAgent[agent.command] ?? [];
+    if (!available.length) {
+      try {
+        available = await loadLiveAgentProviderModels(agent.command);
+        setLiveModelsByAgent((current) => ({ ...current, [agent.command]: available }));
+      } catch {
+        available = [];
+      }
+    }
+    const normalizedModelText = normalizedPrompt.replace(/[-_.:/]+/g, ' ');
+    const matchedModel = available.find((entry) => {
+      const id = entry.id.toLowerCase();
+      const label = entry.label.toLowerCase();
+      return normalizedPrompt.includes(id) || normalizedModelText.includes(id.replace(/[-_.:/]+/g, ' '))
+        || normalizedPrompt.includes(label) || normalizedModelText.includes(label.replace(/[-_.:/]+/g, ' '));
+    })?.id;
+    if (available.length && !matchedModel && requestedAgent) {
+      showToast(`The requested model was not reported by ${agent.name}. Refresh its model list and try again.`, 'warning', 5000);
+      return;
+    }
+    const model = matchedModel ?? (thread.agentPreset === agent.command ? thread.model : null)
+      ?? available.find((entry) => entry.isDefault)?.id ?? available[0]?.id ?? 'default';
+    const child = createSubagentChatThread(project.id, thread.parentThreadId ?? thread.id, {
+      name: agent.name,
+      command: agent.command,
+      model,
+      role: 'custom',
+    });
+    const context = messages
+      .filter((message) => message.text.trim())
+      .slice(-8)
+      .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text.trim()}`)
+      .join('\n\n')
+      .slice(-12000);
+    appendThreadMessage({
+      id: `chat-message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      threadId: child.id,
+      type: 'system',
+      role: 'system',
+      text: `Dedicated sub-agent thread for ${agent.name} (${model}).`,
+      ts: Date.now(),
+    });
+    if (context) {
+      appendThreadMessage({
+        id: `chat-message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        threadId: child.id,
+        type: 'system',
+        role: 'system',
+        text: `Bounded context handoff from the parent thread:\n\n${context}`,
+        ts: Date.now(),
+      });
+    }
+    const childPrompt = context
+      ? `Work on this request using ${agent.name} model ${model}.\n\nParent context:\n${context}\n\nSub-agent assignment:\n${prompt}`
+      : prompt;
+    setSubagentPrompt('');
+    selectChatThread(project.id, child.id);
+    void sendChatMessage(project.id, project.root_path, childPrompt, {
+      projectName: project.name,
+      threadId: child.id,
+      orchestratorProvider: selectedProvider,
+      orchestratorModel: selectedModel,
+      forcedAgent: agent.command,
+      model,
+      accessMode,
+      workMode,
+      chatMode: true,
+      conversationalMode: true,
+    }).catch((error) => showToast(error instanceof Error ? error.message : String(error), 'error'));
   }
 
   async function answerPendingRequest(answer: string, request = pendingRequest) {
@@ -1124,6 +1271,8 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
       threadId: thread.id,
       orchestratorProvider: selectedProvider,
       orchestratorModel: selectedModel,
+      forcedAgent: selectedAcpAgent || undefined,
+      model: selectedAcpModel,
       accessMode,
       workMode,
       chatMode: true,
@@ -1146,12 +1295,47 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
       threadId: thread.id,
       orchestratorProvider: selectedProvider,
       orchestratorModel: selectedModel,
+      forcedAgent: selectedAcpAgent || undefined,
+      model: selectedAcpModel,
       accessMode,
       workMode,
       chatMode: true,
       conversationalMode: true,
       answerTaskId: taskId,
     });
+  }
+
+  async function switchAndContinue(message: ChatMessage) {
+    if (!project || !thread || pendingSendCount > 0) return;
+    const source = message.dispatchedAgent ?? message.completion?.agentName ?? thread.agentPreset;
+    const target = acpAgents.find((agent) => agent.command !== source) ?? acpAgents[0];
+    if (!target) {
+      showToast('Add or enable another ACP agent in Settings > Agents before switching.', 'warning', 5000);
+      return;
+    }
+    ensureAgentModels(target.command);
+    const targetModels = liveModelsByAgent[target.command] ?? [];
+    const targetModel = targetModels.find((model) => model.isDefault)?.id
+      ?? targetModels[0]?.id
+      ?? 'default';
+    updateChatThread(thread.id, { agentPreset: target.command, model: targetModel, updatedAt: Date.now() });
+    setPendingSendCount((count) => count + 1);
+    try {
+      await sendChatMessage(project.id, project.root_path, 'Continue where you left off.', {
+        projectName: project.name,
+        threadId: thread.id,
+        orchestratorProvider: selectedProvider,
+        orchestratorModel: selectedModel,
+        forcedAgent: target.command,
+        model: targetModel,
+        accessMode,
+        workMode,
+        chatMode: true,
+        conversationalMode: true,
+      });
+    } finally {
+      setPendingSendCount((count) => Math.max(0, count - 1));
+    }
   }
 
   async function handleFiles(files: FileList | null) {
@@ -1714,6 +1898,8 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
         threadId: target.id,
         orchestratorProvider: selectedProvider,
         orchestratorModel: selectedModel,
+        forcedAgent: selectedAcpAgent || undefined,
+        model: selectedAcpModel,
         accessMode,
         workMode,
         chatMode: true,
@@ -1758,6 +1944,49 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
         </div>
       </div>
 
+      {project && thread && (
+         <aside className="chat-mode-subagents" aria-label="Sub-agents">
+           <div className="chat-mode-subagents-head">
+             <strong>Sub-agents</strong>
+             <input
+               type="text"
+               value={subagentPrompt}
+               onChange={(event) => setSubagentPrompt(event.target.value)}
+               onKeyDown={(event) => { if (event.key === 'Enter') void createSubagentThread(); }}
+               placeholder="Assign work, agent, and model…"
+               aria-label="Sub-agent assignment"
+             />
+             <button
+               type="button"
+               onClick={() => void createSubagentThread()}
+               disabled={!subagentPrompt.trim() || pendingSendCount > 0}
+               title="Create a dedicated chat thread for the selected agent"
+             >
+               + Add
+             </button>
+           </div>
+           {subagentThreads.length === 0 ? (
+             <span className="chat-mode-subagents-empty">Create a focused agent thread without leaving this conversation.</span>
+           ) : (
+             <div className="chat-mode-subagents-list">
+               {subagentThreads.map((child) => (
+                 <button
+                   type="button"
+                   key={child.id}
+                   className={`chat-mode-subagent ${child.id === thread.id ? 'active' : ''}`}
+                   onClick={() => selectChatThread(project.id, child.id)}
+                 >
+                   <span className="chat-mode-subagent-name">{child.agentName || child.title} · {child.model || 'default'}</span>
+                   <span className={`chat-mode-subagent-status ${child.status}`}>
+                     {child.status === 'working' ? 'Working' : child.status === 'needs-input' ? 'Needs input' : child.status === 'failed' ? 'Failed' : 'Idle'}
+                   </span>
+                 </button>
+               ))}
+             </div>
+           )}
+         </aside>
+      )}
+
       <div className={`chat-mode-content-stack${messages.length === 0 ? ' is-empty' : ''}`}>
         <div className={`chat-mode-body${messages.length === 0 ? ' is-empty' : ''}`}>
           <div ref={scrollRef} className={`chat-mode-transcript${messages.length === 0 ? ' is-empty' : ''}`} aria-live="polite">
@@ -1785,11 +2014,16 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               // Finished or Failed and shows the report.
               if (message.type === 'completion') return null;
               if (message.completion?.taskId && cardTaskIds.has(message.completion.taskId)) return null;
-              if (message.type === 'activity' || message.type === 'orchestrator') {
-                // Tool and timing details stay internal; Chat shows the answer,
-                // agent cards, and explicit questions that need the user's reply.
-                return null;
+              if (message.type === 'activity') {
+                return (
+                  <div key={message.id} className="chat-mode-activity-card" role="status">
+                    <span className="chat-mode-activity-dot" aria-hidden="true" />
+                    <span>{message.text}</span>
+                    <time>{formatTime(message.ts)}</time>
+                  </div>
+                );
               }
+              if (message.type === 'orchestrator') return null;
 
               return (
                 <article key={message.id} className={`chat-mode-message ${message.role}`}>
@@ -1898,6 +2132,16 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                     <div className={`chat-mode-completion ${message.completion.status}`}>
                       <strong>{message.completion.taskTitle}</strong>
                       <span>{message.completion.summary || message.completion.reason || statusLabel(message.completion.status)}</span>
+                      {isUsageLimitFailure(message) && acpAgents.length > 1 && (
+                        <button
+                          type="button"
+                          className="chat-mode-handoff-action"
+                          onClick={() => void switchAndContinue(message)}
+                          disabled={pendingSendCount > 0 || thread?.status === 'working'}
+                        >
+                          Switch agent and continue
+                        </button>
+                      )}
                     </div>
                   )}
                   {!message.pending && (
@@ -1923,6 +2167,24 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
             })}
           </div>
         </div>
+
+        {thread?.handoffs?.length ? (
+          <div className="chat-mode-handoff-history" aria-label="Agent handoff history">
+            <div className="chat-mode-handoff-history-title">Agent handoffs</div>
+            {thread.handoffs.slice(-5).map((handoff) => (
+              <div className={`chat-mode-handoff-row ${handoff.status}`} key={handoff.id}>
+                <span>{handoff.sourceAgent} → {handoff.targetAgent}</span>
+                <small>
+                  {handoff.status === 'delivered'
+                    ? 'Context delivered'
+                    : handoff.status === 'failed'
+                      ? handoff.failureReason ?? 'Delivery failed'
+                      : 'Delivering context…'}
+                </small>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         <div className="chat-mode-composer-area">
           {turnTicker && turnTicker.threadId === thread?.id && turnTicker.items.length > 0 && (() => {
@@ -2110,36 +2372,25 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
           <div className="chat-mode-composer-footer">
             <div className="chat-mode-composer-settings">
               <ChatAgentModelPicker
-                agents={orchestratorProviders.map((entry) => ({ command: entry.id, name: entry.label }))}
-                provider={selectedProvider}
-                model={selectedModel}
-                modelsFor={(provider) => {
-                  const def = getProviderDef(provider as AiProviderId);
-                  const live = liveModelsByProvider[provider] ?? [];
-                  return (live.length ? live : def.models);
-                }}
-                loadingProvider={loadingModelsFor}
+                agents={acpAgents}
+                provider={selectedAcpAgent}
+                model={selectedAcpModel}
+                modelsFor={(command) => liveModelsByAgent[command] ?? [{ id: 'default', label: 'CLI default', description: 'Use the agent’s configured model.' }]}
+                loadingProvider={loadingAgentModelsFor}
                 boundarySelector=".chat-mode-panel"
-                onPreviewProvider={(provider) => {
-                  // Ask again each time: a model that refused an image this
-                  // session is text-only now, and its icon should say so.
-                  forgetModelVision(provider);
-                  refreshLiveModels(provider as AiProviderId);
-                }}
-                onRefresh={(provider) => ensureLiveModels(provider as AiProviderId, true)}
-                renderEngineIcon={(command, name) => <ProviderBrandMark id={command} label={name} />}
-                renderModelBadges={(provider, modelId, modelIds) => (
-                  <ModelCapabilityIcons provider={provider} model={modelId} siblings={modelIds} />
-                )}
-                onChange={(provider, model) => {
+                onPreviewProvider={(command) => ensureAgentModels(command)}
+                onRefresh={(command) => ensureAgentModels(command, true)}
+                onChange={(command, model) => {
                   const target = ensureConversationThread();
-                  if (!target || !providerIds.has(provider as AiProviderId)) return;
-                  const nextProvider = provider as AiProviderId;
+                  if (!target) return;
                   clearPendingNewThreadSettings(target.projectId);
-                  updateChatThread(target.id, { provider: nextProvider, model, updatedAt: Date.now() });
-                  aiProvider.set(nextProvider);
-                  setAiModel(nextProvider, model);
-                  ensureLiveModels(nextProvider);
+                  updateChatThread(target.id, {
+                    agentPreset: command,
+                    agentName: acpAgents.find((agent) => agent.command === command)?.name ?? command,
+                    model,
+                    updatedAt: Date.now(),
+                  });
+                  ensureAgentModels(command);
                 }}
                 disabled={!thread && !standalone}
               />

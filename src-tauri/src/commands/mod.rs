@@ -1,4 +1,5 @@
 pub mod activity_stats;
+pub mod acp;
 pub mod agent_accounts;
 pub mod agent_models;
 pub mod agent_probe;

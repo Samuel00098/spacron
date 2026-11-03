@@ -7,7 +7,7 @@ import { mcpServers } from '$lib/stores/settings';
 import type { McpServer } from '$lib/services/mcp-servers';
 import { activeBrainToolDefs, brainToolProfile, buildBrainToolsPrompt } from './brain-tools';
 import { validateToolCall } from './agent-transport';
-import { describeMcpTool, findMcpServer, syncChatMcpServers } from './mcp-client';
+import { acpMcpServers, describeMcpTool, findMcpServer, syncChatMcpServers } from './mcp-client';
 
 const server = (over: Partial<McpServer>): McpServer => ({
   id: 'a', name: 'Linear', transport: 'http', url: 'https://mcp.linear.app/mcp', enabled: true, ...over,
@@ -28,7 +28,6 @@ describe('chat MCP servers', () => {
     syncChatMcpServers([server({})]);
     expect(activeBrainToolDefs().map((d) => d.name)).toEqual(expect.arrayContaining(['mcp_list_tools', 'mcp_call_tool']));
     expect(buildBrainToolsPrompt()).toContain('"Linear"');
-    // Offered in the read-only profile too; the executor holds it to read-only tools.
     expect(brainToolProfile('ask').allowed.has('mcp_call_tool')).toBe(true);
   });
 
@@ -56,6 +55,19 @@ describe('chat MCP servers', () => {
       inputSchema: { type: 'object', properties: { title: { type: 'string', description: 'Title' }, labels: { type: ['array', 'null'] } }, required: ['title'] },
     });
     expect(text).toBe('- create_issue: Create an issue\n    title (required): string - Title\n    labels: array|null');
+  });
+
+  it('converts enabled stdio and remote servers for ACP sessions', async () => {
+    const servers = [
+      server({ name: 'Local', transport: 'stdio', command: 'my-mcp', args: ['--safe'], env: { TOKEN: 'x' } }),
+      server({ name: 'Remote', transport: 'http', url: 'https://example.test/mcp', headers: { Authorization: 'test-token' } }),
+    ];
+    mcpServers.set(servers);
+    syncChatMcpServers(servers);
+    await expect(acpMcpServers()).resolves.toEqual([
+      { name: 'Local', command: 'my-mcp', args: ['--safe'], env: [{ name: 'TOKEN', value: 'x' }] },
+      { type: 'http', name: 'Remote', url: 'https://example.test/mcp', headers: [{ name: 'Authorization', value: 'test-token' }] },
+    ]);
   });
 
   it('accepts tool arguments as an object or as JSON text', () => {

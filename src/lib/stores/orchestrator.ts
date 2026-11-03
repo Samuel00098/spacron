@@ -107,6 +107,8 @@ import type { HookSignal } from '$lib/services/orchestrator/agent-hook-signals';
 import { effectiveReasoningEffort } from '$lib/services/orchestrator/reasoning-levels';
 import { estimateFileOverlap } from '$lib/services/jev';
 import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
+import { buildChatContextHandoff, lastDispatchedChatAgent } from '$lib/services/chat-context-handoff';
+import { decideChatProviderTransition } from '$lib/services/chat-provider-transition';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { agentTurnStates, noteAgentTurnEnded, turnEndWasCounted } from '$lib/stores/agentTurnState';
 import { getSessionHeaderSummary } from '$lib/stores/terminal';
@@ -184,6 +186,8 @@ import {
   removeThreadMessagesFrom,
   removeThreadMessage,
   updateChatThread,
+  recordChatHandoff,
+  updateChatHandoff,
   setChatTurnTicker,
   advanceChatTurnTicker,
   clearChatTurnTicker,
@@ -194,6 +198,36 @@ import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/s
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
 import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
+import { isNativeAcpCommand } from '$lib/services/acp-capabilities';
+import {
+  authenticateAcp,
+  createAcpNativeSession,
+  initializeAcp,
+  loadAcpNativeSession,
+  openAcpSession,
+  promptAcpNativeSession,
+  resumeAcpNativeSession,
+  setAcpSessionModel,
+  waitForAcpReplayIdle,
+  type AcpServerRequest,
+  type AcpSession,
+} from '$lib/services/acp-transport';
+import { acpMcpServers } from '$lib/services/orchestrator/mcp-client';
+import { normalizeAcpUpdate } from '$lib/services/acp-protocol';
+import { activityFromAcpUpdate } from '$lib/services/acp-activity';
+import { openPty, type PtySession } from '$lib/services/pty-bridge';
+
+type AcpApprovalWaiter = {
+  respond: (result: Record<string, unknown>, error?: Record<string, unknown>) => Promise<void>;
+  options: Array<{ id: string; label: string; value?: string }>;
+  threadId: string;
+};
+const acpApprovalWaiters = new Map<string, AcpApprovalWaiter>();
+const acpTerminals = new Map<string, { session: PtySession; threadId: string }>();
+const activeAcpTurns = new Map<string, {
+  session: { notify(method: string, params: Record<string, unknown>): Promise<void> };
+  sessionId?: string;
+}>();
 import {
   getProjectMemoryLines,
   loadProjectMemory,
@@ -271,6 +305,136 @@ export const orchestratorTasks = writable<OrchestratorTask[]>([]);
 
 export function getProjectOrchestratorTasks(projectId: string) {
   return derived(orchestratorTasks, ($all) => $all.filter((t) => t.projectId === projectId));
+}
+
+function acpRequestString(params: Record<string, unknown>, key: string): string {
+  const value = params[key];
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`ACP request is missing '${key}'`);
+  return value;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function handleAcpClientRequest(
+  request: AcpServerRequest,
+  session: AcpSession,
+  threadId: string,
+  rootPath: string,
+): Promise<void> {
+  const params = request.params ?? {};
+  try {
+    switch (request.method) {
+      case 'fs/read_text_file':
+        await session.respond(request.requestId, {
+          content: await invoke<string>('fs_read_file', { path: acpRequestString(params, 'path') }),
+        });
+        return;
+      case 'fs/write_text_file':
+        await invoke('fs_write_file', {
+          path: acpRequestString(params, 'path'),
+          content: typeof params.content === 'string' ? params.content : '',
+        });
+        await session.respond(request.requestId, {});
+        return;
+      case 'terminal/create': {
+        const terminalId = `acp-terminal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const cwd = typeof params.cwd === 'string' && params.cwd.trim() ? params.cwd : rootPath;
+        const command = typeof params.command === 'string' ? params.command : '';
+        const args = Array.isArray(params.args) ? params.args.filter((arg): arg is string => typeof arg === 'string') : [];
+        const commandLine = [command, ...args].filter(Boolean).map((part) => /[\s"]/u.test(part) ? `"${part.replace(/"/g, '\\"')}"` : part).join(' ');
+        const pty = await openPty(120, 32, {
+          onData: (bytes) => {
+            void session.notify('terminal/output', { terminalId, output: bytesToBase64(bytes) }).catch(() => {});
+          },
+          onExit: (code) => {
+            void session.notify('terminal/exit', { terminalId, exitCode: code }).catch(() => {});
+          },
+        }, cwd);
+        acpTerminals.set(terminalId, { session: pty, threadId });
+        if (commandLine) await pty.write(`${commandLine}\n`);
+        await session.respond(request.requestId, { terminalId });
+        return;
+      }
+      case 'terminal/write': {
+        const terminalId = acpRequestString(params, 'terminalId');
+        const terminal = acpTerminals.get(terminalId);
+        if (!terminal || terminal.threadId !== threadId) throw new Error('ACP terminal session not found');
+        await terminal.session.write(typeof params.data === 'string' ? params.data : '');
+        await session.respond(request.requestId, {});
+        return;
+      }
+      case 'terminal/resize': {
+        const terminalId = acpRequestString(params, 'terminalId');
+        const terminal = acpTerminals.get(terminalId);
+        if (!terminal || terminal.threadId !== threadId) throw new Error('ACP terminal session not found');
+        const cols = typeof params.cols === 'number' ? params.cols : 120;
+        const rows = typeof params.rows === 'number' ? params.rows : 32;
+        await terminal.session.resize(cols, rows);
+        await session.respond(request.requestId, {});
+        return;
+      }
+      case 'terminal/release': {
+        const terminalId = acpRequestString(params, 'terminalId');
+        const terminal = acpTerminals.get(terminalId);
+        if (terminal?.threadId === threadId) {
+          acpTerminals.delete(terminalId);
+          await terminal.session.close();
+        }
+        await session.respond(request.requestId, {});
+        return;
+      }
+      case 'mcp/list_tools': {
+        const serverName = typeof params.server === 'string'
+          ? params.server
+          : acpRequestString(params, 'serverName');
+        const server = findMcpServer(serverName);
+        if (!server) throw new Error(`MCP server not found: ${serverName}`);
+        const tools = await listMcpTools(server);
+        await session.respond(request.requestId, {
+          tools: tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          })),
+        });
+        return;
+      }
+      case 'mcp/call_tool': {
+        const serverName = typeof params.server === 'string' ? params.server : String(params.serverName ?? '');
+        const toolName = acpRequestString(params, 'tool');
+        const server = findMcpServer(serverName);
+        if (!server) throw new Error(`MCP server not found: ${serverName}`);
+        const result = await callMcpTool(
+          server,
+          toolName,
+          params.arguments && typeof params.arguments === 'object'
+            ? params.arguments as Record<string, unknown>
+            : {},
+        );
+        await session.respond(request.requestId, {
+          content: [{ type: 'text', text: result.text }],
+          isError: result.isError,
+        });
+        return;
+      }
+      default:
+        await session.respond(request.requestId, {}, {
+          code: -32601,
+          message: `Unsupported ACP request: ${request.method}`,
+        });
+    }
+  } catch (error) {
+    await session.respond(request.requestId, {}, {
+      code: -32001,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /** Read durable task history without loading the rest of the orchestrator runtime. */
@@ -1704,6 +1868,7 @@ function sendGoalToLeasedTask(
   agentCommand: string,
   watchTurn: boolean,
   chatThreadId?: string,
+  handoffId?: string | null,
 ): void {
   void (async () => {
     try {
@@ -1720,11 +1885,23 @@ function sendGoalToLeasedTask(
         shouldContinue: () => leasedSessionLive(id, sessionId),
       });
       if (!sent) {
+        if (handoffId && chatThreadId) {
+          updateChatHandoff(chatThreadId, handoffId, {
+            status: 'failed',
+            failureReason: 'The replacement agent did not accept the handoff prompt.',
+          });
+        }
         patchTask(id, (current) => current.status === 'in-progress'
           ? { ...current, status: 'failed', failureReason: 'Could not confirm that the agent accepted the goal.' }
           : current
         );
         return;
+      }
+      if (handoffId && chatThreadId) {
+        updateChatHandoff(chatThreadId, handoffId, {
+          status: 'delivered',
+          deliveredAt: Date.now(),
+        });
       }
       // Chat owns one watcher, armed before delivery so an immediate report cannot be lost.
       patchTask(id, (current) =>
@@ -2128,6 +2305,20 @@ async function runHandover(
     reason,
     history: (briefTask.migrations ?? []).slice(0, -1),
   });
+  const handoffThreadId = threadIdForTask(task);
+  const usageHandoffId = handoffThreadId
+    ? recordChatHandoff(handoffThreadId, {
+      sourceAgent: fromLabel,
+      targetAgent: toLabel,
+      reason: 'usage-limit',
+      prompt: brief,
+      coveredMessageIds: getThreadMessageSnapshot(handoffThreadId)
+        .filter((message) => !message.pending)
+        .slice(-20)
+        .map((message) => message.id),
+      omittedMessages: Math.max(0, getThreadMessageSnapshot(handoffThreadId).length - 20),
+    })
+    : null;
 
   // Without a worktree, this path is the successor's cwd — and launching an
   // agent into the wrong directory is worse than not launching one. The task is
@@ -2150,6 +2341,12 @@ async function runHandover(
     reasoningEffort: task.agentReasoningEffort,
   });
   if (nextSessionId == null) {
+    if (handoffThreadId && usageHandoffId) {
+      updateChatHandoff(handoffThreadId, usageHandoffId, {
+        status: 'failed',
+        failureReason: `${toLabel} could not be started to take over.`,
+      });
+    }
     patchTask(task.id, (current) => ({
       ...current,
       status: 'blocked',
@@ -2164,7 +2361,7 @@ async function runHandover(
     'dispatch',
     `${toLabel} took over on the same branch with ${Math.round(choice.headroomPercent)}% usage left.`,
   );
-  sendGoalToLeasedTask(task.id, nextSessionId, brief, choice.candidate.command, true);
+  sendGoalToLeasedTask(task.id, nextSessionId, brief, choice.candidate.command, true, handoffThreadId ?? undefined, usageHandoffId);
   // The successor's own headroom is now the one that matters, and the meter is
   // already polling it — no separate watch is armed for the new agent.
   void refreshUsage(true);
@@ -4401,6 +4598,291 @@ type SendChatOpts = {
   resendFromMessageId?: string;
 };
 
+function splitAcpCommand(command: string): { executable: string; args: string[] } {
+  const parts = command.match(/"[^"]*"|'[^']*'|[^\s]+/g) ?? [];
+  const unquote = (value: string) => value.replace(/^["']|["']$/g, '');
+  return {
+    executable: unquote(parts[0] ?? command.trim()),
+    args: parts.slice(1).map(unquote),
+  };
+}
+
+function acpNotificationText(value: unknown): string {
+  const update = normalizeAcpUpdate(value);
+  return update && (update.kind === 'agent_message_chunk' || update.kind === 'agent_thought_chunk')
+    ? update.content ?? ''
+    : '';
+}
+
+function acpActivity(value: unknown): string {
+  const activity = activityFromAcpUpdate(value);
+  return activity ? `${activity.label}${activity.detail ? ` — ${activity.detail}` : ''}` : '';
+}
+
+function acpPermissionRequest(value: Record<string, unknown>): {
+  id: string;
+  prompt: string;
+  options: Array<{ id: string; label: string; value?: string }>;
+} | null {
+  const params = value.params && typeof value.params === 'object'
+    ? value.params as Record<string, unknown>
+    : {};
+  const requestId = value.requestId;
+  if ((typeof requestId !== 'string' && typeof requestId !== 'number') || value.method !== 'session/request_permission') return null;
+  const toolCall = params.toolCall && typeof params.toolCall === 'object'
+    ? params.toolCall as Record<string, unknown>
+    : {};
+  const title = typeof toolCall.title === 'string'
+    ? toolCall.title
+    : typeof params.title === 'string'
+      ? params.title
+      : 'The agent requests permission';
+  const description = typeof toolCall.kind === 'string' ? `\n\n${toolCall.kind}` : '';
+  const options = Array.isArray(params.options)
+    ? params.options.flatMap((option): Array<{ id: string; label: string; value?: string }> => {
+      if (!option || typeof option !== 'object') return [];
+      const entry = option as Record<string, unknown>;
+      const id = typeof entry.optionId === 'string' ? entry.optionId : typeof entry.id === 'string' ? entry.id : '';
+      if (!id) return [];
+      const label = typeof entry.name === 'string' ? entry.name : typeof entry.label === 'string' ? entry.label : id;
+      return [{ id, label, value: id }];
+    })
+    : [];
+  return {
+    id: `acp-approval-${String(requestId)}`,
+    prompt: `${title}${description}`,
+    options: options.length ? options : [
+      { id: 'allow', label: 'Allow', value: 'allow' },
+      { id: 'reject', label: 'Reject', value: 'reject' },
+    ],
+  };
+}
+
+async function sendNativeAcpChatTurn(
+  projectId: string,
+  rootPath: string,
+  text: string,
+  thread: NonNullable<ReturnType<typeof getChatThread>>,
+  agentCommand: string,
+  model: string | null | undefined,
+  attachments: ChatAttachment[],
+): Promise<void> {
+  const userId = msgId();
+  const assistantId = msgId();
+  const basePrompt = attachments.length ? buildAttachmentPrompt(text, attachments) : text;
+  const priorMessages = getThreadMessageSnapshot(thread.id);
+  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, thread.id);
+  appendChat(projectId, {
+    id: assistantId,
+    role: 'assistant',
+    text: '',
+    ts: Date.now(),
+    pending: true,
+    dispatchedAgent: agentCommand,
+  }, thread.id);
+  updateChatThread(thread.id, { status: 'working', updatedAt: Date.now(), lastActivityAt: Date.now() });
+
+  const { executable, args } = splitAcpCommand(agentCommand);
+  const session = await openAcpSession(executable, args, rootPath);
+  activeAcpTurns.set(thread.id, { session });
+  let responseText = '';
+  let stderrText = '';
+  let exited = false;
+  const unlisten = await session.onNotification((notification) => {
+    const chunk = acpNotificationText(notification);
+    if (chunk) {
+      responseText += chunk;
+      patchChat(projectId, assistantId, { text: responseText, pending: true });
+    }
+    const activity = acpActivity(notification);
+    if (activity) {
+      appendChat(projectId, {
+        id: msgId(),
+        role: 'assistant',
+        type: 'activity',
+        text: activity,
+        ts: Date.now(),
+      }, thread.id);
+    }
+  });
+  const unlistenRequest = await session.onRequest(async (request) => {
+    const permission = acpPermissionRequest(request);
+    if (!permission) {
+      await handleAcpClientRequest(request, session, thread.id, rootPath);
+      return;
+    }
+    acpApprovalWaiters.set(permission.id, {
+      respond: (result, error) => session.respond(request.requestId, result, error),
+      options: permission.options,
+      threadId: thread.id,
+    });
+    appendChat(projectId, {
+      id: msgId(),
+      role: 'assistant',
+      type: 'approval',
+      text: '',
+      ts: Date.now(),
+      inlineRequest: {
+        id: permission.id,
+        type: 'approval',
+        prompt: permission.prompt,
+        options: permission.options,
+        taskId: null,
+      },
+    }, thread.id);
+  });
+  const unlistenStderr = await session.onStderr((text) => {
+    stderrText = `${stderrText}${stderrText ? '\n' : ''}${text}`.slice(-4000);
+  });
+  const unlistenExit = await session.onExit(() => {
+    exited = true;
+    if (getChatThread(thread.id)?.status === 'working') {
+      patchChat(projectId, assistantId, {
+        text: `ACP agent exited unexpectedly.${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`,
+        pending: false,
+        type: 'failure',
+      });
+      updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    }
+  });
+  try {
+    const initialization = await initializeAcp(session);
+    const authMethods = Array.isArray(initialization.authMethods)
+      ? initialization.authMethods.flatMap((method): Array<{ id: string; name?: string; type?: string }> => {
+        if (!method || typeof method !== 'object') return [];
+        const entry = method as Record<string, unknown>;
+        return typeof entry.id === 'string'
+          ? [{ id: entry.id, ...(typeof entry.name === 'string' ? { name: entry.name } : {}), ...(typeof entry.type === 'string' ? { type: entry.type } : {}) }]
+          : [];
+      })
+      : [];
+    updateChatThread(thread.id, {
+      nativeAcpCapabilities: {
+        protocolVersion: typeof initialization.protocolVersion === 'number' || typeof initialization.protocolVersion === 'string'
+          ? initialization.protocolVersion
+          : 1,
+        agentInfo: initialization.agentInfo && typeof initialization.agentInfo === 'object'
+          ? initialization.agentInfo as { name?: string; version?: string; title?: string }
+          : null,
+        agentCapabilities: initialization.agentCapabilities && typeof initialization.agentCapabilities === 'object'
+          ? initialization.agentCapabilities as Record<string, unknown>
+          : {},
+        authMethods,
+        negotiatedAt: Date.now(),
+      },
+    });
+    if (authMethods.length > 0) {
+      const method = authMethods[0];
+      appendChat(projectId, {
+        id: msgId(),
+        role: 'assistant',
+        type: 'activity',
+        text: `Authenticating with ${method.name ?? method.id}…`,
+        ts: Date.now(),
+      }, thread.id);
+      await authenticateAcp(session, method.id);
+    }
+    const agentCapabilities = initialization.agentCapabilities;
+    const supportsMcp = Boolean(
+      agentCapabilities && typeof agentCapabilities === 'object'
+      && (agentCapabilities as Record<string, unknown>).mcp,
+    );
+    const configuredMcpServers = supportsMcp ? await acpMcpServers() : [];
+    const supportsLoad = Boolean(
+      agentCapabilities
+      && typeof agentCapabilities === 'object'
+      && (agentCapabilities as Record<string, unknown>).loadSession === true,
+    );
+    const supportsResume = Boolean(
+      agentCapabilities
+      && typeof agentCapabilities === 'object'
+      && (agentCapabilities as Record<string, unknown>).sessionCapabilities
+      && typeof (agentCapabilities as Record<string, unknown>).sessionCapabilities === 'object'
+      && (agentCapabilities as Record<string, unknown>).sessionCapabilities
+      && typeof ((agentCapabilities as Record<string, unknown>).sessionCapabilities as Record<string, unknown>).resume === 'object',
+    );
+    let nativeSessionId = thread.nativeAcpCommand === agentCommand ? thread.nativeAcpSessionId : null;
+    if (nativeSessionId && (thread.nativeAcpModel ?? null) !== (model ?? null)) {
+      const sessionCapabilities = agentCapabilities && typeof agentCapabilities === 'object'
+        ? (agentCapabilities as Record<string, unknown>).sessionCapabilities
+        : null;
+      const supportsModelSwitch = Boolean(
+        sessionCapabilities && typeof sessionCapabilities === 'object'
+        && (sessionCapabilities as Record<string, unknown>).setModel,
+      );
+      if (supportsModelSwitch && model) {
+        try {
+          await setAcpSessionModel(session, nativeSessionId, model);
+        } catch {
+          nativeSessionId = null;
+        }
+      } else {
+        nativeSessionId = null;
+      }
+    }
+    let prompt = basePrompt;
+    if (nativeSessionId) {
+      try {
+        if (supportsLoad) {
+          await loadAcpNativeSession(session, nativeSessionId, rootPath, configuredMcpServers);
+        } else if (supportsResume) {
+          await resumeAcpNativeSession(session, nativeSessionId, rootPath, configuredMcpServers);
+        } else {
+          throw new Error('ACP agent does not advertise session continuation');
+        }
+        await waitForAcpReplayIdle(session);
+      } catch {
+        nativeSessionId = null;
+      }
+    }
+    if (!nativeSessionId) {
+      nativeSessionId = (await createAcpNativeSession(session, rootPath, model, configuredMcpServers)).sessionId;
+      const sourceAgent = lastDispatchedChatAgent(priorMessages) ?? thread.nativeAcpCommand;
+      if (sourceAgent && sourceAgent !== agentCommand) {
+        prompt = buildChatContextHandoff(priorMessages, sourceAgent, agentCommand, basePrompt).prompt;
+      }
+    }
+    updateChatThread(thread.id, {
+      nativeAcpCommand: agentCommand,
+      nativeAcpSessionId: nativeSessionId,
+      nativeAcpModel: model ?? null,
+    });
+    activeAcpTurns.set(thread.id, { session, sessionId: nativeSessionId });
+    await promptAcpNativeSession(session, nativeSessionId, prompt);
+    if (exited) throw new Error('ACP agent exited before completing the prompt');
+    patchChat(projectId, assistantId, {
+      text: responseText || 'The ACP agent completed the turn without returning text.',
+      pending: false,
+    });
+    updateChatThread(thread.id, {
+      status: 'idle',
+      turnEndedAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+    });
+  } catch (error) {
+    patchChat(projectId, assistantId, {
+      text: `Native ACP handoff failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`,
+      pending: false,
+      type: 'failure',
+    });
+    updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+  } finally {
+    await unlisten();
+    await unlistenRequest();
+    await unlistenStderr();
+    await unlistenExit();
+    activeAcpTurns.delete(thread.id);
+    for (const [terminalId, terminal] of acpTerminals) {
+      if (terminal.threadId === thread.id) {
+        acpTerminals.delete(terminalId);
+        await terminal.session.close().catch(() => {});
+      }
+    }
+    await session.close().catch(() => {});
+  }
+}
+
 /**
  * High-signal files to read automatically when the brain answered with only a
  * bare acknowledgement and the user actually asked for project work or an
@@ -5033,6 +5515,8 @@ export function resetOrchestratorCachesForTests(): void {
   chatTurnWatchers.clear();
   dispatchTurnWatchers.clear();
   threadIdByTaskId.clear();
+  for (const terminal of acpTerminals.values()) void terminal.session.close().catch(() => {});
+  acpTerminals.clear();
 }
 const answeringChatRequests = new Set<string>();
 interface BrainJob { owner: string; controller: AbortController; output: string; result?: BrainRunResult; error?: string }
@@ -5071,6 +5555,16 @@ export function stopChatTurn(threadId: string): void {
   for (const job of brainJobs.values()) if (job.owner === threadId && !job.result) job.controller.abort();
   clearChatTurnTicker(threadId);
   const thread = getChatThread(threadId);
+  const activeAcp = activeAcpTurns.get(threadId);
+  if (activeAcp?.sessionId) {
+    void activeAcp.session.notify('session/cancel', { sessionId: activeAcp.sessionId }).catch(() => {});
+  }
+  for (const [requestId, waiter] of acpApprovalWaiters) {
+    if (waiter.threadId === threadId) {
+      void waiter.respond({ outcome: { outcome: 'cancelled' } }).catch(() => {});
+      acpApprovalWaiters.delete(requestId);
+    }
+  }
   if (thread) {
     const pending = getThreadMessageSnapshot(threadId).find((message) => message.pending);
     if (pending) removeThreadMessage(threadId, pending.id);
@@ -5306,6 +5800,30 @@ export async function sendChatMessage(
     }
     return;
   }
+  if (pendingInput?.inlineRequest?.id.startsWith('acp-approval-')) {
+    const waiter = acpApprovalWaiters.get(pendingInput.inlineRequest.id);
+    if (!waiter) {
+      patchChat(projectId, pendingInput.id, {
+        inlineRequest: null,
+        pending: false,
+        type: 'failure',
+        text: 'This ACP approval expired. Send the request again.',
+      });
+      return;
+    }
+    const selected = waiter.options.find((option) =>
+      option.label.toLowerCase() === trimmed.toLowerCase() || option.id.toLowerCase() === trimmed.toLowerCase()
+    ) ?? waiter.options[0];
+    applyResendTruncation();
+    markInlineRequestAnswered(projectId, pendingInput.id, trimmed);
+    acpApprovalWaiters.delete(pendingInput.inlineRequest.id);
+    await waiter.respond({
+      outcome: selected
+        ? { outcome: 'selected', optionId: selected.id }
+        : { outcome: 'cancelled' },
+    });
+    return;
+  }
   const conversationalMode = opts?.conversationalMode === true || opts?.voiceConversation === true;
   const chatMode = opts?.chatMode === true
     || opts?.conversationalMode === true
@@ -5408,14 +5926,35 @@ export async function sendChatMessage(
     if (choice?.kind === 'self') selfOverrideRequest = proposal.request;
   }
 
+  const directAgentRequested = Boolean(opts?.forcedAgent && opts.forcedAgent !== 'auto');
+  if (
+    opts?.chatMode &&
+    chatThread &&
+    opts.forcedAgent &&
+    isNativeAcpCommand(opts.forcedAgent)
+  ) {
+    await sendNativeAcpChatTurn(
+      projectId,
+      rootPath,
+      trimmed,
+      chatThread,
+      opts.forcedAgent,
+      opts.model,
+      opts.attachments ?? [],
+    );
+    return;
+  }
+
   // Recheck the selected connection against the OS keychain for every Chat
   // turn. The startup cache is for UI responsiveness; it must not decide that
   // a key saved during/after startup is missing and prevent ai_complete from
   // ever reaching the Rust-side resolver.
-  const access = await detectAgentAccess({
-    fresh: true,
-    preferredProvider: opts?.orchestratorProvider,
-  });
+  const access = directAgentRequested
+    ? { ready: true, message: '' }
+    : await detectAgentAccess({
+      fresh: true,
+      preferredProvider: opts?.orchestratorProvider,
+    });
   if (!access.ready) {
     const blockedAttachments = opts?.attachments ?? [];
     applyResendTruncation();
@@ -5440,9 +5979,10 @@ export async function sendChatMessage(
   // Atomic swap point for resends: discard the stale tail and append the new
   // turn's messages with no await between, so the transcript paints once.
   applyResendTruncation();
-  const conversation = (chatThreadId
+  const threadMessages = (chatThreadId
     ? getThreadMessageSnapshot(chatThreadId)
-    : (get(chatMessages)[projectId] ?? []))
+    : (get(chatMessages)[projectId] ?? []));
+  const conversation = threadMessages
     .filter((m) => !m.pending && m.type !== 'activity')
     .map((m) => ({ role: m.role, text: m.text || m.completion?.summary || m.completion?.reason || '' })).slice(-12);
   const recentUserMessages = conversation
@@ -5453,11 +5993,19 @@ export async function sendChatMessage(
   const taskPanel = getProjectTaskPanelLines(projectId);
   const mailboxLines = getMailboxLines(projectId);
   const knowledgeLines = getKnowledgeLines(projectId);
-  const llmConfig = await resolveConversationLlmConfig({
-    provider: opts?.orchestratorProvider,
-    model: opts?.orchestratorModel,
-    sessionId: chatThreadId,
-  });
+  const llmConfig = directAgentRequested
+    ? {
+      provider: 'local' as AiProviderId,
+      model: 'default',
+      hasApiKey: false,
+      baseUrl: '',
+      sessionId: chatThreadId,
+    }
+    : await resolveConversationLlmConfig({
+      provider: opts?.orchestratorProvider,
+      model: opts?.orchestratorModel,
+      sessionId: chatThreadId,
+    });
 
   // How much room this model really has, so the prompt and the project
   // snapshot are sized to the chosen brain rather than to one constant. The
@@ -5517,12 +6065,76 @@ export async function sendChatMessage(
   const forced = selectedAgent && selectedAgent !== 'auto'
     ? agents.find((a) => a.command === selectedAgent)
     : null;
+  const existingThreadTask = chatThread?.taskId
+    ? get(orchestratorTasks).find((task) => task.id === chatThread.taskId)
+    : null;
+  const previousAgent = lastDispatchedChatAgent(threadMessages);
+  const existingModel = existingThreadTask?.agentModel ?? chatThread?.model ?? null;
+  const requestedModel = opts?.model?.trim() || null;
+  const transition = forced && existingThreadTask
+    ? decideChatProviderTransition(
+      { agent: existingThreadTask.agentPreset ?? '', model: existingModel, workspace: existingThreadTask.worktree?.path ?? rootPath },
+      { agent: forced.command, model: requestedModel, workspace: existingThreadTask.worktree?.path ?? rootPath },
+    )
+    : 'create_with_handoff';
+  const contextHandoff = forced && previousAgent && transition !== 'reuse'
+    ? buildChatContextHandoff(
+      threadMessages,
+      previousAgent,
+      requestedModel && previousAgent === forced.command ? `${forced.command} (${requestedModel})` : forced.command,
+      trimmed,
+    )
+    : null;
+  const dispatchPrompt = contextHandoff?.prompt ?? promptText;
+  let contextHandoffId: string | null = null;
   if (forced) {
-    result = {
-      reply: `Handing this to ${forced.name}.`,
-        actions: [{ kind: 'spawn', agent: forced.command, prompt: promptText, model: opts?.model?.trim() || null, panelTaskId: opts?.panelTaskId ?? null }],
-      viaLLM: false,
-    };
+    if (
+      existingThreadTask &&
+      transition === 'reuse' &&
+      existingThreadTask.agentPreset === forced.command &&
+      existingThreadTask.name &&
+      existingThreadTask.assignedSessionId != null &&
+      (existingThreadTask.status === 'in-progress' || existingThreadTask.status === 'blocked')
+    ) {
+      result = {
+        reply: `Continuing with ${forced.name}.`,
+        actions: [{ kind: 'send', target: existingThreadTask.name, prompt: promptText }],
+        viaLLM: false,
+      };
+    } else {
+      if (
+        existingThreadTask &&
+        transition !== 'reuse' &&
+        existingThreadTask.assignedSessionId != null &&
+        (existingThreadTask.status === 'in-progress' || existingThreadTask.status === 'blocked')
+      ) {
+        await closeOrchestratorAgent(existingThreadTask.id, `Context handed off to ${forced.name}.`);
+      }
+      if (contextHandoff && chatThreadId) {
+        contextHandoffId = recordChatHandoff(chatThreadId, {
+          sourceAgent: contextHandoff.sourceAgent,
+          targetAgent: contextHandoff.targetAgent,
+          reason: 'agent-switch',
+          prompt: contextHandoff.prompt,
+          coveredMessageIds: contextHandoff.coveredMessageIds,
+          omittedMessages: contextHandoff.omittedMessages,
+        });
+        appendChat(projectId, {
+          id: msgId(),
+          type: 'system',
+          role: 'assistant',
+          text: `Context handed off from ${previousAgent} to ${forced.command}. ${contextHandoff.omittedMessages ? `${contextHandoff.omittedMessages} older message(s) were omitted from the inline handoff.` : 'Recent thread context was included.'}`,
+          ts: Date.now(),
+        }, chatThreadId);
+      }
+      result = {
+        reply: contextHandoff
+          ? `Handing this to ${forced.name} with the existing thread context.`
+          : `Handing this to ${forced.name}.`,
+        actions: [{ kind: 'spawn', agent: forced.command, prompt: dispatchPrompt, model: opts?.model?.trim() || null, panelTaskId: opts?.panelTaskId ?? null }],
+        viaLLM: false,
+      };
+    }
   } else if (approvedDelegation) {
     result = {
       reply: `Handing this to ${approvedDelegation.label.replace(/^(?:Delegate|Send) to /, '')}.`,
@@ -6796,6 +7408,7 @@ export async function sendChatMessage(
     userMessage: trimmed,
     llmConfig,
     selectedAgent: selectedAgent ?? undefined,
+    contextHandoffId,
     turnEvidence,
     turnTodos,
     recentUserMessages,
@@ -6917,6 +7530,7 @@ async function executeRoutedOrchestratorPlan(args: {
   turnTodos?: ChatTurnTodoItem[];
   /** The user's earlier messages in this conversation, for repeat detection. */
   recentUserMessages?: string[];
+  contextHandoffId?: string | null;
 }): Promise<void> {
   let {
     projectId,
@@ -6932,6 +7546,7 @@ async function executeRoutedOrchestratorPlan(args: {
     selectedAgent,
     turnEvidence = [],
     turnTodos = [],
+    contextHandoffId = null,
   } = args;
   const llmConfig = args.llmConfig ?? await resolveConversationLlmConfig({
     provider: opts.orchestratorProvider,
@@ -6974,7 +7589,7 @@ async function executeRoutedOrchestratorPlan(args: {
         .filter(Boolean))]
     : [];
   let reconPromise: ReturnType<typeof reconnoiterMany> | null = null;
-  if (reconCommands.length && rootPath) {
+  if (reconCommands.length && rootPath && !selectedAgent) {
     patchChat(projectId, assistantId, { text: result.reply + '\n\n🔍 Analyzing codebase…' });
     reconPromise = reconnoiterMany(
       reconCommands,
@@ -7136,6 +7751,12 @@ async function executeRoutedOrchestratorPlan(args: {
     if (sessionId == null) {
       // Launch failed (no free terminal pane) — remove the orphaned task record.
       deleteOrchestratorTask(task.id);
+      if (contextHandoffId && chatThreadId) {
+        updateChatHandoff(chatThreadId, contextHandoffId, {
+          status: 'failed',
+          failureReason: 'The replacement agent could not be started.',
+        });
+      }
       showToast(`Could not start ${getAgentDisplayName(action.agent) ?? action.agent}, because no terminal is available`, 'error', 5000);
     } else if (chatThreadId) {
       const launchedTask = get(orchestratorTasks).find((entry) => entry.id === task.id);
@@ -7182,7 +7803,7 @@ async function executeRoutedOrchestratorPlan(args: {
       patchTask(task.id, (t) => ({ ...t, goal }));
     }
     if (rawPrompt) {
-      sendGoalToLeasedTask(task.id, sessionId, goal, agent, watchTurn, chatMode ? chatThreadId : undefined);
+      sendGoalToLeasedTask(task.id, sessionId, goal, agent, watchTurn, chatMode ? chatThreadId : undefined, contextHandoffId);
     } else {
       // No task yet (persistent/named agent) — deliver the standing brief so every
       // spawned agent is briefed (a no-op for rules-file agents, already briefed

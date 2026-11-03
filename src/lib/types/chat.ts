@@ -114,6 +114,30 @@ export interface ChatCompletion {
   taskId?: string | null;
 }
 
+export type ChatHandoffDeliveryStatus = 'pending' | 'delivered' | 'failed';
+
+export interface ChatHandoffRecord {
+  id: string;
+  sourceAgent: string;
+  targetAgent: string;
+  createdAt: number;
+  reason: 'agent-switch' | 'usage-limit';
+  status: ChatHandoffDeliveryStatus;
+  coveredMessageIds: string[];
+  omittedMessages: number;
+  prompt: string;
+  deliveredAt?: number;
+  failureReason?: string;
+}
+
+export interface ChatAcpCapabilities {
+  protocolVersion: number | string;
+  agentInfo?: { name?: string; version?: string; title?: string } | null;
+  agentCapabilities?: Record<string, unknown>;
+  authMethods?: Array<{ id: string; name?: string; type?: string }>;
+  negotiatedAt: number;
+}
+
 /**
  * The thread-aware message contract. `threadId` is required so consumers can
  * never accidentally render another thread's transcript by project alone.
@@ -145,6 +169,17 @@ export interface ChatThread {
   standaloneWorkspaceId?: string;
   agentCheckpoint?: import('../services/orchestrator/agent-transport').AgentCheckpoint;
   agentBudgets?: import('../services/orchestrator/agent-transport').AgentBudgets;
+  /** Durable provider/agent handoff records, retained for retry and audit. */
+  handoffs?: ChatHandoffRecord[];
+  /** Native ACP session identity, when Chat is using an ACP transport. */
+  nativeAcpSessionId?: string | null;
+  nativeAcpCommand?: string | null;
+  nativeAcpModel?: string | null;
+  nativeAcpCapabilities?: ChatAcpCapabilities | null;
+  /** Parent conversation when this is a dedicated sub-agent thread. */
+  parentThreadId?: string | null;
+  subagentTaskId?: string | null;
+  subagentRole?: 'scout' | 'builder' | 'reviewer' | 'custom' | null;
   id: string;
   projectId: string;
   title: string;

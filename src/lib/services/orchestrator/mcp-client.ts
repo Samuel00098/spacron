@@ -26,6 +26,20 @@ export interface McpCallResult {
   isError: boolean;
 }
 
+export type AcpMcpServer =
+  | {
+      type: 'http' | 'sse';
+      name: string;
+      url: string;
+      headers: Array<{ name: string; value: string }>;
+    }
+  | {
+      name: string;
+      command: string;
+      args: string[];
+      env: Array<{ name: string; value: string }>;
+    };
+
 let spacronHttpUrl: string | null = null;
 
 /** A signed-in server is reached through Spacron's proxy, as agents reach it. */
@@ -33,6 +47,7 @@ async function specOf(input: McpServer) {
   if (input.oauth && spacronHttpUrl === null) {
     spacronHttpUrl = await invoke<string>('mcp_server_http_url').catch(() => null);
   }
+
   const [server] = withSignInProxy([input], spacronHttpUrl);
   return {
     transport: server.transport,
@@ -47,6 +62,35 @@ async function specOf(input: McpServer) {
 /** The enabled, valid servers, as the chat may use them. */
 export function chatMcpServers(): McpServer[] {
   return enabledServers(get(mcpServers)).map((entry) => entry.server);
+}
+
+/** Convert the same enabled Settings > MCP/plugin rows used by Chat tools into ACP session config. */
+export async function acpMcpServers(): Promise<AcpMcpServer[]> {
+  const servers = chatMcpServers();
+  const result: AcpMcpServer[] = [];
+  for (const server of servers) {
+    const spec = await specOf(server);
+    if (server.transport === 'stdio' && typeof spec.command === 'string' && spec.command.trim()) {
+      result.push({
+        name: server.name,
+        command: spec.command,
+        args: Array.isArray(spec.args) ? spec.args.map(String) : [],
+        env: Object.entries(spec.env ?? {}).map(([name, value]) => ({ name, value })),
+      });
+    } else if (
+      (server.transport === 'http' || server.transport === 'sse')
+      && typeof spec.url === 'string'
+      && spec.url.trim()
+    ) {
+      result.push({
+        type: server.transport,
+        name: server.name,
+        url: spec.url,
+        headers: Object.entries(spec.headers ?? {}).map(([name, value]) => ({ name, value })),
+      });
+    }
+  }
+  return result;
 }
 
 /** Find a server by the name the model used: exact, then case/slug-insensitive. */

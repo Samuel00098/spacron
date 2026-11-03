@@ -26,6 +26,7 @@ import type {
   ChatReasoningEffort,
   ChatAttachment,
   ChatFileRef,
+  ChatHandoffRecord,
 } from '$lib/types/chat';
 
 export type {
@@ -43,6 +44,7 @@ export type {
   ChatReasoningEffort,
   ChatAttachment,
   ChatFileRef,
+  ChatHandoffRecord,
 } from '$lib/types/chat';
 
 export const CHAT_THREADS_STORAGE_KEY = 'spacron_chat_threads_v1';
@@ -139,6 +141,34 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function copyHandoffs(value: unknown): ChatHandoffRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const records: ChatHandoffRecord[] = [];
+  for (const entry of value.filter(isRecord)) {
+    const id = asString(entry.id);
+    const sourceAgent = asString(entry.sourceAgent);
+    const targetAgent = asString(entry.targetAgent);
+    const prompt = asString(entry.prompt);
+    const createdAt = asNumber(entry.createdAt);
+    const status = entry.status;
+    const reason = entry.reason;
+    const coveredMessageIds = Array.isArray(entry.coveredMessageIds)
+      ? entry.coveredMessageIds.filter((id): id is string => typeof id === 'string')
+      : [];
+    if (!id || !sourceAgent || !targetAgent || !prompt || createdAt == null ||
+      (status !== 'pending' && status !== 'delivered' && status !== 'failed') ||
+      (reason !== 'agent-switch' && reason !== 'usage-limit')) continue;
+    records.push({
+      id, sourceAgent, targetAgent, prompt, createdAt, status, reason,
+      coveredMessageIds,
+      omittedMessages: Math.max(0, Math.floor(asNumber(entry.omittedMessages) ?? 0)),
+      deliveredAt: asNumber(entry.deliveredAt) ?? undefined,
+      failureReason: asString(entry.failureReason) ?? undefined,
+    });
+  }
+  return records.length ? records : undefined;
 }
 
 function asProvider(value: unknown): ChatProviderId | null {
@@ -437,6 +467,21 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
       ? raw.agentCheckpoint as unknown as ChatThread['agentCheckpoint'] : undefined,
     agentBudgets: isRecord(raw.agentBudgets) ? Object.fromEntries(Object.entries(raw.agentBudgets).filter(([key, value]) =>
       (['contextChars', 'outputTokens', 'maxRounds'].includes(key) && typeof value === 'number' && Number.isSafeInteger(value) && value > 0) || (key === 'toolMode' && (value === 'native' || value === 'text')))) : undefined,
+    handoffs: copyHandoffs(raw.handoffs),
+    nativeAcpSessionId: asString(raw.nativeAcpSessionId),
+    nativeAcpCommand: asString(raw.nativeAcpCommand),
+    nativeAcpModel: asString(raw.nativeAcpModel),
+    nativeAcpCapabilities: isRecord(raw.nativeAcpCapabilities)
+      && (typeof raw.nativeAcpCapabilities.protocolVersion === 'number' || typeof raw.nativeAcpCapabilities.protocolVersion === 'string')
+      && typeof raw.nativeAcpCapabilities.negotiatedAt === 'number'
+      ? raw.nativeAcpCapabilities as unknown as ChatThread['nativeAcpCapabilities']
+      : undefined,
+    parentThreadId: asString(raw.parentThreadId),
+    subagentTaskId: asString(raw.subagentTaskId),
+    subagentRole:
+      raw.subagentRole === 'scout' || raw.subagentRole === 'builder' || raw.subagentRole === 'reviewer' || raw.subagentRole === 'custom'
+        ? raw.subagentRole
+        : undefined,
   };
 }
 
@@ -661,7 +706,7 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
 
 export function createChatThread(
   projectId: string,
-  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'workMode' | 'reasoningEffort' | 'taskId' | 'sessionId' | 'standalone' | 'standaloneWorkspaceId'>> = {},
+  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'workMode' | 'reasoningEffort' | 'taskId' | 'sessionId' | 'standalone' | 'standaloneWorkspaceId' | 'parentThreadId' | 'subagentTaskId' | 'subagentRole'>> = {},
   now = Date.now(),
 ): ChatThread {
   const state = get(chatThreadState);
@@ -675,6 +720,9 @@ export function createChatThread(
     projectId,
     standalone: overrides.standalone,
     standaloneWorkspaceId: overrides.standaloneWorkspaceId,
+    parentThreadId: overrides.parentThreadId ?? null,
+    subagentTaskId: overrides.subagentTaskId ?? null,
+    subagentRole: overrides.subagentRole ?? null,
     title: overrides.title?.trim() || 'New thread',
     agentName: overrides.agentName ?? null,
     agentPreset: overrides.agentPreset ?? null,
@@ -709,6 +757,31 @@ export function createChatThread(
   return thread;
 }
 
+export function createSubagentChatThread(
+  projectId: string,
+  parentThreadId: string,
+  input: {
+    name: string;
+    command: string;
+    model?: string | null;
+    role?: ChatThread['subagentRole'];
+    taskId?: string | null;
+  },
+  now = Date.now(),
+): ChatThread {
+  return createChatThread(projectId, {
+    title: input.name.trim() || 'Sub-agent',
+    agentName: input.name.trim() || null,
+    agentPreset: input.command,
+    model: input.model ?? null,
+    parentThreadId,
+    subagentTaskId: input.taskId ?? null,
+    subagentRole: input.role ?? 'custom',
+    accessMode: 'full-access',
+    workMode: 'build',
+  }, now);
+}
+
 export function updateChatThread(threadId: string, patch: Partial<ChatThread>): boolean {
   let updated = false;
   chatThreadState.update((state) => {
@@ -725,6 +798,35 @@ export function updateChatThread(threadId: string, patch: Partial<ChatThread>): 
     return { ...state, threadsByProject };
   });
   return updated;
+}
+
+export function recordChatHandoff(
+  threadId: string,
+  handoff: Omit<ChatHandoffRecord, 'id' | 'createdAt' | 'status'> & Partial<Pick<ChatHandoffRecord, 'id' | 'createdAt' | 'status'>>,
+): string | null {
+  const thread = getChatThread(threadId);
+  if (!thread) return null;
+  const record: ChatHandoffRecord = {
+    ...handoff,
+    id: handoff.id ?? `chat-handoff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: handoff.createdAt ?? Date.now(),
+    status: handoff.status ?? 'pending',
+  };
+  updateChatThread(threadId, { handoffs: [...(thread.handoffs ?? []), record], updatedAt: record.createdAt });
+  return record.id;
+}
+
+export function updateChatHandoff(
+  threadId: string,
+  handoffId: string,
+  patch: Partial<ChatHandoffRecord>,
+): boolean {
+  const thread = getChatThread(threadId);
+  if (!thread?.handoffs?.some((handoff) => handoff.id === handoffId)) return false;
+  return updateChatThread(threadId, {
+    handoffs: thread.handoffs.map((handoff) => handoff.id === handoffId ? { ...handoff, ...patch, id: handoffId } : handoff),
+    updatedAt: Date.now(),
+  });
 }
 
 export function renameChatThread(threadId: string, title: string): boolean {

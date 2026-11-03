@@ -27,6 +27,8 @@ export interface CustomAgent {
    * the paste channel.
    */
   readsRulesFile: boolean;
+  supportsAcp?: boolean;
+  registryId?: string;
 }
 
 const STORAGE_KEY = 'spacron_custom_agents';
@@ -57,6 +59,8 @@ export function addCustomAgent(input: {
   name: string;
   command: string;
   readsRulesFile?: boolean;
+  supportsAcp?: boolean;
+  registryId?: string;
 }): CustomAgent | null {
   const name = input.name.trim();
   const command = input.command.trim();
@@ -72,6 +76,8 @@ export function addCustomAgent(input: {
     name,
     command,
     readsRulesFile: Boolean(input.readsRulesFile),
+    supportsAcp: input.supportsAcp === true,
+    registryId: input.registryId?.trim() || undefined,
   };
   customAgents.update((all) => [...all, agent]);
   return agent;
@@ -79,7 +85,7 @@ export function addCustomAgent(input: {
 
 export function updateCustomAgent(
   id: string,
-  patch: { name?: string; command?: string; readsRulesFile?: boolean }
+  patch: { name?: string; command?: string; readsRulesFile?: boolean; supportsAcp?: boolean; registryId?: string }
 ): void {
   customAgents.update((all) =>
     all.map((a) =>
@@ -90,6 +96,10 @@ export function updateCustomAgent(
             command: patch.command !== undefined ? patch.command.trim() || a.command : a.command,
             readsRulesFile:
               patch.readsRulesFile !== undefined ? patch.readsRulesFile : a.readsRulesFile,
+            supportsAcp:
+              patch.supportsAcp !== undefined ? patch.supportsAcp : a.supportsAcp,
+            registryId:
+              patch.registryId !== undefined ? patch.registryId.trim() || undefined : a.registryId,
           }
         : a
     )
@@ -124,4 +134,3 @@ export function removePresetAgent(command: string): void {
 export function restorePresetAgent(command: string): void {
   removedPresetAgents.update((all) => all.filter((cmd) => cmd !== command));
 }
-

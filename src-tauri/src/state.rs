@@ -1,3 +1,4 @@
+use crate::acp::AcpManager;
 use crate::lsp::bridge::LspBridge;
 use crate::preview::PreviewManager;
 use crate::pty::manager::PtyManager;
@@ -48,6 +49,7 @@ pub struct AppState {
     pub preview_manager: PreviewManager,
     pub write_rate_limiter: WriteRateLimiter,
     pub config_dir: PathBuf,
+    pub acp_manager: Arc<AcpManager>,
 }
 
 impl AppState {
@@ -61,6 +63,7 @@ impl AppState {
             preview_manager: PreviewManager::new(active_project_id, config_dir.clone()),
             write_rate_limiter: WriteRateLimiter::new(),
             config_dir,
+            acp_manager: Arc::new(AcpManager::new()),
         }
     }
 }

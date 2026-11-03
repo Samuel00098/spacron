@@ -146,6 +146,8 @@ import {
   deleteCustomAgent,
   removedPresetAgents,
 } from '$lib/stores/customAgents';
+import { acpRegistryEnabled, acpDisabledCommands, setAcpCommandEnabled } from '$lib/stores/acpRegistry';
+import { commandForAcpDistribution, fetchAcpRegistry, type AcpRegistryAgent } from '$lib/services/acp-registry';
 import { activeTheme } from '$lib/stores/theme';
 import { chooseBackgroundImage, removeBackgroundImage, backgroundImagePresent } from '$lib/stores/background';
 import { getAvailableShells, type ShellInfo } from '$lib/services/pty-bridge';
@@ -1830,10 +1832,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }, [loadLocalModels]);
 
   const $customAgents = useStore(customAgents);
+  const acpRegistryOn = useStore(acpRegistryEnabled);
+  const disabledAcpCommands = useStore(acpDisabledCommands);
 
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentCommand, setNewAgentCommand] = useState('');
   const [newAgentReadsRules, setNewAgentReadsRules] = useState(true);
+  const [newAgentSupportsAcp, setNewAgentSupportsAcp] = useState(false);
+  const [newAgentRegistryId, setNewAgentRegistryId] = useState('');
+  const [acpAgents, setAcpAgents] = useState<AcpRegistryAgent[]>([]);
+  const [acpLoading, setAcpLoading] = useState(false);
+  const [acpError, setAcpError] = useState('');
   const [agentFormError, setAgentFormError] = useState('');
   // Result of asking the entered CLI whether it reads a rules file. `null` means
   // nothing has been checked yet (empty field, or a check in flight).
@@ -2471,7 +2480,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
       setAgentFormError('Give the agent a name and a launch command.');
       return;
     }
-    const created = addCustomAgent({ name, command, readsRulesFile: newAgentReadsRules });
+    const created = addCustomAgent({
+      name,
+      command,
+      readsRulesFile: newAgentReadsRules,
+      supportsAcp: newAgentSupportsAcp,
+      registryId: newAgentRegistryId,
+    });
     if (!created) {
       setAgentFormError('An agent with that launch command already exists.');
       return;
@@ -2479,10 +2494,24 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     setNewAgentName('');
     setNewAgentCommand('');
     setNewAgentReadsRules(true);
+    setNewAgentSupportsAcp(false);
+    setNewAgentRegistryId('');
     setRulesDetection(null);
     rulesTouched.current = false;
     setAgentFormError('');
     showToast(`Added "${created.name}". It's now in the spawn picker.`, 'success');
+  }
+
+  async function loadAcpAgents() {
+    setAcpLoading(true);
+    setAcpError('');
+    try {
+      setAcpAgents(await fetchAcpRegistry());
+    } catch (error) {
+      setAcpError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAcpLoading(false);
+    }
   }
 
   function handleRemoveCustomAgent(id: string, name: string) {
@@ -3780,6 +3809,24 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       />
                       <span>This CLI reads a <code>CLAUDE.md</code> / <code>AGENTS.md</code> rules file at startup</span>
                     </label>
+                    <label className="agent-rules-row">
+                      <input
+                        type="checkbox"
+                        checked={newAgentSupportsAcp}
+                        onChange={(e) => setNewAgentSupportsAcp(e.target.checked)}
+                      />
+                      <span>This command speaks ACP and can be selected by Chat mode</span>
+                    </label>
+                    {newAgentSupportsAcp && (
+                      <input
+                        className="agent-input"
+                        type="text"
+                        placeholder="Optional ACP Registry agent id"
+                        value={newAgentRegistryId}
+                        onChange={(e) => setNewAgentRegistryId(e.target.value)}
+                        maxLength={128}
+                      />
+                    )}
 
                     {/* What the check concluded, and on what basis — a pre-filled
                         box with no stated reason is just a guess the user can't
@@ -3814,6 +3861,77 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <p className="agent-error">{agentFormError}</p>
                     )}
                   </div>
+                </Section>
+
+                <Section title="ACP Registry">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Use ACP-capable agents in Chat mode with their own sign-in and model selection.
+                    Spacron never asks for an API key for these commands; credentials stay with the agent.
+                  </p>
+                  <SettingRow
+                    title="Enable ACP agents in Chat"
+                    detail="When enabled, ACP-capable local commands appear in the Chat agent/model picker."
+                  >
+                    <Toggle
+                      label="Toggle ACP Chat agents"
+                      checked={acpRegistryOn}
+                      onChange={acpRegistryEnabled.set}
+                    />
+                  </SettingRow>
+                  <div className="agent-add-container" style={{ marginTop: '12px' }}>
+                    <div className="agent-name-row" style={{ justifyContent: 'space-between' }}>
+                      <h4 className="agent-add-title">Official registry</h4>
+                      <button className="agent-add-btn" type="button" onClick={() => void loadAcpAgents()} disabled={acpLoading}>
+                        {acpLoading ? 'Loading…' : acpAgents.length ? 'Refresh' : 'Browse registry'}
+                      </button>
+                    </div>
+                    {acpError && <p className="shell-hint" style={{ color: 'var(--error)' }}>{acpError}</p>}
+                    {acpAgents.length > 0 && (
+                      <div className="agent-list">
+                        {acpAgents.slice(0, 40).map((agent) => {
+                          const distribution = agent.distribution[0];
+                          const command = commandForAcpDistribution(distribution);
+                          const added = $customAgents.some((entry) => entry.registryId === agent.id);
+                          return (
+                            <div className="agent-row" key={`${agent.id}:${agent.version}`}>
+                              <span className="agent-row-icon" aria-hidden="true"><AgentBrandMark command={command} name={agent.name} /></span>
+                              <div className="agent-meta">
+                                <div className="agent-name-row"><span className="agent-name">{agent.name}</span></div>
+                                <code className="agent-cmd">{command}</code>
+                              </div>
+                              <button
+                                type="button"
+                                className="agent-add-btn"
+                                disabled={added}
+                                onClick={() => {
+                                  setNewAgentName(agent.name);
+                                  setNewAgentCommand(command);
+                                  setNewAgentRegistryId(agent.id);
+                                  setNewAgentSupportsAcp(true);
+                                  showToast('Review the local command, then add it below.', 'info');
+                                }}
+                              >
+                                {added ? 'Added' : 'Use command'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  {$customAgents.filter((agent) => agent.supportsAcp).map((agent) => (
+                    <SettingRow
+                      key={`acp-${agent.id}`}
+                      title={agent.name}
+                      detail={agent.command}
+                    >
+                      <Toggle
+                        label={`Toggle ACP for ${agent.name}`}
+                        checked={!disabledAcpCommands.includes(agent.command.toLowerCase())}
+                        onChange={(enabled) => setAcpCommandEnabled(agent.command, enabled)}
+                      />
+                    </SettingRow>
+                  ))}
                 </Section>
               </>
             )}

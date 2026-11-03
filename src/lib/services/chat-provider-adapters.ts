@@ -1,4 +1,6 @@
 import type { ChatAccessMode, ChatProviderId, ChatReasoningEffort } from '$lib/types/chat';
+import type { AcpCapabilities } from './acp-capabilities';
+import { getAcpCapabilities } from './acp-capabilities';
 
 export type ChatProviderProtocol =
   | 'codex-app-server'
@@ -36,6 +38,8 @@ export interface AgentProviderCapabilities {
   reasoningEfforts: ChatReasoningEffort[];
   /** Runtime choices are fixed for the current PTY-backed Chat session. */
   sessionModelSwitch: 'unsupported';
+  /** Native ACP continuation is only available for registered ACP transports. */
+  acp?: AcpCapabilities;
   optionDescriptors?: Array<{ id: string; label: string; type: 'select' | 'boolean'; options?: AgentProviderModel[] }>;
 }
 
@@ -352,6 +356,7 @@ export function getAgentProviderCapabilities(command: string, label?: string): A
     accessModes: adapter ? [...adapter.accessModes] : [],
     reasoningEfforts: adapter ? [...adapter.reasoningEfforts] : [],
     sessionModelSwitch: 'unsupported',
+    ...(adapter || command.trim() ? { acp: getAcpCapabilities(command) } : {}),
   };
 }
 
