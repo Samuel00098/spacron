@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getAcpCapabilities, getAcpProviderAdapter, isNativeAcpCommand } from './acp-capabilities';
+import { getAcpCapabilities, getAcpProviderAdapter, isAcpChatCommand, isNativeAcpCommand } from './acp-capabilities';
 
 describe('ACP capabilities', () => {
   it('recognizes native ACP executables', () => {
@@ -16,6 +16,15 @@ describe('ACP capabilities', () => {
     expect(capabilities.sessionHandoff).toBe('prompt-fallback');
     expect(capabilities.supportsSessionLoad).toBe(false);
     expect(capabilities.reason).toContain('native ACP protocol');
+  });
+
+  it('routes registry-installed ACP agents to the native transport', () => {
+    // Nothing in this command says "acp": the registry entry is the evidence.
+    expect(isAcpChatCommand('uvx notes-agent')).toBe(false);
+    expect(isAcpChatCommand('uvx notes-agent', ['uvx notes-agent'])).toBe(true);
+    expect(isAcpChatCommand('uvx notes-agent', ['UVX NOTES-AGENT'])).toBe(true);
+    expect(isAcpChatCommand('uvx notes-agent', ['uvx other-agent'])).toBe(false);
+    expect(isAcpChatCommand(undefined, ['uvx notes-agent'])).toBe(false);
   });
 
   it('uses verified adapter metadata for ACP launch forms', () => {

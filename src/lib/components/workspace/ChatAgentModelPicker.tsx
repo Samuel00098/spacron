@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
+import { get } from '$lib/stores/storeCompat';
+import { favouriteAgentCommands, sortAgentsByFavourite, toggleFavouriteAgent } from '$lib/stores/agentFavourites';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 
 export type ChatEngineOption = { command: string; name: string };
@@ -56,6 +58,10 @@ export default function ChatAgentModelPicker({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  // Pinned agents first: the roster is long once ACP agents are installed, and
+  // the one you keep reaching for should never be at the bottom of the list.
+  const [favourites, setFavourites] = useState<string[]>(() => get(favouriteAgentCommands));
+  const orderedAgents = useMemo(() => sortAgentsByFavourite(agents), [agents, favourites]);
   const selectedAgent = agents.find((agent) => agent.command === provider) ?? null;
   const selectedModel = modelsFor(provider).find((entry) => entry.id === model) ?? null;
   const triggerLabel = selectedModel && selectedModel.id !== 'default'
@@ -183,20 +189,38 @@ export default function ChatAgentModelPicker({
       {open && createPortal(
         <div ref={menuRef} className={`chat-agent-model-menu${dropUp ? ' drop-up' : ''}`} style={menuStyle} role="dialog" aria-label="Provider and model">
           <div className="chat-agent-model-engines" role="listbox" aria-label="Providers">
-            {agents.map((agent) => (
-              <button
-                key={agent.command}
-                type="button"
-                className={agent.command === previewProvider ? 'active' : ''}
-                onClick={() => preview(agent.command)}
-                role="option"
-                aria-selected={agent.command === previewProvider}
-              >
-                <span className="chat-agent-model-mark"><EngineIcon command={agent.command} name={agent.name} /></span>
-                <span>{agent.name}</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
-              </button>
-            ))}
+            {orderedAgents.map((agent) => {
+              const pinned = favourites.includes(agent.command.trim().toLowerCase());
+              return (
+                <div className="chat-agent-model-engine-row" key={agent.command}>
+                  <button
+                    type="button"
+                    className={agent.command === previewProvider ? 'active' : ''}
+                    onClick={() => preview(agent.command)}
+                    role="option"
+                    aria-selected={agent.command === previewProvider}
+                  >
+                    <span className="chat-agent-model-mark"><EngineIcon command={agent.command} name={agent.name} /></span>
+                    <span>{agent.name}</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+                  </button>
+                  <button
+                    type="button"
+                    className={`chat-agent-model-fav${pinned ? ' pinned' : ''}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFavouriteAgent(agent.command);
+                      setFavourites(get(favouriteAgentCommands));
+                    }}
+                    aria-pressed={pinned}
+                    aria-label={pinned ? `Unpin ${agent.name}` : `Pin ${agent.name} to the top`}
+                    title={pinned ? `Unpin ${agent.name}` : `Pin ${agent.name} to the top`}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z" /></svg>
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <div className="chat-agent-model-models-pane">
             <div className="chat-agent-model-models-heading">

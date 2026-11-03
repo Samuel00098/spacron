@@ -551,13 +551,66 @@ function normalizeState(raw: unknown, now = Date.now()): ChatThreadState | null 
   return state;
 }
 
+const PERSIST_MIN_INTERVAL_MS = 300;
+// The module instance that owns the live store. A trailing write from an older
+// instance (hot reload, or a fresh import in tests) must never overwrite newer
+// state, so the timer checks that it still owns the global slot.
+const storeInstance = {};
+const STORE_INSTANCE_KEY = '__spacronChatStoreInstance';
+function claimStoreInstance(): void {
+  (globalThis as unknown as Record<string, unknown>)[STORE_INSTANCE_KEY] = storeInstance;
+}
+function ownsStoreInstance(): boolean {
+  return (globalThis as unknown as Record<string, unknown>)[STORE_INSTANCE_KEY] === storeInstance;
+}
+
+let lastPersistAt = 0;
+let pendingPersist: ReturnType<typeof setTimeout> | null = null;
+let latestState: ChatThreadState | null = null;
+
 function persistState(state: ChatThreadState): void {
   if (typeof window === 'undefined') return;
+  lastPersistAt = Date.now();
   try {
     window.localStorage.setItem(CHAT_THREADS_STORAGE_KEY, JSON.stringify(state, (key, value) => key === 'agentCheckpoint' ? undefined : value));
   } catch {
     // Storage is best effort; live state remains usable when quota is full.
   }
+}
+
+/**
+ * Debounced persistence. Every keystroke in a draft updates the whole store,
+ * and each write serialises every thread and message — writing once per
+ * keystroke is what made long transcripts stutter while typing. A burst now
+ * produces one write at its start and one once the user pauses; the page
+ * lifecycle flushes the newest state so a reload never loses the last keys.
+ */
+function schedulePersist(state: ChatThreadState): void {
+  latestState = state;
+  if (typeof window === 'undefined') return;
+  if (pendingPersist) {
+    clearTimeout(pendingPersist);
+    pendingPersist = null;
+  }
+  const wait = PERSIST_MIN_INTERVAL_MS - (Date.now() - lastPersistAt);
+  if (wait <= 0) {
+    persistState(state);
+    return;
+  }
+  pendingPersist = setTimeout(() => {
+    pendingPersist = null;
+    if (!ownsStoreInstance() || !latestState) return;
+    persistState(latestState);
+  }, wait);
+}
+
+/** Write the newest state now — used when the page is going away. */
+export function flushChatThreadPersistence(): void {
+  if (pendingPersist) {
+    clearTimeout(pendingPersist);
+    pendingPersist = null;
+  }
+  if (latestState) persistState(latestState);
 }
 
 function loadInitialState(): ChatThreadState {
@@ -570,7 +623,16 @@ function loadInitialState(): ChatThreadState {
 
 export const chatThreadState = writable<ChatThreadState>(loadInitialState());
 
-chatThreadState.subscribe((state) => persistState(state));
+claimStoreInstance();
+chatThreadState.subscribe(schedulePersist);
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', flushChatThreadPersistence);
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushChatThreadPersistence();
+  });
+}
 
 // ── Live turn to-do ticker (ephemeral, never persisted) ───────────────────────
 // When a turn starts executing, its plan prints as a small ticker box above the
@@ -962,6 +1024,21 @@ export function renameChatImageAttachments(previousPath: string, path: string, n
   });
 }
 
+/**
+ * Messages that should light the sidebar's unread dot: replies, and anything
+ * that is now waiting on the user. Activity and system rows are progress, not
+ * news, so they never count.
+ */
+function countsAsUnread(message: ChatMessage): boolean {
+  // Progress rows can be attributed to the assistant without being a reply.
+  if (message.type === 'activity' || message.type === 'system' ||
+    message.type === 'orchestrator' || message.type === 'completion') return false;
+  return message.role === 'assistant' ||
+    message.type === 'failure' ||
+    message.type === 'approval' ||
+    message.type === 'input';
+}
+
 export function appendThreadMessage(message: ChatMessage): boolean {
   const state = get(chatThreadState);
   const thread = Object.values(state.threadsByProject).flat().find((entry) => entry.id === message.threadId);
@@ -987,7 +1064,18 @@ export function appendThreadMessage(message: ChatMessage): boolean {
         projectId,
         threads.map((entry) => entry.id === message.threadId
           // Writing in an archived thread brings it back: it is in use again.
-          ? { ...entry, status: nextStatus, updatedAt: message.ts, lastActivityAt: message.ts, ...(message.role === 'user' ? { archived: false } : {}) }
+          ? {
+              ...entry,
+              status: nextStatus,
+              updatedAt: message.ts,
+              lastActivityAt: message.ts,
+              ...(message.role === 'user' ? { archived: false } : {}),
+              // Unread means "something arrived in a thread you are not looking
+              // at". Selecting the thread clears its count.
+              ...(countsAsUnread(message) && current.activeThreadByProject[projectId] !== message.threadId
+                ? { unreadCount: Math.min(99, entry.unreadCount + 1) }
+                : {}),
+            }
           : entry),
       ]),
     ),

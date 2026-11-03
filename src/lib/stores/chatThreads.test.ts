@@ -629,3 +629,38 @@ describe('cleanGeneratedTitle', () => {
     expect(cleanGeneratedTitle('word '.repeat(40)).endsWith('…')).toBe(true);
   });
 });
+
+describe('unread counts', () => {
+  const unreadOf = (threadId: string) => get(chatThreadState).threadsByProject['project-a']
+    .find((thread) => thread.id === threadId)?.unreadCount;
+
+  it('counts replies in threads the user is not looking at, and clears on select', () => {
+    const background = createChatThread('project-a', { title: 'Background' }, 100);
+    const open = createChatThread('project-a', { title: 'Open' }, 200);
+
+    appendThreadMessage({ id: 'bg-reply', threadId: background.id, type: 'agent', role: 'assistant', text: 'Done', ts: 300 });
+    expect(unreadOf(background.id)).toBe(1);
+    // The thread on screen is not "unread" to the person watching it.
+    appendThreadMessage({ id: 'open-reply', threadId: open.id, type: 'agent', role: 'assistant', text: 'Here', ts: 310 });
+    expect(unreadOf(open.id)).toBe(0);
+
+    // Progress rows are not news, but a request waiting on the user is.
+    appendThreadMessage({ id: 'bg-activity', threadId: background.id, type: 'activity', role: 'assistant', text: 'Ran the tests', ts: 320 });
+    expect(unreadOf(background.id)).toBe(1);
+    appendThreadMessage({
+      id: 'bg-input', threadId: background.id, type: 'input', role: 'assistant', text: 'Which file?', ts: 330,
+      inlineRequest: { id: 'req-1', type: 'text', prompt: 'Which file?' },
+    });
+    expect(unreadOf(background.id)).toBe(2);
+
+    expect(selectChatThread('project-a', background.id)).toBe(true);
+    expect(unreadOf(background.id)).toBe(0);
+  });
+
+  it('never counts the user\'s own message as unread elsewhere', () => {
+    const background = createChatThread('project-a', { title: 'Background' }, 100);
+    createChatThread('project-a', { title: 'Open' }, 200);
+    appendThreadMessage({ id: 'bg-user', threadId: background.id, type: 'user', role: 'user', text: 'Do this next', ts: 300 });
+    expect(unreadOf(background.id)).toBe(0);
+  });
+});

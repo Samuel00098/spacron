@@ -694,6 +694,8 @@ A full-panel, thread-aware workspace for working with your AI providers without 
 - **Concurrent prompts & input requests** — keep multiple prompts in flight and surface agent requests for input inside the composer, so a workflow can pause for an answer without losing the conversation.
 - **Live ticker** — the current turn's plan (`update_todos`) is rendered live above the composer.
 - **Thread-aware follow-ups** — a follow-up message goes to the selected thread and keeps the conversation's history and routing.
+- **Grouped tool calls** — a run of tool calls in an agent's turn renders as one expandable card (count, live status, last call), not one row per notification.
+- **ACP agents** — ACP-capable commands (installable from Settings → Agents → ACP Registry) run a native ACP session inside the thread: streamed replies, one live row per tool call, and approval cards answered in place. In the same pane any other local command — a preset like Claude Code or Antigravity, or an agent you added by hand — can be declared ACP with its switch, and Chat then drives it the same way instead of dispatching it as a terminal task.
 
 The orchestrator's conversation lives here too: Chat mode is where you steer the fleet, approve cards, and review each agent's turn.
 

@@ -2995,3 +2995,124 @@
 .chat-mode-subagent-status.failed {
   color: #ef7777;
 }
+
+/* A run of tool calls collapsed into one card: summary line, expandable list. */
+.app-shell .chat-mode-tool-group {
+  margin: 8px 0;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: var(--surface-raised, rgba(255, 255, 255, 0.03));
+  overflow: hidden;
+}
+
+.app-shell .chat-mode-tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-shell .chat-mode-tool-group-head:hover { background: rgba(255, 255, 255, 0.04); }
+
+.app-shell .chat-mode-tool-group-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-tertiary, #8a8f98);
+}
+
+.app-shell .chat-mode-tool-group.working .chat-mode-tool-group-dot {
+  background: var(--accent, #6aa9ff);
+  animation: chat-tool-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes chat-tool-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.app-shell .chat-mode-tool-group-count,
+.app-shell .chat-mode-tool-group-toggle { color: var(--text-tertiary, #8a8f98); font-size: 11px; }
+
+.app-shell .chat-mode-tool-group-last {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary, #b6bcc6);
+  font-size: 12px;
+}
+
+.app-shell .chat-mode-tool-group-list {
+  margin: 0;
+  padding: 4px 12px 10px 29px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-shell .chat-mode-tool-group-list li {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #b6bcc6);
+}
+
+.app-shell .chat-mode-tool-group-check { width: 10px; flex: 0 0 auto; opacity: 0.7; }
+.app-shell .chat-mode-tool-group-list li.working .chat-mode-tool-group-check { color: var(--accent, #6aa9ff); }
+
+/* Agent rows in the picker: selecting on the left, pinning on the right. */
+.chat-agent-model-engine-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.chat-agent-model-engine-row > button[role='option'] {
+  flex: 1;
+  min-width: 0;
+}
+.chat-agent-model-fav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0.55;
+}
+.chat-agent-model-engine-row:hover .chat-agent-model-fav,
+.chat-agent-model-fav.pinned {
+  opacity: 1;
+}
+.chat-agent-model-fav svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.chat-agent-model-fav.pinned {
+  color: var(--accent);
+}
+.chat-agent-model-fav.pinned svg {
+  fill: currentColor;
+}
+.chat-agent-model-fav:hover {
+  background: var(--surface-hover);
+}

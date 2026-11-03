@@ -146,7 +146,18 @@ import {
   deleteCustomAgent,
   removedPresetAgents,
 } from '$lib/stores/customAgents';
-import { acpRegistryEnabled, acpDisabledCommands, setAcpCommandEnabled } from '$lib/stores/acpRegistry';
+import {
+  acpRegistryEnabled,
+  acpDisabledCommands,
+  acpExplicitCommands,
+  acpCommandOverrides,
+  setAcpCommandEnabled,
+  setAcpExplicit,
+  setAcpCommandOverride,
+} from '$lib/stores/acpRegistry';
+import { getAgentRoster } from '$lib/stores/runs';
+import { favouriteAgentCommands, toggleFavouriteAgent } from '$lib/stores/agentFavourites';
+import { isNativeAcpCommand } from '$lib/services/acp-capabilities';
 import { commandForAcpDistribution, fetchAcpRegistry, type AcpRegistryAgent } from '$lib/services/acp-registry';
 import { activeTheme } from '$lib/stores/theme';
 import { chooseBackgroundImage, removeBackgroundImage, backgroundImagePresent } from '$lib/stores/background';
@@ -1658,6 +1669,45 @@ function ShortcutEditor({
   );
 }
 
+/** The same pin the Chat picker shows, so either place can star an agent. */
+function FavouriteStar({ command, name }: { command: string; name: string }) {
+  const favourites = useStore(favouriteAgentCommands);
+  const pinned = favourites.includes(command.trim().toLowerCase());
+  return (
+    <button
+      type="button"
+      onClick={() => toggleFavouriteAgent(command)}
+      aria-pressed={pinned}
+      aria-label={pinned ? `Unpin ${name}` : `Pin ${name} to the top of Chat`}
+      title={pinned ? `Unpin ${name}` : `Pin ${name} to the top of Chat`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '26px',
+        height: '26px',
+        padding: 0,
+        border: 0,
+        borderRadius: '6px',
+        background: 'transparent',
+        color: pinned ? 'var(--accent)' : 'var(--text-tertiary)',
+        cursor: 'pointer',
+        opacity: pinned ? 1 : 0.7,
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path
+          d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"
+          fill={pinned ? 'currentColor' : 'none'}
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 export default function SettingsModal({ onclose }: SettingsModalProps) {
   // Re-render when custom providers load or change: every provider picker
   // here reads `aiProviders`, which they are merged into.
@@ -1832,6 +1882,16 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }, [loadLocalModels]);
 
   const $customAgents = useStore(customAgents);
+  const $acpExplicitCommands = useStore(acpExplicitCommands);
+  const $acpCommandOverrides = useStore(acpCommandOverrides);
+  // Every launchable agent not already listed above as a custom ACP agent. Any
+  // of them can be declared ACP here — that is how a preset like Claude Code or
+  // Antigravity reaches the native ACP transport — and each gets the Chat
+  // enable switch whether it is native ACP or only declared so.
+  const acpRoster = useMemo(
+    () => getAgentRoster().filter((agent) => !$customAgents.some((custom) => custom.supportsAcp && custom.command === agent.command)),
+    [$customAgents],
+  );
   const acpRegistryOn = useStore(acpRegistryEnabled);
   const disabledAcpCommands = useStore(acpDisabledCommands);
 
@@ -3925,13 +3985,53 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       title={agent.name}
                       detail={agent.command}
                     >
-                      <Toggle
-                        label={`Toggle ACP for ${agent.name}`}
-                        checked={!disabledAcpCommands.includes(agent.command.toLowerCase())}
-                        onChange={(enabled) => setAcpCommandEnabled(agent.command, enabled)}
-                      />
+                      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end' }}>
+                        <FavouriteStar command={agent.command} name={agent.name} />
+                        <Toggle
+                          label={`Toggle ACP for ${agent.name}`}
+                          checked={!disabledAcpCommands.includes(agent.command.toLowerCase())}
+                          onChange={(enabled) => setAcpCommandEnabled(agent.command, enabled)}
+                        />
+                      </div>
                     </SettingRow>
                   ))}
+                  {acpRoster.map((agent) => {
+                    const normalized = agent.command.trim().toLowerCase();
+                    const native = isNativeAcpCommand(agent.command);
+                    const explicit = $acpExplicitCommands.includes(normalized);
+                    return (
+                      <SettingRow
+                        key={`acp-roster-${agent.command}`}
+                        title={agent.name}
+                        detail={native ? `${agent.command} · ACP by name` : agent.command}
+                      >
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <FavouriteStar command={agent.command} name={agent.name} />
+                          <input
+                            type="text"
+                            style={{ minWidth: '240px', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text-primary)', fontSize: '12px' }}
+                            value={$acpCommandOverrides[normalized] ?? ''}
+                            placeholder="Local ACP command (e.g. agy_acp_server)"
+                            aria-label={`ACP command for ${agent.name}`}
+                            title="The command Chat launches for this agent over ACP. Clear it to use the agent's own ACP entry point."
+                            onChange={(event) => setAcpCommandOverride(agent.command, event.target.value)}
+                          />
+                          {!native && (
+                            <Toggle
+                              label={`Treat ${agent.name} as an ACP agent`}
+                              checked={explicit}
+                              onChange={(enabled) => setAcpExplicit(agent.command, enabled)}
+                            />
+                          )}
+                          <Toggle
+                            label={`Enable ${agent.name} in Chat`}
+                            checked={!disabledAcpCommands.includes(normalized)}
+                            onChange={(enabled) => setAcpCommandEnabled(agent.command, enabled)}
+                          />
+                        </div>
+                      </SettingRow>
+                    );
+                  })}
                 </Section>
               </>
             )}

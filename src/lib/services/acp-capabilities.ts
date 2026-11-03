@@ -95,3 +95,23 @@ export function getAcpCapabilities(command: string, explicitlyNative = false): A
 export function isNativeAcpCommand(command: string, explicitlyNative = false): boolean {
   return getAcpCapabilities(command, explicitlyNative).nativeProtocol;
 }
+
+/**
+ * Whether a Chat with this agent should use the native ACP transport.
+ *
+ * An agent added from the ACP registry is ACP by definition, even when nothing
+ * in its command says `acp` (`npx -y @google/gemini-cli`, `uvx some-agent`).
+ * The registry entry is the evidence, so those commands are passed in instead
+ * of being guessed from the command string.
+ */
+export function isAcpChatCommand(
+  command: string | null | undefined,
+  registryAcpCommands: readonly string[] = [],
+  explicitlyNative = false,
+): boolean {
+  const trimmed = command?.trim();
+  if (!trimmed) return false;
+  if (isNativeAcpCommand(trimmed, explicitlyNative)) return true;
+  const normalized = trimmed.toLowerCase();
+  return registryAcpCommands.some((entry) => entry.trim().toLowerCase() === normalized);
+}

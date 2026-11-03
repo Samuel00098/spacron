@@ -1,7 +1,12 @@
 export type AcpActivity = {
+  /** Stable per-tool-call id, when the agent sends one, so a status update can
+   *  rewrite the same transcript row instead of appending a duplicate. */
+  id?: string;
   label: string;
   detail?: string;
   kind: 'tool' | 'file' | 'plan' | 'status';
+  /** Status exactly as the agent reported it (`in_progress`, `completed`, …). */
+  status?: string;
 };
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -25,6 +30,11 @@ export function activityFromAcpUpdate(value: unknown): AcpActivity | null {
       ? tool.name
       : kind.replace(/[_-]/g, ' ');
   const status = typeof tool.status === 'string' ? tool.status : undefined;
+  const toolCallId = typeof tool.toolCallId === 'string'
+    ? tool.toolCallId
+    : typeof tool.id === 'string'
+      ? tool.id
+      : undefined;
   const activityKind: AcpActivity['kind'] = kind.includes('file') || path
     ? 'file'
     : kind.includes('plan')
@@ -34,7 +44,9 @@ export function activityFromAcpUpdate(value: unknown): AcpActivity | null {
         : 'status';
   return {
     kind: activityKind,
+    ...(toolCallId ? { id: toolCallId } : {}),
     label: `${name}${status ? ` (${status})` : ''}`,
     ...(path ? { detail: path } : {}),
+    ...(status ? { status } : {}),
   };
 }

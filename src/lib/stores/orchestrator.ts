@@ -198,7 +198,11 @@ import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/s
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
 import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
-import { isNativeAcpCommand } from '$lib/services/acp-capabilities';
+import { isAcpChatCommand } from '$lib/services/acp-capabilities';
+import { resolveAcpLaunchCommand } from '$lib/services/acp-launchers';
+import { isChatDirectMode } from '$lib/stores/chatDirectMode';
+import { getCustomAgents } from '$lib/stores/customAgents';
+import { getAcpCommandOverride, getExplicitAcpCommands } from '$lib/stores/acpRegistry';
 import {
   authenticateAcp,
   createAcpNativeSession,
@@ -214,7 +218,7 @@ import {
 } from '$lib/services/acp-transport';
 import { acpMcpServers } from '$lib/services/orchestrator/mcp-client';
 import { normalizeAcpUpdate } from '$lib/services/acp-protocol';
-import { activityFromAcpUpdate } from '$lib/services/acp-activity';
+import { activityFromAcpUpdate, type AcpActivity } from '$lib/services/acp-activity';
 import { openPty, type PtySession } from '$lib/services/pty-bridge';
 
 type AcpApprovalWaiter = {
@@ -4607,17 +4611,22 @@ function splitAcpCommand(command: string): { executable: string; args: string[] 
   };
 }
 
-function acpNotificationText(value: unknown): string {
+/**
+ * The visible reply text in an ACP notification. Message chunks are the answer;
+ * thought chunks are the agent's reasoning, and folding them into the reply is
+ * what made ACP answers arrive with their own musings stitched in front.
+ */
+function acpReplyText(value: unknown): string {
   const update = normalizeAcpUpdate(value);
-  return update && (update.kind === 'agent_message_chunk' || update.kind === 'agent_thought_chunk')
-    ? update.content ?? ''
-    : '';
+  return update?.kind === 'agent_message_chunk' ? update.content ?? '' : '';
 }
 
-function acpActivity(value: unknown): string {
-  const activity = activityFromAcpUpdate(value);
-  return activity ? `${activity.label}${activity.detail ? ` — ${activity.detail}` : ''}` : '';
+function acpActivity(value: unknown): AcpActivity | null {
+  return activityFromAcpUpdate(value);
 }
+
+/** Status words that mean a tool call is no longer in flight. */
+const ACP_FINISHED_STATUS_RE = /complete|success|done|fail|error|cancel/i;
 
 function acpPermissionRequest(value: Record<string, unknown>): {
   id: string;
@@ -4666,6 +4675,7 @@ async function sendNativeAcpChatTurn(
   agentCommand: string,
   model: string | null | undefined,
   attachments: ChatAttachment[],
+  displayName?: string,
 ): Promise<void> {
   const userId = msgId();
   const assistantId = msgId();
@@ -4678,7 +4688,7 @@ async function sendNativeAcpChatTurn(
     text: '',
     ts: Date.now(),
     pending: true,
-    dispatchedAgent: agentCommand,
+    dispatchedAgent: displayName ?? agentCommand,
   }, thread.id);
   updateChatThread(thread.id, { status: 'working', updatedAt: Date.now(), lastActivityAt: Date.now() });
 
@@ -4688,22 +4698,35 @@ async function sendNativeAcpChatTurn(
   let responseText = '';
   let stderrText = '';
   let exited = false;
+  // One transcript row per tool call, rewritten as its status changes: a
+  // streaming agent sends `tool_call` plus N `tool_call_update` notifications,
+  // and appending each as its own line buried the reply under duplicates.
+  const activityMessageIds = new Map<string, string>();
   const unlisten = await session.onNotification((notification) => {
-    const chunk = acpNotificationText(notification);
+    const chunk = acpReplyText(notification);
     if (chunk) {
       responseText += chunk;
       patchChat(projectId, assistantId, { text: responseText, pending: true });
     }
     const activity = acpActivity(notification);
-    if (activity) {
-      appendChat(projectId, {
-        id: msgId(),
-        role: 'assistant',
-        type: 'activity',
-        text: activity,
-        ts: Date.now(),
-      }, thread.id);
+    if (!activity) return;
+    const label = `${activity.label}${activity.detail ? ` — ${activity.detail}` : ''}`;
+    const finished = Boolean(activity.status && ACP_FINISHED_STATUS_RE.test(activity.status));
+    const existingId = activity.id ? activityMessageIds.get(activity.id) : undefined;
+    if (existingId) {
+      patchChat(projectId, existingId, { text: label, pending: !finished });
+      return;
     }
+    const id = msgId();
+    if (activity.id) activityMessageIds.set(activity.id, id);
+    appendChat(projectId, {
+      id,
+      role: 'assistant',
+      type: 'activity',
+      text: label,
+      pending: !finished,
+      ts: Date.now(),
+    }, thread.id);
   });
   const unlistenRequest = await session.onRequest(async (request) => {
     const permission = acpPermissionRequest(request);
@@ -5927,20 +5950,35 @@ export async function sendChatMessage(
   }
 
   const directAgentRequested = Boolean(opts?.forcedAgent && opts.forcedAgent !== 'auto');
-  if (
-    opts?.chatMode &&
-    chatThread &&
-    opts.forcedAgent &&
-    isNativeAcpCommand(opts.forcedAgent)
-  ) {
+  // An agent added from the ACP registry is ACP by definition, even when its
+  // command says nothing about `acp` (e.g. `npx -y @google/gemini-cli`).
+  const registryAcpCommands = opts?.forcedAgent
+    ? [
+        ...getCustomAgents().filter((agent) => agent.supportsAcp).map((agent) => agent.command),
+        ...getExplicitAcpCommands(),
+      ]
+    : [];
+  // A Chat turn with an ACP agent talks to that agent directly: the message is
+  // the prompt, the agent's own stream is the reply. Presets whose CLI is not
+  // itself ACP (Claude Code, Codex, Cursor, OpenCode, Grok) are launched
+  // through their vendor ACP entry point — see `services/acp-launchers.ts`.
+  // Precedence: an ACP entry point the user set for this agent, then its vendor
+  // launcher, then the command itself when it was declared ACP.
+  const acpOverride = opts?.forcedAgent ? getAcpCommandOverride(opts.forcedAgent) : null;
+  const acpSpawnCommand = acpOverride
+    ?? (opts?.forcedAgent
+      ? resolveAcpLaunchCommand(opts.forcedAgent, isAcpChatCommand(opts.forcedAgent, registryAcpCommands))
+      : null);
+  if (opts?.chatMode && chatThread && acpSpawnCommand) {
     await sendNativeAcpChatTurn(
       projectId,
       rootPath,
       trimmed,
       chatThread,
-      opts.forcedAgent,
+      acpSpawnCommand,
       opts.model,
       opts.attachments ?? [],
+      opts.forcedAgent,
     );
     return;
   }
@@ -5969,6 +6007,73 @@ export async function sendChatMessage(
   }
 
   const agents = getDispatchableAgents(projectId);
+
+  // ── Chat is a direct line to an agent ───────────────────────────────────
+  // T3's model: the message goes to the agent the user picked and that agent's
+  // own reply comes back. No brain, no routing, no narration. ACP agents
+  // returned above; a reachable terminal agent dispatches below. The only
+  // direct path that stays is media (`/image`, `/video`), which calls the
+  // configured provider API rather than a model.
+  if (opts?.chatMode && chatThread && isChatDirectMode() && opts.voiceConversation !== true) {
+    const mediaCommand = /^\/(image|video)\b\s*([\s\S]*)$/i.exec(trimmed);
+    if (mediaCommand) {
+      const kind: MediaKind = mediaCommand[1].toLowerCase() === 'video' ? 'video' : 'image';
+      const mediaPrompt = mediaCommand[2].trim();
+      applyResendTruncation();
+      if (!mediaPrompt) {
+        appendChat(projectId, {
+          id: msgId(),
+          role: 'assistant',
+          text: `Give /${kind} a description, e.g. /${kind} a red bicycle on a pier.`,
+          ts: Date.now(),
+        }, chatThread.id);
+        return;
+      }
+      appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
+      const pendingId = msgId();
+      appendChat(projectId, {
+        id: pendingId,
+        role: 'assistant',
+        text: kind === 'video' ? 'Generating the video…' : 'Generating the image…',
+        ts: Date.now(),
+        pending: true,
+      }, chatThread.id);
+      updateChatThread(chatThread.id, { status: 'working', updatedAt: Date.now(), lastActivityAt: Date.now() });
+      const output = await runMediaGeneration({
+        projectId,
+        threadId: chatThread.id,
+        rootPath,
+        kind,
+        prompt: mediaPrompt,
+        referenceImages: (opts.attachments ?? []).map((file) => file.path).filter((path): path is string => Boolean(path)),
+      });
+      const failed = output.startsWith('error:');
+      patchChat(projectId, pendingId, {
+        text: failed
+          ? `That ${kind} could not be generated: ${output.replace(/^error:\s*/, '')}`
+          : `Here is the ${kind}.`,
+        pending: false,
+      });
+      updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now() });
+      return;
+    }
+    const pick = opts.forcedAgent?.trim();
+    const reachable = Boolean(pick && pick !== 'auto' && agents.some((agent) => agent.command === pick));
+    if (!reachable) {
+      applyResendTruncation();
+      appendChat(projectId, { id: msgId(), role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
+      appendChat(projectId, {
+        id: msgId(),
+        role: 'assistant',
+        text: pick && pick !== 'auto'
+          ? `${pick} isn't running, so there is nothing to send this to. Start it (or pick another agent) in the composer and send again.`
+          : 'Chat talks to one agent directly — pick the agent in the composer. The orchestrator and its plan/approval loop only run in CLI mode now.',
+        ts: Date.now(),
+      }, chatThread.id);
+      updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now() });
+      return;
+    }
+  }
   if (!get(tasks).some((task) => task.projectId === projectId)) {
     try {
       await loadProjectTasks({ id: projectId, root_path: rootPath });

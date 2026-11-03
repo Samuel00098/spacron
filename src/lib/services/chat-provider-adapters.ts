@@ -7,7 +7,8 @@ export type ChatProviderProtocol =
   | 'claude-stream-json'
   | 'cursor-stream-json'
   | 'grok-stream-json'
-  | 'opencode-server';
+  | 'opencode-server'
+  | 'antigravity-cli';
 
 export interface AgentProviderModel {
   id: string;
@@ -317,12 +318,42 @@ const openCodeAdapter: ChatProviderAdapter = {
   parseModels: parseOpenCodeModels,
 };
 
+/**
+ * Antigravity (the `agy` CLI) as a Chat agent.
+ *
+ * Its CLI advertises neither a machine-readable model list nor documented
+ * permission flags in this build, so the adapter deliberately invents nothing:
+ * the model list stays "CLI default" and a tier never becomes an argument the
+ * CLI would reject. Chat still drives it like any other selected agent.
+ */
+const antigravityAdapter: ChatProviderAdapter = {
+  id: 'agy',
+  aliases: ['agy', 'antigravity'],
+  label: 'Antigravity',
+  protocol: 'antigravity-cli',
+  models: [{ id: 'default', label: 'CLI default', description: 'Let Antigravity choose the available model.' }],
+  accessModes: ['supervised', 'full-access'],
+  reasoningEfforts: [],
+  modelCommand: null,
+  buildLaunchOptions(selection) {
+    return {
+      permissionArgs: permissionArgs(selection.accessMode ?? 'inherit', this.accessModes, {
+        supervised: '',
+        'full-access': '',
+      }),
+      runtimeArgs: runtimeModelArgs(safeProviderValue(selection.model)).join(' '),
+    };
+  },
+  parseModels: () => [],
+};
+
 export const CHAT_PROVIDER_ADAPTERS = [
   codexAdapter,
   claudeAdapter,
   cursorAdapter,
   grokAdapter,
   openCodeAdapter,
+  antigravityAdapter,
 ] as const;
 
 const adaptersByAlias = new Map<string, ChatProviderAdapter>();

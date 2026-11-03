@@ -57,7 +57,7 @@ import {
 import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import { getAgentRoster } from '$lib/stores/runs';
 import { getCustomAgents } from '$lib/stores/customAgents';
-import { acpDisabledCommands, acpRegistryEnabled, isAcpEnabled } from '$lib/stores/acpRegistry';
+import { acpCommandOverrides, acpDisabledCommands, acpExplicitCommands, acpRegistryEnabled, isAcpEnabled } from '$lib/stores/acpRegistry';
 import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import AgentLaunchConfigFields from '$lib/components/shared/AgentLaunchConfigFields';
@@ -96,6 +96,7 @@ import { chatScope, showProjectChat, startStandaloneChat } from '$lib/stores/cha
 import { beginProjectFromChat, projectFromChat } from '$lib/services/standalone-chat';
 import type { OrchestratorTask } from '$lib/services/orchestrator/task-lifecycle';
 import ChatFileGlyph from './ChatFileGlyph';
+import { groupChatToolActivity, toolGroupIsWorking } from '$lib/services/chat-tool-groups';
 import { readAloudMessageId, readAloudSupported, stopReadAloud, toggleReadAloud } from '$lib/services/read-aloud';
 import './ChatModePanel.css';
 import './ChatFileViewer.css';
@@ -391,6 +392,40 @@ function InlineCard({ message, onOption }: { message: ChatMessage; onOption?: (l
   return null;
 }
 
+/** One card for a run of tool calls: summary line, then the individual calls. */
+function ToolActivityGroup({ messages }: { messages: ChatMessage[] }) {
+  const [open, setOpen] = useState(false);
+  const working = toolGroupIsWorking(messages);
+  const last = messages[messages.length - 1];
+  return (
+    <div className={`chat-mode-tool-group${working ? ' working' : ''}`} role="status">
+      <button
+        type="button"
+        className="chat-mode-tool-group-head"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-label={open ? 'Hide tool calls' : 'Show tool calls'}
+      >
+        <span className="chat-mode-tool-group-dot" aria-hidden="true" />
+        <strong>{working ? 'Running tools' : 'Tools'}</strong>
+        <span className="chat-mode-tool-group-count">{messages.length} {messages.length === 1 ? 'call' : 'calls'}</span>
+        <span className="chat-mode-tool-group-last">{last?.text}</span>
+        <span className="chat-mode-tool-group-toggle" aria-hidden="true">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <ul className="chat-mode-tool-group-list">
+          {messages.map((message) => (
+            <li key={message.id} className={message.pending ? 'working' : 'done'}>
+              <span className="chat-mode-tool-group-check" aria-hidden="true">{message.pending ? '●' : '✓'}</span>
+              <span>{message.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ChatPlacementDialog({ request }: { request: AgentPlacementRequest }) {
   const [choices, setChoices] = useState<AgentLaunchChoice[]>([]);
   const [modelsByCommand, setModelsByCommand] = useState<Record<string, AgentProviderModel[]>>({});
@@ -566,6 +601,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const threadState = useStore(chatThreadState);
   const acpChatEnabled = useStore(acpRegistryEnabled);
   const disabledAcpCommands = useStore(acpDisabledCommands);
+  const explicitAcpCommands = useStore(acpExplicitCommands);
   const allTasks = useStore(orchestratorTasks);
   const defaultProvider = useStore(aiProvider);
   const defaultModel = useStore(currentAiModel);
@@ -666,6 +702,15 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     [projectThreads, project, threadGroupParentId],
   );
   const messages = thread ? threadState.messagesByThread[thread.id] ?? [] : [];
+  // Runs of consecutive tool rows, keyed by their first message id: the run
+  // renders once, as a single card, and the later rows render nothing.
+  const toolGroups = useMemo(() => {
+    const groups = new Map<string, ChatMessage[]>();
+    for (const group of groupChatToolActivity(messages)) {
+      if (group[0]?.type === 'activity' && group[0]) groups.set(group[0].id, group);
+    }
+    return groups;
+  }, [messages]);
   // The file open in the side viewer: `label` is the path as the conversation
   // names it, `path` the absolute file under this chat's root.
   const [viewerFile, setViewerFile] = useState<{ path: string; label: string } | null>(null);
@@ -806,13 +851,27 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const acpAgents = useMemo(() => {
     void acpChatEnabled;
     void disabledAcpCommands;
+    void acpCommandOverrides;
     const custom = getCustomAgents();
-    const customAcp = new Set(custom.filter((agent) => agent.supportsAcp).map((agent) => agent.command));
+    // ACP membership comes from three places: a custom agent added with the ACP
+    // box ticked, a command the user declared ACP in Settings (which is how
+    // presets like Claude Code or Antigravity get here), and the command's own
+    // name, which the transport settles at send time.
+    const acpCommands = new Set([
+      ...custom.filter((agent) => agent.supportsAcp).map((agent) => agent.command.trim().toLowerCase()),
+      ...explicitAcpCommands.map((command) => command.trim().toLowerCase()),
+    ]);
     return getAgentRoster()
       .filter((agent) => isAcpEnabled(agent.command))
-      .filter((agent) => isChatAgentProvider(agent.command) || customAcp.has(agent.command))
+      .filter((agent) =>
+        isChatAgentProvider(agent.command)
+        || acpCommands.has(agent.command.trim().toLowerCase())
+        // A local ACP command set in Settings makes any roster agent chattable:
+        // Chat launches that entry point, so the agent belongs in the list.
+        || Boolean(get(acpCommandOverrides)[agent.command.trim().toLowerCase()]),
+      )
       .map((agent) => ({ command: agent.command, name: agent.name }));
-  }, [threadState, project?.id, acpChatEnabled, disabledAcpCommands]);
+  }, [threadState, project?.id, acpChatEnabled, disabledAcpCommands, explicitAcpCommands, acpCommandOverrides]);
   const selectedAcpAgent = thread?.agentPreset && acpAgents.some((agent) => agent.command === thread.agentPreset)
     ? thread.agentPreset
     : acpAgents[0]?.command ?? '';
@@ -2015,13 +2074,20 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               if (message.type === 'completion') return null;
               if (message.completion?.taskId && cardTaskIds.has(message.completion.taskId)) return null;
               if (message.type === 'activity') {
-                return (
-                  <div key={message.id} className="chat-mode-activity-card" role="status">
-                    <span className="chat-mode-activity-dot" aria-hidden="true" />
-                    <span>{message.text}</span>
-                    <time>{formatTime(message.ts)}</time>
-                  </div>
-                );
+                const group = toolGroups.get(message.id);
+                // Members of an already-rendered run draw nothing; the run is
+                // one card, not one row per notification.
+                if (!group) return null;
+                if (group.length === 1) {
+                  return (
+                    <div key={message.id} className="chat-mode-activity-card" role="status">
+                      <span className="chat-mode-activity-dot" aria-hidden="true" />
+                      <span>{message.text}</span>
+                      <time>{formatTime(message.ts)}</time>
+                    </div>
+                  );
+                }
+                return <ToolActivityGroup key={`tool-group-${message.id}`} messages={group} />;
               }
               if (message.type === 'orchestrator') return null;
 
@@ -2318,9 +2384,13 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                   void submit();
                 }
               }}
-              placeholder={pendingRequest ? 'Answer the request above…' : (project ? 'Talk to the orchestrator…' : 'Select a project first')}
+              placeholder={pendingRequest
+                ? 'Answer the request above…'
+                : project
+                  ? `Message ${acpAgents.find((agent) => agent.command === selectedAcpAgent)?.name ?? 'the agent'}…`
+                  : 'Select a project first'}
               disabled={!project || Boolean(pendingRequest)}
-              aria-label="Message the orchestrator"
+              aria-label="Message the selected agent"
             />
             {fileMention && fileMatches.length > 0 && (
               <div className="chat-mode-file-mentions" role="listbox" aria-label="Project files">
@@ -2402,7 +2472,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                     { value: 'inherit', label: 'Ask before edit', tooltip: 'Ask before edit: the orchestrator can read and search freely, but stops and asks you before it changes a file or runs a command that could change anything.' },
                   ] as DropdownOption[]}
                   onChange={selectAccess}
-                  ariaLabel="Orchestrator agent access"
+                  ariaLabel="Agent access"
                   disabled={!thread && !standalone}
                   boundarySelector=".chat-mode-panel"
                 />

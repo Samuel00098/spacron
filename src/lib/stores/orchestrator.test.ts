@@ -3,6 +3,11 @@ import { get } from '$lib/stores/storeCompat';
 import { mcpServers } from '$lib/stores/settings';
 import { useCommandPaletteStore } from '$lib/stores/zustand/commandpalette';
 import { layoutControlCommand } from '$lib/stores/layoutControl';
+import { chatDirectAgentMode } from '$lib/stores/chatDirectMode';
+
+// Legacy coverage: the orchestrator's chat routing is still supported when the
+// agent-direct switch is off, and these tests pin that behaviour.
+chatDirectAgentMode.set(false);
 
 const invoke = vi.hoisted(() => vi.fn(async (..._args: any[]): Promise<any> => undefined));
 const routeOrchestratorRequest = vi.hoisted(() => vi.fn());
@@ -3948,5 +3953,34 @@ describe('formatBrainRunResult', () => {
   it('marks timeouts and closed sessions distinctly', () => {
     expect(formatBrainRunResult('sleep 60', { exitCode: null, output: 'partial', timedOut: true, elapsedMs: 90000 })).toContain('TIMEOUT');
     expect(formatBrainRunResult('npm test', { exitCode: null, output: '', timedOut: false, elapsedMs: 400 })).toContain('SESSION CLOSED');
+  });
+});
+
+describe('chat direct mode', () => {
+  beforeEach(() => {
+    chatDirectAgentMode.set(true);
+  });
+  afterEach(() => {
+    chatDirectAgentMode.set(false);
+  });
+
+  it('never falls through to the orchestrator when no agent is picked', async () => {
+    resetChatThreadsForTests();
+    const thread = createChatThread('project-1', { provider: 'deepseek' });
+    routeOrchestratorRequest.mockClear();
+
+    await sendChatMessage('project-1', '/repo', 'hello there', {
+      threadId: thread.id,
+      chatMode: true,
+      conversationalMode: true,
+    });
+
+    // The whole point of the mode: the brain is not consulted, so there is no
+    // routing, no plan and no "handing this to…" narration.
+    expect(routeOrchestratorRequest).not.toHaveBeenCalled();
+    expect(sendAgentPromptDirect).not.toHaveBeenCalled();
+    const messages = get(chatThreadState).messagesByThread[thread.id];
+    expect(messages.some((m) => m.role === 'user' && m.text === 'hello there')).toBe(true);
+    expect(messages.some((m) => m.role === 'assistant' && /pick the agent in the composer/i.test(m.text))).toBe(true);
   });
 });

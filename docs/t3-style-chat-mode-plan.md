@@ -6,6 +6,11 @@ independent conversations inside each project. Each conversation keeps its own
 transcript, draft, AI provider, model, and access policy while sharing the
 project's tasks, agents, memory, and knowledge.
 
+Status update: shipped in Spacron 5.0/5.1. The plan below is kept as the record
+of the design; where the shipped app deliberately diverges from it (the plan
+card, realtime voice, queued messages) the divergence is called out inline and
+summarised under [Post-launch divergences](#post-launch-divergences).
+
 This document describes the step-by-step plan for adding a project-scoped,
 T3-style chat experience to Spacron while preserving the existing CLI mode.
 
@@ -164,7 +169,8 @@ Messages should support more than plain user/assistant text:
 - User message
 - Agent response
 - Orchestrator response
-- Plan card
+- Plan progress (the live `update_todos` ticker above the composer, not a
+  transcript message)
 - Tool/activity event
 - Approval request
 - Input request
@@ -330,6 +336,12 @@ Add a microphone button inside the thread composer:
 The existing global transcription shortcut remains available. The chat button
 is simply a direct entry point that guarantees the composer is the target.
 
+The composer also has a realtime voice button (and the global bare-Alt gesture
+routes into it while Chat mode is active). Voice exchanges stream into the
+thread as normal messages. The original plan kept live voice out of Chat mode;
+that restriction was dropped after launch, so dictation is no longer the only
+voice input here.
+
 ### File attachments
 
 The composer accepts up to five files at a time, with a per-file size limit.
@@ -460,6 +472,24 @@ The work is ready for normal use when:
 - Manual native desktop testing confirms terminal liveness, dictation targeting,
   and file attachment flow.
 
+## Post-launch divergences
+
+These are intentional differences between this plan and the shipped Chat mode.
+Keep them in mind when reading the phases above:
+
+- **The plan card is gone.** A turn's plan is the ephemeral `update_todos`
+  ticker above the composer (`chatTurnTicker`), not a transcript message. Old
+  transcripts that carry a `plan` row have it dropped on load.
+- **Realtime voice lives in the composer.** The plan kept live voice out of Chat
+  mode; it now ships next to dictation, with its exchanges written into the
+  thread.
+- **Queued messages are memory-only.** The per-thread FIFO queue (`chatQueues`)
+  survives stop and lets a message be steered into the running turn, but it is
+  not persisted, so a reload drops what was still waiting.
+- **Unread counts are project-sidebar only.** A reply or request that lands in a
+  thread you are not looking at increments `unreadCount`; selecting the thread
+  clears it. Standalone chats show working state instead of a count.
+
 ## Scope boundaries
 
 The first release will not attempt to:
@@ -467,8 +497,8 @@ The first release will not attempt to:
 - Replace the native CLI experience.
 - Change the existing CLI model or terminal workspace behavior.
 - Parse every provider’s terminal output into perfect structured events.
-- Add realtime voice controls to Chat mode; dictation is the only voice input
-  exposed by the Chat composer.
+- Start a realtime voice call implicitly or from dictation: the composer's
+  voice button is the only way into a live call.
 - Add cross-device thread synchronization.
 - Add complex thread splitting or multi-pane chat layouts.
 - Automatically merge or publish agent work.
