@@ -294,6 +294,7 @@ pub fn run() {
             commands::background::background_image_get,
             commands::background::background_image_clear,
             commands::chatgpt::chatgpt_status,
+            commands::chatgpt::chatgpt_chat_complete,
             commands::custom_providers::custom_providers_list,
             commands::custom_providers::custom_provider_save,
             commands::custom_providers::custom_provider_delete,

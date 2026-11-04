@@ -197,7 +197,7 @@ import { requestAgentPlacement, defaultAgentPlacement, type AgentLaunchChoice, t
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
-import { getAgentProviderLaunchOptions, isChatAgentProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
+import { getAgentProviderLaunchOptions, isChatAgentProvider, isCodexProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
 import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
 import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
@@ -4751,6 +4751,73 @@ async function sendPiRpcChatTurn(
   }
 }
 
+async function sendNativeCodexChatTurn(
+  projectId: string,
+  rootPath: string,
+  text: string,
+  thread: NonNullable<ReturnType<typeof getChatThread>>,
+  model: string | null | undefined,
+  attachments: ChatAttachment[],
+  displayName?: string,
+  reasoningEffort?: ChatReasoningEffort,
+): Promise<void> {
+  const userId = msgId();
+  const assistantId = msgId();
+  const cwd = threadWorkingRoot(thread, rootPath);
+  const basePrompt = attachments.length ? buildAttachmentPrompt(text, attachments) : text;
+  const priorMessages = getThreadMessageSnapshot(thread.id)
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .slice(-40)
+    .map((message) => `${message.role === 'user' ? 'User' : 'Codex'}: ${message.text}`)
+    .join('\n\n');
+  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, thread.id);
+  appendChat(projectId, {
+    id: assistantId,
+    role: 'assistant',
+    text: '',
+    ts: Date.now(),
+    pending: true,
+    dispatchedAgent: displayName ?? 'Codex',
+  }, thread.id);
+  updateChatThread(thread.id, {
+    status: 'working',
+    updatedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    contextUsage: null,
+    turnPlan: null,
+  });
+  try {
+    const response = await invoke<string>('chatgpt_chat_complete', {
+      cwd,
+      model: model ?? 'default',
+      systemPrompt: 'You are Codex in Spacron Chat. Work directly in the current checkout when needed. Reply to the user clearly and concisely. Do not describe yourself as an unavailable tool.',
+      userText: priorMessages
+        ? `Conversation so far:\n${priorMessages}\n\nContinue the conversation and answer this new message:\n${basePrompt}`
+        : basePrompt,
+      images: attachments.map((attachment) => attachment.path).filter((path): path is string => Boolean(path)),
+      effort: reasoningEffort && reasoningEffort !== 'default' ? reasoningEffort : null,
+      accessMode: thread.accessMode,
+    });
+    patchChat(projectId, assistantId, { text: response || 'Codex completed the turn without returning text.', pending: false });
+    updateChatThread(thread.id, {
+      status: 'idle',
+      turnEndedAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+      nativeAcpCommand: null,
+      nativeAcpSessionId: null,
+      nativeAcpModel: model ?? null,
+    });
+  } catch (error) {
+    patchChat(projectId, assistantId, {
+      text: `Native Codex Chat failed: ${error instanceof Error ? error.message : String(error)}`,
+      pending: false,
+      type: 'failure',
+    });
+    updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+  }
+}
+
 async function sendNativeAcpChatTurn(
   projectId: string,
   rootPath: string,
@@ -6126,6 +6193,19 @@ export async function sendChatMessage(
     ?? (opts?.forcedAgent
       ? resolveAcpLaunchCommand(opts.forcedAgent, isAcpChatCommand(opts.forcedAgent, registryAcpCommands))
       : null);
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isCodexProvider(opts.forcedAgent)) {
+    await sendNativeCodexChatTurn(
+      projectId,
+      rootPath,
+      trimmed,
+      chatThread,
+      opts.model,
+      opts.attachments ?? [],
+      opts.forcedAgent,
+      opts.reasoningEffort,
+    );
+    return;
+  }
   if (opts?.chatMode && chatThread && opts.forcedAgent && isPiProvider(opts.forcedAgent)) {
     const piLaunch = getAgentProviderLaunchOptions(opts.forcedAgent, {
       model: opts.model,

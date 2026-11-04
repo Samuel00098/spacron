@@ -332,6 +332,17 @@ fn brain_cwd() -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
+fn completion_cwd(cwd: &str) -> Result<String, String> {
+    let path = std::path::Path::new(cwd);
+    if !path.is_absolute() {
+        return Err("provider_error: Codex Chat cwd must be absolute".to_string());
+    }
+    if !path.is_dir() {
+        return Err("provider_error: Codex Chat cwd does not exist".to_string());
+    }
+    Ok(cwd.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Completion
 // ---------------------------------------------------------------------------
@@ -472,13 +483,28 @@ pub type OnDelta<'a> = Option<&'a (dyn Fn(&str) + Send + Sync)>;
 /// the user's attachments); Codex reads them itself as `localImage` inputs.
 /// The caller has already checked the paths (agent_turn/vision.rs).
 pub async fn complete(model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
+    complete_in_cwd(model, system_prompt, user_text, images, effort, on_delta, &brain_cwd()?).await
+}
+
+pub async fn complete_in_cwd(model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str) -> Result<String, String> {
+    complete_in_cwd_with_access(model, system_prompt, user_text, images, effort, on_delta, cwd, None).await
+}
+
+async fn complete_in_cwd_with_access(model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str, access_mode: Option<&str>) -> Result<String, String> {
+    let (sandbox, approval_policy) = match access_mode {
+        Some("full-access") => ("danger-full-access", "never"),
+        Some("auto") => ("workspace-write", "never"),
+        Some("auto-edits") => ("workspace-write", "on-request"),
+        _ => ("read-only", "on-request"),
+    };
     if let Some(mut warm) = take_warm() {
-        match run_turn(&mut warm.server, model, system_prompt, user_text, images, effort, on_delta).await {
+        match run_turn(&mut warm.server, model, system_prompt, user_text, images, effort, on_delta, cwd, sandbox, approval_policy).await {
             Ok(text) => {
                 warm.turns += 1;
                 keep_warm(warm);
                 return Ok(text);
             }
+
             // A reused server can have died between requests (sleep, update,
             // crash). Only that is retried, on a fresh server; a real provider
             // error from a live server is the answer.
@@ -487,18 +513,45 @@ pub async fn complete(model: &str, system_prompt: &str, user_text: &str, images:
         }
     }
     let mut server = AppServer::start().await?;
-    let text = run_turn(&mut server, model, system_prompt, user_text, images, effort, on_delta).await?;
+    let text = run_turn(&mut server, model, system_prompt, user_text, images, effort, on_delta, cwd, sandbox, approval_policy).await?;
     keep_warm(Warm { server, turns: 1, last_used: Instant::now() });
     Ok(text)
 }
 
-async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>) -> Result<String, String> {
+/// Native Chat entry point for a selected Codex agent. Unlike the
+/// orchestrator-brain path, this runs in the thread's checkout and keeps the
+/// Codex app-server warm between turns.
+#[tauri::command]
+pub async fn chatgpt_chat_complete(
+    cwd: String,
+    model: Option<String>,
+    system_prompt: String,
+    user_text: String,
+    images: Vec<String>,
+    effort: Option<String>,
+    access_mode: Option<String>,
+) -> Result<String, String> {
+    let cwd = completion_cwd(&cwd)?;
+    let image_paths = images.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    complete_in_cwd_with_access(
+        model.as_deref().unwrap_or(DEFAULT_MODEL),
+        &system_prompt,
+        &user_text,
+        &image_paths,
+        effort.as_deref(),
+        None,
+        &cwd,
+        access_mode.as_deref(),
+    ).await
+}
+
+async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str, sandbox: &str, approval_policy: &str) -> Result<String, String> {
     let mut params = json!({
         "ephemeral": true,
         "baseInstructions": format!("{system_prompt}\n\nYou are running as a text model inside Spacron. Your own built-in shell, file, web and image tools are disabled here: never try to use them. Any Spacron tools listed above (such as generate_image) ARE available: call them with the tool_calls JSON described above and Spacron runs them. Never tell the user a listed tool is unavailable. Answer only in the format described above."),
-        "sandbox": "read-only",
-        "approvalPolicy": "never",
-        "cwd": brain_cwd()?,
+        "sandbox": sandbox,
+        "approvalPolicy": approval_policy,
+        "cwd": cwd,
         // Codex's own image tool must be off here: the brain would call it
         // instead of Spacron's `generate_image`, and this loop keeps only the
         // reply text, so the picture is made, charged and never shown.
