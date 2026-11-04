@@ -6453,7 +6453,7 @@ export async function sendChatMessage(
   // returned above; a reachable terminal agent dispatches below. The only
   // direct path that stays is media (`/image`, `/video`), which calls the
   // configured provider API rather than a model.
-  if (opts?.chatMode && chatThread && isChatDirectMode() && opts.voiceConversation !== true) {
+  if (opts?.chatMode && chatThread && isChatDirectMode()) {
     const mediaCommand = /^\/(image|video)\b\s*([\s\S]*)$/i.exec(trimmed);
     if (mediaCommand) {
       const kind: MediaKind = mediaCommand[1].toLowerCase() === 'video' ? 'video' : 'image';
