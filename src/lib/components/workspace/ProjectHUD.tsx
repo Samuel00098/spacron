@@ -205,7 +205,7 @@ interface ProjectItem {
 /** One line in the thread list: a thread, or a collapsible group header. */
 type ThreadListEntry =
   | { kind: 'row'; row: ChatSidebarRow }
-  | { kind: 'label'; group: 'settled' | 'snoozed'; path: string; open: boolean; text: string };
+  | { kind: 'label'; group: 'working' | 'settled' | 'snoozed'; path: string; open: boolean; text: string };
 
 interface ChatSidebarRow {
   id: string;
@@ -828,6 +828,8 @@ export default function ProjectHUD() {
       && typeof row.thread?.snoozedUntil === 'number' && row.thread.snoozedUntil > nowTs;
     const isSettled = (row: ChatSidebarRow) => !row.thread?.archived && Boolean(row.thread?.settledAt);
     const liveChatRows = chatRows.filter((row) => !row.thread?.archived && !isSettled(row) && !isSnoozed(row));
+    const workingChatRows = liveChatRows.filter((row) => row.status === 'working');
+    const idleChatRows = liveChatRows.filter((row) => row.status !== 'working');
     const settledChatRows = chatRows.filter(isSettled);
     const snoozedChatRows = chatRows.filter(isSnoozed);
     const archivedChatRows = chatRows.filter((row) => row.thread?.archived);
@@ -835,7 +837,17 @@ export default function ProjectHUD() {
     const settledOpen = openSettledGroups.has(p.path);
     const snoozedOpen = openSnoozedGroups.has(p.path);
     const threadListEntries: ThreadListEntry[] = [
-      ...liveChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
+      ...(workingChatRows.length > 0 ? [
+        {
+          kind: 'label' as const,
+          group: 'working' as const,
+          path: p.path,
+          open: true,
+          text: `Working (${workingChatRows.length})`,
+        } satisfies ThreadListEntry,
+        ...workingChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
+      ] : []),
+      ...idleChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
       ...(settledChatRows.length > 0 ? [
         {
           kind: 'label' as const,
@@ -1184,7 +1196,9 @@ export default function ProjectHUD() {
                           key={`thread-group-${entry.group}`}
                           type="button"
                           className={`project-threads-archived-toggle${entry.open ? ' open' : ''}`}
-                          onClick={() => toggleThreadGroup(entry.path, entry.group)}
+                          onClick={() => {
+                            if (entry.group !== 'working') toggleThreadGroup(entry.path, entry.group);
+                          }}
                           aria-expanded={entry.open}
                         >
                           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
