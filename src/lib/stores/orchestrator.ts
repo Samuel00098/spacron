@@ -1287,7 +1287,8 @@ async function notifyChatCompletion(
   showToast(
     `${agentName} ${status === 'done' ? 'finished' : status === 'failed' ? 'failed' : 'needs input'}`,
     status === 'done' ? 'success' : status === 'failed' ? 'error' : 'warning',
-    6000
+    6000,
+    true, // notifySystem — ping the OS even when the app is focused or hidden
   );
   if (!get(announceAgentCompletions)) return;
   playNudge(status);
@@ -4419,12 +4420,14 @@ async function runMediaGeneration(options: {
       attachments: [{ id: `generated-${requestId}`, name: result.name, type: mediaMimeType(result.name), size: result.size, path: result.path.replace(/\\/g, '/'), generated: true }],
     }, threadId);
     const noun = kind === 'video' ? 'video' : 'image';
+    await notifyChatCompletion(projectId, rootPath, 'Media Generation', 'done', `Generated ${noun}`);
     return `Generated ${noun} with ${result.provider}, saved at ${result.path} and shown to the user in chat.`
       + (notice ? ' The user was told which provider was used and why.' : '')
       + (result.revisedPrompt ? ` Prompt as drawn: ${result.revisedPrompt}` : '');
   } catch (error) {
     const message = String(error ?? 'generation failed');
     const notice = failureNotice(message, kind);
+    await notifyChatCompletion(projectId, rootPath, 'Media Generation', 'failed');
     if (notice) {
       appendChat(projectId, { id: msgId(), role: 'assistant', text: notice, ts: Date.now() }, threadId);
       return `error: ${message}\nThe user has already been shown this report; do not retry and do not repeat it.`;
@@ -5033,6 +5036,20 @@ async function sendNativeAcpChatTurn(
         taskId: null,
       },
     }, thread.id);
+    // The agent is waiting on the user — if they're away, ping them.
+    void showToast(
+      `${displayName ?? agentCommand} needs your input`,
+      'warning',
+      6000,
+      true,
+    );
+    void postMailboxMessage(projectId, rootPath, {
+      from: displayName ?? agentCommand,
+      to: null,
+      kind: 'note',
+      taskId: null,
+      text: `Needs input: ${permission.prompt}`,
+    });
   });
   const unlistenStderr = await session.onStderr((text) => {
     stderrText = `${stderrText}${stderrText ? '\n' : ''}${text}`.slice(-4000);
