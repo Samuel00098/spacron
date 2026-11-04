@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/TypeScript-5.6-blue?logo=typescript" alt="TypeScript">
 </p>
 
-Spacron is a cross-platform desktop workspace that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, git integration, and a **conversational agent fleet** — all unified inside a single keyboard- and voice-driven window. Tell the orchestrator your goal and it plans the work, edits up to 3 files itself, and delegates the rest to a team of coding CLIs that work in your shared repo — each told explicitly not to touch the others' files. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, sub-second startup.
+Spacron is a cross-platform desktop workspace that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, git integration, and a **conversational agent fleet** — all unified inside a single keyboard- and voice-driven window. Tell the orchestrator your goal and it reads your project, makes small direct edits itself (up to 3 files per task), and delegates larger work to coding CLIs (Claude Code, Codex, Cursor, OpenCode, Muse, and more) over explicit approval cards you accept or decline. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, sub-second startup.
 
 **You are always in control.** Every automated action — an orchestrator edit, a spawned agent, an approval card, a generation — has a plain manual path. Agent work sits on branches you review yourself, nothing runs without your say-so, and all of the classic terminal/editor/preview/git features work exactly the same with zero AI connections configured. See **[Doing It Yourself](docs/FEATURES.md#18-doing-it-yourself)**.
 
@@ -21,7 +21,7 @@ Spacron is a cross-platform desktop workspace that combines a real PTY terminal 
 
 ## ⚡ Key Features
 
-- **Agent Fleet & Orchestration** — A conversational orchestrator that understands your whole project. It plans each goal into 2–4 sub-tasks with disjoint file sets, edits at most 3 files per task itself, and delegates big work to agents over approval cards. The fleet (Claude Code, Codex, Cursor, Antigravity, Grok, OpenCode, Muse, and more) runs live as tiles with `APPROVED`/bounce review gates. Agents default to your shared main repo; per-agent isolated worktrees remain an option.
+- **Agent Fleet & Orchestration** — A conversational orchestrator that reads your whole project. You hand it a goal and it: (1) plans the work into sub-tasks shown on a live plan ticker, (2) edits at most 3 project files itself per task, (3) proposes larger work as an agent hand-off that you must explicitly approve before anything starts, and (4) runs project verification (tests, typecheck, lint, build) after any file change before accepting the turn. Agents (Claude Code, Codex, Cursor, Antigravity, Grok, OpenCode, Muse, and more) run live as fleet tiles with review gates. Agent work lands on isolated branches you review yourself — nothing reaches `main` without your approval.
 - **Native agent adapters** — Claude Code (`claude_chat_complete`), Codex (`chatgpt_chat_complete`), Cursor (`cursor_chat_complete`), OpenCode (`opencode_chat_complete`), and Muse (`muse_chat_complete`) all run through Tauri commands on the Rust side, spawning the user's own CLI. Each captures session IDs for resume, supports `--fork-session` for context handover, and never sees or stores API keys — the user's own CLI auth is used directly.
 - **Hands-off the shared tree** — When several agents work alongside you in the same repo, a standing charter, disjoint file sets, coordinator sequencing, and mailbox file-claims keep them from clobbering each other — never revert changes that aren't yours, commit only the files you changed.
 - **Voice-driven everything** — Tap **left Alt** anywhere for a live speech↔speech conversation; press **F9** to dictate into any field (terminals stay verbatim); the floating prompt bar is voice-first with staged prompts and file drag-and-drop.
@@ -86,7 +86,35 @@ Spacron ships **signed auto-updates**, so it keeps itself current after install.
 
 ---
 
-## 📊 Feature Comparison
+## 🤖 What the orchestrator actually does
+
+Spacron's orchestrator is a conversation you open in **Chat mode** (`Ctrl+Shift+J`) or start from the CLI workspace. It is gated by your approval at every step — nothing runs without your say-so. Here is the exact flow:
+
+### 1. You tell it a goal
+Type or dictate a goal in the composer (`Ctrl+Shift+J`, or `F9` for dictation). The orchestrator reads your project's active files, open panes, current branch, and task board for context.
+
+### 2. It plans and does small work itself
+The orchestrator establishes a todo list (3–6 items) on a live plan ticker. For small changes — at most **3 project files per task** — it edits directly using `edit_file`/`write_file`, then runs the project's verification command (tests, typecheck, lint, or build) and reports the real result. If verification fails, it reports the failure rather than silently proceeding.
+
+### 3. Big work requires your explicit approval
+Work that needs more than 3 files (a new feature, module, refactor, or cross-cutting change) is **not** done by the orchestrator itself. Instead it produces a detailed agent brief (goal, context, requirements, constraints, acceptance criteria, verification steps) as a **delegation proposal**. The app shows you an approval card:
+- **Approve once** — run this hand-off
+- **Always allow** — run this kind of hand-off without re-asking in this conversation
+- **Deny / type a reply** — "no, do this instead", delivered to the running turn as a steer
+
+Only after you approve does the orchestrator spawn the agent (Claude Code, Codex, Cursor, OpenCode, Muse, etc.) on an isolated `thread/<slug>-<short>` worktree branch.
+
+### 4. Agent work is reviewed before merging
+The agent works in its own checkout under `.spacron/worktrees/`. When finished, its changes are staged onto its branch. You review the diff (`git diff main..<branch>`), run tests, then commit in Source Control. Nothing reaches `main` without your explicit commit.
+
+### 5. Turn-completion reporting
+A finished turn produces a card with what changed, verification results, and plan closure. You can undo orchestrator edits ("undo" restores files changed directly by the orchestrator, surviving restarts).
+
+### Approval gates everywhere
+Every operation with side effects raises an approval card first: file writes, shell commands with redirects/substitutions/braces/`, agent spawns, PR creation, generations. Strictly read-only commands run without a card. You can always decline or redirect.
+
+### Agents are optional
+You never have to spawn an agent or talk to the orchestrator — the terminal, editor, preview, and git all work exactly the same with zero AI connections configured.
 
 | Feature | Spacron | VS Code | Warp |
 |---|---|---|---|
@@ -173,6 +201,24 @@ Below are Spacron's default keyboard shortcuts. You can customize them in the se
 | **Transcribe (dictation)** | `F9` | Voice |
 | **Start Preview Proxy** | `Ctrl+Alt+P` | Preview |
 | **Format Document** | `Alt+Shift+F` | Editor |
+
+---
+
+## 📊 Feature Comparison
+
+| Feature | Spacron | VS Code | Warp |
+|---|---|---|---|
+| **Startup Speed** | **Sub-second (Native)** | 3–5 seconds | Fast |
+| **Workspace Shell** | **Tauri 2 (Rust)** | Electron (Node) | Native (Rust) |
+| **Agent Fleet & Orchestration** | **Yes (approval-gated)** | Extensions | No |
+| **Native agent adapters** | **Claude, Codex, Cursor, OpenCode, Muse** | No | No |
+| **Per-provider source control sign-in** | **GitHub / GitLab / Bitbucket / Other** | Extensions | No |
+| **Isolated agent worktrees** | **Yes, per agent/thread** | No | No |
+| **Voice Control** | **Yes (realtime + dictation)** | No | No |
+| **Multi-pane PTY** | **Yes** | Integrated Tab | Primary focus |
+| **Code Editor** | **CodeMirror 6** | Monaco Editor | None |
+| **Port Preview Proxy** | **Yes + DOM Inspector** | Requires extension | None |
+| **Resource Memory** | **~40–80 MB** | ~400–800+ MB | ~150–350 MB |
 
 ---
 
