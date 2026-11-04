@@ -126,20 +126,6 @@ When an agent runs from the terminal, Spacron creates an isolated git worktree o
 4. **No shared-tree collisions** — Parallel agents and the user can all edit simultaneously without overwriting each other, because each writes to its own checkout.
 5. **Review before merge** — When the agent finishes, its work is staged onto its own branch. The user reviews the diff (`git diff main..<branch>`), runs tests, then commits in Source Control — nothing reaches `main` without explicit approval.
 
-### Chat mode vs T3 Code
-
-| Aspect | T3 Code | Spacron Chat mode |
-|---|---|---|
-| **Worktree creation** | Per-thread, isolated checkout | Optional per thread; created on demand |
-| **Branch naming** | Thread-scoped | `thread/<slug>-<short id>`, stable per thread |
-| **Context handover** | Separate thread with session fork | `forkChatThreadFrom` + `claude --fork-session` carries the agent session into the forked thread |
-| **Where work lands** | Stay in thread until user merges | Staged onto agent branch, reviewed, then committed by user |
-| **Cleanup** | Thread closes → worktree removed | `reclaimWorktree` stages pending work first, only removes when nothing is left unstaged |
-| **Main-repo option** | Yes | Yes — agents can run directly in the project root when isolation is skipped |
-
-This is **aligned with T3 Code**: both use separate threads/sessions with explicit context handover rather than mixing sub-agent turns into the same thread. Spacron carries over forked Claude sessions (and cursor/opencode/muse session IDs) so a forked thread resumes the source agent's conversation natively via `--resume`.
-
----
 
 ## 🔔 Notifications
 
