@@ -5799,7 +5799,15 @@ export function stopChatTurn(threadId: string): void {
     void (activePi ?? persistentPi)?.close().catch(() => {});
   }
   if (activeAcp?.sessionId) {
-    void activeAcp.session.notify('session/cancel', { sessionId: activeAcp.sessionId }).catch(() => {});
+    void (async () => {
+      try {
+        await activeAcp.session.notify('session/cancel', { sessionId: activeAcp.sessionId });
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      } catch {
+        // Some ACP v1 agents do not implement cancellation. The turn's
+        // finally block still closes the process, which is the safe fallback.
+      }
+    })();
   }
   for (const [requestId, waiter] of acpApprovalWaiters) {
     if (waiter.threadId === threadId) {

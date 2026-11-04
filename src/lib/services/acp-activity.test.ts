@@ -17,4 +17,16 @@ describe('ACP activity projection', () => {
   it('ignores streamed message chunks', () => {
     expect(activityFromAcpUpdate({ params: { update: { sessionUpdate: 'agent_message_chunk', content: 'hi' } } })).toBeNull();
   });
+
+  it('projects compaction, terminal, and state updates', () => {
+    expect(activityFromAcpUpdate({
+      params: { update: { sessionUpdate: 'compaction_started' } },
+    })).toMatchObject({ kind: 'plan', label: 'Compacting conversation' });
+    expect(activityFromAcpUpdate({
+      params: { update: { sessionUpdate: 'terminal_update', title: 'Running tests', status: 'in_progress' } },
+    })).toMatchObject({ kind: 'tool', label: 'Terminal Running tests (in_progress)' });
+    expect(activityFromAcpUpdate({
+      params: { update: { sessionUpdate: 'state_update', state: 'waiting' } },
+    })).toMatchObject({ kind: 'status', label: 'Agent state: state update' });
+  });
 });
