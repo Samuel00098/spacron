@@ -21,36 +21,20 @@ import {
 import SpectrumVisualizer, { type SpectrumPhase } from './SpectrumVisualizer.tsx';
 import TranscriptionIndicator from './TranscriptionIndicator.tsx';
 import { createAltTapGesture } from '$lib/services/alt-tap-gesture';
-import {
-  isRealtimeVoiceSupported,
-  REALTIME_VOICE_INSTRUCTIONS,
-  startRealtimeVoiceSession,
-  type RealtimeVoiceSession,
-} from '$lib/services/realtime-voice';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import {
-  getRealtimeEngineConfig,
   userShortcuts,
-  voiceConversationEngine,
-  type VoiceConversationEngine,
 } from '$lib/stores/settings';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
-import { interactionMode, requestChatVoiceMode } from '$lib/stores/interactionMode';
+import { interactionMode } from '$lib/stores/interactionMode';
 import {
   orchestratorTasks,
   sendChatMessage,
   chatMessages,
   agentForcedAgent,
-  agentVoiceModeActive,
-  appendVoiceExchangeMessage,
   type ChatMessage,
 } from '$lib/stores/orchestrator';
-import {
-  appendConversationTurn,
-  endConversationRecord,
-  startConversationRecord,
-} from '$lib/stores/voiceHistory';
 import { formatAgentIdentity } from '$lib/services/orchestrator/inbox';
 import { openSettings } from '$lib/stores/layout';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
@@ -184,7 +168,6 @@ export default function FloatingPromptBar({
   }, []);
   const [isListening, setIsListening, isListeningRef] = useSyncedState(false);
   const [isRefining, setIsRefining, isRefiningRef] = useSyncedState(false);
-  const [voicePhase, setVoicePhase] = useState<SpectrumPhase>('idle');
   const shellElRef = useRef<HTMLDivElement | null>(null);
   const barElRef = useRef<HTMLDivElement | null>(null);
   // Alt-to-voice is a deliberate act: the shortcut only fires once the user has
@@ -217,10 +200,6 @@ export default function FloatingPromptBar({
   // call (brain working on a spoken request) — drives the "thinking" orb.
   const [agentSending, setAgentSending, agentSendingRef] =
     useSyncedState(false);
-  const [voiceModeActive, setVoiceModeActive, voiceModeActiveRef] =
-    useSyncedState(false);
-  const [voiceSleeping, setVoiceSleeping, voiceSleepingRef] =
-    useSyncedState(false);
   const [pastedImages, setPastedImages] = useState<PastedImage[]>([]);
   const [pastedFiles, setPastedFiles] = useState<
     Array<{ name: string; path: string }>
@@ -250,8 +229,6 @@ export default function FloatingPromptBar({
     () => $chatMessages[$activeProject?.id ?? ''] ?? [],
     [$chatMessages, $activeProject]
   );
-
-  const isVoiceActive = voiceModeActive;
 
   const canSend = Boolean($activeProject) && !agentSending;
 
@@ -285,7 +262,6 @@ export default function FloatingPromptBar({
       isRefining ||
       isDragOver ||
       (!draggedExplorerPath && isGlobalFileDrag) ||
-      voiceModeActive
     );
   }, [
     hasStagedContent,
@@ -294,7 +270,6 @@ export default function FloatingPromptBar({
     isDragOver,
     draggedExplorerPath,
     isGlobalFileDrag,
-    voiceModeActive,
   ]);
 
   const handleShellFocusOut = useCallback(
@@ -406,226 +381,6 @@ export default function FloatingPromptBar({
     []
   );
 
-  // Late-bound handle to stopAgentVoice so callbacks created before its
-  // definition (keyboard handler, session onEnded) can tear voice mode down
-  // without depending on definition order.
-  const stopAgentVoiceRef = useRef<() => void>(() => {});
-
-  // Live GPT Realtime session (speech-to-speech engine). Voice conversation is
-  // realtime-only now — the call owns the mic and speaks for itself; there is
-  // no local STT→brain→TTS loop any more.
-  const realtimeSessionRef = useRef<RealtimeVoiceSession | null>(null);
-  const realtimeActiveRef = useRef(false);
-  /**
-   * Voice-history record for the call in flight (Settings → Voice → History).
-   * Separate from the project chat: the chat card is a live view that gets
-   * compacted and summarized away, while this is the durable log of what was
-   * actually said, kept for as long as the retention setting says.
-   */
-  const conversationRecordRef = useRef<string | null>(null);
-
-  const stopAgentVoice = useCallback(() => {
-    // Realtime-only teardown: end the call, release the mic, reset the bar.
-    setVoiceModeActive(false);
-    agentVoiceModeActive.set(false);
-    setVoiceSleeping(false);
-    setIsListening(false);
-    setIsRefining(false);
-    setVoicePhase('idle');
-    // Null the session ref BEFORE stopping so the session's onEnded callback
-    // (which fires from stop()) sees it gone and doesn't re-enter this teardown.
-    const realtimeSession = realtimeSessionRef.current;
-    realtimeSessionRef.current = null;
-    realtimeActiveRef.current = false;
-    endConversationRecord(conversationRecordRef.current);
-    conversationRecordRef.current = null;
-    realtimeSession?.stop();
-  }, []);
-
-  useEffect(() => {
-    stopAgentVoiceRef.current = stopAgentVoice;
-  }, [stopAgentVoice]);
-
-  // Bridge from the GPT Realtime model to the orchestrator brain: the model
-  // calls its spacron_orchestrator tool, we run the request through the same
-  // sendChatMessage path the pipeline uses, and hand back the brain's reply for
-  // the model to speak. Chat logging comes for free from sendChatMessage.
-  const runRealtimeOrchestratorCommand = useCallback(
-    async (request: string): Promise<string> => {
-      const project = get(activeProject);
-      if (!project) return 'No project is open right now.';
-      setAgentSending(true);
-      try {
-        await sendChatMessage(project.id, project.root_path, request, {
-          forcedAgent: get(agentForcedAgent),
-          voiceConversation: true,
-        });
-      } finally {
-        setAgentSending(false);
-      }
-      const messages = get(chatMessages)[project.id] ?? [];
-      for (let i = messages.length - 1; i >= 0; i -= 1) {
-        const message = messages[i];
-        if (
-          message.role === 'assistant' &&
-          !message.pending &&
-          message.text?.trim()
-        ) {
-          return message.text.trim();
-        }
-        if (message.role === 'user') break;
-      }
-      return 'The orchestrator accepted the request.';
-    },
-    [setAgentSending]
-  );
-
-  const startRealtimeVoiceMode = useCallback(
-    (engine: VoiceConversationEngine) => {
-      const engineConfig = getRealtimeEngineConfig(engine);
-      const { provider, label, keyProvider } = engineConfig;
-      if (!isRealtimeVoiceSupported(provider)) {
-        showToast(
-          `${label} voice isn't supported in this runtime. Try the other realtime engine in Settings → Voice, or use Ctrl+Alt+M to dictate instead.`,
-          'warning'
-        );
-        openSettings();
-        return;
-      }
-      if (!isProviderApiKeyConfiguredLocal(keyProvider)) {
-        showToast(
-          `${label} needs ${engineConfig.keyName} API key. Add it in Settings, or switch the conversation engine.`,
-          'warning'
-        );
-        openSettings();
-        return;
-      }
-      // Tear down any lingering realtime session from a previous attempt so the
-      // old session's onEnded callback can't fire on this new session's state.
-      const prevSession = realtimeSessionRef.current;
-      realtimeSessionRef.current = null;
-      realtimeActiveRef.current = false;
-      if (prevSession) {
-        try {
-          prevSession.stop();
-        } catch {
-          /* already stopped */
-        }
-      }
-      setVoiceModeActive(true);
-      agentVoiceModeActive.set(true);
-      realtimeActiveRef.current = true;
-      setIsRefining(true); // "thinking" orb while the call connects
-      setVoicePhase('thinking');
-
-      const model = get(engineConfig.model);
-      // Opened BEFORE the call connects so the transcript callbacks always have
-      // somewhere to land. A call that connects and says nothing is dropped
-      // when the record closes, so a failed handshake leaves no empty row.
-      // Close any record left open by the session torn down just above, so a
-      // re-entry can't strand it without an end time.
-      endConversationRecord(conversationRecordRef.current);
-      const startedProject = get(activeProject);
-      conversationRecordRef.current = startConversationRecord({
-        engine,
-        model,
-        projectId: startedProject?.id,
-        projectName: startedProject?.name,
-      });
-
-      void (async () => {
-        try {
-          const session = await startRealtimeVoiceSession({
-            provider,
-            connection: engineConfig.connection,
-            model,
-            voice: get(engineConfig.voice),
-            instructions: REALTIME_VOICE_INSTRUCTIONS,
-            callbacks: {
-              onStateChange: (state) => {
-                setVoicePhase(state);
-                setIsRefining(state === 'connecting' || state === 'thinking');
-                setIsListening(state === 'listening');
-              },
-              onUserTranscript: (text) => {
-                appendConversationTurn(conversationRecordRef.current, 'user', text);
-                const project = get(activeProject);
-                if (project)
-                  appendVoiceExchangeMessage(project.id, 'user', text);
-              },
-              onAssistantTranscript: (text, final) => {
-                if (!final) return;
-                appendConversationTurn(conversationRecordRef.current, 'assistant', text);
-                const project = get(activeProject);
-                if (project)
-                  appendVoiceExchangeMessage(project.id, 'assistant', text);
-              },
-              onOrchestratorCommand: runRealtimeOrchestratorCommand,
-              onError: (message) => showToast(message, 'error'),
-              onEnded: () => {
-                // Fires for a spontaneous transport failure as well as stop().
-                // A user-initiated stop already nulled the ref, so this only acts
-                // when the connection died on its own.
-                if (realtimeSessionRef.current) {
-                  realtimeSessionRef.current = null;
-                  realtimeActiveRef.current = false;
-                  endConversationRecord(conversationRecordRef.current);
-                  conversationRecordRef.current = null;
-                  if (voiceModeActiveRef.current) stopAgentVoiceRef.current();
-                }
-              },
-            },
-          });
-          if (!realtimeActiveRef.current) {
-            // The user exited voice mode while the call was still connecting.
-            endConversationRecord(conversationRecordRef.current);
-            conversationRecordRef.current = null;
-            session.stop();
-            return;
-          }
-          realtimeSessionRef.current = session;
-        } catch (error) {
-          realtimeActiveRef.current = false;
-          endConversationRecord(conversationRecordRef.current);
-          conversationRecordRef.current = null;
-          setIsRefining(false);
-          showToast(
-            error instanceof Error
-              ? error.message
-              : `Could not start ${label} voice.`,
-            'error'
-          );
-          stopAgentVoiceRef.current();
-        }
-      })();
-    },
-    [
-      runRealtimeOrchestratorCommand,
-      setIsListening,
-      setIsRefining,
-      setVoiceModeActive,
-    ]
-  );
-
-  const toggleAgentVoiceMode = useCallback(() => {
-    if (voiceModeActive) {
-      stopAgentVoice();
-      return;
-    }
-    // Voice conversation is realtime-only: the whole conversation is one live
-    // speech-to-speech call. There is no local STT -> brain -> TTS loop, and
-    // `VoiceConversationEngine` has no non-realtime member left to fall back
-    // from, so the setting maps straight through.
-    startRealtimeVoiceMode(get(voiceConversationEngine));
-  }, [voiceModeActive, stopAgentVoice, startRealtimeVoiceMode]);
-
-  const launchAgentVoiceMode = useCallback(() => {
-    openPromptBar();
-    if (!voiceModeActive) {
-      toggleAgentVoiceMode();
-    }
-  }, [openPromptBar, voiceModeActive, toggleAgentVoiceMode]);
-
   const submitAgentMessage = useCallback(
     async (textOverride?: string) => {
       if (!$activeProject) return;
@@ -676,7 +431,7 @@ export default function FloatingPromptBar({
   // Auto-open agent center when waiting tasks arrive (if in agent mode and not in voice mode)
   useEffect(() => {
     void waitingTaskCount; // subscribe but don't open panel — orchestrator panel removed
-  }, [voiceModeActive, waitingTaskCount]);
+  }, [waitingTaskCount]);
 
   // Clean up pasted-image object URLs on unmount to prevent blob: URL leaks.
   useEffect(() => {
@@ -951,15 +706,6 @@ export default function FloatingPromptBar({
     }
   }, [$promptBarFocusRequest, openPromptBar]);
 
-  const lastVoiceModeRequestRef = useRef(0);
-  useEffect(() => {
-    const req = $promptBarVoiceModeRequest;
-    if (req !== lastVoiceModeRequestRef.current) {
-      lastVoiceModeRequestRef.current = req;
-      if (req > 0) launchAgentVoiceMode();
-    }
-  }, [$promptBarVoiceModeRequest, launchAgentVoiceMode]);
-
   // Text handed to the bar from elsewhere — Preview's "add element to prompt",
   // the goal of an agent spawned without auto-run. There is no text box for it
   // to land in any more, so it becomes the staged prompt and is shown in the
@@ -1022,40 +768,28 @@ export default function FloatingPromptBar({
   const handleGlobalVoiceShortcut = useCallback(
     (event: KeyboardEvent) => {
       if (event.type === 'keydown') {
-        if (voiceModeActive && event.key === 'Escape') {
-          event.preventDefault();
-          stopAgentVoice();
-          return;
-        }
         altTapRef.current.keydown(event);
         return;
       }
 
       if (!altTapRef.current.keyup(event) || isRefining) return;
 
-      // A bare Alt tap is the same gesture everywhere, but what it toggles is
-      // mode-dependent. In conversational mode the CLI bar's realtime call is
-      // the wrong target (the bar itself is hidden) — hand the gesture to the
-      // chat composer instead, which owns the visible voice session there.
       event.preventDefault();
+      // Bare Alt tap toggles dictation (single-shot speech-to-text into the
+      // focused field or terminal). Dictation is available whether or not voice
+      // mode was previously running.
       if (get(interactionMode) === 'chat') {
-        requestChatVoiceMode();
+        toggleChatModeTranscription();
         return;
       }
-
-      if (voiceModeActive) {
-        stopAgentVoice();
-        return;
+      if (!startBarTranscription()) {
+        showToast(
+          'A transcription is already running. Finish it or press Escape first.',
+          'warning'
+        );
       }
-
-      // No arming: a bare left-Alt tap toggles voice from anywhere in the app,
-      // including while the caret sits in a text input or a dialog. This was an
-      // explicit product call — the tradeoff is that a stray tap opens the mic and
-      // starts a realtime call, which is why the gesture is a deliberate bare tap
-      // (see `alt-tap-gesture.ts`) and not merely "Alt was involved".
-      toggleAgentVoiceMode();
     },
-    [voiceModeActive, isRefining, stopAgentVoice, toggleAgentVoiceMode]
+    [isRefining]
   );
 
   const handleExplorerDragStart = useCallback((event: Event) => {
@@ -1319,13 +1053,13 @@ export default function FloatingPromptBar({
 
   return (
     <div
-      className={`floating-prompt-shell ${isActive ? 'active' : 'collapsed'}${isVoiceActive ? ' voice-active' : ''}${transcribing ? ' transcribing' : ''}`}
+      className={`floating-prompt-shell ${isActive ? 'active' : 'collapsed'}${transcribing ? ' transcribing' : ''}`}
       ref={shellElRef}
     >
       {isActive && (
         <>
           <div
-            className={`floating-prompt-bar agent-mode${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${isVoiceActive ? ' voice-active' : ''}${transcribing ? ' transcribing' : ''}`}
+            className={`floating-prompt-bar agent-mode${!canSend ? ' disabled' : ''}${isDragOver ? ' drag-over' : ''}${isGlobalFileDrag && !isDragOver ? ' global-drag' : ''}${transcribing ? ' transcribing' : ''}`}
             id="floating-prompt-bar"
             ref={barElRef}
             onDragEnter={handleInternalDragEnter}
@@ -1357,73 +1091,7 @@ export default function FloatingPromptBar({
                 Drop file to add as context
               </div>
             )}
-            {isVoiceActive ? (
-              /* --- VOICE MODE: Redesigned floating pill with dynamic spectrum --- */
-              <div className="voice-spectrum-pill">
-                <div
-                  className={`voice-pill-indicator ${
-                    voiceSleeping
-                      ? 'sleeping'
-                      : voicePhase === 'speaking'
-                        ? 'speaking'
-                        : voicePhase === 'listening'
-                          ? 'listening'
-                          : 'thinking'
-                  }`}
-                  title={
-                    voiceSleeping
-                      ? 'Sleeping (say "wake up" to resume)'
-                      : voicePhase === 'speaking'
-                        ? 'Speaking…'
-                        : voicePhase === 'listening'
-                          ? 'Listening…'
-                          : 'Thinking…'
-                  }
-                >
-                  <span className="voice-indicator-dot" />
-                  <span className="voice-indicator-text">
-                    {voiceSleeping
-                      ? 'Sleeping'
-                      : voicePhase === 'speaking'
-                        ? 'Speaking'
-                        : voicePhase === 'listening'
-                          ? 'Listening'
-                          : 'Thinking'}
-                  </span>
-                </div>
-
-                <div className="voice-spectrum-track">
-                  <SpectrumVisualizer
-                    phase={voiceSleeping ? 'sleeping' : voicePhase}
-                    barCount={32}
-                    glow={true}
-                    height={32}
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  className="voice-pill-close-btn"
-                  onClick={stopAgentVoice}
-                  aria-label="End voice mode"
-                  title="End voice mode (Esc)"
-                >
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
-            ) : (
-              /* --- NORMAL & TRANSCRIBING MODE --- */
+            /* --- NORMAL & TRANSCRIBING MODE --- */
               <>
                 <button
                   type="button"

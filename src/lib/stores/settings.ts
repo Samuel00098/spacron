@@ -859,27 +859,23 @@ export const voiceAiProvider = persistentWritable<AiProviderId>('voiceAiProvider
 export const voiceAiModelByProvider = persistentWritable<Record<string, string>>('voiceAiModelByProvider', {});
 
 /**
- * Which engine powers the hands-free voice conversation:
- * - 'openai-realtime': one live speech-to-speech WebRTC call to OpenAI's
- *   Realtime API — much lower latency and natural barge-in, but requires an
- *   OpenAI API key and is billed on audio tokens.
- * - 'xai-realtime': the same experience over xAI's Grok Voice Agent API
- *   (OpenAI Realtime-compatible, WebSocket). Requires an xAI API key; billed
- *   flat per minute (~$0.05/min).
- * - 'openai-live': OpenAI GPT-Live over WebRTC. The voice model delegates
- *   project work to Spacron's existing orchestrator.
- * - 'vercel-realtime': any realtime model behind the Vercel AI Gateway (OpenAI,
- *   Gemini Live, Grok Voice) over one WebSocket. Requires the gateway key.
+ * Which engine powers the hands-free voice conversation.
+ * The realtime speech-to-speech feature has been removed. Voice input now uses
+ * single-shot dictation (F9 / Ctrl+Alt+M) and agent responses are read back via
+ * text-to-speech (Settings → Voice → Read aloud).
  */
-export type VoiceConversationEngine = 'openai-realtime' | 'xai-realtime' | 'openai-live' | 'vercel-realtime';
-export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('voiceConversationEngine', 'openai-realtime');
-export const openaiRealtimeModel = persistentWritable<string>('openaiRealtimeModel', 'gpt-realtime-2.1-mini');
-export const openaiRealtimeVoice = persistentWritable<string>('openaiRealtimeVoice', 'marin');
-/**
- * Where a GPT Realtime call goes: `'openai'`, or the id of a custom provider
- * that serves OpenAI's realtime API at its own address.
- */
-export const openaiRealtimeConnection = persistentWritable<string>('openaiRealtimeConnection', 'openai');
+export type VoiceConversationEngine = 'none';
+export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('none');
+export const announceAgentCompletions = persistentWritable<boolean>('announceAgentCompletions', true);
+/** Whether agent completion turns (done / failed / needs input) are read aloud
+ * via text-to-speech in addition to the chime + inbox + toast. */
+export const speakAgentCompletions = persistentWritable<boolean>('speakAgentCompletions', true);
+
+/** Built-in orchestrator skills the user switched off in Settings (by skill id). */
+export const orchestratorDisabledSkills = persistentWritable<string[]>('orchestratorDisabledSkills', []);
+/** Skills the user wrote themselves; see services/orchestrator/skills.ts. */
+export const orchestratorCustomSkills = persistentWritable<CustomSkill[]>('orchestratorCustomSkills', []);
+
 /**
  * Where Jev decisions are answered: `'typesafe'`, `'openrouter'`, `'vercel'`
  * or a custom provider id that serves `/systemone`. Each uses its own key.
@@ -887,121 +883,6 @@ export const openaiRealtimeConnection = persistentWritable<string>('openaiRealti
 export const jevProvider = persistentWritable<string>('jevProvider', 'typesafe');
 /** Offer Jev to the CLI agents as the `jev_classify` MCP tool. Off by default. */
 export const jevAgentTool = persistentWritable('jevAgentTool', false);
-
-export const openaiRealtimeModelOptions: VoiceModelOption[] = [
-  { id: 'gpt-realtime-2.1-mini', label: 'GPT Realtime 2.1 Mini', description: 'Fast and ~3× cheaper (~$10/$20 per 1M audio tokens). Good default for conversation.' },
-  { id: 'gpt-realtime-2.1', label: 'GPT Realtime 2.1', description: 'Flagship speech-to-speech model (~$32/$64 per 1M audio tokens).' },
-  { id: 'gpt-realtime-mini', label: 'GPT Realtime Mini (previous gen)', description: 'Previous-generation mini realtime model.' },
-  { id: 'gpt-realtime', label: 'GPT Realtime (previous gen)', description: 'Previous-generation realtime model.' },
-];
-
-export const openaiRealtimeVoiceOptions: VoiceOption[] = [
-  { id: 'marin', label: 'Marin', description: 'Natural conversational voice (recommended)' },
-  { id: 'cedar', label: 'Cedar', description: 'Natural conversational voice (recommended)' },
-  { id: 'alloy', label: 'Alloy', description: 'Neutral voice' },
-  { id: 'ash', label: 'Ash', description: 'Male voice' },
-  { id: 'ballad', label: 'Ballad', description: 'Male voice' },
-  { id: 'coral', label: 'Coral', description: 'Female voice' },
-  { id: 'echo', label: 'Echo', description: 'Male voice' },
-  { id: 'sage', label: 'Sage', description: 'Female voice' },
-  { id: 'shimmer', label: 'Shimmer', description: 'Female voice' },
-  { id: 'verse', label: 'Verse', description: 'Male voice' },
-];
-
-export const openaiLiveModel = persistentWritable<string>('openaiLiveModel', 'gpt-live-1');
-export const openaiLiveVoice = persistentWritable<string>('openaiLiveVoice', 'marin');
-
-export const openaiLiveModelOptions: VoiceModelOption[] = [
-  { id: 'gpt-live-1', label: 'GPT Live 1', description: 'Full-duplex voice conversation with delegated project work.' },
-];
-
-export const openaiLiveVoiceOptions: VoiceOption[] = openaiRealtimeVoiceOptions;
-
-export const xaiRealtimeModel = persistentWritable<string>('xaiRealtimeModel', 'grok-voice-latest');
-export const xaiRealtimeVoice = persistentWritable<string>('xaiRealtimeVoice', 'eve');
-
-export const xaiRealtimeModelOptions: VoiceModelOption[] = [
-  { id: 'grok-voice-latest', label: 'Grok Voice (latest)', description: 'Always points at the newest Grok realtime voice model. Flat ~$0.05/min.' },
-  { id: 'grok-voice-think-fast-1.0', label: 'Grok Voice Think Fast 1.0', description: 'Pinned flagship Grok realtime voice model.' },
-];
-
-export const xaiRealtimeVoiceOptions: VoiceOption[] = [
-  { id: 'eve', label: 'Eve', description: 'Default Grok voice' },
-  { id: 'ara', label: 'Ara', description: 'Female voice' },
-  { id: 'rex', label: 'Rex', description: 'Male voice' },
-  { id: 'sal', label: 'Sal', description: 'Male voice' },
-  { id: 'leo', label: 'Leo', description: 'Male voice' },
-];
-
-export const vercelRealtimeModel = persistentWritable<string>('vercelRealtimeModel', 'openai/gpt-realtime-2');
-export const vercelRealtimeVoice = persistentWritable<string>('vercelRealtimeVoice', '');
-
-export const vercelRealtimeModelOptions: VoiceModelOption[] = [
-  { id: 'openai/gpt-realtime-2', label: 'GPT Realtime 2', description: 'OpenAI realtime through the gateway.' },
-  { id: 'openai/gpt-realtime-mini', label: 'GPT Realtime Mini', description: 'Cheaper OpenAI realtime through the gateway.' },
-  { id: 'google/gemini-3.8-live', label: 'Gemini 3.8 Live', description: 'Google Live API through the gateway.' },
-  { id: 'spacexai/grok-voice-think-fast-2.0', label: 'Grok Voice Think Fast 2.0', description: 'xAI realtime voice through the gateway.' },
-];
-
-const geminiLiveVoiceOptions: VoiceOption[] = [
-  { id: 'Puck', label: 'Puck', description: 'Upbeat voice' },
-  { id: 'Charon', label: 'Charon', description: 'Informative voice' },
-  { id: 'Kore', label: 'Kore', description: 'Firm voice' },
-  { id: 'Fenrir', label: 'Fenrir', description: 'Excitable voice' },
-  { id: 'Aoede', label: 'Aoede', description: 'Breezy voice' },
-];
-
-/**
- * Voices depend on which lab's model the gateway routes to, so the picker
- * follows the model's `owner/` prefix. An empty id lets the model use its own
- * default voice, which is what a model we have no list for gets.
- */
-export function getVercelRealtimeVoiceOptions(model: string): VoiceOption[] {
-  const owner = model.split('/')[0];
-  const voices = owner === 'openai' ? openaiRealtimeVoiceOptions
-    : owner === 'google' ? geminiLiveVoiceOptions
-      : owner === 'spacexai' || owner === 'xai' ? xaiRealtimeVoiceOptions
-        : [];
-  return [{ id: '', label: 'Model default', description: "The model's own default voice" }, ...voices];
-}
-
-/**
- * Everything a voice surface needs to start a call on one engine: which
- * transport, what to call it, whose key it needs and where its model/voice
- * picks live. The chat panel and the floating bar both read this.
- */
-export function getRealtimeEngineConfig(engine: VoiceConversationEngine) {
-  switch (engine) {
-    case 'xai-realtime':
-      return { provider: 'xai' as const, label: 'Grok Realtime', keyProvider: 'xai' as AiProviderId, keyName: 'an xAI', model: xaiRealtimeModel, voice: xaiRealtimeVoice, connection: undefined as string | undefined };
-    case 'openai-live':
-      return { provider: 'openai-live' as const, label: 'GPT Live', keyProvider: 'openai' as AiProviderId, keyName: 'an OpenAI', model: openaiLiveModel, voice: openaiLiveVoice, connection: undefined as string | undefined };
-    case 'vercel-realtime':
-      return { provider: 'vercel' as const, label: 'Vercel AI Gateway voice', keyProvider: 'vercel' as AiProviderId, keyName: 'a Vercel AI Gateway', model: vercelRealtimeModel, voice: vercelRealtimeVoice, connection: undefined as string | undefined };
-    default: {
-      // GPT Realtime can run through a custom provider that serves the same API.
-      const via = get(openaiRealtimeConnection);
-      const custom = isCustomProviderId(via) ? aiProviders.find((p) => p.id === via) : undefined;
-      if (custom) {
-        return { provider: 'openai' as const, label: `${custom.label} realtime`, keyProvider: custom.id, keyName: `a ${custom.label}`, model: openaiRealtimeModel, voice: openaiRealtimeVoice, connection: custom.id as string | undefined };
-      }
-      return { provider: 'openai' as const, label: 'GPT Realtime', keyProvider: 'openai' as AiProviderId, keyName: 'an OpenAI', model: openaiRealtimeModel, voice: openaiRealtimeVoice, connection: undefined as string | undefined };
-    }
-  }
-}
-
-/**
- * When on, the orchestrator gives a soft audible nudge (a short chime) each
- * time an agent finishes/blocks/fails, independent of whether the voice
- * conversation overlay is open. The recap lives in the chat completion card;
- * during a live realtime voice call the model mentions it in a one-liner instead.
- */
-export const announceAgentCompletions = persistentWritable<boolean>('announceAgentCompletions', true);
-
-/** Built-in orchestrator skills the user switched off in Settings (by skill id). */
-export const orchestratorDisabledSkills = persistentWritable<string[]>('orchestratorDisabledSkills', []);
-/** Skills the user wrote themselves; see services/orchestrator/skills.ts. */
-export const orchestratorCustomSkills = persistentWritable<CustomSkill[]>('orchestratorCustomSkills', []);
 
 export const currentVoiceInputModel = derived(
   [voiceInputProvider, voiceInputModelByProvider],
@@ -1098,15 +979,7 @@ if (typeof localStorage !== 'undefined') {
     localStorage.removeItem('forge_setting_voiceRefinementModel');
   }
 
-  // Spoken replies (TTS) were removed: speech-to-speech now runs only through a
-  // realtime engine. Move anyone still on the deleted 'pipeline' engine onto
-  // GPT Realtime -- leaving them there silently routed them to OpenAI anyway.
-  if ((get(voiceConversationEngine) as string) === 'pipeline') {
-    voiceConversationEngine.set('openai-realtime');
-  }
-}
-
-// The active model id, derived from the selected provider and its remembered
+  // The active model id, derived from the selected provider and its remembered
 // choice (falling back to the provider's default). The remembered id is trusted
 // as-is: models are now loaded live from each provider, so a valid choice may
 // not appear in the static curated `models` list.
@@ -1429,18 +1302,8 @@ export function updateSetting(key: string, value: unknown) {
     case 'voiceInputModelByProvider': voiceInputModelByProvider.set(value as Record<string, string>); break;
     case 'voiceAiProvider': voiceAiProvider.set(value as AiProviderId); break;
     case 'voiceAiModelByProvider': voiceAiModelByProvider.set(value as Record<string, string>); break;
-    case 'voiceConversationEngine': voiceConversationEngine.set(value as VoiceConversationEngine); break;
-    case 'openaiRealtimeModel': openaiRealtimeModel.set(value as string); break;
-    case 'openaiRealtimeVoice': openaiRealtimeVoice.set(value as string); break;
-    case 'openaiRealtimeConnection': openaiRealtimeConnection.set(value as string); break;
     case 'jevProvider': jevProvider.set(value as string); break;
     case 'jevAgentTool': jevAgentTool.set(value as boolean); break;
-    case 'openaiLiveModel': openaiLiveModel.set(value as string); break;
-    case 'openaiLiveVoice': openaiLiveVoice.set(value as string); break;
-    case 'xaiRealtimeModel': xaiRealtimeModel.set(value as string); break;
-    case 'xaiRealtimeVoice': xaiRealtimeVoice.set(value as string); break;
-    case 'vercelRealtimeModel': vercelRealtimeModel.set(value as string); break;
-    case 'vercelRealtimeVoice': vercelRealtimeVoice.set(value as string); break;
     case 'aiProvider': aiProvider.set(value as AiProviderId); break;
     case 'aiModelByProvider': aiModelByProvider.set(value as Record<string, string>); break;
     case 'aiBaseUrlByProvider': aiBaseUrlByProvider.set(value as Record<string, string>); break;
@@ -1489,18 +1352,8 @@ export function resetSettingsToDefault() {
   voiceInputModelByProvider.set({});
   voiceAiProvider.set('groq');
   voiceAiModelByProvider.set({});
-  voiceConversationEngine.set('openai-realtime');
-  openaiRealtimeModel.set('gpt-realtime-2.1-mini');
-  openaiRealtimeVoice.set('marin');
-  openaiRealtimeConnection.set('openai');
   jevProvider.set('typesafe');
   jevAgentTool.set(false);
-  openaiLiveModel.set('gpt-live-1');
-  openaiLiveVoice.set('marin');
-  xaiRealtimeModel.set('grok-voice-latest');
-  xaiRealtimeVoice.set('eve');
-  vercelRealtimeModel.set('openai/gpt-realtime-2');
-  vercelRealtimeVoice.set('');
   announceAgentCompletions.set(true);
   uiZoom.set(100);
   uiFontSize.set(14);

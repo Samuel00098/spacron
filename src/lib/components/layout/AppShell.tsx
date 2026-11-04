@@ -98,12 +98,11 @@ import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { appearance, matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { closeUsagePanel } from '$lib/stores/usage';
-import { interactionMode, requestChatVoiceMode, setInteractionMode } from '$lib/stores/interactionMode';
+import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
 import {
   claimStartupShell,
   releaseStartupShellClaim,
   createTerminalSession,
-  launchPromptBarVoiceMode,
   activeSessionId,
   devActiveSessionId,
   getSessionPromptTargetLabel,
@@ -1601,14 +1600,9 @@ export default function AppShell() {
         // openDailyNote removed
         // toggleSketch removed
         case 'launchVoiceMode':
-          // Mode-routed like the bare-Alt tap: in conversational mode the CLI
-          // bar (and its hidden realtime call) is the wrong target — hand the
-          // shortcut to the chat composer's voice session instead.
-          if (get(interactionMode) === 'chat') {
-            requestChatVoiceMode();
-          } else {
-            launchPromptBarVoiceMode();
-          }
+          // Voice mode was removed — route to single-shot dictation instead so
+          // the user can still speak text into the focused field or terminal.
+          toggleTerminalTranscription();
           break;
         case 'cycleAmbientLayout': {
           // Two reachable arrangements now that Fleet is an action rather than a

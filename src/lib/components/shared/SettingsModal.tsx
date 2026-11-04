@@ -70,7 +70,6 @@ import {
   userShortcuts,
   vimMode,
   voiceAiProvider,
-  voiceConversationEngine,
   voiceInputProvider,
   voiceInputUsesModelTranscription,
   voiceRefinementEnabled,
@@ -78,29 +77,13 @@ import {
   smartVadEnabled,
   transcriptionAutoSend,
   announceAgentCompletions,
+  speakAgentCompletions,
   autoSettleEnabled,
   autoSettleIdleMs,
   orchestratorCustomSkills,
   orchestratorDisabledSkills,
   jevProvider,
   jevAgentTool,
-  openaiRealtimeConnection,
-  openaiRealtimeModel,
-  openaiRealtimeModelOptions,
-  openaiRealtimeVoice,
-  openaiRealtimeVoiceOptions,
-  openaiLiveModel,
-  openaiLiveModelOptions,
-  openaiLiveVoice,
-  openaiLiveVoiceOptions,
-  xaiRealtimeModel,
-  xaiRealtimeModelOptions,
-  xaiRealtimeVoice,
-  xaiRealtimeVoiceOptions,
-  vercelRealtimeModel,
-  vercelRealtimeModelOptions,
-  vercelRealtimeVoice,
-  getVercelRealtimeVoiceOptions,
   wordWrap,
   sourceControlProvider,
   chatQueueWhileBusy,
@@ -111,7 +94,6 @@ import {
   type AiProviderId,
   type ChatAccessMode,
   type KeyboardShortcut,
-  type VoiceConversationEngine,
   type VoiceInputProviderId,
 } from '$lib/stores/settings';
 import {
@@ -671,6 +653,7 @@ function ReadAloudSection() {
   const settings = useStore(readAloudSettings) as ReadAloudSettings;
   const engine = settings.engine;
   const voice = readAloudVoiceFor(settings);
+  const speakCompletions = useStore(speakAgentCompletions);
   const [keyInput, setKeyInput] = useState('');
   const [keyExists, setKeyExists] = useState<boolean | null>(null);
   const [keyError, setKeyError] = useState('');
@@ -745,6 +728,12 @@ function ReadAloudSection() {
           onChange={setEngine}
           ariaLabel="Read aloud voice engine"
         />
+      </SettingRow>
+      <SettingRow
+        title="Read agent completions aloud"
+        detail="Read task completion replies (done / failed / needs input) out loud via text-to-speech in both chat and terminal modes."
+      >
+        <Toggle label="Read completions aloud" checked={speakCompletions} onChange={speakAgentCompletions.set} />
       </SettingRow>
       {engine !== 'system' && (
         <SettingRow title="Voice" detail={voicesError || undefined}>
@@ -2306,20 +2295,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const transcriptionSend = useStore(transcriptionAutoSend);
   const refinementProvider = useStore(voiceAiProvider);
   const refinementModel = useStore(currentVoiceAiModel);
-  const conversationEngine = useStore(voiceConversationEngine);
-  const realtimeModel = useStore(openaiRealtimeModel);
-  const realtimeConnection = useStore(openaiRealtimeConnection) as string;
-  // The provider GPT Realtime runs through: OpenAI, or a custom provider.
-  const realtimeVia = (realtimeConnection.startsWith('custom-') && aiProviders.some((p) => p.id === realtimeConnection)
-    ? realtimeConnection
-    : 'openai') as AiProviderId;
-  const realtimeVoice = useStore(openaiRealtimeVoice);
-  const liveModel = useStore(openaiLiveModel);
-  const liveVoice = useStore(openaiLiveVoice);
-  const grokRealtimeModel = useStore(xaiRealtimeModel);
-  const grokRealtimeVoice = useStore(xaiRealtimeVoice);
-  const gatewayRealtimeModel = useStore(vercelRealtimeModel);
-  const gatewayRealtimeVoice = useStore(vercelRealtimeVoice);
   const announceCompletions = useStore(announceAgentCompletions);
   const baseUrls = useStore(aiBaseUrlByProvider);
   const defaultAccentColor = currentActiveTheme?.colors?.accent ?? (currentAppearance === 'dark' ? '#ffffff' : '#000000');
@@ -2354,42 +2329,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const refinementModels = useMemo(() => {
     return providerLiveModels[refinementProvider] ?? getProviderDef(refinementProvider).models;
   }, [refinementProvider, providerLiveModels]);
-
-  // Live realtime model lists, falling back to the curated list when the live
-  // fetch hasn't landed yet (no key, offline, or request still in flight) —
-  // curated descriptions/pricing notes win when a live id matches one we know.
-  const openaiRealtimeModelsMerged = useMemo(() => {
-    const live = providerRealtimeModels[realtimeVia];
-    if (realtimeVia !== 'openai') {
-      // A custom provider's list is its own; keep the current pick visible until it loads.
-      return live && live.length ? live : [{ id: realtimeModel, label: realtimeModel, description: '' }];
-    }
-    if (!live || live.length === 0) return openaiRealtimeModelOptions;
-    const curated = new Map(openaiRealtimeModelOptions.map((m) => [m.id, m]));
-    return live.map((m) => curated.get(m.id) ?? m);
-  }, [providerRealtimeModels, realtimeVia, realtimeModel]);
-
-  const openaiLiveModelsMerged = useMemo(() => {
-    const live = providerRealtimeModels['openai'];
-    if (!live || live.length === 0) return openaiLiveModelOptions;
-    const curated = new Map(openaiLiveModelOptions.map((m) => [m.id, m]));
-    const models = live.filter((m) => m.id.toLowerCase().includes('live'));
-    return (models.length ? models : openaiLiveModelOptions).map((m) => curated.get(m.id) ?? m);
-  }, [providerRealtimeModels]);
-
-  const xaiRealtimeModelsMerged = useMemo(() => {
-    const live = providerRealtimeModels['xai'];
-    if (!live || live.length === 0) return xaiRealtimeModelOptions;
-    const curated = new Map(xaiRealtimeModelOptions.map((m) => [m.id, m]));
-    return live.map((m) => curated.get(m.id) ?? m);
-  }, [providerRealtimeModels]);
-
-  const vercelRealtimeModelsMerged = useMemo(() => {
-    const live = providerRealtimeModels['vercel'];
-    if (!live || live.length === 0) return vercelRealtimeModelOptions;
-    const curated = new Map(vercelRealtimeModelOptions.map((m) => [m.id, m]));
-    return live.map((m) => curated.get(m.id) ?? m);
-  }, [providerRealtimeModels]);
 
   useEffect(() => {
     panelRef.current?.scrollTo({ top: 0 });
@@ -3616,219 +3555,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       {modelLoading ? 'Refreshing...' : 'Refresh models'}
                     </button>
                   </div>
-                </Section>
-
-                <Section title="Conversation engine">
-                  <SettingRow
-                    title="Engine"
-                    detail={conversationEngine === 'vercel-realtime'
-                      ? 'One live speech-to-speech call through your Vercel AI Gateway key, to an OpenAI, Gemini Live or Grok voice model. Billed by the gateway at the model’s own rate.'
-                      : conversationEngine === 'xai-realtime'
-                      ? 'One live speech-to-speech call to xAI Grok, with sub-second replies and barge-in, billed flat at ~$0.05 per minute.'
-                      : conversationEngine === 'openai-live'
-                        ? 'OpenAI GPT Live handles the spoken conversation and delegates project work to Spacron’s orchestrator over a full-duplex WebRTC session.'
-                      : 'One live speech-to-speech call to OpenAI. Replies start in well under a second and you can interrupt mid-sentence. Billed on audio tokens (mini ≈ $10 in / $20 out per 1M; full ≈ $32 / $64).'}
-                  >
-                    <SelectField
-                      value={conversationEngine}
-                      options={[
-                        { id: 'openai-realtime', label: 'GPT Realtime (OpenAI)' },
-                        { id: 'openai-live', label: 'GPT Live (OpenAI)' },
-                        { id: 'xai-realtime', label: 'Grok Realtime (xAI)' },
-                        { id: 'vercel-realtime', label: 'Vercel AI Gateway' },
-                      ]}
-                      onChange={(value) => voiceConversationEngine.set(value as VoiceConversationEngine)}
-                      ariaLabel="Voice conversation engine"
-                    />
-                  </SettingRow>
-                  {conversationEngine === 'openai-realtime' && (
-                    <>
-                      {aiProviders.some((p) => p.custom) && (
-                        <SettingRow title="Connect through" detail="OpenAI, or a custom provider that serves OpenAI's realtime voice API.">
-                          <SelectField
-                            value={realtimeVia}
-                            options={[
-                              { id: 'openai', label: 'OpenAI' },
-                              ...aiProviders.filter((p) => p.custom).map((p) => ({ id: p.id, label: p.label })),
-                            ]}
-                            onChange={openaiRealtimeConnection.set}
-                            ariaLabel="Realtime connection"
-                            renderIcon={providerIcon}
-                          />
-                        </SettingRow>
-                      )}
-                      <SettingRow title="Realtime model">
-                        <ModelSelect
-                          value={realtimeModel}
-                          models={openaiRealtimeModelsMerged}
-                          onChange={openaiRealtimeModel.set}
-                          label="Realtime model"
-                          renderIcon={() => providerIcon(realtimeVia)}
-                        />
-                      </SettingRow>
-                      {(openaiKeyExists || realtimeVia !== 'openai') && (
-                        <div className="settings-action-row">
-                          <button
-                            type="button"
-                            className="settings-secondary"
-                            onClick={() => void loadRealtimeModels(realtimeVia, true)}
-                            disabled={realtimeModelLoading}
-                          >
-                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
-                          </button>
-                        </div>
-                      )}
-                      <SettingRow title="Voice">
-                        <StyledSelect
-                          value={realtimeVoice}
-                          options={openaiRealtimeVoiceOptions.map((v) => ({ id: v.id, label: v.label }))}
-                          onChange={openaiRealtimeVoice.set}
-                          ariaLabel="Realtime voice"
-                        />
-                      </SettingRow>
-                      {!openaiKeyExists && realtimeVia === 'openai' && (
-                        <SettingRow title="OpenAI API key" detail="GPT Realtime needs an OpenAI API key.">
-                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
-                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No OpenAI API key configured</span>
-                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
-                              Add API key
-                            </button>
-                          </div>
-                        </SettingRow>
-                      )}
-                    </>
-                  )}
-                  {conversationEngine === 'openai-live' && (
-                    <>
-                      <SettingRow title="Live model">
-                        <ModelSelect
-                          value={liveModel}
-                          models={openaiLiveModelsMerged}
-                          onChange={openaiLiveModel.set}
-                          label="GPT Live model"
-                          renderIcon={() => providerIcon('openai')}
-                        />
-                      </SettingRow>
-                      {openaiKeyExists && (
-                        <div className="settings-action-row">
-                          <button type="button" className="settings-secondary" onClick={() => void loadRealtimeModels('openai', true)} disabled={realtimeModelLoading}>
-                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
-                          </button>
-                        </div>
-                      )}
-                      <SettingRow title="Voice">
-                        <StyledSelect
-                          value={liveVoice}
-                          options={openaiLiveVoiceOptions.map((v) => ({ id: v.id, label: v.label }))}
-                          onChange={openaiLiveVoice.set}
-                          ariaLabel="GPT Live voice"
-                        />
-                      </SettingRow>
-                      {!openaiKeyExists && (
-                        <SettingRow title="OpenAI API key" detail="GPT Live needs an OpenAI API key.">
-                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
-                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No OpenAI API key configured</span>
-                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
-                              Add API key
-                            </button>
-                          </div>
-                        </SettingRow>
-                      )}
-                    </>
-                  )}
-                  {conversationEngine === 'xai-realtime' && (
-                    <>
-                      <SettingRow title="Realtime model">
-                        <ModelSelect
-                          value={grokRealtimeModel}
-                          models={xaiRealtimeModelsMerged}
-                          onChange={xaiRealtimeModel.set}
-                          label="Realtime model"
-                          renderIcon={() => providerIcon('xai')}
-                        />
-                      </SettingRow>
-                      {xaiKeyExists && (
-                        <div className="settings-action-row">
-                          <button
-                            type="button"
-                            className="settings-secondary"
-                            onClick={() => void loadRealtimeModels('xai', true)}
-                            disabled={realtimeModelLoading}
-                          >
-                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
-                          </button>
-                        </div>
-                      )}
-                      <SettingRow title="Voice">
-                        <StyledSelect
-                          value={grokRealtimeVoice}
-                          options={xaiRealtimeVoiceOptions.map((v) => ({ id: v.id, label: v.label }))}
-                          onChange={xaiRealtimeVoice.set}
-                          ariaLabel="Realtime voice"
-                        />
-                      </SettingRow>
-                      {!xaiKeyExists && (
-                        <SettingRow title="xAI API key" detail="Grok Realtime needs an xAI API key.">
-                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
-                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No xAI API key configured</span>
-                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
-                              Add API key
-                            </button>
-                          </div>
-                        </SettingRow>
-                      )}
-                    </>
-                  )}
-                  {conversationEngine === 'vercel-realtime' && (
-                    <>
-                      <SettingRow title="Realtime model">
-                        <ModelSelect
-                          value={gatewayRealtimeModel}
-                          models={vercelRealtimeModelsMerged}
-                          onChange={(value) => {
-                            vercelRealtimeModel.set(value);
-                            // Voices belong to the model's lab; a voice from
-                            // the previous model would be rejected.
-                            if (!getVercelRealtimeVoiceOptions(value).some((v) => v.id === get(vercelRealtimeVoice))) {
-                              vercelRealtimeVoice.set('');
-                            }
-                          }}
-                          label="Realtime model"
-                          renderIcon={() => providerIcon('vercel')}
-                        />
-                      </SettingRow>
-                      {vercelKeyExists && (
-                        <div className="settings-action-row">
-                          <button
-                            type="button"
-                            className="settings-secondary"
-                            onClick={() => void loadRealtimeModels('vercel', true)}
-                            disabled={realtimeModelLoading}
-                          >
-                            {realtimeModelLoading ? 'Refreshing...' : 'Refresh models'}
-                          </button>
-                        </div>
-                      )}
-                      <SettingRow title="Voice">
-                        <StyledSelect
-                          value={gatewayRealtimeVoice}
-                          options={getVercelRealtimeVoiceOptions(gatewayRealtimeModel).map((v) => ({ id: v.id, label: v.label }))}
-                          onChange={vercelRealtimeVoice.set}
-                          ariaLabel="Realtime voice"
-                        />
-                      </SettingRow>
-                      {!vercelKeyExists && (
-                        <SettingRow title="Vercel AI Gateway API key" detail="This engine needs a Vercel AI Gateway API key.">
-                          <div style={{ display: 'flex', gap: '8px', flexDirection: 'column', width: '100%' }}>
-                            <span style={{ fontSize: '12px', color: 'var(--warning)' }}>No Vercel AI Gateway API key configured</span>
-                            <button type="button" className="settings-primary" onClick={() => { setActiveTab('models'); }}>
-                              Add API key
-                            </button>
-                          </div>
-                        </SettingRow>
-                      )}
-                    </>
-                  )}
                 </Section>
 
                 <Section title="Notifications">

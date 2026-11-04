@@ -74,10 +74,11 @@ import {
   getProviderDef,
   getProviderBaseUrl,
   announceAgentCompletions,
+  speakAgentCompletions,
   type AiProviderId,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal, providerApiKeyExists } from '$lib/services/ai-keychain';
-import { announceViaRealtimeVoice } from '$lib/services/realtime-voice';
+import { speakText } from '$lib/services/read-aloud';
 import { playNudge } from '$lib/services/nudge';
 import {
   createTaskRecord,
@@ -264,6 +265,7 @@ import {
   postMailboxMessage,
   dismissMailboxCard,
   type MailboxCard,
+  type MailboxKind,
 } from '$lib/services/orchestrator/mailbox';
 import {
   acknowledge,
@@ -943,19 +945,11 @@ function announceCompletionAloud(
   title: string
 ): void {
   if (!get(announceAgentCompletions)) return;
-  if (get(agentVoiceModeActive)) {
-    const line =
-      status === 'blocked' ? `${name} needs your input: ${title}.` :
-      status === 'failed' ? `${name} failed: ${title}.` :
-      `${name} finished: ${title}.`;
-    // Inject the update into the live call so the model mentions it in its own
-    // voice. If no call is actually up (announceViaRealtimeVoice returns false)
-    // fall back to the chime rather than letting the update pass unheard.
-    if (!announceViaRealtimeVoice(line)) {
-      playNudge(status);
-    }
-    return;
-  }
+  const line =
+    status === 'blocked' ? `${name} needs your input: ${title}.` :
+    status === 'failed' ? `${name} failed: ${title}.` :
+    `${name} finished: ${title}.`;
+  if (get(speakAgentCompletions)) speakText(line);
   playNudge(status);
 }
 
@@ -1258,6 +1252,47 @@ async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurn
       taskId: task.id,
       text: `Failed on ${label}: ${task.failureReason ?? 'exited with errors'}`,
     });
+  }
+}
+
+/** Post a chat-mode direct-agent completion to the mailbox/inbox and notify the user,
+ * mirroring what terminal-mode agents get via completeLeasedTask. */
+async function notifyChatCompletion(
+  projectId: string,
+  rootPath: string | null | undefined,
+  agentName: string,
+  status: 'done' | 'failed' | 'blocked',
+  title?: string
+): Promise<void> {
+  const kind: MailboxKind = status === 'done' ? 'done' : 'note';
+  await postMailboxMessage(projectId, rootPath ?? projectPaths.get(projectId), {
+    from: agentName,
+    to: null,
+    kind,
+    taskId: null,
+    text:
+      status === 'done'
+        ? `Finished: ${title ?? agentName}`
+        : status === 'failed'
+          ? `Failed: ${title ?? agentName}`
+          : `Needs input: ${title ?? agentName}`,
+  });
+  showToast(
+    `${agentName} ${status === 'done' ? 'finished' : status === 'failed' ? 'failed' : 'needs input'}`,
+    status === 'done' ? 'success' : status === 'failed' ? 'error' : 'warning',
+    6000,
+    true, // notifySystem — ping the OS even when the app is focused or hidden
+  );
+  if (!get(announceAgentCompletions)) return;
+  playNudge(status);
+  if (get(speakAgentCompletions)) {
+    speakText(
+      status === 'done'
+        ? `${agentName} finished. ${title ?? ''}`
+        : status === 'failed'
+          ? `${agentName} failed. ${title ?? ''}`
+          : `${agentName} needs input. ${title ?? ''}`
+    );
   }
 }
 
@@ -3667,13 +3702,10 @@ function notifyAdoptedTurnEnd(
   // The completion card below is the one visual notification for this turn end —
   // a toast would duplicate it. The chime stays as the "right now" audio cue.
   if (!silent && get(announceAgentCompletions)) {
-    // In voice mode the realtime model relays it in its own voice; a chime on
-    // top of a live call is jarring. Same split as announceCompletionAloud.
-    if (get(agentVoiceModeActive)) {
-      announceViaRealtimeVoice(spokenTurnEnd(name, told));
-    } else {
-      playNudge(told.status === 'done' ? 'done' : 'blocked');
-    }
+    // Read the turn end back via TTS, then chime. A chime on top of TTS is fine
+    // — they're complementary (voice says what happened, chime grabs attention).
+    if (get(speakAgentCompletions)) speakText(spokenTurnEnd(name, told));
+    playNudge(told.status === 'done' ? 'done' : 'blocked');
   }
 
   // A hand-launched agent can still be one a conversation has been driving —
@@ -3905,11 +3937,8 @@ export function recordUnwatchedAgentReport(
   // The same audio cue every other declared turn end gets. The card above is
   // the only visual one — see the dedupe note on `notifyAdoptedTurnEnd`.
   if (get(announceAgentCompletions)) {
-    if (get(agentVoiceModeActive)) {
-      announceViaRealtimeVoice(spokenTurnEnd(name, told));
-    } else {
-      playNudge(told.status === 'done' ? 'done' : 'blocked');
-    }
+    if (get(speakAgentCompletions)) speakText(spokenTurnEnd(name, told));
+    playNudge(told.status === 'done' ? 'done' : 'blocked');
   }
 
   return { kind: 'filed', projectId };
@@ -4387,12 +4416,14 @@ async function runMediaGeneration(options: {
       attachments: [{ id: `generated-${requestId}`, name: result.name, type: mediaMimeType(result.name), size: result.size, path: result.path.replace(/\\/g, '/'), generated: true }],
     }, threadId);
     const noun = kind === 'video' ? 'video' : 'image';
+    await notifyChatCompletion(projectId, rootPath, 'Media Generation', 'done', `Generated ${noun}`);
     return `Generated ${noun} with ${result.provider}, saved at ${result.path} and shown to the user in chat.`
       + (notice ? ' The user was told which provider was used and why.' : '')
       + (result.revisedPrompt ? ` Prompt as drawn: ${result.revisedPrompt}` : '');
   } catch (error) {
     const message = String(error ?? 'generation failed');
     const notice = failureNotice(message, kind);
+    await notifyChatCompletion(projectId, rootPath, 'Media Generation', 'failed');
     if (notice) {
       appendChat(projectId, { id: msgId(), role: 'assistant', text: notice, ts: Date.now() }, threadId);
       return `error: ${message}\nThe user has already been shown this report; do not retry and do not repeat it.`;
@@ -4755,9 +4786,11 @@ async function sendPiRpcChatTurn(
     while (!settled) await new Promise((resolve) => setTimeout(resolve, 50));
     patchChat(projectId, assistantId, { text: responseText || 'Pi completed the turn without returning text.', pending: false });
     updateChatThread(thread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? command, 'done');
   } catch (error) {
     patchChat(projectId, assistantId, { text: `Native Pi RPC failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`, pending: false, type: 'failure' });
     updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? command, 'failed');
   } finally {
     await unlisten();
     await unlistenStderr();
@@ -4827,6 +4860,7 @@ async function sendNativeCodexChatTurn(
       nativeAcpSessionId: null,
       nativeAcpModel: model ?? null,
     });
+    await notifyChatCompletion(projectId, rootPath, 'Codex', 'done');
   } catch (error) {
     patchChat(projectId, assistantId, {
       text: `Native Codex Chat failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -4834,6 +4868,7 @@ async function sendNativeCodexChatTurn(
       type: 'failure',
     });
     updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, 'Codex', 'failed');
   }
 }
 
@@ -4997,6 +5032,20 @@ async function sendNativeAcpChatTurn(
         taskId: null,
       },
     }, thread.id);
+    // The agent is waiting on the user — if they're away, ping them.
+    void showToast(
+      `${displayName ?? agentCommand} needs your input`,
+      'warning',
+      6000,
+      true,
+    );
+    void postMailboxMessage(projectId, rootPath, {
+      from: displayName ?? agentCommand,
+      to: null,
+      kind: 'note',
+      taskId: null,
+      text: `Needs input: ${permission.prompt}`,
+    });
   });
   const unlistenStderr = await session.onStderr((text) => {
     stderrText = `${stderrText}${stderrText ? '\n' : ''}${text}`.slice(-4000);
@@ -5142,6 +5191,7 @@ async function sendNativeAcpChatTurn(
       updatedAt: Date.now(),
       lastActivityAt: Date.now(),
     });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? agentCommand, 'done');
   } catch (error) {
     patchChat(projectId, assistantId, {
       text: `Native ACP handoff failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`,
@@ -5149,6 +5199,7 @@ async function sendNativeAcpChatTurn(
       type: 'failure',
     });
     updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? agentCommand, 'failed');
   } finally {
     await unlisten();
     await unlistenRequest();
@@ -6283,6 +6334,7 @@ export async function sendChatMessage(
       const { text, sessionId } = await runClaudeNativeTurn(sdkOpts);
       patchChat(projectId, assistantId, { text: text || 'Claude completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { claudeSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'Claude', 'done');
     } catch (error) {
       try {
         const cliOpts = {
@@ -6296,9 +6348,11 @@ export async function sendChatMessage(
         const result = await runClaudeCliTurn(cliOpts);
         patchChat(projectId, assistantId, { text: result || 'Claude completed the turn without returning text.', pending: false });
         updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+        await notifyChatCompletion(projectId, rootPath, 'Claude', 'done');
       } catch (cliError) {
         patchChat(projectId, assistantId, { text: `Claude failed: ${error instanceof Error ? error.message : String(error)}${cliError instanceof Error ? ` / ${cliError.message}` : ''}`, pending: false, type: 'failure' });
         updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+        await notifyChatCompletion(projectId, rootPath, 'Claude', 'failed');
       }
     }
     return;
@@ -6326,9 +6380,11 @@ export async function sendChatMessage(
       const { text, sessionId } = await runCursorNativeTurn(nativeOpts);
       patchChat(projectId, assistantId, { text: text || 'Cursor completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { cursorSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'Cursor', 'done');
     } catch (error) {
       patchChat(projectId, assistantId, { text: `Cursor failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
       updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+      await notifyChatCompletion(projectId, rootPath, 'Cursor', 'failed');
     }
     return;
   }
@@ -6355,9 +6411,11 @@ export async function sendChatMessage(
       const { text, sessionId } = await runOpenCodeNativeTurn(nativeOpts);
       patchChat(projectId, assistantId, { text: text || 'OpenCode completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { opencodeSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'OpenCode', 'done');
     } catch (error) {
       patchChat(projectId, assistantId, { text: `OpenCode failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
       updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+      await notifyChatCompletion(projectId, rootPath, 'OpenCode', 'failed');
     }
     return;
   }
@@ -6384,9 +6442,11 @@ export async function sendChatMessage(
       const { text, sessionId } = await runMuseNativeTurn(nativeOpts);
       patchChat(projectId, assistantId, { text: text || 'Muse completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { museSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'Muse', 'done');
     } catch (error) {
       patchChat(projectId, assistantId, { text: `Muse failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
       updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+      await notifyChatCompletion(projectId, rootPath, 'Muse', 'failed');
     }
     return;
   }
@@ -6453,7 +6513,7 @@ export async function sendChatMessage(
   // returned above; a reachable terminal agent dispatches below. The only
   // direct path that stays is media (`/image`, `/video`), which calls the
   // configured provider API rather than a model.
-  if (opts?.chatMode && chatThread && isChatDirectMode() && opts.voiceConversation !== true) {
+  if (opts?.chatMode && chatThread && isChatDirectMode()) {
     const mediaCommand = /^\/(image|video)\b\s*([\s\S]*)$/i.exec(trimmed);
     if (mediaCommand) {
       const kind: MediaKind = mediaCommand[1].toLowerCase() === 'video' ? 'video' : 'image';

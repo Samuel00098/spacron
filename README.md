@@ -13,17 +13,17 @@
   <img src="https://img.shields.io/badge/TypeScript-5.6-blue?logo=typescript" alt="TypeScript">
 </p>
 
-Spacron is a cross-platform desktop workspace that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, git integration, and a **conversational agent fleet** — all unified inside a single keyboard- and voice-driven window. Tell the orchestrator your goal and it plans the work, edits up to 3 files itself, and delegates the rest to a team of coding CLIs that work in your shared repo — each told explicitly not to touch the others' files. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, sub-second startup.
+Spacron is a cross-platform desktop workspace that combines a real PTY terminal grid, a CodeMirror code editor, a hot-reloading web preview proxy, git integration, and a **direct agent fleet** — all unified inside a single keyboard- and voice-driven window. Open Chat mode (`Ctrl+Shift+J`), pick an agent (Claude Code, Codex, Cursor, OpenCode, Muse, Pi, or any registered ACP agent), and talk to it directly. Your message goes to the agent; the agent's reply streams back. Built with Tauri 2 (Rust) and React, it stays lean: no Electron, no Node.js runtime, sub-second startup.
 
-**You are always in control.** Every automated action — an orchestrator edit, a spawned agent, an approval card, a generation — has a plain manual path. Agent work sits on branches you review yourself, nothing runs without your say-so, and all of the classic terminal/editor/preview/git features work exactly the same with zero AI connections configured. See **[Doing It Yourself](docs/FEATURES.md#18-doing-it-yourself)**.
+**You are always in control.** Everything works exactly the same with zero AI connections configured — terminal, editor, preview, and git are all fully manual. When you do use agents, each one runs through your own CLI with your own auth; Spacron never sees or stores API keys. See **[Doing It Yourself](docs/FEATURES.md#18-doing-it-yourself)**.
 
 ---
 
 ## ⚡ Key Features
 
-- **Agent Fleet & Orchestration** — A conversational orchestrator that understands your whole project. It plans each goal into 2–4 sub-tasks with disjoint file sets, edits at most 3 files per task itself, and delegates big work to agents over approval cards. The fleet (Claude Code, Codex, Cursor, Antigravity, Grok, OpenCode, Muse, and more) runs live as tiles with `APPROVED`/bounce review gates. Agents default to your shared main repo; per-agent isolated worktrees remain an option.
+- **Agent Fleet & Direct Access** — Open Chat mode (`Ctrl+Shift+J`), pick an agent (Claude Code, Codex, Cursor, OpenCode, Muse, Pi, or any registered ACP agent), and talk to it directly. Your message is the agent's prompt; the agent's own streamed reply is the response. There is no planner, no approval gate, and no supervision layer between you and the agent — if you want those, run agents from the terminal instead. Agents run as live tiles through your own CLI; nothing reaches `main` without your explicit commit.
 - **Native agent adapters** — Claude Code (`claude_chat_complete`), Codex (`chatgpt_chat_complete`), Cursor (`cursor_chat_complete`), OpenCode (`opencode_chat_complete`), and Muse (`muse_chat_complete`) all run through Tauri commands on the Rust side, spawning the user's own CLI. Each captures session IDs for resume, supports `--fork-session` for context handover, and never sees or stores API keys — the user's own CLI auth is used directly.
-- **Hands-off the shared tree** — When several agents work alongside you in the same repo, a standing charter, disjoint file sets, coordinator sequencing, and mailbox file-claims keep them from clobbering each other — never revert changes that aren't yours, commit only the files you changed.
+- **Isolated agent worktrees** — Each agent gets its own git worktree on its own branch off HEAD, under `.spacron/worktrees/`. Work is staged onto the branch; you review the diff and commit when you're ready. Main-repo mode keeps agents in the shared checkout.
 - **Voice-driven everything** — Tap **left Alt** anywhere for a live speech↔speech conversation; press **F9** to dictate into any field (terminals stay verbatim); the floating prompt bar is voice-first with staged prompts and file drag-and-drop.
 - **Generations** — Images and videos generate into `<project>/generations` on your ChatGPT plan or your own API keys (OpenAI, Google/Veo, OpenRouter, fal, Replicate), with an inline image viewer and paint-masked edits.
 - **Remote Workspace** — Attach Spacron to your own VPS/VM over Tailscale or SSH: the workspace (files, terminals, agents) lives on your box and reconnects mid-state from anywhere. No provisioned servers.
@@ -33,8 +33,7 @@ Spacron is a cross-platform desktop workspace that combines a real PTY terminal 
 - **Tool Rooms** — One-click rooms for the HTTP client, SQLite database explorer, Docker containers, dev toolbox (JWT/JSON/regex/epoch/coder), environment manager, media player, sketch canvas, and project snapshots.
 - **Source Control (multi-provider)** — Choose GitHub, GitLab, Bitbucket, or Other (PAT-only) as your provider. GitHub supports OAuth device flow and gh CLI import; GitLab/Bitbucket/Other accept a personal access token saved to the OS keychain per provider. Sign in once per provider to clone private repos and publish PRs without pasting a token every time.
 - **Git Integration** — Diff, commit, push, discard, and ASCII commit history, all from the sidebar.
-- **Chat Workspace Mode** (`Ctrl+Shift+J`) — Thread-aware conversations per project: persistent threads with durable state, composer with provider/model selection, streaming replies, live plan ticker, inline approval cards, concurrent prompts, and input requests. Threads can be forked with their agent session context carried over.
-- **Isolated worktrees per agent/thread** — Each agent gets its own git worktree on its own branch off HEAD, under `.spacron/worktrees/`. Work is staged onto the branch and reviewed before anything reaches `main`. Main-repo mode keeps agents in the shared checkout with explicit no-touch-each-other rules.
+- **Chat Workspace Mode** (`Ctrl+Shift+J`) — Thread-aware conversations per project: persistent threads with durable state, composer with provider/model selection, streaming replies, concurrent prompts, and input requests. Threads can be forked with their agent session context carried over. Every agent turn ends with a completion notification (inbox entry, toast, chime, OS ping) so you're told when work finishes or an agent needs your input — even if you're away from the app.
 
 ---
 
@@ -80,9 +79,9 @@ Spacron ships **signed auto-updates**, so it keeps itself current after install.
 4. **Activate the Preview Proxy** (`Ctrl+Alt+P`) to launch the live preview split pane with the DOM Inspector.
 5. **Inspect elements** inside the preview and edit code in CodeMirror side-by-side.
 6. **Commit & Push** changes directly from the Git integration in the sidebar.
-7. **Bring in the fleet when you want it** — press `Ctrl+Shift+A` to spawn agents, or open the orchestrator, tell it your goal, and approve the plan. Or skip all of it: everything above is fully manual.
+7. **Bring in the fleet when you want it** — press `Ctrl+Shift+A` to spawn agents, or open Chat mode (`Ctrl+Shift+J`), pick an agent in the composer, and send your message. Or skip all of it: everything above is fully manual.
 
-> Want the full surface area? Read **[docs/FEATURES.md](docs/FEATURES.md)** — it documents every user-facing feature, including the **Doing It Yourself** section that maps each automated action to its manual equivalent.
+> Want the full surface area? Read **[docs/FEATURES.md](docs/FEATURES.md)** — it documents every user-facing feature.
 
 ---
 
@@ -92,7 +91,7 @@ Spacron ships **signed auto-updates**, so it keeps itself current after install.
 |---|---|---|---|
 | **Startup Speed** | **Sub-second (Native)** | 3–5 seconds | Fast |
 | **Workspace Shell** | **Tauri 2 (Rust)** | Electron (Node) | Native (Rust) |
-| **Agent Fleet & Orchestration** | **Yes (in shared repo)** | Extensions | No |
+| **Agent Fleet & Direct Access** | **Yes (direct to agent CLI)** | Extensions | No |
 | **Native agent adapters** | **Claude, Codex, Cursor, OpenCode, Muse** | No | No |
 | **Per-provider source control sign-in** | **GitHub / GitLab / Bitbucket / Other** | Extensions | No |
 | **Isolated agent worktrees** | **Yes, per agent/thread** | No | No |
@@ -117,9 +116,9 @@ npm run tauri dev
 
 ---
 
-## 🌳 Isolated Worktrees in Chat Mode
+## 🌳 Isolated Worktrees
 
-When a chat thread dispatches work to an agent (Claude Code, Codex, Cursor, OpenCode, Muse, or any registered CLI), Spacron gives that agent its own **isolated git worktree** by default:
+When an agent runs from the terminal, Spacron creates an isolated git worktree on its own branch off HEAD, under `.spacron/worktrees/`:
 
 1. **Branch off HEAD** — A new branch (`thread/<slug>-<short id>`) is created from the project's current HEAD commit.
 2. **Separate checkout** — The worktree lives inside the project at `.spacron/worktrees/<branch>`, keeping its own files, index, and working directory while sharing Git history with the main checkout.
@@ -131,14 +130,26 @@ When a chat thread dispatches work to an agent (Claude Code, Codex, Cursor, Open
 
 | Aspect | T3 Code | Spacron Chat mode |
 |---|---|---|
-| **Worktree creation** | Per-thread, isolated checkout | Per-thread, isolated worktree off HEAD |
-| **Branch naming** | Thread-scoped | `thread/<slug>-<short id>`, stable per thread; renamed Orca-style from first real work when possible |
+| **Worktree creation** | Per-thread, isolated checkout | Optional per thread; created on demand |
+| **Branch naming** | Thread-scoped | `thread/<slug>-<short id>`, stable per thread |
 | **Context handover** | Separate thread with session fork | `forkChatThreadFrom` + `claude --fork-session` carries the agent session into the forked thread |
 | **Where work lands** | Stay in thread until user merges | Staged onto agent branch, reviewed, then committed by user |
-| **Cleanup** | Thread thread closes → worktree removed | `reclaimWorktree` stages pending work first, only removes when nothing is left unstaged |
+| **Cleanup** | Thread closes → worktree removed | `reclaimWorktree` stages pending work first, only removes when nothing is left unstaged |
 | **Main-repo option** | Yes | Yes — agents can run directly in the project root when isolation is skipped |
 
 This is **aligned with T3 Code**: both use separate threads/sessions with explicit context handover rather than mixing sub-agent turns into the same thread. Spacron carries over forked Claude sessions (and cursor/opencode/muse session IDs) so a forked thread resumes the source agent's conversation natively via `--resume`.
+
+---
+
+## 🔔 Notifications
+
+Every agent turn in Chat mode ends with a completion notification so you're never left wondering:
+
+- **Done** — Inbox entry (`✅`), success toast, chime, OS ping
+- **Failed** — Inbox entry (`📝`), error toast, chime, OS ping
+- **Needs input** — Inbox entry (`📝`), warning toast, chime, OS ping — raised when an ACP agent pauses waiting for your permission or answer
+
+OS notifications fire even when Spacron is hidden or another app has focus. Everything lands in the inbox panel as a durable row that waits for you when you return.
 
 ---
 
