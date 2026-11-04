@@ -226,7 +226,7 @@ import { normalizeAcpUpdate, parseAcpPlan, parseAcpUsage } from '$lib/services/a
 import { activityFromAcpUpdate, type AcpActivity } from '$lib/services/acp-activity';
 import { openPty, type PtySession } from '$lib/services/pty-bridge';
 import { isPiSettled, openPiRpcSession, piPrompt, piTextDelta, type PiRpcSession } from '$lib/services/pi-rpc';
-import { runClaudeAgentSdkTurn } from '$lib/services/claude-agent-sdk';
+import { runClaudeAgentSdkTurn, type ClaudePermissionMode, claudePermissionModeForAccess } from '$lib/services/claude-agent-sdk';
 
 type AcpApprovalWaiter = {
   respond: (result: Record<string, unknown>, error?: Record<string, unknown>) => Promise<void>;
@@ -6221,12 +6221,24 @@ export async function sendChatMessage(
     appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
     appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: opts.forcedAgent }, chatThread.id);
     updateChatThread(chatThread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+    const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
     try {
       const result = await runClaudeAgentSdkTurn({
         prompt: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
         cwd: threadWorkingRoot(chatThread, rootPath),
-        permissionMode: 'default',
+        model: opts.model,
+        permissionMode: claudePermissionModeForAccess(tier),
         onText: (value) => patchChat(projectId, assistantId, { text: value, pending: true }),
+        onUsage: (usage) => {
+          updateChatThread(chatThread.id, {
+            contextUsage: {
+              used: usage.inputTokens ?? 0,
+              size: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+              cost: usage.cost ?? null,
+              updatedAt: Date.now(),
+            },
+          });
+        },
       });
       patchChat(projectId, assistantId, { text: result || 'Claude completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });

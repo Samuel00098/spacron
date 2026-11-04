@@ -244,7 +244,7 @@ const claudeAdapter: ChatProviderAdapter = {
   models: [{ id: 'default', label: 'CLI default', description: 'Let Claude Code choose the available model.' }],
   accessModes: ['supervised', 'auto-edits', 'auto', 'full-access'],
   reasoningEfforts: CLAUDE_REASONING,
-  modelCommand: null,
+  modelCommand: 'claude models',
   buildLaunchOptions(selection) {
     const model = safeProviderValue(selection.model);
     const reasoning = selection.reasoningEffort ?? 'default';
@@ -262,7 +262,7 @@ const claudeAdapter: ChatProviderAdapter = {
       runtimeArgs: runtimeArgs.join(' '),
     };
   },
-  parseModels: () => [],
+  parseModels: parseDashModels,
 };
 
 const cursorAdapter: ChatProviderAdapter = {

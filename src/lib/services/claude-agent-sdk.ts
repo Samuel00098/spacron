@@ -1,14 +1,42 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+export type ChatAccessMode = 'supervised' | 'auto-edits' | 'auto' | 'full-access' | 'inherit';
+
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk';
+
+export interface ClaudeUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  cost?: number;
+}
+
+export function claudePermissionModeForAccess(tier: ChatAccessMode): ClaudePermissionMode {
+  switch (tier) {
+    case 'supervised':
+      return 'default';
+    case 'auto-edits':
+      return 'acceptEdits';
+    case 'auto':
+      return 'plan';
+    case 'full-access':
+      return 'bypassPermissions';
+    case 'inherit':
+    default:
+      return 'default';
+  }
+}
+
 export interface ClaudeAgentSdkTurnOptions {
   prompt: string;
   cwd: string;
   model?: string | null;
-  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk';
+  permissionMode?: ClaudePermissionMode;
   abortController?: AbortController;
   onText: (text: string) => void;
   onTool?: (name: string, input: unknown) => void;
-  onResult?: (result: { text: string; usage?: unknown }) => void;
+  onUsage?: (usage: ClaudeUsage) => void;
 }
 
 export async function runClaudeAgentSdkTurn(opts: ClaudeAgentSdkTurnOptions): Promise<string> {
@@ -34,7 +62,14 @@ export async function runClaudeAgentSdkTurn(opts: ClaudeAgentSdkTurnOptions): Pr
         }
       }
     } else if (message.type === 'result') {
-      opts.onResult?.({ text: finalText, usage: message.usage });
+      const usage: ClaudeUsage = {
+        inputTokens: message.usage?.input_tokens ?? message.usage?.inputTokens,
+        outputTokens: message.usage?.output_tokens ?? message.usage?.outputTokens,
+        cacheReadTokens: message.usage?.cache_read_input_tokens ?? message.usage?.cacheReadTokens,
+        cacheWriteTokens: message.usage?.cache_write_input_tokens ?? message.usage?.cacheWriteTokens,
+        cost: message.usage?.cost,
+      };
+      opts.onUsage?.(usage);
     }
   }
   return finalText;
