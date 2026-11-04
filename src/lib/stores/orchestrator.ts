@@ -239,6 +239,7 @@ const activeAcpTurns = new Map<string, {
   sessionId?: string;
 }>();
 const activePiTurns = new Map<string, PiRpcSession>();
+const piSessions = new Map<string, { command: string; session: PiRpcSession }>();
 import {
   getProjectMemoryLines,
   loadProjectMemory,
@@ -4697,8 +4698,16 @@ async function sendPiRpcChatTurn(
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: displayName ?? command }, thread.id);
   updateChatThread(thread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
 
-  const { executable, args } = splitAcpCommand(command);
-  const session = await openPiRpcSession(executable, args, cwd);
+  const existing = piSessions.get(thread.id);
+  const session = existing?.command === command
+    ? existing.session
+    : await (async () => {
+      if (existing) await existing.session.close().catch(() => {});
+      const { executable, args } = splitAcpCommand(command);
+      const opened = await openPiRpcSession(executable, args, cwd);
+      piSessions.set(thread.id, { command, session: opened });
+      return opened;
+    })();
   activePiTurns.set(thread.id, session);
   let responseText = '';
   let stderrText = '';
@@ -4715,6 +4724,8 @@ async function sendPiRpcChatTurn(
     stderrText = `${stderrText}${stderrText ? '\n' : ''}${value}`.slice(-4000);
   });
   const unlistenExit = await session.onExit(() => {
+    piSessions.delete(thread.id);
+    activePiTurns.delete(thread.id);
     if (!settled && getChatThread(thread.id)?.status === 'working') {
       patchChat(projectId, assistantId, { text: `Pi exited unexpectedly.${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`, pending: false, type: 'failure' });
       updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
@@ -4733,7 +4744,10 @@ async function sendPiRpcChatTurn(
     await unlistenStderr();
     await unlistenExit();
     activePiTurns.delete(thread.id);
-    await session.close().catch(() => {});
+    if (!settled) {
+      piSessions.delete(thread.id);
+      await session.close().catch(() => {});
+    }
   }
 }
 
@@ -5712,7 +5726,11 @@ export function stopChatTurn(threadId: string): void {
   const thread = getChatThread(threadId);
   const activeAcp = activeAcpTurns.get(threadId);
   const activePi = activePiTurns.get(threadId);
-  if (activePi) void activePi.close().catch(() => {});
+  const persistentPi = piSessions.get(threadId)?.session;
+  if (activePi || persistentPi) {
+    piSessions.delete(threadId);
+    void (activePi ?? persistentPi)?.close().catch(() => {});
+  }
   if (activeAcp?.sessionId) {
     void activeAcp.session.notify('session/cancel', { sessionId: activeAcp.sessionId }).catch(() => {});
   }
