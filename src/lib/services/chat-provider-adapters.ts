@@ -7,6 +7,7 @@ export type ChatProviderProtocol =
   | 'claude-stream-json'
   | 'cursor-stream-json'
   | 'grok-stream-json'
+  | 'muse-serve-json'
   | 'opencode-server'
   | 'pi-rpc'
   | 'antigravity-cli';
@@ -20,6 +21,7 @@ export type ChatProviderTransport =
   | 'codex-app-server'
   | 'claude-agent-sdk'
   | 'cursor-sdk'
+  | 'muse-sdk'
   | 'opencode-sdk'
   | 'pi-rpc'
   | 'acp-fallback'
@@ -407,6 +409,33 @@ const antigravityAdapter: ChatProviderAdapter = {
   parseModels: () => [],
 };
 
+const museAdapter: ChatProviderAdapter = {
+  id: 'muse',
+  aliases: ['muse'],
+  label: 'Muse',
+  protocol: 'muse-serve-json',
+  transport: 'acp-fallback',
+  nativeTransport: 'muse-sdk',
+  models: [{ id: 'default', label: 'CLI default', description: 'Let Muse choose the available model.' }],
+  accessModes: ['supervised', 'auto-edits', 'auto', 'full-access'],
+  reasoningEfforts: [],
+  modelCommand: 'muse models',
+  buildLaunchOptions(selection) {
+    const model = safeProviderValue(selection.model);
+    const runtimeArgs = runtimeModelArgs(model);
+    return {
+      permissionArgs: permissionArgs(selection.accessMode ?? 'inherit', this.accessModes, {
+        supervised: '--permission-mode manual',
+        'auto-edits': '--permission-mode acceptEdits',
+        auto: '--permission-mode auto',
+        'full-access': '--permission-mode bypassPermissions',
+      }),
+      runtimeArgs: runtimeArgs.join(' '),
+    };
+  },
+  parseModels: parseDashModels,
+};
+
 export const CHAT_PROVIDER_ADAPTERS = [
   codexAdapter,
   claudeAdapter,
@@ -415,6 +444,7 @@ export const CHAT_PROVIDER_ADAPTERS = [
   openCodeAdapter,
   piAdapter,
   antigravityAdapter,
+  museAdapter,
 ] as const;
 
 const adaptersByAlias = new Map<string, ChatProviderAdapter>();
@@ -472,6 +502,18 @@ export function isClaudeProvider(command: string): boolean {
 
 export function isCodexProvider(command: string): boolean {
   return getChatProviderAdapter(command)?.id === 'codex';
+}
+
+export function isCursorProvider(command: string): boolean {
+  return getChatProviderAdapter(command)?.id === 'cursor-agent';
+}
+
+export function isOpenCodeProvider(command: string): boolean {
+  return getChatProviderAdapter(command)?.id === 'opencode';
+}
+
+export function isMuseProvider(command: string): boolean {
+  return getChatProviderAdapter(command)?.id === 'muse';
 }
 
 export function getAgentProviderLaunchOptions(

@@ -66,12 +66,13 @@ export function toggleCommandPalette() {
   });
 }
 
-import { newFolderPromptOpen, openProject, openProjectByPath } from './workspace';
+import { newFolderPromptOpen, openProject, openProjectByPath, activeProject } from './workspace';
 import { saveActiveFile, formatActiveFile } from './editor';
 import { setActiveView, toggleSidebar, toggleEditorSplitPreview, toggleSidebarTab, openEnvManager, openSettings } from './layout';
 import { createTerminalSession } from './terminal';
 import { startProxy, stopProxy } from './preview';
 import { toggleFloatingSearch } from './projectsearch';
+import { chatThreadState, getProjectThreads, selectChatThread } from './chatThreads';
 
 export function initDefaultCommands() {
   const defaultCmds: any[] = [
@@ -205,7 +206,38 @@ export function initDefaultCommands() {
     const extras = existing.filter((c: any) => !defaults.has(c.id));
     return [...defaultCmds, ...extras];
   });
+
+  registerThreadCommands();
 }
+
+/** Register every chat thread as a palette command so threads are findable by
+ *  title (T3's "palette thread search with snippets"). Called on init and
+ *  whenever the thread store changes. */
+export function registerThreadCommands(): void {
+  const project = get(activeProject);
+  if (!project) return;
+  const threads = get(getProjectThreads(project.id));
+  commands.update((existing) => {
+    // Remove any previously registered thread commands.
+    const others = existing.filter((c: any) => !c.id.startsWith('thread.switch.'));
+    const threadCmds = threads.map((thread) => ({
+      id: `thread.switch.${thread.id}`,
+      name: thread.title,
+      category: 'Threads',
+      shortcut: undefined,
+      action: () => {
+        selectChatThread(project.id, thread.id);
+      },
+    }));
+    return [...others, ...threadCmds];
+  });
+}
+
+// Re-register thread commands whenever threads change, so new threads appear
+// in the palette immediately.
+chatThreadState.subscribe(() => {
+  registerThreadCommands();
+});
 
 export function registerCommand(command: any) {
   commands.update((cmds) => {

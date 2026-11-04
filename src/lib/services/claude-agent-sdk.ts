@@ -1,5 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import { spawn } from 'child_process';
+import { invoke } from '@tauri-apps/api/core';
 
 export type ChatAccessMode = 'supervised' | 'auto-edits' | 'auto' | 'full-access' | 'inherit';
 
@@ -35,46 +34,47 @@ export interface ClaudeAgentSdkTurnOptions {
   model?: string | null;
   permissionMode?: ClaudePermissionMode;
   abortController?: AbortController;
+  /** Resume an existing Claude SDK session by ID instead of starting fresh. */
+  sessionId?: string | null;
+  /** Fork the resumed session into a new native session (only meaningful with sessionId). */
+  forkSession?: boolean;
   onText: (text: string) => void;
   onTool?: (name: string, input: unknown) => void;
   onUsage?: (usage: ClaudeUsage) => void;
+  /** Captures the SDK session id observed from init/result messages. */
+  onSessionId?: (sessionId: string) => void;
 }
 
-export async function runClaudeAgentSdkTurn(opts: ClaudeAgentSdkTurnOptions): Promise<string> {
-  const q = query({
-    prompt: opts.prompt,
-    options: {
-      cwd: opts.cwd,
-      model: opts.model && opts.model !== 'default' ? opts.model : undefined,
-      permissionMode: opts.permissionMode ?? 'default',
-      abortController: opts.abortController,
-    },
-  });
+export interface ClaudeAgentSdkTurnResult {
+  text: string;
+  sessionId: string | null;
+}
 
-  let finalText = '';
-  for await (const message of q) {
-    if (message.type === 'assistant') {
-      for (const block of message.message.content ?? []) {
-        if (block.type === 'text') {
-          finalText += block.text;
-          opts.onText(finalText);
-        } else if (block.type === 'tool_use') {
-          opts.onTool?.(block.name, block.input);
-        }
-      }
-    } else if (message.type === 'result') {
-      const u: Record<string, unknown> | null = message.usage ?? null;
-      const usage: ClaudeUsage = {
-        inputTokens: u?.['input_tokens'] as number | undefined,
-        outputTokens: u?.['output_tokens'] as number | undefined,
-        cacheReadTokens: u?.['cache_read_input_tokens'] as number | undefined,
-        cacheWriteTokens: u?.['cache_write_input_tokens'] as number | undefined,
-        cost: u?.['cost'] as number | undefined,
-      };
-      opts.onUsage?.(usage);
-    }
-  }
-  return finalText;
+/**
+ * Run one Claude turn through the Rust-native Tauri adapter (`claude_chat_complete`).
+ *
+ * The `@anthropic-ai/claude-agent-sdk` npm package is Node-only and cannot run
+ * inside the Tauri webview, so all Claude turns route through the Rust side
+ * which spawns the user's `claude` CLI directly. This function preserves the
+ * SDK-style callback interface for callers, delivering the final text once via
+ * `onText` and the observed session id via `onSessionId`.
+ */
+export async function runClaudeAgentSdkTurn(opts: ClaudeAgentSdkTurnOptions): Promise<ClaudeAgentSdkTurnResult> {
+  const nativeOpts: ClaudeNativeTurnOptions = {
+    cwd: opts.cwd,
+    model: opts.model ?? null,
+    systemPrompt: '',
+    userText: opts.prompt,
+    images: [],
+    effort: null,
+    accessMode: null,
+    sessionId: opts.sessionId ?? null,
+    forkSession: opts.forkSession ?? false,
+  };
+  const result = await runClaudeNativeTurn(nativeOpts);
+  opts.onText(result.text);
+  if (result.sessionId) opts.onSessionId?.(result.sessionId);
+  return { text: result.text, sessionId: result.sessionId };
 }
 
 export interface ClaudeCliTurnOptions extends Omit<ClaudeAgentSdkTurnOptions, 'abortController'> {
@@ -130,57 +130,94 @@ export function parseClaudeJsonLine(line: string): {
   return null;
 }
 
+/** Run one Claude turn through the Rust-native Tauri adapter (`claude_chat_complete`). */
 export async function runClaudeCliTurn(opts: ClaudeCliTurnOptions): Promise<string> {
-  const args = [
-    '-p',
-    opts.prompt,
-    '--output-format',
-    'stream-json',
-    '--permission-mode',
-    opts.permissionMode ?? 'default',
-  ];
-  if (opts.model && opts.model !== 'default') args.push('--model', opts.model);
-  const child = spawn('claude', args, { cwd: opts.cwd });
-
-  let finalText = '';
-  let buf = '';
-  const emitText = (value: string) => {
-    finalText += value;
-    opts.onText(finalText);
-  };
-
-  const textStream = child.stdout as NodeJS.ReadableStream;
-  textStream.on('data', (chunk: Buffer | string) => {
-    buf += chunk.toString();
-    let idx: number;
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, idx);
-      buf = buf.slice(idx + 1);
-      const parsed = parseClaudeJsonLine(line);
-      if (!parsed) continue;
-      if (parsed.text) emitText(parsed.text);
-      if (parsed.usage) opts.onUsage?.({
-        inputTokens: parsed.usage['input_tokens'] as number | undefined,
-        outputTokens: parsed.usage['output_tokens'] as number | undefined,
-        cacheReadTokens: parsed.usage['cache_read_input_tokens'] as number | undefined,
-        cacheWriteTokens: parsed.usage['cache_write_input_tokens'] as number | undefined,
-        cost: parsed.usage['cost'] as number | undefined,
-      });
-      if (parsed.toolName) opts.onTool?.(parsed.toolName, parsed.toolInput);
-    }
+  const result = await runClaudeNativeTurn({
+    cwd: opts.cwd,
+    model: opts.model ?? null,
+    systemPrompt: '',
+    userText: opts.prompt,
+    images: [],
+    effort: null,
+    accessMode: null,
+    sessionId: opts.sessionId ?? null,
+    forkSession: opts.forkSession ?? false,
   });
+  return result.text;
+}
 
-  await new Promise<void>((resolve, reject) => {
-    const abort = () => { child.kill('SIGTERM'); reject(new Error('Claude CLI turn aborted')); };
-    if (opts.signal) {
-      opts.signal.addEventListener('abort', abort, { once: true });
-    }
-    child.on('error', reject);
-    child.on('close', () => resolve());
-    child.stderr.on('data', () => {});
+/** Options for a Claude turn routed through the Rust-native Tauri adapter. */
+export interface ClaudeNativeTurnOptions {
+  cwd: string;
+  model?: string | null;
+  systemPrompt: string;
+  userText: string;
+  images: string[];
+  effort?: string | null;
+  accessMode?: string | null;
+  sessionId?: string | null;
+  forkSession?: boolean;
+}
+
+/** Run one Claude turn through the Rust-native Tauri adapter (`claude_chat_complete`). */
+export async function runClaudeNativeTurn(opts: ClaudeNativeTurnOptions): Promise<ClaudeAgentSdkTurnResult> {
+  const result = await invoke<{ text: string; session_id: string | null }>('claude_chat_complete', {
+    cwd: opts.cwd,
+    model: opts.model ?? null,
+    system_prompt: opts.systemPrompt,
+    user_text: opts.userText,
+    images: opts.images,
+    effort: opts.effort ?? null,
+    access_mode: opts.accessMode ?? null,
+    session_id: opts.sessionId ?? null,
+    fork_session: opts.forkSession ?? false,
   });
-  if (opts.signal) {
-    opts.signal.removeEventListener('abort', () => {});
+  return { text: result.text, sessionId: result.session_id ?? null };
+}
+
+/** Fork a Claude SDK session into a new native session, copying its transcript. */
+export async function forkClaudeSession(sessionId: string, options?: {
+  dir?: string;
+  upToMessageId?: string;
+  title?: string;
+}): Promise<{ sessionId: string } | null> {
+  try {
+    const result = await invoke<{ text: string; session_id: string | null }>('claude_fork_session', {
+      cwd: options?.dir ?? '',
+      session_id: sessionId,
+    });
+    if (result.session_id) {
+      return { sessionId: result.session_id };
+    }
+    return null;
+  } catch {
+    return null;
   }
-  return finalText;
+}
+
+/** Read the conversation messages of a Claude SDK session from its transcript. */
+export async function getClaudeSessionMessages(sessionId: string, options?: {
+  dir?: string;
+  limit?: number;
+}): Promise<Array<{ type: string; uuid: string }>> {
+  // No Rust-native equivalent yet; the SDK reads local transcript files which
+  // are not exposed through Tauri commands. Return empty so callers degrade
+  // gracefully to replaying the transcript in the prompt.
+  return [];
+}
+
+/** Read metadata for a single Claude SDK session by ID. */
+export async function getClaudeSessionInfo(sessionId: string, options?: { dir?: string }): Promise<{
+  summary?: string | null;
+  customTitle?: string | null;
+  firstPrompt?: string | null;
+  lastModified?: number;
+  cwd?: string | null;
+  gitBranch?: string | null;
+  tag?: string | null;
+} | null> {
+  // No Rust-native equivalent yet; the SDK reads local transcript files which
+  // are not exposed through Tauri commands. Return null so callers degrade
+  // gracefully.
+  return null;
 }

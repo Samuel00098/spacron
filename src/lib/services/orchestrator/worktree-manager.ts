@@ -71,13 +71,13 @@ function slugify(label: string): string {
 }
 
 /**
- * Derive a stable, human-readable branch name for a task: `spacron/<slug>-<short>`.
- * The trailing short id keeps it unique even when two agents share a label.
+ * Derive a stable, human-readable branch name for a thread: `thread/<slug>-<short>`.
+ * The trailing short id keeps it unique even when two threads share a label.
  */
-export function deriveTaskBranch(taskId: string, label?: string | null): string {
-  const short = taskId.replace(/[^a-z0-9]/gi, '').slice(-6) || Math.random().toString(36).slice(2, 8);
+export function deriveThreadBranch(threadId: string, label?: string | null): string {
+  const short = threadId.replace(/[^a-z0-9]/gi, '').slice(-6) || Math.random().toString(36).slice(2, 8);
   const slug = label && label.trim() ? slugify(label) : 'agent';
-  return `spacron/${slug}-${short}`;
+  return `thread/${slug}-${short}`;
 }
 
 /**
@@ -95,8 +95,8 @@ export function deriveFirstWorkBranch(
   worktree: WorktreeInfo,
   first: { file?: string | null; subject?: string | null },
 ): string | null {
-  // The trailing segment of `spacron/<slug>-<short>` is the uniqueness suffix
-  // (`deriveTaskBranch` appends one). Keeping it through the rename is what
+  // The trailing segment of `thread/<slug>-<short>` is the uniqueness suffix
+  // (`deriveThreadBranch` appends one). Keeping it through the rename is what
   // lets two agents doing the same kind of work stay on distinct branches.
   const short = worktree.branch.split('-').pop() ?? '';
   if (!short) return null;
@@ -104,7 +104,7 @@ export function deriveFirstWorkBranch(
   // Prefer the oldest commit subject — that's the agent's own summary of what
   // the branch does. Strip conventional-commit prefixes (feat:, fix:, chore:)
   // so the slug reads as the work, not the ceremony around it. Our own snapshot
-  // commit ("spacron: snapshot uncommitted agent work") says nothing about the
+  // commit ("thread: snapshot uncommitted agent work") says nothing about the
   // work, so it is skipped like any other empty subject.
   const subject = first.subject?.trim() ?? '';
   const fromSubject =
@@ -129,7 +129,7 @@ export function deriveFirstWorkBranch(
   // means "nothing nameable yet" — keep the spawn-time label instead.
   const slug = (fromSubject || fromFile).slice(0, 24);
   if (!slug || slug === 'agent') return null;
-  const branch = `spacron/${slug}-${short}`;
+  const branch = `thread/${slug}-${short}`;
   return branch === worktree.branch ? null : branch;
 }
 
@@ -176,10 +176,11 @@ export async function worktreeUnavailableReason(projectId: string): Promise<stri
 /** Create the requested isolated checkout; failure must never change placement. */
 export async function createTaskWorktree(args: {
   projectId: string;
-  taskId: string;
+  threadId?: string;
+  taskId?: string;
   label?: string | null;
 }): Promise<WorktreeInfo> {
-  const branch = deriveTaskBranch(args.taskId, args.label);
+  const branch = deriveThreadBranch(args.threadId ?? args.taskId ?? '', args.label);
   try {
     const raw = await backendInvoke<{
       path: string;

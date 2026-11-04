@@ -8,7 +8,7 @@ import {
   worktreeUnavailableReason,
   reclaimWorktree,
   stageBaseline,
-  deriveTaskBranch,
+  deriveThreadBranch,
   deriveFirstWorkBranch,
   renameTaskWorktree,
   mergeTaskWorktree,
@@ -22,7 +22,7 @@ const TIP = 'bbbbbbb2';
 function worktree(over: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     path: '/proj/.spacron/worktrees/spacron-alex-1',
-    branch: 'spacron/alex-1',
+    branch: 'thread/alex-1',
     baseBranch: 'main',
     baseCommit: BASE,
     createdAt: 0,
@@ -202,7 +202,7 @@ describe('mergeTaskWorktree', () => {
     backend({
       workspace_git_merge_worktree: {
         success: true,
-        message: "Nothing to merge — 'spacron/alex-1' holds nothing your checkout doesn't already have.",
+        message: "Nothing to merge — 'thread/alex-1' holds nothing your checkout doesn't already have.",
         conflicted: false,
         already_up_to_date: true,
         merged_commit: TIP,
@@ -218,7 +218,7 @@ describe('mergeTaskWorktree', () => {
     backend({
       workspace_git_merge_worktree: {
         success: true,
-        message: "Branch 'spacron/alex-1' merged successfully.",
+        message: "Branch 'thread/alex-1' merged successfully.",
         conflicted: false,
         already_up_to_date: false,
         merged_commit: TIP,
@@ -245,11 +245,11 @@ describe('mergeTaskWorktree', () => {
   });
 });
 
-describe('deriveTaskBranch', () => {
-  it('keeps the branch readable and unique per task', () => {
-    const a = deriveTaskBranch('ot_1700000000_abc123', 'Backend work');
-    expect(a).toBe('spacron/backend-work-abc123');
-    expect(deriveTaskBranch('ot_1700000000_zzz999', 'Backend work')).not.toBe(a);
+describe('deriveThreadBranch', () => {
+  it('keeps the branch readable and unique per thread', () => {
+    const a = deriveThreadBranch('ot_1700000000_abc123', 'Backend work');
+    expect(a).toBe('thread/backend-work-abc123');
+    expect(deriveThreadBranch('ot_1700000000_zzz999', 'Backend work')).not.toBe(a);
   });
 });
 
@@ -259,12 +259,12 @@ describe('deriveFirstWorkBranch', () => {
       subject: 'fix: login redirect',
       file: 'src/login.tsx',
     });
-    expect(result).toBe('spacron/login-redirect-1');
+    expect(result).toBe('thread/login-redirect-1');
   });
 
   it('falls back to the first changed file when the agent never commits', () => {
     const result = deriveFirstWorkBranch(worktree(), { file: 'src/components/LoginForm.tsx' });
-    expect(result).toBe('spacron/login-form-1');
+    expect(result).toBe('thread/login-form-1');
   });
 
   it('ignores our own snapshot commit as a name source', () => {
@@ -272,7 +272,7 @@ describe('deriveFirstWorkBranch', () => {
       subject: 'spacron: snapshot uncommitted agent work',
       file: 'src/api.ts',
     });
-    expect(result).toBe('spacron/api-1');
+    expect(result).toBe('thread/api-1');
   });
 
   it('returns null when there is nothing nameable yet', () => {
@@ -281,17 +281,17 @@ describe('deriveFirstWorkBranch', () => {
 
   it('returns null when the derived name matches the current branch', () => {
     const result = deriveFirstWorkBranch(
-      worktree({ branch: 'spacron/login-1' }),
+      worktree({ branch: 'thread/login-1' }),
       { subject: 'fix: login' },
     );
     expect(result).toBeNull();
   });
 
   it('keeps the trailing short id so two agents naming the same work stay unique', () => {
-    const a = deriveFirstWorkBranch(worktree({ branch: 'spacron/agent-abc123' }), { file: 'login.tsx' });
-    const b = deriveFirstWorkBranch(worktree({ branch: 'spacron/agent-zzz999' }), { file: 'login.tsx' });
-    expect(a).toBe('spacron/login-abc123');
-    expect(b).toBe('spacron/login-zzz999');
+    const a = deriveFirstWorkBranch(worktree({ branch: 'thread/agent-abc123' }), { file: 'login.tsx' });
+    const b = deriveFirstWorkBranch(worktree({ branch: 'thread/agent-zzz999' }), { file: 'login.tsx' });
+    expect(a).toBe('thread/login-abc123');
+    expect(b).toBe('thread/login-zzz999');
   });
 });
 
@@ -300,23 +300,23 @@ describe('renameTaskWorktree', () => {
     let args: Record<string, unknown> = {};
     backendInvoke.mockImplementation(async (_cmd: string, a: Record<string, unknown>) => {
       args = a;
-      return 'spacron/login-abc123';
+      return 'thread/login-abc123';
     });
 
-    const branch = await renameTaskWorktree('p1', worktree(), 'spacron/login-abc123');
+    const branch = await renameTaskWorktree('p1', worktree(), 'thread/login-abc123');
 
     expect(args).toEqual({
       projectId: 'p1',
       worktreePath: worktree().path,
-      branch: 'spacron/alex-1',
-      newBranch: 'spacron/login-abc123',
+      branch: 'thread/alex-1',
+      newBranch: 'thread/login-abc123',
     });
-    expect(branch).toBe('spacron/login-abc123');
+    expect(branch).toBe('thread/login-abc123');
   });
 
   it('returns null when the backend refuses the rename', async () => {
     backendInvoke.mockRejectedValue(new Error('Worktree is on another branch'));
-    const branch = await renameTaskWorktree('p1', worktree(), 'spacron/login-abc123');
+    const branch = await renameTaskWorktree('p1', worktree(), 'thread/login-abc123');
     expect(branch).toBeNull();
   });
 });
@@ -327,18 +327,18 @@ describe('sweepAgentBranches', () => {
     backendInvoke.mockImplementation(async (_cmd: string, a: Record<string, unknown>) => {
       args = a;
       return {
-        deleted: ['spacron/ada-1', 'spacron/bane-2'],
+        deleted: ['thread/ada-1', 'thread/bane-2'],
         retained: [],
         failed: [],
         base: 'main',
       };
     });
 
-    const sweep = await sweepAgentBranches('p1', { skip: ['spacron/live-9'] });
+    const sweep = await sweepAgentBranches('p1', { skip: ['thread/live-9'] });
 
-    expect(args.skip).toEqual(['spacron/live-9']);
+    expect(args.skip).toEqual(['thread/live-9']);
     expect(args.dryRun).toBe(false);
-    expect(sweep.deleted).toEqual(['spacron/ada-1', 'spacron/bane-2']);
+    expect(sweep.deleted).toEqual(['thread/ada-1', 'thread/bane-2']);
     expect(sweep.base).toBe('main');
   });
 
@@ -348,13 +348,13 @@ describe('sweepAgentBranches', () => {
         deleted: [],
         retained: [
           {
-            branch: 'spacron/niobe-4',
+            branch: 'thread/niobe-4',
             unique_commits: 2,
             last_commit: '2026-07-26T21:59:36+01:00',
             patch_equivalent: true,
           },
         ],
-        failed: ['spacron/locked-1'],
+        failed: ['thread/locked-1'],
         base: 'main',
       },
     });
@@ -363,26 +363,26 @@ describe('sweepAgentBranches', () => {
 
     expect(sweep.retained).toEqual([
       {
-        branch: 'spacron/niobe-4',
+        branch: 'thread/niobe-4',
         uniqueCommits: 2,
         lastCommit: '2026-07-26T21:59:36+01:00',
         patchEquivalent: true,
       },
     ]);
-    expect(sweep.failed).toEqual(['spacron/locked-1']);
+    expect(sweep.failed).toEqual(['thread/locked-1']);
   });
 
   it('forwards a dry run so nothing is deleted', async () => {
     let args: Record<string, unknown> = {};
     backendInvoke.mockImplementation(async (_cmd: string, a: Record<string, unknown>) => {
       args = a;
-      return { deleted: ['spacron/would-go'], retained: [], failed: [], base: 'main' };
+      return { deleted: ['thread/would-go'], retained: [], failed: [], base: 'main' };
     });
 
     const sweep = await sweepAgentBranches('p1', { dryRun: true });
 
     expect(args.dryRun).toBe(true);
-    expect(sweep.deleted).toEqual(['spacron/would-go']);
+    expect(sweep.deleted).toEqual(['thread/would-go']);
   });
 
   it('yields an empty sweep rather than throwing into a background timer', async () => {
@@ -408,7 +408,7 @@ describe('sweepAgentBranches', () => {
 
 describe('createTaskWorktree', () => {
   it('returns the isolated checkout supplied by Git', async () => {
-    backendInvoke.mockResolvedValue({ path: '/repo/.spacron/worktrees/agent', branch: 'spacron/agent', base_branch: 'main', base_commit: BASE });
+    backendInvoke.mockResolvedValue({ path: '/repo/.spacron/worktrees/agent', branch: 'thread/agent', base_branch: 'main', base_commit: BASE });
     await expect(createTaskWorktree({ projectId: 'p', taskId: 't' })).resolves.toMatchObject({ path: '/repo/.spacron/worktrees/agent', baseCommit: BASE });
   });
 

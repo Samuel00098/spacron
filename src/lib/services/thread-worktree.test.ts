@@ -20,7 +20,7 @@ const {
 } = await import('./thread-worktree');
 
 const shipResult = {
-  branch: 'spacron/fix-login-a1b2c3',
+  branch: 'thread/fix-login-a1b2c3',
   base: 'main',
   committed: true,
   commitSubject: 'Fix login redirect',
@@ -30,7 +30,7 @@ const shipResult = {
   prNumber: 7,
   prCreated: true,
   prError: null,
-  compareUrl: 'https://github.com/o/r/compare/main...spacron/fix-login-a1b2c3?expand=1',
+  compareUrl: 'https://github.com/o/r/compare/main...thread/fix-login-a1b2c3?expand=1',
 };
 
 beforeEach(() => {
@@ -57,15 +57,15 @@ describe('thread worktrees', () => {
   it('derives a stable branch from the thread, not from the clock', () => {
     const first = deriveThreadBranch('thread-42', 'Fix login redirect');
     expect(first).toBe(deriveThreadBranch('thread-42', 'Fix login redirect'));
-    expect(first).toMatch(/^spacron\/fix-login-redirect-[a-z0-9]+$/);
+    expect(first).toMatch(/^thread\/fix-login-redirect-[a-z0-9]+$/);
     // Two threads with the same title still land on different branches.
     expect(deriveThreadBranch('thread-43', 'Fix login redirect')).not.toBe(first);
   });
 
   it('creates the checkout through the workspace backend and maps git field names', async () => {
     backendMock.mockResolvedValue({
-      path: '/repo/.spacron/worktrees/spacron/fix-login-42',
-      branch: 'spacron/fix-login-42',
+      path: '/repo/.spacron/worktrees/thread/fix-login-42',
+      branch: 'thread/fix-login-42',
       base_branch: 'develop',
       base_commit: 'deadbeef',
     });
@@ -79,8 +79,8 @@ describe('thread worktrees', () => {
       branch: deriveThreadBranch('thread-42', 'Fix login'),
     });
     expect(worktree).toMatchObject({
-      path: '/repo/.spacron/worktrees/spacron/fix-login-42',
-      branch: 'spacron/fix-login-42',
+      path: '/repo/.spacron/worktrees/thread/fix-login-42',
+      branch: 'thread/fix-login-42',
       baseBranch: 'develop',
       baseCommit: 'deadbeef',
     });
@@ -96,7 +96,7 @@ describe('thread worktrees', () => {
     backendMock.mockResolvedValue(null);
     const removed = await removeThreadWorktree('proj', {
       path: '/repo/.spacron/worktrees/b',
-      branch: 'spacron/b-1',
+      branch: 'thread/b-1',
       baseBranch: 'main',
       baseCommit: 'abc',
       createdAt: 1,
@@ -106,7 +106,7 @@ describe('thread worktrees', () => {
       projectId: 'proj',
       worktreePath: '/repo/.spacron/worktrees/b',
       deleteBranch: false,
-      branch: 'spacron/b-1',
+      branch: 'thread/b-1',
     });
   });
 
@@ -114,7 +114,7 @@ describe('thread worktrees', () => {
     backendMock.mockRejectedValue('worktree is dirty');
     const removed = await removeThreadWorktree('proj', {
       path: '/repo/.spacron/worktrees/b',
-      branch: 'spacron/b-1',
+      branch: 'thread/b-1',
       baseBranch: 'main',
       baseCommit: 'abc',
       createdAt: 1,
@@ -138,7 +138,7 @@ describe('thread worktrees', () => {
     });
     // The workspace router must not see it: it would look for the token remotely.
     expect(backendMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ prNumber: 7, prCreated: true, branch: 'spacron/fix-login-a1b2c3' });
+    expect(result).toMatchObject({ prNumber: 7, prCreated: true, branch: 'thread/fix-login-a1b2c3' });
   });
 
   it('forwards an explicit repo path, body and base when given', async () => {
@@ -165,7 +165,7 @@ describe('thread worktrees', () => {
       url: 'https://github.com/o/r/pull/7',
       number: 7,
       compareUrl: shipResult.compareUrl,
-      branch: 'spacron/fix-login-a1b2c3',
+      branch: 'thread/fix-login-a1b2c3',
       base: 'main',
       openedAt: 1234,
     });

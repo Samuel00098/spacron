@@ -78,6 +78,8 @@ import {
   smartVadEnabled,
   transcriptionAutoSend,
   announceAgentCompletions,
+  autoSettleEnabled,
+  autoSettleIdleMs,
   orchestratorCustomSkills,
   orchestratorDisabledSkills,
   jevProvider,
@@ -100,9 +102,14 @@ import {
   vercelRealtimeVoice,
   getVercelRealtimeVoiceOptions,
   wordWrap,
+  sourceControlProvider,
+  chatQueueWhileBusy,
+  chatAutoAnswerInline,
+  chatDefaultAccessMode,
   type AiModelOption,
   mediaGeneration,
   type AiProviderId,
+  type ChatAccessMode,
   type KeyboardShortcut,
   type VoiceConversationEngine,
   type VoiceInputProviderId,
@@ -160,6 +167,7 @@ import { favouriteAgentCommands, toggleFavouriteAgent } from '$lib/stores/agentF
 import { getAntigravityRuntimeStatus, installAntigravityRuntime, type AntigravityRuntimeStatus } from '$lib/services/antigravity-runtime';
 import { isNativeAcpCommand } from '$lib/services/acp-capabilities';
 import { commandForAcpDistribution, fetchAcpRegistry, type AcpRegistryAgent } from '$lib/services/acp-registry';
+import { agentBinaryStatus, agentBinaryInstall, type AgentBinaryStatus } from '$lib/services/agent-binary';
 import { activeTheme } from '$lib/stores/theme';
 import { chooseBackgroundImage, removeBackgroundImage, backgroundImagePresent } from '$lib/stores/background';
 import { getAvailableShells, type ShellInfo } from '$lib/services/pty-bridge';
@@ -169,6 +177,11 @@ import {
 } from '$lib/services/orchestrator/agent-rules-file';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
 import { useGithubSignIn } from '$lib/react/useGithubSignIn';
+import { useSourceControlSignIn } from '$lib/react/useSourceControlSignIn';
+import {
+  type SourceControlIdentity,
+  SOURCE_CONTROL_PROVIDERS,
+} from '$lib/services/source-control';
 import './SettingsModal.css';
 
 import { useLayoutStore } from '$lib/stores/zustand/layout';
@@ -196,6 +209,8 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation', description: 'Dictation, transcription and voice conversation.' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering', description: 'Default shell and how terminals render.' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools', description: 'The coding CLI tools Spacron can launch.' },
+  { id: 'chat', label: 'Chat', kicker: 'Chat mode and queue', description: 'Chat mode behavior, message queue and inline requests.' },
+  { id: 'source-control', label: 'Source Control', kicker: 'GitHub and git', description: 'GitHub sign-in and source control provider choice.' },
   { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning', description: 'Orchestrator skills and what it learns.' },
   { id: 'mcp', label: 'MCP & plugins', kicker: 'Tools and plugins', description: 'Tool servers and plugins available to your agents.' },
   { id: 'stats', label: 'Usage', kicker: 'Model usage and cost', description: 'Token and cost analytics across the agents.' },
@@ -258,6 +273,11 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'orchestrator-custom-skills', tab: 'orchestrator', section: 'Your skills', label: 'Add a skill', keywords: 'orchestrator custom instructions playbook prompt' },
   { id: 'orchestrator-learned', tab: 'orchestrator', section: 'What it has learned', label: 'What it has learned', keywords: 'orchestrator memory profile preferences forget' },
   { id: 'coding-cli-agents', tab: 'agents', section: 'Coding CLI agents', label: 'Coding CLI agents', keywords: 'custom agent command' },
+  { id: 'chat-mode', tab: 'chat', section: 'Chat mode', label: 'Chat mode', keywords: 'chat conversational send message queue' },
+  { id: 'chat-queue', tab: 'chat', section: 'Queue behavior', label: 'Message queue', keywords: 'queue send chat message order' },
+  { id: 'chat-inline', tab: 'chat', section: 'Inline requests', label: 'Inline request behavior', keywords: 'inline approval choice input request' },
+  { id: 'source-control-github', tab: 'source-control', section: 'Source control provider', label: 'Source control', keywords: 'git github provider clone publish' },
+  { id: 'source-control-signin', tab: 'source-control', section: 'GitHub sign-in', label: 'GitHub sign-in', keywords: 'github sign in oauth gh cli personal access token' },
   { id: 'mcp-builtin', tab: 'mcp', section: 'Built in', label: 'Built-in servers', keywords: 'mcp spacron playwright browser tools' },
   { id: 'mcp-catalog', tab: 'mcp', section: 'Plugins', label: 'Plugins', keywords: 'mcp catalog plugins marketplace install github notion linear figma supabase stripe vercel sentry' },
   { id: 'mcp-servers', tab: 'mcp', section: 'Your servers', label: 'Add an MCP server', keywords: 'mcp model context protocol remote hosted stdio integration linear notion github' },
@@ -1601,7 +1621,7 @@ function ShortcutEditor({
   onDelete,
 }: {
   shortcuts: KeyboardShortcut[];
-  onUpdate: (id: string, keys: string) => void;
+  onUpdate: (id: string, keys: string, when?: string) => void;
   onDelete: (id: string) => void;
 }) {
   const grouped = useMemo(() => {
@@ -1634,8 +1654,26 @@ function ShortcutEditor({
             <div className="shortcut-row-container" key={shortcut.id}>
               <label className="shortcut-row">
                 <span>{shortcut.label}</span>
+                {shortcut.when && (
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginRight: '6px' }}>{shortcut.when}</span>
+                )}
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input value={shortcut.keys} onChange={(event) => onUpdate(shortcut.id, event.target.value)} />
+                  <input value={shortcut.keys} onChange={(event) => onUpdate(shortcut.id, event.target.value, shortcut.when)} />
+                  <input
+                    type="text"
+                    placeholder="when (optional)"
+                    value={shortcut.when ?? ''}
+                    onChange={(event) => onUpdate(shortcut.id, shortcut.keys, event.target.value || undefined)}
+                    style={{
+                      width: '130px',
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '4px',
+                      color: 'var(--text-primary)',
+                      fontSize: '11px',
+                      padding: '2px 6px',
+                    }}
+                  />
                   {shortcut.id.startsWith('custom_') && (
                     <button 
                       type="button"
@@ -1706,6 +1744,110 @@ function FavouriteStar({ command, name }: { command: string; name: string }) {
         />
       </svg>
     </button>
+  );
+}
+
+/**
+ * Managed agent binary installs: lists ACP registry agents that have a binary
+ * distribution for this platform, shows install status, and offers one-click
+ * install with sha256 verification — matching T3 Code's registry-managed installs.
+ */
+function ManagedAgentInstalls() {
+  const [statuses, setStatuses] = useState<Map<string, AgentBinaryStatus>>(new Map());
+  const [agentEntries, setAgentEntries] = useState<Array<{ agent: AcpRegistryAgent; binary: any }>>([]);
+  const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState<string>('');
+
+  useEffect(() => {
+    void fetchAcpRegistry().then((agents) => {
+      const next: Array<{ agent: AcpRegistryAgent; binary: any }> = [];
+      for (const agent of agents) {
+        const binary = agent.distribution.find((d: any) => d.kind === 'binary');
+        if (binary) next.push({ agent, binary });
+      }
+      setAgentEntries(next);
+      for (const { agent } of next) {
+        void agentBinaryStatus(agent.id, agent.version).then((status) => {
+          if (!status) return;
+          setStatuses((prev) => new Map(prev).set(agent.id, status));
+        });
+      }
+    }).catch(() => {});
+  }, []);
+
+  async function install(agent: AcpRegistryAgent, binary: any) {
+    setBusy((prev) => new Set(prev).add(agent.id));
+    setNote('');
+    try {
+      const url = binary.kind === 'binary' ? binary.url : '';
+      const sha256 = binary.sha256 ?? '';
+      const cmd = binary.cmd ?? binary.command ?? 'agent';
+      const next = await agentBinaryInstall(agent.id, agent.version, url, sha256, cmd);
+      setStatuses((prev) => new Map(prev).set(agent.id, next));
+      const installedPath = next.path;
+      if (installedPath) {
+        void import('$lib/stores/acpRegistry').then(({ setAcpCommandOverride }) => {
+          setAcpCommandOverride(agent.id, installedPath);
+        });
+        setNote(`Installed ${agent.name} v${agent.version}. Chat will launch ${installedPath}.`);
+      } else {
+        setNote(`Installed ${agent.name} v${agent.version}.`);
+      }
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy((prev) => { const next = new Set(prev); next.delete(agent.id); return next; });
+    }
+  }
+
+  if (agentEntries.length === 0) {
+    return (
+      <div className="agent-list" style={{ padding: '8px 0' }}>
+        <p className="shell-hint">No managed binary installs available for this platform.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="agent-list">
+      {agentEntries.map(({ agent, binary }) => {
+        const status = statuses.get(agent.id);
+        const installed = status?.installed === true;
+        const detail = !status
+          ? 'Checking install status…'
+          : installed
+            ? `v${status.version} · ${status.path ?? ''}`
+            : status.supported
+              ? `Not installed · v${agent.version}`
+              : 'No binary for this platform';
+        return (
+          <div className="agent-row" key={agent.id}>
+            <span className="agent-row-icon" aria-hidden="true">
+              <AgentBrandMark command={binary.cmd ?? agent.id} name={agent.name} />
+            </span>
+            <div className="agent-meta">
+              <div className="agent-name-row"><span className="agent-name">{agent.name}</span></div>
+              <div className="agent-cmd">{binary.cmd ?? agent.id} · v{agent.version}</div>
+              <span className="shell-hint">{agent.description}</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {note && <span className="shell-hint" style={{ maxWidth: '320px' }}>{note}</span>}
+              <button
+                className="agent-add-btn"
+                type="button"
+                onClick={() => void install(agent, binary)}
+                disabled={busy.has(agent.id) || !status?.supported || installed}
+              >
+                {busy.has(agent.id) ? 'Installing…' : installed ? 'Reinstall' : 'Install'}
+              </button>
+            </div>
+            <span className="shell-hint" style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+              {detail}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -2000,6 +2142,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [customLabel, setCustomLabel] = useState('');
   const [customKeys, setCustomKeys] = useState('');
   const [customAction, setCustomAction] = useState('');
+  const [customWhen, setCustomWhen] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
   // This selects which connection card is being managed. It deliberately does
   // not change the orchestrator: each Chat conversation owns that choice in
@@ -2047,6 +2190,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
   const github = useGithubSignIn();
   const [githubCopied, setGithubCopied] = useState(false);
+
+  const gitlabSc = useSourceControlSignIn('gitlab');
+  const bitbucketSc = useSourceControlSignIn('bitbucket');
+  const otherSc = useSourceControlSignIn('other');
+  const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
 
   async function copyGithubCode() {
     if (!github.device) return;
@@ -2118,6 +2266,12 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentFailoverHeadroom = useStore(agentFailoverHeadroomPercent);
   const currentFailoverCrossProvider = useStore(agentFailoverCrossProvider);
   const currentKeepSystemAwake = useStore(keepSystemAwake);
+  const currentAutoSettleEnabled = useStore(autoSettleEnabled);
+  const currentAutoSettleIdleMs = useStore(autoSettleIdleMs);
+  const currentSourceControlProvider = useStore(sourceControlProvider);
+  const currentChatQueueWhileBusy = useStore(chatQueueWhileBusy);
+  const currentChatAutoAnswerInline = useStore(chatAutoAnswerInline);
+  const currentChatDefaultAccessMode = useStore(chatDefaultAccessMode);
   const keepAwake = useStore(keepAwakeState);
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
@@ -2553,8 +2707,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }
 
-  function updateShortcut(id: string, keys: string) {
-    userShortcuts.set(shortcuts.map((shortcut) => (shortcut.id === id ? { ...shortcut, keys } : shortcut)));
+  function updateShortcut(id: string, keys: string, when?: string) {
+    userShortcuts.set(shortcuts.map((shortcut) => (shortcut.id === id ? { ...shortcut, keys, ...(when !== undefined ? { when } : {}) } : shortcut)));
   }
 
   function handleAddShortcut() {
@@ -2575,13 +2729,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
       id: newId,
       label: customLabel.trim(),
       keys: customKeys.trim(),
-      action: customAction
+      action: customAction,
+      ...(customWhen.trim() ? { when: customWhen.trim() } : {}),
     };
 
     userShortcuts.set([...shortcuts, newShortcut]);
     setCustomLabel('');
     setCustomKeys('');
     setCustomAction('');
+    setCustomWhen('');
     showToast('Custom shortcut added successfully.', 'info');
   }
 
@@ -2869,7 +3025,34 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </p>
                 </Section>
 
-                <Section title="GitHub">
+                <Section title="Source Control Provider">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Choose which provider Spacron uses for clone, push and pull-request actions. GitHub
+                    supports OAuth sign-in; others use a personal access token pasted in the Clone dialog.
+                  </p>
+                  <SettingRow title="Source control provider">
+                    <Dropdown
+                      options={[
+                        { value: 'github', label: 'GitHub' },
+                        { value: 'gitlab', label: 'GitLab' },
+                        { value: 'bitbucket', label: 'Bitbucket' },
+                        { value: 'other', label: 'Other (PAT only)' },
+                      ]}
+                      value={currentSourceControlProvider}
+                      onChange={(val) => sourceControlProvider.set(val as 'github' | 'gitlab' | 'bitbucket' | 'other')}
+                    />
+                  </SettingRow>
+                  <p className="shell-hint" style={{ marginTop: '8px', marginBottom: 0, fontSize: '11px', color: 'var(--text-muted)' }}>
+                    GitHub sign-in lives in the Source Control tab — sign in once here to clone private
+                    repos and publish PRs without pasting a token every time.
+                  </p>
+                </Section>
+              </>
+            )}
+
+            {activeTab === 'source-control' && (
+              <>
+                <Section title="GitHub sign-in">
                   <div className="settings-github">
                     {github.identity ? (
                       <>
@@ -2980,6 +3163,86 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     )}
                   </div>
                 </Section>
+
+                {SOURCE_CONTROL_PROVIDERS
+                  .filter((p) => p.value !== 'github')
+                  .map((provider) => {
+                    const sc =
+                      provider.value === 'gitlab'
+                        ? gitlabSc
+                        : provider.value === 'bitbucket'
+                          ? bitbucketSc
+                          : otherSc;
+                    const draft = tokenDrafts[provider.value] ?? '';
+
+                    const handleSave = async () => {
+                      await sc.saveToken(draft.trim());
+                      setTokenDrafts({ ...tokenDrafts, [provider.value]: '' });
+                    };
+
+                    return (
+                      <Section key={provider.value} title={`${provider.label} sign-in`}>
+                        <div className="settings-github">
+                          {sc.identity ? (
+                            <>
+                              <div className="settings-github-status">
+                                <span className="settings-github-login">
+                                  Signed in as {sc.identity.login || provider.label}
+                                </span>
+                                <small>via {sc.identity.source === 'oauth' ? 'OAuth' : 'personal access token'}</small>
+                              </div>
+                              <button
+                                type="button"
+                                className="settings-danger"
+                                onClick={() => void sc.signOut()}
+                              >
+                                Sign out
+                              </button>
+                            </>
+                          ) : sc.signingIn ? (
+                            <div className="settings-github-signin">
+                              <div className="settings-github-device-waiting">
+                                <span className="settings-github-spinner" aria-hidden="true" />
+                                <span>Saving token for {provider.label}…</span>
+                              </div>
+                              <button type="button" className="settings-secondary" onClick={() => {}}>
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="settings-github-status">
+                                <span className="settings-github-login">Not signed in</span>
+                                <small>
+                                  Paste a {provider.label} personal access token to enable private
+                                  clones and publish actions for this provider.
+                                </small>
+                              </div>
+                              <div className="settings-github-actions">
+                                <input
+                                  type="password"
+                                  placeholder="Personal access token"
+                                  value={draft}
+                                  onChange={(e) =>
+                                    setTokenDrafts({ ...tokenDrafts, [provider.value]: e.target.value })
+                                  }
+                                  disabled={sc.signingIn}
+                                />
+                                <button
+                                  type="button"
+                                  className="settings-primary"
+                                  onClick={handleSave}
+                                  disabled={sc.signingIn || !draft.trim()}
+                                >
+                                  Save token
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </Section>
+                    );
+                  })}
               </>
             )}
 
@@ -3786,6 +4049,41 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   )}
                 </Section>
 
+                <Section title="Long-running work">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Threads that go quiet stop competing for attention. Auto-settle drops an idle thread
+                    out of the active list after a quiet period — T3 Code's "Working section" equivalent.
+                    Settled threads are one click from resumption, so nothing is lost: they just stop
+                    reading as "in flight". The idle threshold is deliberately long; a thread still
+                    producing output keeps its activity advancing and stays active.
+                  </p>
+                  <SettingRow
+                    title="Auto-settle idle threads"
+                    detail={`Threads idle for ${Math.round(currentAutoSettleIdleMs / 60000)} minutes settle out of the active list.`}
+                  >
+                    <Toggle
+                      label="Toggle auto-settle idle threads"
+                      checked={currentAutoSettleEnabled}
+                      onChange={autoSettleEnabled.set}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Idle threshold"
+                    detail="Minutes of inactivity before a thread settles."
+                  >
+                    <input
+                      type="range"
+                      min="1"
+                      max="120"
+                      step="1"
+                      value={currentAutoSettleIdleMs / 60000}
+                      disabled={!currentAutoSettleEnabled}
+                      aria-label="Auto-settle idle threshold in minutes"
+                      onChange={(event) => autoSettleIdleMs.set(Number(event.target.value) * 60000)}
+                    />
+                  </SettingRow>
+                </Section>
+
                 <Section title="Browser">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Give agents a real browser so they can open what they just built, read the page
@@ -3980,6 +4278,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </div>
                 </Section>
 
+                <Section title="Managed installs">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Agents published to the ACP registry with a downloadable binary can be installed and
+                    managed by Spacron: each one is downloaded, its sha256 is verified against the registry,
+                    and it is extracted into Spacron's own config directory. npx/uvx-distributed agents need
+                    no install — they resolve at launch. Only agents with a binary for this platform show an
+                    install button.
+                  </p>
+                  <ManagedAgentInstalls />
+                </Section>
+
                 <Section title="ACP Registry">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Use ACP-capable agents in Chat mode with their own sign-in and model selection.
@@ -4094,6 +4403,51 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               </>
             )}
 
+            {activeTab === 'chat' && (
+              <>
+                <Section title="Chat Mode">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    How Chat mode behaves: whether messages queue while a turn runs, whether inline
+                    requests are auto-answered when your access tier allows, and the default access
+                    mode for new chat threads.
+                  </p>
+                  <SettingRow
+                    title="Queue messages while busy"
+                    detail="When a turn is running, new messages wait in the queue and run in order instead of being rejected."
+                  >
+                    <Toggle
+                      label="Toggle queue while busy"
+                      checked={currentChatQueueWhileBusy}
+                      onChange={chatQueueWhileBusy.set}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Auto-answer inline requests"
+                    detail="When your access tier allows, inline requests (approvals, choices, text input) are answered automatically instead of waiting for you."
+                  >
+                    <Toggle
+                      label="Toggle auto-answer inline requests"
+                      checked={currentChatAutoAnswerInline}
+                      onChange={chatAutoAnswerInline.set}
+                    />
+                  </SettingRow>
+                  <SettingRow title="Default access mode for new threads">
+                    <Dropdown
+                      options={[
+                        { value: 'inherit', label: 'Inherit from project default' },
+                        { value: 'supervised', label: 'Supervised (ask before every change)' },
+                        { value: 'auto-edits', label: 'Auto-edits (auto-accept file changes)' },
+                        { value: 'auto', label: 'Auto (approve edits, ask on system commands)' },
+                        { value: 'full-access', label: 'Full access (bypass all permission prompts)' },
+                      ]}
+                      value={currentChatDefaultAccessMode}
+                      onChange={(val) => chatDefaultAccessMode.set(val as ChatAccessMode)}
+                    />
+                  </SettingRow>
+                </Section>
+              </>
+            )}
+
             {activeTab === 'orchestrator' && <OrchestratorSettingsPane />}
             {activeTab === 'mcp' && <McpSettingsPane />}
             {activeTab === 'stats' && <UsageStatsPane />}
@@ -4158,7 +4512,26 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         ariaLabel="Application Action"
                       />
                     </div>
-                    
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>When Clause (optional)</span>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. editorFocused"
+                        value={customWhen}
+                        onChange={(e) => setCustomWhen(e.target.value)} 
+                        style={{
+                          background: 'var(--bg-secondary)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '6px',
+                          color: 'var(--text-primary)',
+                          padding: '6px 10px',
+                          fontSize: '13px',
+                          outline: 'none'
+                        }}
+                      />
+                    </div>
+
                     <button 
                       type="button"
                       className="settings-primary" 

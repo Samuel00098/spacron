@@ -1,7 +1,10 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import { useSettingsStore } from './zustand/settings';
 import type { McpServer } from '$lib/services/mcp-servers';
+import type { ChatAccessMode as ChatAccessModeType } from '$lib/types/chat';
 import { DEFAULT_MEDIA_GENERATION, type MediaGenerationSettings } from '$lib/services/media-generation';
+
+export type { ChatAccessModeType as ChatAccessMode };
 
 function persistentWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   if (typeof window === 'undefined') {
@@ -156,6 +159,12 @@ export const computerUse = persistentWritable('computerUse', false);
 // of the built-in list of password managers and security prompts.
 export const computerUseBlockedApps = persistentWritable<string[]>('computerUseBlockedApps', []);
 
+// Auto-settle idle threads so they drop out of the active list after a quiet
+// period — T3 Code's "Working section" equivalent. Settled threads are one click
+// from resumption but stop competing for attention.
+export const autoSettleEnabled = persistentWritable('autoSettleEnabled', true);
+export const autoSettleIdleMs = persistentWritable('autoSettleIdleMs', 5 * 60 * 1000);
+
 // ─── Failover on usage limits ───────────────────────────────────────────────
 // When an agent is about to run out of usage mid-feature, move the unfinished
 // work to one that still has headroom instead of letting it stop at the wall.
@@ -193,6 +202,19 @@ export const mediaGeneration = persistentWritable<MediaGenerationSettings>('medi
 // a user who never asked, and on a laptop away from a charger it is the wrong
 // trade. The hold is released the moment the last turn ends either way.
 export const keepSystemAwake = persistentWritable('keepSystemAwake', false);
+
+// ─── Source control ────────────────────────────────────────────────────────
+// Which provider Spacron uses for clone, push and PR actions. GitHub is the
+// only provider with OAuth sign-in; others use a personal access token.
+export const sourceControlProvider = persistentWritable<'github' | 'gitlab' | 'bitbucket' | 'other'>('sourceControlProvider', 'github');
+
+// ─── Chat mode ─────────────────────────────────────────────────────────────
+// How the chat composer behaves: whether messages queue while a turn runs,
+// whether inline requests are auto-answered when the tier allows, and the
+// default access mode for new chat threads.
+export const chatQueueWhileBusy = persistentWritable('chatQueueWhileBusy', true);
+export const chatAutoAnswerInline = persistentWritable('chatAutoAnswerInline', false);
+export const chatDefaultAccessMode = persistentWritable<ChatAccessModeType>('chatDefaultAccessMode', 'inherit');
 
 // Agent permissions & launch overrides — the Orca-style "Yolo" mode.
 //
@@ -1126,6 +1148,8 @@ export interface KeyboardShortcut {
   id: string;
   label: string;
   keys: string;
+  /** When-clause context — shortcut only fires when this matches. */
+  when?: string;
   action?: string; // For custom shortcuts: id of the app action (see shortcutActions) this key triggers
 }
 
@@ -1133,6 +1157,9 @@ export interface ShortcutAction {
   id: string;
   label: string;
   category: string;
+  /** Optional context clause — the shortcut only fires when this matches.
+   *  Examples: "editorFocused", "chatOpen", "terminalFocused". */
+  when?: string;
 }
 
 export const shortcutActions: ShortcutAction[] = [
@@ -1448,6 +1475,8 @@ export function resetSettingsToDefault() {
   autoStageAgentChanges.set(false);
   agentBrowserTools.set(false);
   keepSystemAwake.set(false);
+  autoSettleEnabled.set(true);
+  autoSettleIdleMs.set(5 * 60 * 1000);
   closeBehavior.set('quit');
   aiProvider.set('chatgpt');
   aiModelByProvider.set({});

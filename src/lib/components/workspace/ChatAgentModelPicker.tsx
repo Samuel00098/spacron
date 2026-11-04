@@ -3,6 +3,14 @@ import { createPortal } from 'react-dom';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import { get } from '$lib/stores/storeCompat';
 import { favouriteAgentCommands, sortAgentsByFavourite, toggleFavouriteAgent } from '$lib/stores/agentFavourites';
+import {
+  favouriteModels,
+  isFavouriteModel,
+  sortModelsByFavourite,
+  toggleFavouriteModel,
+  type FavouriteModelKey,
+} from '$lib/stores/modelFavourites';
+import { showToast } from '$lib/stores/notification';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 
 export type ChatEngineOption = { command: string; name: string };
@@ -61,6 +69,7 @@ export default function ChatAgentModelPicker({
   // Pinned agents first: the roster is long once ACP agents are installed, and
   // the one you keep reaching for should never be at the bottom of the list.
   const [favourites, setFavourites] = useState<string[]>(() => get(favouriteAgentCommands));
+  const [modelFavourites, setModelFavourites] = useState<FavouriteModelKey[]>(() => get(favouriteModels));
   const orderedAgents = useMemo(() => sortAgentsByFavourite(agents), [agents, favourites]);
   const selectedAgent = agents.find((agent) => agent.command === provider) ?? null;
   const selectedModel = modelsFor(provider).find((entry) => entry.id === model) ?? null;
@@ -69,11 +78,12 @@ export default function ChatAgentModelPicker({
     : selectedAgent?.name ?? 'Choose provider';
   const previewAgent = agents.find((agent) => agent.command === previewProvider) ?? selectedAgent;
   const previewModels = useMemo(() => modelsFor(previewProvider), [modelsFor, previewProvider]);
+  const orderedModels = useMemo(() => sortModelsByFavourite(previewModels, previewProvider), [previewModels, previewProvider, modelFavourites]);
   const filteredModels = useMemo(() => {
     const query = modelQuery.trim().toLocaleLowerCase();
-    if (!query) return previewModels;
-    return previewModels.filter((entry) => entry.label.toLocaleLowerCase().includes(query));
-  }, [modelQuery, previewModels]);
+    if (!query) return orderedModels;
+    return orderedModels.filter((entry) => entry.label.toLocaleLowerCase().includes(query));
+  }, [modelQuery, orderedModels]);
   const unavailableModelCount = filteredModels.filter((entry) => entry.supported === false).length;
   const previewModelIds = useMemo(() => previewModels.map((entry) => entry.id), [previewModels]);
 
@@ -143,6 +153,11 @@ export default function ChatAgentModelPicker({
     if (!open || !menuRef.current) return;
     placeMenu();
   }, [open]);
+
+  useEffect(() => {
+    const unsub = favouriteModels.subscribe((next) => setModelFavourites(next));
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -244,32 +259,50 @@ export default function ChatAgentModelPicker({
               <span className="chat-agent-model-loading">Loading models…</span>
             ) : filteredModels.length === 0 ? (
               <span className="chat-agent-model-loading">No matching models</span>
-            ) : filteredModels.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                className={`chat-agent-model-model${previewProvider === provider && entry.id === model ? ' active' : ''}${entry.supported === false ? ' unsupported' : ''}`}
-                disabled={entry.supported === false}
-                onClick={() => {
-                  if (entry.supported === false) return;
-                  onChange(previewProvider, entry.id);
-                  setOpen(false);
-                }}
-                role="option"
-                aria-selected={previewProvider === provider && entry.id === model}
-                aria-disabled={entry.supported === false}
-                title={entry.supportReason ?? entry.label}
-              >
-                <span className="chat-agent-model-model-text">
-                  <span className="chat-agent-model-model-label">{entry.label}</span>
-                  {entry.supported === false && <span className="chat-agent-model-model-status">Not supported yet</span>}
-                </span>
-                {renderModelBadges && entry.id !== 'default' ? renderModelBadges(previewProvider, entry.id, previewModelIds) : null}
-                {previewProvider === provider && entry.id === model && (
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
-                )}
-              </button>
-            ))}
+            ) : filteredModels.map((entry) => {
+              const pinned = isFavouriteModel(previewProvider, entry.id);
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={`chat-agent-model-model${previewProvider === provider && entry.id === model ? ' active' : ''}${entry.supported === false ? ' unsupported' : ''}`}
+                  disabled={entry.supported === false}
+                  onClick={(event) => {
+                    if (entry.supported === false) return;
+                    onChange(previewProvider, entry.id);
+                    setOpen(false);
+                  }}
+                  role="option"
+                  aria-selected={previewProvider === provider && entry.id === model}
+                  aria-disabled={entry.supported === false}
+                  title={entry.supportReason ?? entry.label}
+                >
+                  <span className="chat-agent-model-model-text">
+                    <span className="chat-agent-model-model-label">{entry.label}</span>
+                    {entry.supported === false && <span className="chat-agent-model-model-status">Not supported yet</span>}
+                  </span>
+                  <button
+                    type="button"
+                    className={`chat-agent-model-fav${pinned ? ' pinned' : ''}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const nowPinned = toggleFavouriteModel(previewProvider, entry.id);
+                      setModelFavourites(get(favouriteModels));
+                      showToast(nowPinned ? `Pinned ${entry.label}` : `Unpinned ${entry.label}`, 'info', 1500);
+                    }}
+                    aria-pressed={pinned}
+                    aria-label={pinned ? `Unpin ${entry.label}` : `Pin ${entry.label} to the top`}
+                    title={pinned ? `Unpin ${entry.label}` : `Pin ${entry.label} to the top`}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9 .9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z" /></svg>
+                  </button>
+                  {renderModelBadges && entry.id !== 'default' ? renderModelBadges(previewProvider, entry.id, previewModelIds) : null}
+                  {previewProvider === provider && entry.id === model && (
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
+                  )}
+                </button>
+              );
+            })}
             </div>
             <div className="chat-agent-model-menu-footer">
               <span>

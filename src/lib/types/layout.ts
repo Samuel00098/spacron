@@ -16,6 +16,8 @@ export type SettingsTab =
   | 'voice'
   | 'terminal'
   | 'agents'
+  | 'chat'
+  | 'source-control'
   | 'orchestrator'
   | 'mcp'
   | 'stats'

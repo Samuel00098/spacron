@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { get } from 'svelte/store';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useStore } from '$lib/react/useStore';
 import {
@@ -32,6 +33,7 @@ import {
   chatThreadState,
   closeChatThread,
   createChatThread,
+  reorderChatThread,
   selectChatThread,
   setChatThreadArchived,
   CHAT_SNOOZE_PRESETS,
@@ -345,6 +347,56 @@ export default function ProjectHUD() {
     });
   }
 
+  // ── Thread drag & drop reorder ─────────────────────────────────────────────
+  // Pointer-based (HTML5 DnD is unreliable inside Tauri). Press on a thread row,
+  // drag past the arm threshold, release on another row to move before it.
+  const [dragThreadId, setDragThreadId] = useState<string | null>(null);
+  const [dropBeforeId, setDropBeforeId] = useState<string | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; armed: boolean; threadId: string } | null>(null);
+
+  function threadHitTestDrop(clientX: number, clientY: number, draggedId: string): string | null {
+    const stack = document.elementsFromPoint(clientX, clientY);
+    const rowEl = stack.find((el): el is HTMLElement => el instanceof HTMLElement && el.classList.contains('project-thread-row'));
+    if (!rowEl) return null;
+    const id = rowEl.dataset.threadId;
+    if (!id || id === draggedId) return null;
+    const r = rowEl.getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) return id; // drop before this row
+    return null; // drop after — handled by the next row or end of list
+  }
+
+  function commitThreadDrop(draggedId: string, beforeId: string | null) {
+    const projectId = activeProjId;
+    if (!projectId) return;
+    const state = get(chatThreadState);
+    const threads = state.threadsByProject[projectId] ?? [];
+    const draggedIndex = threads.findIndex((t: { id: string }) => t.id === draggedId);
+    if (draggedIndex < 0) return;
+    const dragged = threads[draggedIndex];
+    const withoutDragged = threads.filter((t: { id: string }) => t.id !== draggedId);
+    const targetIndex = beforeId == null
+      ? withoutDragged.length
+      : withoutDragged.findIndex((t: { id: string }) => t.id === beforeId);
+    const insertAt = targetIndex < 0 ? withoutDragged.length : targetIndex;
+    const next = [...withoutDragged.slice(0, insertAt), dragged, ...withoutDragged.slice(insertAt)];
+    next.forEach((thread, index) => {
+      if (thread.order !== index) reorderChatThread(thread.id, index);
+    });
+  }
+
+  function endThreadDrag(dropAt?: { x: number; y: number }) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    setDragThreadId(null);
+    setDropBeforeId(null);
+    if (!drag.armed) return;
+    if (!dropAt) return;
+    const beforeId = threadHitTestDrop(dropAt.x, dropAt.y, drag.threadId);
+    if (beforeId === undefined) return;
+    commitThreadDrop(drag.threadId, beforeId);
+  }
+
   function toggleArchivedGroup(path: string) {
     setOpenArchivedGroups((prev) => {
       const next = new Set(prev);
@@ -442,6 +494,31 @@ export default function ProjectHUD() {
       cancelled = true;
     };
   }, [knownProjects]);
+
+  // Global pointer listeners for thread drag & drop reorder.
+  useEffect(() => {
+    function onMove(event: PointerEvent) {
+      const drag = dragRef.current;
+      if (!drag || !drag.armed) {
+        if (drag && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 6) {
+          drag.armed = true;
+        }
+        return;
+      }
+      const beforeId = threadHitTestDrop(event.clientX, event.clientY, drag.threadId);
+      setDropBeforeId(beforeId ?? null);
+    }
+    function onUp(event: PointerEvent) {
+      if (event.button !== 0) return;
+      endThreadDrag({ x: event.clientX, y: event.clientY });
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, []);
 
   const tasksByProject = useMemo(() => {
     const byProject = new Map<string, OrchestratorTask[]>();
@@ -1223,8 +1300,19 @@ export default function ProjectHUD() {
                       <div className={`project-thread-row-wrap${isSelected ? ' selected' : ''}${row.thread?.archived ? ' archived' : ''}`}>
                         <button
                           type="button"
-                          className={`project-thread-row status-${row.status}`}
+                          className={`project-thread-row status-${row.status}${dragThreadId === row.id ? ' dragging' : ''}${dropBeforeId === row.id ? ' drop-before' : ''}`}
+                          data-thread-id={row.id}
                           onClick={() => void openChatThread(p.workspaceId, p.path, row)}
+                          onPointerDown={(event) => {
+                            if (event.button !== 0) return;
+                            dragRef.current = {
+                              startX: event.clientX,
+                              startY: event.clientY,
+                              armed: false,
+                              threadId: row.id,
+                            };
+                            setDragThreadId(row.id);
+                          }}
                           title={`${row.title} · ${row.provider} · ${row.model} · ${chatStatusLabel(row.status)}`}
                         >
                           <span className="project-thread-copy">
