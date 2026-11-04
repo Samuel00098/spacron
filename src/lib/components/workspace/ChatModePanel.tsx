@@ -45,9 +45,7 @@ import {
   aiProviders,
   currentAiModel,
   getProviderDef,
-  getRealtimeEngineConfig,
   setAiModel,
-  voiceConversationEngine,
   type AiModelOption,
   type AiProviderId,
 } from '$lib/stores/settings';
@@ -69,13 +67,6 @@ import { acpCommandOverrides, acpDisabledCommands, acpExplicitCommands, acpRegis
 import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import AgentLaunchConfigFields from '$lib/components/shared/AgentLaunchConfigFields';
-import {
-  isRealtimeVoiceSupported,
-  REALTIME_VOICE_INSTRUCTIONS,
-  startRealtimeVoiceSession,
-  type RealtimeVoiceSession,
-  type RealtimeVoiceState,
-} from '$lib/services/realtime-voice';
 import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, ChatMessage, ChatReasoningEffort, ChatThread } from '$lib/types/chat';
 import type { Project } from '$lib/types/workspace';
 import { reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
@@ -192,10 +183,6 @@ async function toChatAttachment(file: File): Promise<ChatAttachment> {
 
 function PaperclipIcon() {
   return <svg className="chat-mode-composer-action-icon chat-mode-paperclip-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m20.5 11.5-8.75 8.75a5.3 5.3 0 0 1-7.5-7.5l9.25-9.25a3.75 3.75 0 0 1 5.3 5.3l-9.25 9.25a2.15 2.15 0 0 1-3.05-3.05l8.55-8.55" /></svg>;
-}
-
-function VoiceModeIcon() {
-  return <svg className="chat-mode-composer-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6M8 6v12M12 3v18M16 6v12M20 9v6" /></svg>;
 }
 
 function ImageIcon() {
@@ -714,21 +701,6 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const editingTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLFormElement | null>(null);
-  const [voicePhase, setVoicePhase] = useState<RealtimeVoiceState | 'idle'>('idle');
-  const voiceSessionRef = useRef<RealtimeVoiceSession | null>(null);
-  const voiceActiveRef = useRef(false);
-  // Voice exchanges stream into the THREAD so a conversation reads as "me
-  // sending a message, it replying back" — not just a rolling strip line. These
-  // refs keep that live mirror free of duplicates:
-  // - `voiceThreadIdRef` pins the thread the call started on (the closure's
-  //   `thread` can change if the user switches conversations mid-call).
-  // - `voiceEchoUserRef` is the id of the live user row so an orchestrator
-  //   turn can drop it before `sendChatMessage` records the real one.
-  // - `awaitingVoiceCommandReplyRef` suppresses the spoken echo of a reply
-  //   that `sendChatMessage` already recorded in the thread.
-  const voiceThreadIdRef = useRef<string | null>(null);
-  const voiceEchoUserRef = useRef<string | null>(null);
-  const awaitingVoiceCommandReplyRef = useRef(false);
 
   const projectThreads = project ? threadState.threadsByProject[project.id] ?? [] : [];
   const activeThreadId = project ? threadState.activeThreadByProject[project.id] ?? null : null;
@@ -1612,18 +1584,6 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     toggleChatModeTranscription();
   }
 
-  const voiceActive = voicePhase !== 'idle';
-  const voiceStatusClass = voicePhase === 'speaking'
-    ? 'speaking'
-    : voicePhase === 'listening'
-      ? 'listening'
-      : 'thinking';
-  const voiceStatusLabel = voicePhase === 'speaking'
-    ? 'Speaking'
-    : voicePhase === 'listening'
-      ? 'Listening'
-      : 'Thinking';
-
   // The composer's own dictation indicator. `transcriptionActive` tells the
   // truth from the very first beat — the microsecond the hotkey/button commits
   // to a capture, before `transcriptionState` leaves 'idle' (the mic-opening
@@ -1649,212 +1609,6 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     : transcriptionPhase === 'processing'
       ? 'thinking'
       : 'connecting';
-
-  // Runs one orchestrator turn from a live voice call and returns the brain's
-  // reply so the realtime model can speak it. Same path as CLI voice mode, but
-  // routed into the open chat thread so the exchange lands in the transcript.
-  async function runOrchestratorVoice(request: string): Promise<string> {
-    if (!project) return 'No project is open right now.';
-    // The live echo of this utterance ("You: …") is superseded by the turn's
-    // own rows — sendChatMessage appends the real user message and streams the
-    // real reply into the thread. Drop the echo so the turn reads once.
-    const echoId = voiceEchoUserRef.current;
-    voiceEchoUserRef.current = null;
-    if (echoId && voiceThreadIdRef.current) {
-      removeThreadMessage(voiceThreadIdRef.current, echoId);
-    }
-    try {
-      await sendChatMessage(project.id, project.root_path, request, {
-        projectName: project.name,
-        threadId: voiceThreadIdRef.current ?? thread?.id,
-        orchestratorProvider: selectedProvider,
-        orchestratorModel: selectedModel,
-        accessMode,
-        workMode,
-        voiceConversation: true,
-        conversationalMode: true,
-      });
-      // The turn's real reply is already in the thread now — suppress the
-      // spoken echo of it in onAssistantTranscript so it does not read twice.
-      // Cleared one-shot when that echo arrives (or on session teardown).
-      awaitingVoiceCommandReplyRef.current = true;
-    } catch (error) {
-      console.error('Voice orchestrator turn failed:', error);
-    }
-    const threadId = voiceThreadIdRef.current;
-    if (!threadId) return 'The orchestrator accepted the request.';
-    const threadMessages = get(chatThreadState).messagesByThread[threadId] ?? [];
-    for (let i = threadMessages.length - 1; i >= 0; i -= 1) {
-      const message = threadMessages[i];
-      if (message.role === 'assistant' && !message.pending && message.text?.trim()) {
-        return message.text.trim();
-      }
-      if (message.role === 'user') break;
-    }
-    return 'The orchestrator accepted the request.';
-  }
-
-  function resetVoiceThreadRefs() {
-    voiceEchoUserRef.current = null;
-    awaitingVoiceCommandReplyRef.current = false;
-    voiceThreadIdRef.current = null;
-  }
-
-  /** Stream one side of a live voice exchange into the open chat thread. */
-  function appendVoiceThreadMessage(role: 'user' | 'assistant', text: string): string | null {
-    const threadId = voiceThreadIdRef.current;
-    if (!threadId) return null;
-    const id = `voice-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    appendThreadMessage({
-      id,
-      threadId,
-      type: role === 'user' ? 'user' : 'agent',
-      role,
-      text,
-      ts: Date.now(),
-    });
-    if (standalone && role === 'assistant') updateChatThread(threadId, { status: 'idle', turnEndedAt: Date.now() });
-    return id;
-  }
-
-  async function startChatVoiceMode() {
-    const target = ensureConversationThread();
-    if (!project || !target) return;
-    voiceThreadIdRef.current = target.id;
-    const engineConfig = getRealtimeEngineConfig(get(voiceConversationEngine));
-    const { provider, label, keyProvider } = engineConfig;
-    if (!isRealtimeVoiceSupported(provider)) {
-      showToast(
-        `${label} voice isn't supported in this runtime. Try the other realtime engine in Settings → Voice, or the dictate button to speak text instead.`,
-        'warning',
-      );
-      openSettings();
-      return;
-    }
-    if (!isProviderApiKeyConfiguredLocal(keyProvider)) {
-      showToast(
-        `${label} needs ${engineConfig.keyName} API key. Add it in Settings, or switch the conversation engine.`,
-        'warning',
-      );
-      openSettings();
-      return;
-    }
-    // Tear down any lingering session from a previous attempt so its onEnded
-    // callback can't fire on this new session's state.
-    const prevSession = voiceSessionRef.current;
-    voiceSessionRef.current = null;
-    if (prevSession) {
-      try {
-        prevSession.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
-    voiceActiveRef.current = true;
-    setVoicePhase('connecting');
-    try {
-      const session = await startRealtimeVoiceSession({
-        provider,
-        connection: engineConfig.connection,
-        model: get(engineConfig.model),
-        voice: get(engineConfig.voice),
-        instructions: REALTIME_VOICE_INSTRUCTIONS,
-        callbacks: {
-          onStateChange: (state) => {
-            if (!voiceActiveRef.current) return;
-            setVoicePhase(state);
-          },
-          onUserTranscript: (text) => {
-            const clean = text.trim();
-            if (!clean || !voiceActiveRef.current) return;
-            // Stream the utterance into the thread as a real message so the
-            // voice conversation reads as me → it.
-            voiceEchoUserRef.current = appendVoiceThreadMessage('user', clean);
-          },
-          onAssistantTranscript: (text, final) => {
-            const clean = text.trim();
-            if (!clean || !voiceActiveRef.current) return;
-            if (!final) return;
-            if (awaitingVoiceCommandReplyRef.current) {
-              // The real reply was already recorded in the thread by
-              // sendChatMessage — this is its spoken echo, so skip the copy.
-              awaitingVoiceCommandReplyRef.current = false;
-              return;
-            }
-            appendVoiceThreadMessage('assistant', clean);
-          },
-          onOrchestratorCommand: (request) => runOrchestratorVoice(request),
-          onError: (message) => showToast(message, 'error'),
-          onEnded: () => {
-            // Fires for a spontaneous transport failure as well as stop(). A
-            // user-initiated stop already nulled the ref, so this only acts
-            // when the connection died on its own.
-            if (voiceSessionRef.current) {
-              voiceSessionRef.current = null;
-              voiceActiveRef.current = false;
-              resetVoiceThreadRefs();
-              setVoicePhase('idle');
-            }
-          },
-        },
-      });
-      if (!voiceActiveRef.current) {
-        // The user exited voice mode while the call was still connecting.
-        resetVoiceThreadRefs();
-        session.stop();
-        return;
-      }
-      voiceSessionRef.current = session;
-    } catch (error) {
-      voiceActiveRef.current = false;
-      setVoicePhase('idle');
-      showToast(
-        error instanceof Error ? error.message : `Could not start ${label} voice.`,
-        'error',
-      );
-    }
-  }
-
-  function stopChatVoiceMode() {
-    if (!voiceActiveRef.current) return;
-    voiceActiveRef.current = false;
-    resetVoiceThreadRefs();
-    setVoicePhase('idle');
-    const session = voiceSessionRef.current;
-    voiceSessionRef.current = null;
-    session?.stop();
-  }
-
-  function toggleChatVoiceMode() {
-    if (voiceActiveRef.current) stopChatVoiceMode();
-    else void startChatVoiceMode();
-  }
-
-  // The floating bar owns the bare-Alt gesture globally; in conversational
-  // mode it routes the tap here instead of opening its own (hidden) call.
-  // Consume the counter so Alt toggles the composer's voice session.
-  const lastChatVoiceRequestRef = useRef(chatVoiceRequest);
-  useEffect(() => {
-    if (chatVoiceRequest === lastChatVoiceRequestRef.current) return;
-    lastChatVoiceRequestRef.current = chatVoiceRequest;
-    if (chatVoiceRequest > 0) toggleChatVoiceMode();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatVoiceRequest]);
-
-  // Escape ends a live chat voice call the same way it ends the CLI bar's.
-  // Registered only while the call is up so it can't swallow Escape elsewhere.
-  useEffect(() => {
-    if (!voiceActive || typeof document === 'undefined') return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      stopChatVoiceMode();
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => document.removeEventListener('keydown', onKeyDown, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voiceActive]);
 
   async function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
     const items = Array.from(event.clipboardData.items).filter((item) => item.type.startsWith('image/'));
@@ -2178,7 +1932,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
       )}
       <div className="chat-mode-room-header">
         <div className="chat-mode-room-title">
-          <span className="chat-mode-room-icon" aria-hidden="true"><VoiceModeIcon /></span>
+          <span className="chat-mode-room-icon" aria-hidden="true"></span>
           <span className="chat-mode-room-kind">Chat</span>
           <strong>{standalone && (!thread || thread.title === 'New thread') ? 'New chat' : thread?.title ?? 'Conversation'}</strong>
           {/* Chat-level activity only ("Working", "Idle", "Needs input") — never a
@@ -2189,7 +1943,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
         </div>
         <div className="chat-mode-room-actions">
           {standalone && project && <button type="button" onClick={() => void invoke('chat_workspace_reveal', { workspaceId: thread?.standaloneWorkspaceId ?? project.id.replace(/^chat-/, '') }).catch((error) => showToast(String(error), 'error'))}>Files</button>}
-          {standalone && thread && messages.some((message) => message.role === 'user') && <button type="button" disabled={thread.status === 'working' || thread.status === 'needs-input' || pendingSendCount > 0 || voiceActive} onClick={() => beginProjectFromChat(thread.id)}>Create project from chat</button>}
+          {standalone && thread && messages.some((message) => message.role === 'user') && <button type="button" disabled={thread.status === 'working' || thread.status === 'needs-input' || pendingSendCount > 0} onClick={() => beginProjectFromChat(thread.id)}>Create project from chat</button>}
           {project && <button type="button" onClick={startNewThread}>{standalone ? 'New chat' : 'New conversation'}</button>}
         </div>
       </div>
@@ -2669,7 +2423,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               onAnswer={(answer) => void answerPendingRequest(answer)}
             />
           )}
-          <form ref={composerRef} className={`chat-mode-composer${voiceActive ? ' voice-active' : ''}${isComposerDragOver ? ' drag-over' : ''}`} onSubmit={(event) => { event.preventDefault(); void submit(); }} onDragOver={handleComposerDragOver} onDragLeave={handleComposerDragLeave} onDrop={(event) => void handleComposerDrop(event)}>
+          <form ref={composerRef} className={`chat-mode-composer${isComposerDragOver ? ' drag-over' : ''}`} onSubmit={(event) => { event.preventDefault(); void submit(); }} onDragOver={handleComposerDragOver} onDragLeave={handleComposerDragLeave} onDrop={(event) => void handleComposerDrop(event)}>
           {isComposerDragOver && (
             <div className="chat-mode-drop-overlay" aria-hidden="true">
               Drop files to attach
@@ -2755,7 +2509,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               ))}
             </div>
           )}
-          <div className={`chat-mode-composer-input-shell${dictationLive ? ' is-dictating' : ''}${voiceActive ? ' is-voice-active' : ''}`}>
+          <div className={`chat-mode-composer-input-shell${dictationLive ? ' is-dictating' : ''}`}>
             <textarea
               ref={textareaRef}
               value={composerValue}
@@ -2812,21 +2566,6 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                   <button key={path} type="button" role="option" aria-selected={index === fileMatchIndex}
                     onMouseDown={(event) => event.preventDefault()} onClick={() => pickFileMention(path)}>{path}</button>
                 ))}
-              </div>
-            )}
-            {voiceActive && (
-              <div className="chat-mode-composer-voice-stage" role="status" aria-label="Voice mode active">
-                <div className="chat-mode-composer-voice-spectrum">
-                  <SpectrumVisualizer
-                    phase={voicePhase as SpectrumPhase}
-                    barCount={32}
-                    glow
-                    height={36}
-                  />
-                </div>
-                <span className={`chat-mode-composer-voice-status ${voiceStatusClass}`} aria-live="polite">
-                  {voiceStatusLabel}
-                </span>
               </div>
             )}
             {dictationLive && (
@@ -2950,8 +2689,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
             <div className="chat-mode-composer-actions">
               <button type="button" className="chat-mode-composer-icon-btn" onClick={() => { if (standalone) ensureConversationThread(); fileInputRef.current?.click(); }} disabled={!project || attachmentBusy || attachments.length >= 5} title="Attach files or images (or drag and drop files here, paste images)" aria-label="Attach files or images"><PaperclipIcon /></button>
               <button type="button" className="chat-mode-composer-icon-btn" onClick={openThreadPicker} disabled={!project} title="@-mention another thread to bring its recent context into this message" aria-label="@-mention a thread">@</button>
-              <button type="button" className={`chat-mode-composer-icon-btn${dictationLive ? ' active' : ''}`} onClick={toggleDictation} disabled={!project || transcriptionPhase === 'processing' || voiceActive} title={dictationLive ? 'Stop dictation and put the transcript in the composer' : 'Dictate a message'} aria-label="Dictate a message"><VoiceInputIcon className="chat-mode-composer-action-icon chat-mode-microphone-icon" /></button>
-              <button type="button" className={`chat-mode-composer-icon-btn${voiceActive ? ' active' : ''}`} onClick={toggleChatVoiceMode} disabled={!project} title="Start voice mode" aria-label="Start voice mode"><VoiceModeIcon /></button>
+              <button type="button" className={`chat-mode-composer-icon-btn${dictationLive ? ' active' : ''}`} onClick={toggleDictation} disabled={!project || transcriptionPhase === 'processing'} title={dictationLive ? 'Stop dictation and put the transcript in the composer' : 'Dictate a message'} aria-label="Dictate a message"><VoiceInputIcon className="chat-mode-composer-action-icon chat-mode-microphone-icon" /></button>
               {dictationLive && (
                 <button
                   type="button"

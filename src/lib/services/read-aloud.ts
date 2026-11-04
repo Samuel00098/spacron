@@ -226,3 +226,17 @@ export function previewReadAloud(engine: ReadAloudEngine, voice: string): void {
   if (engine === 'system') readSystem([sample], mine);
   else void readCloud(engine, voice, sample, mine);
 }
+
+/** Speak `markdown` aloud using the current read-aloud settings (engine + voice).
+ * Used to read agent completion responses back to the user after a turn finishes.
+ * Safe to call multiple times — each call interrupts the previous one. */
+export function speakText(markdown: string): void {
+  stopReadAloud();
+  const text = speakableText(markdown);
+  if (!text) return;
+  const mine = session;
+  readAloudMessageId.set('__completion__');
+  const settings = get(readAloudSettings);
+  if (settings.engine === 'system') readSystem(speechChunks(text), mine);
+  else void readCloud(settings.engine, readAloudVoiceFor(settings), text, mine);
+}

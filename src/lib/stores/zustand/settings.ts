@@ -125,13 +125,6 @@ function migrateLegacySettings() {
     localStorage.removeItem('forge_setting_voiceRefinementModel');
   }
 
-  // The STT -> brain -> TTS 'pipeline' engine is gone; it silently routed to
-  // OpenAI Realtime anyway, so make that explicit rather than leaving a value
-  // no branch handles.
-  if (persistentValue<string>('voiceConversationEngine', '') === 'pipeline') {
-    persistValue('voiceConversationEngine', 'openai-realtime');
-  }
-
   // Move webgl users to canvas once. WebGL has unreliable font-glyph atlas
   // invalidation after a font-family change, and — the reason this migration
   // exists — a page only gets 16 WebGL contexts before the oldest are evicted,
@@ -233,24 +226,8 @@ function createSettingsState() {
     // stores/settings.ts. Undeclared, the wrapper's boot read hit undefined and
     // the toggle reset every launch, so turning it on could never stick.
     transcriptionAutoSend: persistentValue('transcriptionAutoSend', false),
-    // Vercel AI Gateway realtime voice picks (stores/settings.ts). Declared so
-    // they survive a restart.
-    vercelRealtimeModel: persistentValue('vercelRealtimeModel', 'openai/gpt-realtime-2'),
-    vercelRealtimeVoice: persistentValue('vercelRealtimeVoice', ''),
-    // Hands-free voice engine and its per-engine model/voice picks
-    // (stores/settings.ts). Undeclared, they reset on every launch. The engine
-    // union is inlined to keep this store leaf-level; keep it and every default
-    // in step with stores/settings.ts.
-    voiceConversationEngine: persistentValue<'openai-realtime' | 'xai-realtime' | 'openai-live' | 'vercel-realtime'>('voiceConversationEngine', 'openai-realtime'),
-    openaiRealtimeModel: persistentValue('openaiRealtimeModel', 'gpt-realtime-2.1-mini'),
-    openaiRealtimeVoice: persistentValue('openaiRealtimeVoice', 'marin'),
-    openaiRealtimeConnection: persistentValue('openaiRealtimeConnection', 'openai'),
     jevProvider: persistentValue('jevProvider', 'typesafe'),
     jevAgentTool: persistentValue('jevAgentTool', false),
-    openaiLiveModel: persistentValue('openaiLiveModel', 'gpt-live-1'),
-    openaiLiveVoice: persistentValue('openaiLiveVoice', 'marin'),
-    xaiRealtimeModel: persistentValue('xaiRealtimeModel', 'grok-voice-latest'),
-    xaiRealtimeVoice: persistentValue('xaiRealtimeVoice', 'eve'),
     announceAgentCompletions: persistentValue('announceAgentCompletions', true),
     // Orchestrator skills (services/orchestrator/skills.ts): built-ins switched
     // off, and the user's own. Shape kept inline so this store stays leaf-level.
@@ -366,18 +343,8 @@ const defaults: SettingsValues = {
   voiceAiProvider: 'groq',
   voiceAiModelByProvider: {},
   transcriptionAutoSend: false,
-  vercelRealtimeModel: 'openai/gpt-realtime-2',
-  vercelRealtimeVoice: '',
-  voiceConversationEngine: 'openai-realtime',
-  openaiRealtimeModel: 'gpt-realtime-2.1-mini',
-  openaiRealtimeVoice: 'marin',
-  openaiRealtimeConnection: 'openai',
   jevProvider: 'typesafe',
   jevAgentTool: false,
-  openaiLiveModel: 'gpt-live-1',
-  openaiLiveVoice: 'marin',
-  xaiRealtimeModel: 'grok-voice-latest',
-  xaiRealtimeVoice: 'eve',
   announceAgentCompletions: true,
   orchestratorDisabledSkills: [],
   orchestratorCustomSkills: [],
@@ -501,18 +468,8 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       voiceAiProvider: 'voiceAiProvider',
       voiceAiModelByProvider: 'voiceAiModelByProvider',
       transcriptionAutoSend: 'transcriptionAutoSend',
-      vercelRealtimeModel: 'vercelRealtimeModel',
-      vercelRealtimeVoice: 'vercelRealtimeVoice',
-      voiceConversationEngine: 'voiceConversationEngine',
-      openaiRealtimeModel: 'openaiRealtimeModel',
-      openaiRealtimeVoice: 'openaiRealtimeVoice',
-      openaiRealtimeConnection: 'openaiRealtimeConnection',
       jevProvider: 'jevProvider',
       jevAgentTool: 'jevAgentTool',
-      openaiLiveModel: 'openaiLiveModel',
-      openaiLiveVoice: 'openaiLiveVoice',
-      xaiRealtimeModel: 'xaiRealtimeModel',
-      xaiRealtimeVoice: 'xaiRealtimeVoice',
       announceAgentCompletions: 'announceAgentCompletions',
       aiProvider: 'aiProvider',
       aiModelByProvider: 'aiModelByProvider',

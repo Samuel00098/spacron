@@ -77,7 +77,7 @@ import {
   type AiProviderId,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal, providerApiKeyExists } from '$lib/services/ai-keychain';
-import { announceViaRealtimeVoice } from '$lib/services/realtime-voice';
+import { speakText } from '$lib/services/read-aloud';
 import { playNudge } from '$lib/services/nudge';
 import {
   createTaskRecord,
@@ -950,11 +950,10 @@ function announceCompletionAloud(
       status === 'failed' ? `${name} failed: ${title}.` :
       `${name} finished: ${title}.`;
     // Inject the update into the live call so the model mentions it in its own
-    // voice. If no call is actually up (announceViaRealtimeVoice returns false)
-    // fall back to the chime rather than letting the update pass unheard.
-    if (!announceViaRealtimeVoice(line)) {
-      playNudge(status);
-    }
+    // voice. If no call is actually up fall back to the chime rather than
+    // letting the update pass unheard.
+    speakText(line);
+    playNudge(status);
     return;
   }
   playNudge(status);
@@ -1292,6 +1291,13 @@ async function notifyChatCompletion(
   );
   if (!get(announceAgentCompletions)) return;
   playNudge(status);
+  speakText(
+    status === 'done'
+      ? `${agentName} finished. ${title ?? ''}`
+      : status === 'failed'
+        ? `${agentName} failed. ${title ?? ''}`
+        : `${agentName} needs input. ${title ?? ''}`
+  );
 }
 
 // ─── Mailbox card actions ─────────────────────────────────────────────────────
@@ -3700,13 +3706,10 @@ function notifyAdoptedTurnEnd(
   // The completion card below is the one visual notification for this turn end —
   // a toast would duplicate it. The chime stays as the "right now" audio cue.
   if (!silent && get(announceAgentCompletions)) {
-    // In voice mode the realtime model relays it in its own voice; a chime on
-    // top of a live call is jarring. Same split as announceCompletionAloud.
-    if (get(agentVoiceModeActive)) {
-      announceViaRealtimeVoice(spokenTurnEnd(name, told));
-    } else {
-      playNudge(told.status === 'done' ? 'done' : 'blocked');
-    }
+    // Read the turn end back via TTS, then chime. A chime on top of TTS is fine
+    // — they're complementary (voice says what happened, chime grabs attention).
+    speakText(spokenTurnEnd(name, told));
+    playNudge(told.status === 'done' ? 'done' : 'blocked');
   }
 
   // A hand-launched agent can still be one a conversation has been driving —
@@ -3938,11 +3941,8 @@ export function recordUnwatchedAgentReport(
   // The same audio cue every other declared turn end gets. The card above is
   // the only visual one — see the dedupe note on `notifyAdoptedTurnEnd`.
   if (get(announceAgentCompletions)) {
-    if (get(agentVoiceModeActive)) {
-      announceViaRealtimeVoice(spokenTurnEnd(name, told));
-    } else {
-      playNudge(told.status === 'done' ? 'done' : 'blocked');
-    }
+    speakText(spokenTurnEnd(name, told));
+    playNudge(told.status === 'done' ? 'done' : 'blocked');
   }
 
   return { kind: 'filed', projectId };
