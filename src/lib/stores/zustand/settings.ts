@@ -55,6 +55,7 @@ const RETIRED_SHORTCUT_IDS = new Set([
   'goToYoutube',
   'openDailyNote',
   'toggleSketch',
+  'launchVoiceMode',
 ]);
 
 function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] {

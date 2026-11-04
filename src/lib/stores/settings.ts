@@ -1067,9 +1067,6 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'zoomOut',        label: 'Zoom Out',        category: 'Window' },
   { id: 'resetZoom',      label: 'Reset Zoom',      category: 'Window' },
   { id: 'spawnAgent',     label: 'Spawn Agents',     category: 'Workspace' },
-  // openDailyNote removed
-  // toggleSketch removed
-  { id: 'launchVoiceMode', label: 'Launch Voice Mode', category: 'Voice' },
   { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', category: 'Voice' },
   // Canvas actions removed with the Canvas view.
   { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', category: 'View' },
@@ -1105,11 +1102,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'zoomOut',        label: 'Zoom Out',        keys: 'Ctrl+-' },
   { id: 'resetZoom',      label: 'Reset Zoom',      keys: 'Ctrl+0' },
   { id: 'spawnAgent',     label: 'Spawn Agents',     keys: 'Ctrl+Shift+A' },
-  // openDailyNote removed
-  // toggleSketch removed
-  { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
   { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'F9' },
-  // canvasZoomIn / canvasZoomOut / canvasResetZoom removed with the Canvas view.
   { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
 ];
 
