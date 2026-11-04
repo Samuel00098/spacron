@@ -6234,7 +6234,7 @@ export async function sendChatMessage(
             contextUsage: {
               used: usage.inputTokens ?? 0,
               size: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
-              cost: usage.cost ?? null,
+              cost: usage.cost != null ? { amount: usage.cost, currency: 'USD' } : null,
               updatedAt: Date.now(),
             },
           });

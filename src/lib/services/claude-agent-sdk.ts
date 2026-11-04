@@ -62,12 +62,13 @@ export async function runClaudeAgentSdkTurn(opts: ClaudeAgentSdkTurnOptions): Pr
         }
       }
     } else if (message.type === 'result') {
+      const u: Record<string, unknown> | null = message.usage ?? null;
       const usage: ClaudeUsage = {
-        inputTokens: message.usage?.input_tokens ?? message.usage?.inputTokens,
-        outputTokens: message.usage?.output_tokens ?? message.usage?.outputTokens,
-        cacheReadTokens: message.usage?.cache_read_input_tokens ?? message.usage?.cacheReadTokens,
-        cacheWriteTokens: message.usage?.cache_write_input_tokens ?? message.usage?.cacheWriteTokens,
-        cost: message.usage?.cost,
+        inputTokens: u?.['input_tokens'] as number | undefined,
+        outputTokens: u?.['output_tokens'] as number | undefined,
+        cacheReadTokens: u?.['cache_read_input_tokens'] as number | undefined,
+        cacheWriteTokens: u?.['cache_write_input_tokens'] as number | undefined,
+        cost: u?.['cost'] as number | undefined,
       };
       opts.onUsage?.(usage);
     }
