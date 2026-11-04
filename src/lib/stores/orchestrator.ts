@@ -4787,9 +4787,11 @@ async function sendPiRpcChatTurn(
     while (!settled) await new Promise((resolve) => setTimeout(resolve, 50));
     patchChat(projectId, assistantId, { text: responseText || 'Pi completed the turn without returning text.', pending: false });
     updateChatThread(thread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? command, 'done');
   } catch (error) {
     patchChat(projectId, assistantId, { text: `Native Pi RPC failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`, pending: false, type: 'failure' });
     updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? command, 'failed');
   } finally {
     await unlisten();
     await unlistenStderr();
@@ -4859,6 +4861,7 @@ async function sendNativeCodexChatTurn(
       nativeAcpSessionId: null,
       nativeAcpModel: model ?? null,
     });
+    await notifyChatCompletion(projectId, rootPath, 'Codex', 'done');
   } catch (error) {
     patchChat(projectId, assistantId, {
       text: `Native Codex Chat failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -4866,6 +4869,7 @@ async function sendNativeCodexChatTurn(
       type: 'failure',
     });
     updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, 'Codex', 'failed');
   }
 }
 
@@ -5174,6 +5178,7 @@ async function sendNativeAcpChatTurn(
       updatedAt: Date.now(),
       lastActivityAt: Date.now(),
     });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? agentCommand, 'done');
   } catch (error) {
     patchChat(projectId, assistantId, {
       text: `Native ACP handoff failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`,
@@ -5181,6 +5186,7 @@ async function sendNativeAcpChatTurn(
       type: 'failure',
     });
     updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    await notifyChatCompletion(projectId, rootPath, displayName ?? agentCommand, 'failed');
   } finally {
     await unlisten();
     await unlistenRequest();
