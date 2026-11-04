@@ -466,8 +466,8 @@ export function isPiProvider(command: string): boolean {
   return getChatProviderAdapter(command)?.id === 'pi';
 }
 
-export function isCodexProvider(command: string): boolean {
-  return getChatProviderAdapter(command)?.id === 'codex';
+export function isClaudeProvider(command: string): boolean {
+  return getChatProviderAdapter(command)?.id === 'claude';
 }
 
 export function getAgentProviderLaunchOptions(

@@ -197,7 +197,7 @@ import { requestAgentPlacement, defaultAgentPlacement, type AgentLaunchChoice, t
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
-import { getAgentProviderLaunchOptions, isChatAgentProvider, isCodexProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
+import { getAgentProviderLaunchOptions, isChatAgentProvider, isClaudeProvider, isCodexProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
 import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
 import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
@@ -226,6 +226,7 @@ import { normalizeAcpUpdate, parseAcpPlan, parseAcpUsage } from '$lib/services/a
 import { activityFromAcpUpdate, type AcpActivity } from '$lib/services/acp-activity';
 import { openPty, type PtySession } from '$lib/services/pty-bridge';
 import { isPiSettled, openPiRpcSession, piPrompt, piTextDelta, type PiRpcSession } from '$lib/services/pi-rpc';
+import { runClaudeAgentSdkTurn } from '$lib/services/claude-agent-sdk';
 
 type AcpApprovalWaiter = {
   respond: (result: Record<string, unknown>, error?: Record<string, unknown>) => Promise<void>;
@@ -6212,6 +6213,27 @@ export async function sendChatMessage(
       opts.forcedAgent,
       opts.reasoningEffort,
     );
+    return;
+  }
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isClaudeProvider(opts.forcedAgent)) {
+    const userId = msgId();
+    const assistantId = msgId();
+    appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
+    appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: opts.forcedAgent }, chatThread.id);
+    updateChatThread(chatThread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+    try {
+      const result = await runClaudeAgentSdkTurn({
+        prompt: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+        cwd: threadWorkingRoot(chatThread, rootPath),
+        permissionMode: 'default',
+        onText: (value) => patchChat(projectId, assistantId, { text: value, pending: true }),
+      });
+      patchChat(projectId, assistantId, { text: result || 'Claude completed the turn without returning text.', pending: false });
+      updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+    } catch (error) {
+      patchChat(projectId, assistantId, { text: `Claude Agent SDK failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
+      updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    }
     return;
   }
   if (opts?.chatMode && chatThread && opts.forcedAgent && isPiProvider(opts.forcedAgent)) {
