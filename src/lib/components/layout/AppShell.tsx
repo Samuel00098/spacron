@@ -1597,13 +1597,6 @@ export default function AppShell() {
         case 'spawnAgent':
           openAgentSpawn();
           break;
-        // openDailyNote removed
-        // toggleSketch removed
-        case 'launchVoiceMode':
-          // Voice mode was removed — route to single-shot dictation instead so
-          // the user can still speak text into the focused field or terminal.
-          toggleTerminalTranscription();
-          break;
         case 'cycleAmbientLayout': {
           // Two reachable arrangements now that Fleet is an action rather than a
           // mode: Focus ↔ Split.
