@@ -74,6 +74,7 @@ import {
   getProviderDef,
   getProviderBaseUrl,
   announceAgentCompletions,
+  speakAgentCompletions,
   type AiProviderId,
 } from '$lib/stores/settings';
 import { isProviderApiKeyConfiguredLocal, providerApiKeyExists } from '$lib/services/ai-keychain';
@@ -944,18 +945,11 @@ function announceCompletionAloud(
   title: string
 ): void {
   if (!get(announceAgentCompletions)) return;
-  if (get(agentVoiceModeActive)) {
-    const line =
-      status === 'blocked' ? `${name} needs your input: ${title}.` :
-      status === 'failed' ? `${name} failed: ${title}.` :
-      `${name} finished: ${title}.`;
-    // Inject the update into the live call so the model mentions it in its own
-    // voice. If no call is actually up fall back to the chime rather than
-    // letting the update pass unheard.
-    speakText(line);
-    playNudge(status);
-    return;
-  }
+  const line =
+    status === 'blocked' ? `${name} needs your input: ${title}.` :
+    status === 'failed' ? `${name} failed: ${title}.` :
+    `${name} finished: ${title}.`;
+  if (get(speakAgentCompletions)) speakText(line);
   playNudge(status);
 }
 
@@ -1291,13 +1285,15 @@ async function notifyChatCompletion(
   );
   if (!get(announceAgentCompletions)) return;
   playNudge(status);
-  speakText(
-    status === 'done'
-      ? `${agentName} finished. ${title ?? ''}`
-      : status === 'failed'
-        ? `${agentName} failed. ${title ?? ''}`
-        : `${agentName} needs input. ${title ?? ''}`
-  );
+  if (get(speakAgentCompletions)) {
+    speakText(
+      status === 'done'
+        ? `${agentName} finished. ${title ?? ''}`
+        : status === 'failed'
+          ? `${agentName} failed. ${title ?? ''}`
+          : `${agentName} needs input. ${title ?? ''}`
+    );
+  }
 }
 
 // ─── Mailbox card actions ─────────────────────────────────────────────────────
@@ -3708,7 +3704,7 @@ function notifyAdoptedTurnEnd(
   if (!silent && get(announceAgentCompletions)) {
     // Read the turn end back via TTS, then chime. A chime on top of TTS is fine
     // — they're complementary (voice says what happened, chime grabs attention).
-    speakText(spokenTurnEnd(name, told));
+    if (get(speakAgentCompletions)) speakText(spokenTurnEnd(name, told));
     playNudge(told.status === 'done' ? 'done' : 'blocked');
   }
 
@@ -3941,7 +3937,7 @@ export function recordUnwatchedAgentReport(
   // The same audio cue every other declared turn end gets. The card above is
   // the only visual one — see the dedupe note on `notifyAdoptedTurnEnd`.
   if (get(announceAgentCompletions)) {
-    speakText(spokenTurnEnd(name, told));
+    if (get(speakAgentCompletions)) speakText(spokenTurnEnd(name, told));
     playNudge(told.status === 'done' ? 'done' : 'blocked');
   }
 

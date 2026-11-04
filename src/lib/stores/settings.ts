@@ -867,6 +867,9 @@ export const voiceAiModelByProvider = persistentWritable<Record<string, string>>
 export type VoiceConversationEngine = 'none';
 export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('none');
 export const announceAgentCompletions = persistentWritable<boolean>('announceAgentCompletions', true);
+/** Whether agent completion turns (done / failed / needs input) are read aloud
+ * via text-to-speech in addition to the chime + inbox + toast. */
+export const speakAgentCompletions = persistentWritable<boolean>('speakAgentCompletions', true);
 
 /** Built-in orchestrator skills the user switched off in Settings (by skill id). */
 export const orchestratorDisabledSkills = persistentWritable<string[]>('orchestratorDisabledSkills', []);

@@ -77,6 +77,7 @@ import {
   smartVadEnabled,
   transcriptionAutoSend,
   announceAgentCompletions,
+  speakAgentCompletions,
   autoSettleEnabled,
   autoSettleIdleMs,
   orchestratorCustomSkills,
@@ -652,6 +653,7 @@ function ReadAloudSection() {
   const settings = useStore(readAloudSettings) as ReadAloudSettings;
   const engine = settings.engine;
   const voice = readAloudVoiceFor(settings);
+  const speakCompletions = useStore(speakAgentCompletions);
   const [keyInput, setKeyInput] = useState('');
   const [keyExists, setKeyExists] = useState<boolean | null>(null);
   const [keyError, setKeyError] = useState('');
@@ -726,6 +728,12 @@ function ReadAloudSection() {
           onChange={setEngine}
           ariaLabel="Read aloud voice engine"
         />
+      </SettingRow>
+      <SettingRow
+        title="Read agent completions aloud"
+        detail="Read task completion replies (done / failed / needs input) out loud via text-to-speech in both chat and terminal modes."
+      >
+        <Toggle label="Read completions aloud" checked={speakCompletions} onChange={speakAgentCompletions.set} />
       </SettingRow>
       {engine !== 'system' && (
         <SettingRow title="Voice" detail={voicesError || undefined}>

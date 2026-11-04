@@ -1159,12 +1159,6 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     if (element) element.scrollTop = element.scrollHeight;
   }, [messages.length]);
 
-  useEffect(() => {
-    // Release the mic when the chat panel unmounts mid-call.
-    return () => stopChatVoiceMode();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   function selectProvider(nextValue: string) {
     if (!thread || !providerIds.has(nextValue as AiProviderId)) return;
     const nextProvider = nextValue as AiProviderId;

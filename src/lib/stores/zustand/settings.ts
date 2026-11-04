@@ -229,6 +229,7 @@ function createSettingsState() {
     jevProvider: persistentValue('jevProvider', 'typesafe'),
     jevAgentTool: persistentValue('jevAgentTool', false),
     announceAgentCompletions: persistentValue('announceAgentCompletions', true),
+    speakAgentCompletions: persistentValue('speakAgentCompletions', true),
     // Orchestrator skills (services/orchestrator/skills.ts): built-ins switched
     // off, and the user's own. Shape kept inline so this store stays leaf-level.
     orchestratorDisabledSkills: persistentValue<string[]>('orchestratorDisabledSkills', []),
