@@ -2,6 +2,10 @@ import { getAgentDisplayName } from '$lib/stores/terminal';
 import {
   getAgentProviderCapabilities as getAdapterCapabilities,
   getAgentProviderLaunchOptions,
+  getChatProviderTransport,
+  getNativeChatProviderTransport,
+  isPiProvider,
+  isCodexProvider,
   getLiveAgentModelCommand,
   isChatAgentProvider,
   mergeAgentProviderModels,
@@ -13,6 +17,7 @@ import type {
   AgentProviderModel,
   ChatProviderAdapter,
   ChatProviderProtocol,
+  ChatProviderTransport,
 } from './chat-provider-adapters';
 
 export function getAgentProviderCapabilities(command: string, label = getAgentDisplayName(command) ?? command): AgentProviderCapabilities {
@@ -21,6 +26,10 @@ export function getAgentProviderCapabilities(command: string, label = getAgentDi
 
 export {
   getAgentProviderLaunchOptions,
+  getChatProviderTransport,
+  getNativeChatProviderTransport,
+  isPiProvider,
+  isCodexProvider,
   getLiveAgentModelCommand,
   isChatAgentProvider,
   mergeAgentProviderModels,
@@ -32,4 +41,5 @@ export type {
   AgentProviderModel,
   ChatProviderAdapter,
   ChatProviderProtocol,
+  ChatProviderTransport,
 };

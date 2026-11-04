@@ -1,5 +1,6 @@
 use crate::acp::AcpManager;
 use crate::lsp::bridge::LspBridge;
+use crate::pi::PiManager;
 use crate::preview::PreviewManager;
 use crate::pty::manager::PtyManager;
 use crate::theme::registry::ThemeRegistry;
@@ -50,6 +51,7 @@ pub struct AppState {
     pub write_rate_limiter: WriteRateLimiter,
     pub config_dir: PathBuf,
     pub acp_manager: Arc<AcpManager>,
+    pub pi_manager: Arc<PiManager>,
 }
 
 impl AppState {
@@ -64,6 +66,7 @@ impl AppState {
             write_rate_limiter: WriteRateLimiter::new(),
             config_dir,
             acp_manager: Arc::new(AcpManager::new()),
+            pi_manager: Arc::new(PiManager::new()),
         }
     }
 }

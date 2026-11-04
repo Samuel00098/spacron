@@ -197,7 +197,7 @@ import { requestAgentPlacement, defaultAgentPlacement, type AgentLaunchChoice, t
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
-import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
+import { getAgentProviderLaunchOptions, isChatAgentProvider, isCodexProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
 import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
 import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
@@ -225,6 +225,7 @@ import { acpMcpServers } from '$lib/services/orchestrator/mcp-client';
 import { normalizeAcpUpdate, parseAcpPlan, parseAcpUsage } from '$lib/services/acp-protocol';
 import { activityFromAcpUpdate, type AcpActivity } from '$lib/services/acp-activity';
 import { openPty, type PtySession } from '$lib/services/pty-bridge';
+import { isPiSettled, openPiRpcSession, piPrompt, piTextDelta, type PiRpcSession } from '$lib/services/pi-rpc';
 
 type AcpApprovalWaiter = {
   respond: (result: Record<string, unknown>, error?: Record<string, unknown>) => Promise<void>;
@@ -237,6 +238,8 @@ const activeAcpTurns = new Map<string, {
   session: { notify(method: string, params: Record<string, unknown>): Promise<void> };
   sessionId?: string;
 }>();
+const activePiTurns = new Map<string, PiRpcSession>();
+const piSessions = new Map<string, { command: string; session: PiRpcSession }>();
 import {
   getProjectMemoryLines,
   loadProjectMemory,
@@ -4678,6 +4681,143 @@ function acpPermissionRequest(value: Record<string, unknown>): {
   };
 }
 
+async function sendPiRpcChatTurn(
+  projectId: string,
+  rootPath: string,
+  text: string,
+  thread: NonNullable<ReturnType<typeof getChatThread>>,
+  command: string,
+  attachments: ChatAttachment[],
+  displayName?: string,
+): Promise<void> {
+  const userId = msgId();
+  const assistantId = msgId();
+  const cwd = threadWorkingRoot(thread, rootPath);
+  const prompt = attachments.length ? buildAttachmentPrompt(text, attachments) : text;
+  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, thread.id);
+  appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: displayName ?? command }, thread.id);
+  updateChatThread(thread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+
+  const existing = piSessions.get(thread.id);
+  const session = existing?.command === command
+    ? existing.session
+    : await (async () => {
+      if (existing) await existing.session.close().catch(() => {});
+      const { executable, args } = splitAcpCommand(command);
+      const opened = await openPiRpcSession(executable, args, cwd);
+      piSessions.set(thread.id, { command, session: opened });
+      return opened;
+    })();
+  activePiTurns.set(thread.id, session);
+  let responseText = '';
+  let stderrText = '';
+  let settled = false;
+  const unlisten = await session.onEvent((record) => {
+    const delta = piTextDelta(record);
+    if (delta) {
+      responseText += delta;
+      patchChat(projectId, assistantId, { text: responseText, pending: true });
+    }
+    if (isPiSettled(record)) settled = true;
+  });
+  const unlistenStderr = await session.onStderr((value) => {
+    stderrText = `${stderrText}${stderrText ? '\n' : ''}${value}`.slice(-4000);
+  });
+  const unlistenExit = await session.onExit(() => {
+    piSessions.delete(thread.id);
+    activePiTurns.delete(thread.id);
+    if (!settled && getChatThread(thread.id)?.status === 'working') {
+      patchChat(projectId, assistantId, { text: `Pi exited unexpectedly.${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`, pending: false, type: 'failure' });
+      updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    }
+  });
+  try {
+    await session.command(piPrompt(prompt));
+    while (!settled) await new Promise((resolve) => setTimeout(resolve, 50));
+    patchChat(projectId, assistantId, { text: responseText || 'Pi completed the turn without returning text.', pending: false });
+    updateChatThread(thread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+  } catch (error) {
+    patchChat(projectId, assistantId, { text: `Native Pi RPC failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`, pending: false, type: 'failure' });
+    updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+  } finally {
+    await unlisten();
+    await unlistenStderr();
+    await unlistenExit();
+    activePiTurns.delete(thread.id);
+    if (!settled) {
+      piSessions.delete(thread.id);
+      await session.close().catch(() => {});
+    }
+  }
+}
+
+async function sendNativeCodexChatTurn(
+  projectId: string,
+  rootPath: string,
+  text: string,
+  thread: NonNullable<ReturnType<typeof getChatThread>>,
+  model: string | null | undefined,
+  attachments: ChatAttachment[],
+  displayName?: string,
+  reasoningEffort?: ChatReasoningEffort,
+): Promise<void> {
+  const userId = msgId();
+  const assistantId = msgId();
+  const cwd = threadWorkingRoot(thread, rootPath);
+  const basePrompt = attachments.length ? buildAttachmentPrompt(text, attachments) : text;
+  const priorMessages = getThreadMessageSnapshot(thread.id)
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .slice(-40)
+    .map((message) => `${message.role === 'user' ? 'User' : 'Codex'}: ${message.text}`)
+    .join('\n\n');
+  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, thread.id);
+  appendChat(projectId, {
+    id: assistantId,
+    role: 'assistant',
+    text: '',
+    ts: Date.now(),
+    pending: true,
+    dispatchedAgent: displayName ?? 'Codex',
+  }, thread.id);
+  updateChatThread(thread.id, {
+    status: 'working',
+    updatedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    contextUsage: null,
+    turnPlan: null,
+  });
+  try {
+    const response = await invoke<string>('chatgpt_chat_complete', {
+      cwd,
+      model: model ?? 'default',
+      systemPrompt: 'You are Codex in Spacron Chat. Work directly in the current checkout when needed. Reply to the user clearly and concisely. Do not describe yourself as an unavailable tool.',
+      userText: priorMessages
+        ? `Conversation so far:\n${priorMessages}\n\nContinue the conversation and answer this new message:\n${basePrompt}`
+        : basePrompt,
+      images: attachments.map((attachment) => attachment.path).filter((path): path is string => Boolean(path)),
+      effort: reasoningEffort && reasoningEffort !== 'default' ? reasoningEffort : null,
+      accessMode: thread.accessMode,
+    });
+    patchChat(projectId, assistantId, { text: response || 'Codex completed the turn without returning text.', pending: false });
+    updateChatThread(thread.id, {
+      status: 'idle',
+      turnEndedAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+      nativeAcpCommand: null,
+      nativeAcpSessionId: null,
+      nativeAcpModel: model ?? null,
+    });
+  } catch (error) {
+    patchChat(projectId, assistantId, {
+      text: `Native Codex Chat failed: ${error instanceof Error ? error.message : String(error)}`,
+      pending: false,
+      type: 'failure',
+    });
+    updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+  }
+}
+
 async function sendNativeAcpChatTurn(
   projectId: string,
   rootPath: string,
@@ -5652,8 +5792,22 @@ export function stopChatTurn(threadId: string): void {
   clearChatTurnTicker(threadId);
   const thread = getChatThread(threadId);
   const activeAcp = activeAcpTurns.get(threadId);
+  const activePi = activePiTurns.get(threadId);
+  const persistentPi = piSessions.get(threadId)?.session;
+  if (activePi || persistentPi) {
+    piSessions.delete(threadId);
+    void (activePi ?? persistentPi)?.close().catch(() => {});
+  }
   if (activeAcp?.sessionId) {
-    void activeAcp.session.notify('session/cancel', { sessionId: activeAcp.sessionId }).catch(() => {});
+    void (async () => {
+      try {
+        await activeAcp.session.notify('session/cancel', { sessionId: activeAcp.sessionId });
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      } catch {
+        // Some ACP v1 agents do not implement cancellation. The turn's
+        // finally block still closes the process, which is the safe fallback.
+      }
+    })();
   }
   for (const [requestId, waiter] of acpApprovalWaiters) {
     if (waiter.threadId === threadId) {
@@ -6047,6 +6201,36 @@ export async function sendChatMessage(
     ?? (opts?.forcedAgent
       ? resolveAcpLaunchCommand(opts.forcedAgent, isAcpChatCommand(opts.forcedAgent, registryAcpCommands))
       : null);
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isCodexProvider(opts.forcedAgent)) {
+    await sendNativeCodexChatTurn(
+      projectId,
+      rootPath,
+      trimmed,
+      chatThread,
+      opts.model,
+      opts.attachments ?? [],
+      opts.forcedAgent,
+      opts.reasoningEffort,
+    );
+    return;
+  }
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isPiProvider(opts.forcedAgent)) {
+    const piLaunch = getAgentProviderLaunchOptions(opts.forcedAgent, {
+      model: opts.model,
+      accessMode: accessTier(opts.accessMode ?? chatThread.accessMode),
+    });
+    const piCommand = [opts.forcedAgent, piLaunch.permissionArgs, piLaunch.runtimeArgs].filter(Boolean).join(' ');
+    await sendPiRpcChatTurn(
+      projectId,
+      rootPath,
+      trimmed,
+      chatThread,
+      piCommand,
+      opts.attachments ?? [],
+      opts.forcedAgent,
+    );
+    return;
+  }
   if (opts?.chatMode && chatThread && acpSpawnCommand) {
     await sendNativeAcpChatTurn(
       projectId,

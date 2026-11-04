@@ -1,5 +1,6 @@
 mod commands;
 mod acp;
+mod pi;
 mod desktop;
 mod error;
 mod lsp;
@@ -293,6 +294,7 @@ pub fn run() {
             commands::background::background_image_get,
             commands::background::background_image_clear,
             commands::chatgpt::chatgpt_status,
+            commands::chatgpt::chatgpt_chat_complete,
             commands::custom_providers::custom_providers_list,
             commands::custom_providers::custom_provider_save,
             commands::custom_providers::custom_provider_delete,
@@ -446,6 +448,9 @@ pub fn run() {
             commands::acp::acp_respond,
             commands::acp::acp_notify,
             commands::acp::acp_close,
+            commands::pi::pi_start,
+            commands::pi::pi_command,
+            commands::pi::pi_close,
             commands::terminal::terminal_attach,
             commands::terminal::terminal_instance_id,
             commands::terminal::terminal_write,

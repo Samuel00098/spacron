@@ -22,30 +22,40 @@ export function activityFromAcpUpdate(value: unknown): AcpActivity | null {
   const update = object(params.update) ?? params;
   const kind = String(update.sessionUpdate ?? update.type ?? '').toLowerCase();
   if (!kind || kind.includes('message_chunk') || kind.includes('thought_chunk')) return null;
+  const normalizedKind = kind.replace(/[_-]/g, ' ');
   const tool = object(update.toolCall) ?? object(update.tool) ?? update;
   const path = typeof tool.path === 'string' ? tool.path : typeof tool.filePath === 'string' ? tool.filePath : undefined;
   const name = typeof tool.title === 'string'
     ? tool.title
     : typeof tool.name === 'string'
       ? tool.name
-      : kind.replace(/[_-]/g, ' ');
+      : normalizedKind;
   const status = typeof tool.status === 'string' ? tool.status : undefined;
   const toolCallId = typeof tool.toolCallId === 'string'
     ? tool.toolCallId
     : typeof tool.id === 'string'
       ? tool.id
       : undefined;
-  const activityKind: AcpActivity['kind'] = kind.includes('file') || path
-    ? 'file'
-    : kind.includes('plan')
-      ? 'plan'
-      : kind.includes('tool') || tool !== update
-        ? 'tool'
+  const activityKind: AcpActivity['kind'] = kind.includes('terminal')
+      ? 'tool'
+      : kind.includes('file') || path
+      ? 'file'
+      : kind.includes('plan') || kind.includes('compaction')
+        ? 'plan'
+        : kind.includes('tool') || tool !== update
+          ? 'tool'
         : 'status';
+  const label = kind.includes('compaction')
+      ? 'Compacting conversation'
+      : kind.includes('terminal')
+        ? `Terminal ${name}`
+        : kind.includes('state')
+          ? `Agent state: ${name}`
+          : name;
   return {
     kind: activityKind,
     ...(toolCallId ? { id: toolCallId } : {}),
-    label: `${name}${status ? ` (${status})` : ''}`,
+    label: `${label}${status ? ` (${status})` : ''}`,
     ...(path ? { detail: path } : {}),
     ...(status ? { status } : {}),
   };
