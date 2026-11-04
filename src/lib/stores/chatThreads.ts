@@ -27,6 +27,8 @@ import type {
   ChatAttachment,
   ChatFileRef,
   ChatHandoffRecord,
+  ChatThreadPullRequest,
+  ChatThreadWorktree,
 } from '$lib/types/chat';
 
 export type {
@@ -141,6 +143,46 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * An absolute POSIX or Windows path, else null. A stored worktree path is used
+ * as the agent's cwd, so a relative one would silently point somewhere else.
+ */
+function asAbsolutePath(value: unknown): string | null {
+  const raw = asString(value)?.trim();
+  if (!raw) return null;
+  return raw.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(raw) ? raw : null;
+}
+
+/** Restore a persisted thread worktree, or drop it if it can't be used. */
+function readThreadWorktree(value: unknown, fallbackAt: number): ChatThreadWorktree | undefined {
+  if (!isRecord(value)) return undefined;
+  const path = asAbsolutePath(value.path);
+  const branch = asString(value.branch);
+  if (!path || !branch) return undefined;
+  return {
+    path,
+    branch,
+    baseBranch: asString(value.baseBranch) || 'main',
+    baseCommit: asString(value.baseCommit) || '',
+    createdAt: asNumber(value.createdAt) ?? fallbackAt,
+  };
+}
+
+/** Restore a shipped pull request; the compare URL is what makes it useful. */
+function readThreadPullRequest(value: unknown, fallbackAt: number): ChatThreadPullRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const compareUrl = asString(value.compareUrl);
+  if (!compareUrl) return undefined;
+  return {
+    url: asString(value.url) || null,
+    number: asNumber(value.number),
+    compareUrl,
+    branch: asString(value.branch) || '',
+    base: asString(value.base) || '',
+    openedAt: asNumber(value.openedAt) ?? fallbackAt,
+  };
 }
 
 function copyHandoffs(value: unknown): ChatHandoffRecord[] | undefined {
@@ -462,6 +504,38 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
     pinned: raw.pinned === true,
     archived: raw.archived === true,
     order: asNumber(raw.order) ?? undefined,
+    forkOfThreadId: asString(raw.forkOfThreadId) ?? undefined,
+    snoozedUntil: asNumber(raw.snoozedUntil) ?? undefined,
+    settledAt: asNumber(raw.settledAt) ?? undefined,
+    worktree: readThreadWorktree(raw.worktree, updatedAt),
+    pullRequest: readThreadPullRequest(raw.pullRequest, updatedAt),
+    contextUsage: isRecord(raw.contextUsage)
+      && typeof raw.contextUsage.used === 'number' && typeof raw.contextUsage.size === 'number'
+      && raw.contextUsage.size > 0
+      ? {
+        used: Math.max(0, raw.contextUsage.used),
+        size: raw.contextUsage.size,
+        cost: isRecord(raw.contextUsage.cost)
+          && typeof raw.contextUsage.cost.amount === 'number' && typeof raw.contextUsage.cost.currency === 'string'
+          ? { amount: raw.contextUsage.cost.amount, currency: raw.contextUsage.cost.currency }
+          : null,
+        updatedAt: asNumber(raw.contextUsage.updatedAt) ?? updatedAt,
+      }
+      : undefined,
+    turnPlan: isRecord(raw.turnPlan) && Array.isArray(raw.turnPlan.entries)
+      ? {
+        planId: asString(raw.turnPlan.planId) ?? 'plan',
+        entries: raw.turnPlan.entries.flatMap((entry) => {
+          if (!isRecord(entry) || typeof entry.content !== 'string' || !entry.content.trim()) return [];
+          return [{
+            content: entry.content,
+            status: asString(entry.status) ?? 'pending',
+            ...(asString(entry.priority) ? { priority: asString(entry.priority) as string } : {}),
+          }];
+        }),
+        updatedAt: asNumber(raw.turnPlan.updatedAt) ?? updatedAt,
+      }
+      : undefined,
     agentCheckpoint: isRecord(raw.agentCheckpoint) && Array.isArray(raw.agentCheckpoint.exchanges) && Array.isArray(raw.agentCheckpoint.results)
       && typeof raw.agentCheckpoint.provider === 'string' && typeof raw.agentCheckpoint.model === 'string' && typeof raw.agentCheckpoint.summary === 'string'
       ? raw.agentCheckpoint as unknown as ChatThread['agentCheckpoint'] : undefined,
@@ -905,6 +979,49 @@ export function toggleChatThreadPinned(threadId: string): boolean {
 
 /** Archive or restore a thread. Archiving also unpins it: a pin says "keep this
  *  in front of me", which an archived thread by definition is not. */
+/**
+ * Hide a thread from the live list until `until`, or wake it now with null.
+ *
+ * Snooze and settle are the two ways a thread leaves your attention without
+ * being deleted: snooze is time-boxed (it comes back on its own), settle is a
+ * done-for-now flag that only a new message or the user clears. Both leave the
+ * transcript, files, and agent state untouched.
+ */
+export function setChatThreadSnoozed(threadId: string, until: number | null): boolean {
+  return updateChatThread(threadId, {
+    snoozedUntil: until === null ? null : Math.max(Date.now(), until),
+    updatedAt: Date.now(),
+  });
+}
+
+/** Snooze presets the sidebar offers. */
+export const CHAT_SNOOZE_PRESETS: ReadonlyArray<{ label: string; ms: number }> = [
+  { label: 'In 4 hours', ms: 4 * 60 * 60 * 1000 },
+  { label: 'Tomorrow', ms: 24 * 60 * 60 * 1000 },
+  { label: 'Next week', ms: 7 * 24 * 60 * 60 * 1000 },
+];
+
+export function setChatThreadSettled(threadId: string, settled: boolean): boolean {
+  return updateChatThread(threadId, {
+    settledAt: settled ? Date.now() : null,
+    ...(settled ? { snoozedUntil: null } : {}),
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Bind an isolated checkout to a thread, or clear it. Every later turn runs its
+ * agent in `worktree.path`, so two threads on one project stop colliding.
+ */
+export function setChatThreadWorktree(threadId: string, worktree: ChatThreadWorktree | null): boolean {
+  return updateChatThread(threadId, { worktree, updatedAt: Date.now() });
+}
+
+/** Remember what the ship action produced so the row can link to it afterwards. */
+export function setChatThreadPullRequest(threadId: string, pullRequest: ChatThreadPullRequest | null): boolean {
+  return updateChatThread(threadId, { pullRequest, updatedAt: Date.now() });
+}
+
 export function setChatThreadArchived(threadId: string, archived: boolean): boolean {
   const thread = getChatThread(threadId);
   if (!thread) return false;
@@ -1069,7 +1186,7 @@ export function appendThreadMessage(message: ChatMessage): boolean {
               status: nextStatus,
               updatedAt: message.ts,
               lastActivityAt: message.ts,
-              ...(message.role === 'user' ? { archived: false } : {}),
+              ...(message.role === 'user' ? { archived: false, snoozedUntil: null, settledAt: null } : {}),
               // Unread means "something arrived in a thread you are not looking
               // at". Selecting the thread clears its count.
               ...(countsAsUnread(message) && current.activeThreadByProject[projectId] !== message.threadId
@@ -1373,6 +1490,172 @@ export function patchThreadMessage(threadId: string, messageId: string, patch: P
     };
   });
   return patched;
+}
+
+/**
+ * Fork: copy the transcript up to `messageId` into a new thread, leaving the
+ * original untouched. `null` copies the whole thread.
+ *
+ * The copy carries the conversation, not the agent's session: ACP's
+ * `session/fork` is draft-only and capability-gated, so a fork starts a fresh
+ * agent session that is given the transcript as context. Message ids are
+ * rewritten because ids are looked up per thread — a shared id would let an
+ * edit in one thread patch the other.
+ */
+export function forkChatThreadFrom(threadId: string, messageId: string | null = null): ChatThread | null {
+  const thread = getChatThread(threadId);
+  if (!thread) return null;
+  const messages = get(chatThreadState).messagesByThread[threadId] ?? [];
+  const cut = messageId ? messages.findIndex((message) => message.id === messageId) : messages.length;
+  if (cut < 0) return null;
+  const copied = messages.slice(0, cut);
+  const fork = createChatThread(thread.projectId, {
+    title: `${thread.title} (fork)`,
+    agentName: thread.agentName,
+    agentPreset: thread.agentPreset,
+    provider: thread.provider,
+    model: thread.model,
+    accessMode: thread.accessMode,
+    workMode: thread.workMode,
+    reasoningEffort: thread.reasoningEffort,
+    standalone: thread.standalone,
+    standaloneWorkspaceId: thread.standaloneWorkspaceId,
+  });
+  const suffix = fork.id.slice(-6);
+  chatThreadState.update((state) => ({
+    ...state,
+    messagesByThread: {
+      ...state.messagesByThread,
+      [fork.id]: copied.map((message) => ({
+        ...message,
+        id: `${message.id}-fork-${suffix}`,
+        threadId: fork.id,
+        pending: false,
+      })),
+    },
+  }));
+  updateChatThread(fork.id, {
+    forkOfThreadId: thread.id,
+    status: copied.length ? 'idle' : 'draft',
+  });
+  return getChatThread(fork.id);
+}
+
+/**
+ * A side chat: a thread that starts with the parent's recent turns so a
+ * question can be asked without touching the running conversation. The parent
+ * keeps working and receives nothing unless the side chat is brought back.
+ */
+export function createSideChatThread(parentThreadId: string): ChatThread | null {
+  const parent = getChatThread(parentThreadId);
+  if (!parent) return null;
+  const side = createChatThread(parent.projectId, {
+    title: `Side chat · ${parent.title}`,
+    agentName: parent.agentName,
+    agentPreset: parent.agentPreset,
+    provider: parent.provider,
+    model: parent.model,
+    accessMode: parent.accessMode,
+    workMode: 'build',
+    reasoningEffort: parent.reasoningEffort,
+    standalone: parent.standalone,
+    standaloneWorkspaceId: parent.standaloneWorkspaceId,
+    parentThreadId: parent.id,
+  });
+  const suffix = side.id.slice(-6);
+  const recent = (get(chatThreadState).messagesByThread[parent.id] ?? []).slice(-12);
+  chatThreadState.update((state) => ({
+    ...state,
+    messagesByThread: {
+      ...state.messagesByThread,
+      [side.id]: [
+        {
+          id: `side-intro-${suffix}`,
+          threadId: side.id,
+          role: 'system',
+          type: 'system',
+          ts: Date.now(),
+          text: `Side chat of “${parent.title}”. The main thread keeps working; nothing said here reaches it unless you choose Bring back.`,
+        },
+        ...recent.map((message) => ({
+          ...message,
+          id: `${message.id}-sidecopy-${suffix}`,
+          threadId: side.id,
+          pending: false,
+        })),
+      ],
+    },
+  }));
+  updateChatThread(side.id, { status: 'idle' });
+  return getChatThread(side.id);
+}
+
+/** Fold a side chat's own turns into its parent, then remove the side thread. */
+export function bringBackSideChat(sideThreadId: string): boolean {
+  const side = getChatThread(sideThreadId);
+  if (!side?.parentThreadId) return false;
+  const parentId = side.parentThreadId;
+  const messages = get(chatThreadState).messagesByThread[sideThreadId] ?? [];
+  // The intro and the copied parent turns are not new information; only what
+  // was actually said in this side chat belongs in the parent.
+  const copied = messages.filter((message) => message.id.includes('-sidecopy-') || message.id.startsWith('side-intro-'));
+  const own = messages.filter((message) => !copied.includes(message));
+  for (const message of own) {
+    appendThreadMessage({ ...message, id: `${message.id}-back`, threadId: parentId });
+  }
+  deleteChatThread(sideThreadId);
+  return true;
+}
+
+/**
+ * Revert a thread to just before `messageId`: that message and everything after
+ * it are dropped, so the conversation branches here.
+ *
+ * A user message's text goes back into the composer, which is the point of the
+ * gesture — re-send the turn with a different instruction. Two kinds of memory
+ * are cleared with the transcript, because keeping them would let the agent act
+ * on what the user just removed: the saved agent checkpoint (IndexedDB, and the
+ * row that points at it) and the native ACP session id (the agent's own server
+ * holds the dropped turns). Files already written to disk are deliberately left
+ * alone: undoing those belongs to the worktree review, which knows what the
+ * turn actually changed.
+ */
+export function revertChatThreadTo(threadId: string, messageId: string): boolean {
+  let reverted = false;
+  const now = Date.now();
+  chatThreadState.update((state) => {
+    const messages = state.messagesByThread[threadId] ?? [];
+    const index = messages.findIndex((message) => message.id === messageId);
+    if (index < 0) return state;
+    const target = messages[index];
+    reverted = true;
+    return {
+      ...state,
+      messagesByThread: { ...state.messagesByThread, [threadId]: messages.slice(0, index) },
+      threadsByProject: Object.fromEntries(
+        Object.entries(state.threadsByProject).map(([projectId, threads]) => [
+          projectId,
+          threads.map((thread) => thread.id === threadId
+            ? {
+              ...thread,
+              status: 'idle' as ChatThreadStatus,
+              draft: target.role === 'user' ? target.text : thread.draft,
+              updatedAt: now,
+              lastActivityAt: now,
+              turnEndedAt: now,
+              unreadCount: 0,
+              contextUsage: null,
+              turnPlan: null,
+              agentCheckpoint: undefined,
+              nativeAcpSessionId: null,
+            }
+            : thread),
+        ]),
+      ),
+    };
+  });
+  if (reverted) void deleteAgentCheckpoint(threadId).catch(() => {});
+  return reverted;
 }
 
 /** Edit a stored message in place. The owning thread and its title are left untouched. */

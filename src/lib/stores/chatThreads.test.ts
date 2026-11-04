@@ -20,7 +20,14 @@ import {
   repairThreadSummaries,
   resetChatThreadsForTests,
   selectChatThread,
+  bringBackSideChat,
+  createSideChatThread,
+  forkChatThreadFrom,
+  getChatThread,
   setChatThreadArchived,
+  setChatThreadSettled,
+  setChatThreadSnoozed,
+  revertChatThreadTo,
   setThreadDraft,
   toggleChatThreadPinned,
 } from './chatThreads';
@@ -662,5 +669,93 @@ describe('unread counts', () => {
     createChatThread('project-a', { title: 'Open' }, 200);
     appendThreadMessage({ id: 'bg-user', threadId: background.id, type: 'user', role: 'user', text: 'Do this next', ts: 300 });
     expect(unreadOf(background.id)).toBe(0);
+  });
+});
+
+describe('reverting to a message', () => {
+  it('drops the message and everything after it, and puts a user turn back in the draft', () => {
+    const thread = createChatThread('project-a');
+    const first = { id: 'm1', threadId: thread.id, role: 'user' as const, type: 'user' as const, text: 'Do the thing', ts: 1 };
+    const second = { id: 'm2', threadId: thread.id, role: 'assistant' as const, type: 'agent' as const, text: 'Done', ts: 2 };
+    appendThreadMessage(first);
+    appendThreadMessage(second);
+    expect(revertChatThreadTo(thread.id, 'm1')).toBe(true);
+    const state = get(chatThreadState);
+    expect(state.messagesByThread[thread.id]).toEqual([]);
+    const reverted = state.threadsByProject['project-a'].find((entry) => entry.id === thread.id);
+    expect(reverted).toMatchObject({ status: 'idle', draft: 'Do the thing', contextUsage: null, turnPlan: null });
+    expect(reverted?.nativeAcpSessionId ?? null).toBeNull();
+  });
+
+  it('keeps the earlier messages and refuses an unknown message id', () => {
+    const thread = createChatThread('project-a');
+    appendThreadMessage({ id: 'm1', threadId: thread.id, role: 'user', type: 'user', text: 'One', ts: 1 });
+    appendThreadMessage({ id: 'm2', threadId: thread.id, role: 'user', type: 'user', text: 'Two', ts: 2 });
+    appendThreadMessage({ id: 'm3', threadId: thread.id, role: 'assistant', type: 'agent', text: 'Reply', ts: 3 });
+    expect(revertChatThreadTo(thread.id, 'm3')).toBe(true);
+    expect(get(chatThreadState).messagesByThread[thread.id].map((message) => message.id)).toEqual(['m1', 'm2']);
+    expect(revertChatThreadTo(thread.id, 'missing')).toBe(false);
+  });
+});
+
+describe('snooze and settle', () => {
+  it('snoozes until a time, settles, and wakes on a new user message', () => {
+    const thread = createChatThread('project-a');
+    const until = Date.now() + 60_000;
+    expect(setChatThreadSnoozed(thread.id, until)).toBe(true);
+    expect(get(chatThreadState).threadsByProject['project-a'][0].snoozedUntil).toBe(until);
+    expect(setChatThreadSettled(thread.id, true)).toBe(true);
+    const settled = get(chatThreadState).threadsByProject['project-a'][0];
+    expect(settled.settledAt).toBeTypeOf('number');
+    expect(settled.snoozedUntil).toBeNull();
+    appendThreadMessage({ id: 'wake', threadId: thread.id, role: 'user', type: 'user', text: 'Back to this', ts: Date.now() });
+    expect(get(chatThreadState).threadsByProject['project-a'][0]).toMatchObject({ settledAt: null, snoozedUntil: null });
+  });
+});
+
+describe('fork and side chats', () => {
+  function seed(threadId: string) {
+    appendThreadMessage({ id: 'p1', threadId, role: 'user', type: 'user', text: 'One', ts: 1 });
+    appendThreadMessage({ id: 'p2', threadId, role: 'assistant', type: 'agent', text: 'Two', ts: 2 });
+  }
+
+  it('copies a transcript into a fork without touching the original', () => {
+    const parent = createChatThread('project-a');
+    seed(parent.id);
+    const fork = forkChatThreadFrom(parent.id, 'p2');
+    expect(fork).not.toBeNull();
+    const state = get(chatThreadState);
+    expect(state.messagesByThread[parent.id].map((message) => message.text)).toEqual(['One', 'Two']);
+    const copied = state.messagesByThread[fork!.id];
+    expect(copied.map((message) => message.text)).toEqual(['One']);
+    // Ids are per thread: a shared id would let one thread's edit patch the other.
+    expect(copied[0].id).not.toBe('p1');
+    expect(copied[0].threadId).toBe(fork!.id);
+    expect(getChatThread(fork!.id)?.forkOfThreadId).toBe(parent.id);
+    expect(forkChatThreadFrom(parent.id, 'missing')).toBeNull();
+  });
+
+  it('seeds a side chat from the parent and brings only its own turns back', () => {
+    const parent = createChatThread('project-a');
+    seed(parent.id);
+    const side = createSideChatThread(parent.id)!;
+    const seeded = get(chatThreadState).messagesByThread[side.id];
+    expect(seeded[0]).toMatchObject({ type: 'system', threadId: side.id });
+    expect(seeded).toHaveLength(3);
+    expect(getChatThread(side.id)?.parentThreadId).toBe(parent.id);
+
+    appendThreadMessage({ id: 's1', threadId: side.id, role: 'user', type: 'user', text: 'Side question', ts: 5 });
+    appendThreadMessage({ id: 's2', threadId: side.id, role: 'assistant', type: 'agent', text: 'Side answer', ts: 6 });
+    expect(bringBackSideChat(side.id)).toBe(true);
+
+    expect(get(chatThreadState).messagesByThread[parent.id].map((message) => message.text))
+      .toEqual(['One', 'Two', 'Side question', 'Side answer']);
+    expect(getChatThread(side.id)).toBeNull();
+  });
+
+  it('refuses to bring back a thread that is not a side chat', () => {
+    const parent = createChatThread('project-a');
+    expect(bringBackSideChat(parent.id)).toBe(false);
+    expect(createSideChatThread('missing')).toBeNull();
   });
 });

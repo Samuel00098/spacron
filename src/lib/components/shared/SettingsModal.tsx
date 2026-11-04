@@ -157,6 +157,7 @@ import {
 } from '$lib/stores/acpRegistry';
 import { getAgentRoster } from '$lib/stores/runs';
 import { favouriteAgentCommands, toggleFavouriteAgent } from '$lib/stores/agentFavourites';
+import { getAntigravityRuntimeStatus, installAntigravityRuntime, type AntigravityRuntimeStatus } from '$lib/services/antigravity-runtime';
 import { isNativeAcpCommand } from '$lib/services/acp-capabilities';
 import { commandForAcpDistribution, fetchAcpRegistry, type AcpRegistryAgent } from '$lib/services/acp-registry';
 import { activeTheme } from '$lib/stores/theme';
@@ -1705,6 +1706,62 @@ function FavouriteStar({ command, name }: { command: string; name: string }) {
         />
       </svg>
     </button>
+  );
+}
+
+/**
+ * Antigravity's ACP server is a separate runtime (Google's `agy_acp_server`
+ * archive), not the `agy` CLI, so its install lives here: one click downloads
+ * the registry archive, verifies it, and points Chat at the result. A manual
+ * binary path still wins, because the field below is what Chat actually spawns.
+ */
+function AntigravityRuntimeRow() {
+  const [status, setStatus] = useState<AntigravityRuntimeStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+
+  useEffect(() => {
+    void getAntigravityRuntimeStatus().then(setStatus);
+  }, []);
+
+  async function install() {
+    setBusy(true);
+    setNote('');
+    try {
+      const next = await installAntigravityRuntime();
+      setStatus(next);
+      if (next.path) setAcpCommandOverride('agy', next.path);
+      setNote(next.path ? `Installed ${next.version}. Chat will launch ${next.path}.` : `Installed ${next.version}.`);
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const installed = status?.installed === true;
+  const detail = status === null
+    ? 'Checking for the installed runtime…'
+    : installed
+      ? `v${status.version} · ${status.path}`
+      : status.supported
+        ? `Not installed · v${status.version}`
+        : 'Google publishes no runtime for this platform';
+
+  return (
+    <SettingRow title="Antigravity runtime" detail={detail}>
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        {note && <span className="shell-hint" style={{ maxWidth: '320px' }}>{note}</span>}
+        <button
+          className="agent-add-btn"
+          type="button"
+          onClick={() => void install()}
+          disabled={busy || status?.supported === false}
+        >
+          {busy ? 'Installing…' : installed ? 'Reinstall' : 'Install runtime'}
+        </button>
+      </div>
+    </SettingRow>
   );
 }
 
@@ -3995,6 +4052,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       </div>
                     </SettingRow>
                   ))}
+                  <AntigravityRuntimeRow />
                   {acpRoster.map((agent) => {
                     const normalized = agent.command.trim().toLowerCase();
                     const native = isNativeAcpCommand(agent.command);

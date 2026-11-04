@@ -28,6 +28,7 @@ export const PROVIDER_OPENCODE = 'opencode';
 export const PROVIDER_PI = 'pi';
 export const PROVIDER_OMP = 'omp';
 export const PROVIDER_COMMAND_CODE = 'command-code';
+export const PROVIDER_ANTIGRAVITY = 'antigravity';
 
 export const PROVIDER_TABS: { id: string; label: string }[] = [
   { id: PROVIDER_ALL, label: 'Overview' },
@@ -37,6 +38,7 @@ export const PROVIDER_TABS: { id: string; label: string }[] = [
   { id: PROVIDER_PI, label: 'Pi' },
   { id: PROVIDER_OMP, label: 'OMP' },
   { id: PROVIDER_COMMAND_CODE, label: 'Command Code' },
+  { id: PROVIDER_ANTIGRAVITY, label: 'Antigravity' },
 ];
 
 export const DEFAULT_SCOPE = SCOPE_ALL;

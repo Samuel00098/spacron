@@ -199,9 +199,13 @@ import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdic
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
 import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
+import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
+import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
+import { acpApprovalDecision } from '$lib/services/acp-approval-policy';
 import { resolveAcpLaunchCommand } from '$lib/services/acp-launchers';
 import { isChatDirectMode } from '$lib/stores/chatDirectMode';
 import { getCustomAgents } from '$lib/stores/customAgents';
+import { threadWorkingRoot } from '$lib/services/thread-worktree';
 import { getAcpCommandOverride, getExplicitAcpCommands } from '$lib/stores/acpRegistry';
 import {
   authenticateAcp,
@@ -210,6 +214,7 @@ import {
   loadAcpNativeSession,
   openAcpSession,
   promptAcpNativeSession,
+  setAcpSessionMode,
   resumeAcpNativeSession,
   setAcpSessionModel,
   waitForAcpReplayIdle,
@@ -217,7 +222,7 @@ import {
   type AcpSession,
 } from '$lib/services/acp-transport';
 import { acpMcpServers } from '$lib/services/orchestrator/mcp-client';
-import { normalizeAcpUpdate } from '$lib/services/acp-protocol';
+import { normalizeAcpUpdate, parseAcpPlan, parseAcpUsage } from '$lib/services/acp-protocol';
 import { activityFromAcpUpdate, type AcpActivity } from '$lib/services/acp-activity';
 import { openPty, type PtySession } from '$lib/services/pty-bridge';
 
@@ -4630,8 +4635,10 @@ const ACP_FINISHED_STATUS_RE = /complete|success|done|fail|error|cancel/i;
 
 function acpPermissionRequest(value: Record<string, unknown>): {
   id: string;
+  title: string;
   prompt: string;
-  options: Array<{ id: string; label: string; value?: string }>;
+  toolKind?: string;
+  options: Array<{ id: string; label: string; value?: string; kind?: string }>;
 } | null {
   const params = value.params && typeof value.params === 'object'
     ? value.params as Record<string, unknown>
@@ -4648,21 +4655,25 @@ function acpPermissionRequest(value: Record<string, unknown>): {
       : 'The agent requests permission';
   const description = typeof toolCall.kind === 'string' ? `\n\n${toolCall.kind}` : '';
   const options = Array.isArray(params.options)
-    ? params.options.flatMap((option): Array<{ id: string; label: string; value?: string }> => {
+    ? params.options.flatMap((option): Array<{ id: string; label: string; value?: string; kind?: string }> => {
       if (!option || typeof option !== 'object') return [];
       const entry = option as Record<string, unknown>;
       const id = typeof entry.optionId === 'string' ? entry.optionId : typeof entry.id === 'string' ? entry.id : '';
       if (!id) return [];
       const label = typeof entry.name === 'string' ? entry.name : typeof entry.label === 'string' ? entry.label : id;
-      return [{ id, label, value: id }];
+      const optionKind = typeof entry.kind === 'string' ? entry.kind.trim().toLowerCase() : '';
+      return [{ id, label, value: id, ...(optionKind ? { kind: optionKind } : {}) }];
     })
     : [];
+  const toolKind = typeof toolCall.kind === 'string' ? toolCall.kind.trim().toLowerCase() : undefined;
   return {
     id: `acp-approval-${String(requestId)}`,
+    title,
     prompt: `${title}${description}`,
+    ...(toolKind ? { toolKind } : {}),
     options: options.length ? options : [
-      { id: 'allow', label: 'Allow', value: 'allow' },
-      { id: 'reject', label: 'Reject', value: 'reject' },
+      { id: 'allow', label: 'Allow', value: 'allow', kind: 'allow_once' },
+      { id: 'reject', label: 'Reject', value: 'reject', kind: 'reject_once' },
     ],
   };
 }
@@ -4676,9 +4687,14 @@ async function sendNativeAcpChatTurn(
   model: string | null | undefined,
   attachments: ChatAttachment[],
   displayName?: string,
+  accessMode?: ChatAccessMode,
 ): Promise<void> {
   const userId = msgId();
   const assistantId = msgId();
+  // A thread with its own checkout works there. cwd is what makes the isolation
+  // real: the agent resolves every relative path — edits, searches, terminals —
+  // from it, so without this the worktree would be created and then ignored.
+  const cwd = threadWorkingRoot(thread, rootPath);
   const basePrompt = attachments.length ? buildAttachmentPrompt(text, attachments) : text;
   const priorMessages = getThreadMessageSnapshot(thread.id);
   appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, thread.id);
@@ -4690,10 +4706,18 @@ async function sendNativeAcpChatTurn(
     pending: true,
     dispatchedAgent: displayName ?? agentCommand,
   }, thread.id);
-  updateChatThread(thread.id, { status: 'working', updatedAt: Date.now(), lastActivityAt: Date.now() });
+  // A new turn starts with an empty context and no inherited plan: the agent
+  // reports both again, and a stale meter would read as this turn's usage.
+  updateChatThread(thread.id, {
+    status: 'working',
+    updatedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    contextUsage: null,
+    turnPlan: null,
+  });
 
   const { executable, args } = splitAcpCommand(agentCommand);
-  const session = await openAcpSession(executable, args, rootPath);
+  const session = await openAcpSession(executable, args, cwd);
   activeAcpTurns.set(thread.id, { session });
   let responseText = '';
   let stderrText = '';
@@ -4703,6 +4727,14 @@ async function sendNativeAcpChatTurn(
   // and appending each as its own line buried the reply under duplicates.
   const activityMessageIds = new Map<string, string>();
   const unlisten = await session.onNotification((notification) => {
+    const usage = parseAcpUsage(notification);
+    if (usage) {
+      updateChatThread(thread.id, { contextUsage: { ...usage, updatedAt: Date.now() } });
+    }
+    const plan = parseAcpPlan(notification);
+    if (plan) {
+      updateChatThread(thread.id, { turnPlan: { ...plan, updatedAt: Date.now() } });
+    }
     const chunk = acpReplyText(notification);
     if (chunk) {
       responseText += chunk;
@@ -4731,8 +4763,34 @@ async function sendNativeAcpChatTurn(
   const unlistenRequest = await session.onRequest(async (request) => {
     const permission = acpPermissionRequest(request);
     if (!permission) {
-      await handleAcpClientRequest(request, session, thread.id, rootPath);
+      await handleAcpClientRequest(request, session, thread.id, cwd);
       return;
+    }
+    // The tier answers first: Full access and Auto approve, Auto-accept edits
+    // covers file changes, Supervised asks about everything. Whatever the
+    // policy declines to decide falls through to the approval card below.
+    const decision = acpApprovalDecision(
+      getChatThread(thread.id)?.accessMode ?? accessMode,
+      permission.toolKind,
+      permission.options,
+    );
+    if (decision) {
+      try {
+        await session.respond(request.requestId, {
+          outcome: { outcome: 'selected', optionId: decision.option.id },
+        });
+        appendChat(projectId, {
+          id: msgId(),
+          role: 'assistant',
+          type: 'activity',
+          text: `Approved automatically (${decision.reason === 'read-only' ? 'read-only' : CHAT_ACCESS_TIER_LABELS[decision.reason]}): ${permission.title}`,
+          ts: Date.now(),
+        }, thread.id);
+        return;
+      } catch {
+        // A withdrawn request must not leave the turn waiting on a card that
+        // can no longer be answered; fall through and show it as usual.
+      }
     }
     acpApprovalWaiters.set(permission.id, {
       respond: (result, error) => session.respond(request.requestId, result, error),
@@ -4791,6 +4849,7 @@ async function sendNativeAcpChatTurn(
           ? initialization.agentCapabilities as Record<string, unknown>
           : {},
         authMethods,
+        protocolV2: initialization.protocolV2 === true,
         negotiatedAt: Date.now(),
       },
     });
@@ -4825,6 +4884,8 @@ async function sendNativeAcpChatTurn(
       && typeof ((agentCapabilities as Record<string, unknown>).sessionCapabilities as Record<string, unknown>).resume === 'object',
     );
     let nativeSessionId = thread.nativeAcpCommand === agentCommand ? thread.nativeAcpSessionId : null;
+    // The agent's own permission modes, as advertised by the session it opened.
+    let modeState: AcpModeState | null = null;
     if (nativeSessionId && (thread.nativeAcpModel ?? null) !== (model ?? null)) {
       const sessionCapabilities = agentCapabilities && typeof agentCapabilities === 'object'
         ? (agentCapabilities as Record<string, unknown>).sessionCapabilities
@@ -4847,9 +4908,9 @@ async function sendNativeAcpChatTurn(
     if (nativeSessionId) {
       try {
         if (supportsLoad) {
-          await loadAcpNativeSession(session, nativeSessionId, rootPath, configuredMcpServers);
+          modeState = parseAcpModeState(await loadAcpNativeSession(session, nativeSessionId, cwd, configuredMcpServers)) ?? modeState;
         } else if (supportsResume) {
-          await resumeAcpNativeSession(session, nativeSessionId, rootPath, configuredMcpServers);
+          modeState = parseAcpModeState(await resumeAcpNativeSession(session, nativeSessionId, cwd, configuredMcpServers)) ?? modeState;
         } else {
           throw new Error('ACP agent does not advertise session continuation');
         }
@@ -4859,7 +4920,9 @@ async function sendNativeAcpChatTurn(
       }
     }
     if (!nativeSessionId) {
-      nativeSessionId = (await createAcpNativeSession(session, rootPath, model, configuredMcpServers)).sessionId;
+      const created = await createAcpNativeSession(session, cwd, model, configuredMcpServers);
+      nativeSessionId = created.sessionId;
+      modeState = parseAcpModeState(created) ?? modeState;
       const sourceAgent = lastDispatchedChatAgent(priorMessages) ?? thread.nativeAcpCommand;
       if (sourceAgent && sourceAgent !== agentCommand) {
         prompt = buildChatContextHandoff(priorMessages, sourceAgent, agentCommand, basePrompt).prompt;
@@ -4871,6 +4934,16 @@ async function sendNativeAcpChatTurn(
       nativeAcpModel: model ?? null,
     });
     activeAcpTurns.set(thread.id, { session, sessionId: nativeSessionId });
+    // Express the composer's tier through the agent's own modes. An agent that
+    // advertises nothing suitable keeps its default — a tier is never faked.
+    const requestedTier = accessMode ?? thread.accessMode;
+    if (nativeSessionId && acpModeNeedsSwitch(modeState, requestedTier)) {
+      const desired = chooseAcpMode(modeState, requestedTier);
+      if (desired) {
+        await setAcpSessionMode(session, nativeSessionId, desired).catch(() => undefined);
+        if (modeState) modeState = { ...modeState, currentModeId: desired };
+      }
+    }
     await promptAcpNativeSession(session, nativeSessionId, prompt);
     if (exited) throw new Error('ACP agent exited before completing the prompt');
     patchChat(projectId, assistantId, {
@@ -5754,7 +5827,7 @@ async function drainChatQueueWith(first: QueuedChatMessage, threadId: string | u
 
 export async function sendChatMessage(
   projectId: string,
-  rootPath: string,
+  projectRoot: string,
   text: string,
   opts?: SendChatOpts,
 ): Promise<void> {
@@ -5764,6 +5837,11 @@ export async function sendChatMessage(
   const chatThreadId = opts?.threadId ? getChatThread(opts.threadId)?.id : undefined;
   const chatThread = chatThreadId ? getChatThread(chatThreadId) : null;
   if (opts?.threadId && (!chatThread || chatThread.projectId !== projectId)) return;
+  // Everything this turn reads or writes resolves from the thread's own checkout
+  // when it has one — the ACP session's cwd, the brain's file tools and its shell
+  // commands alike. Project *state* (tasks, inbox, mailbox) keeps using
+  // `projectRoot`: it describes the repository, not one thread's copy of it.
+  const rootPath = threadWorkingRoot(chatThread, projectRoot);
   // A new queued turn is allowed to reuse a thread after the previous stop
   // has fully unwound. Do not let the old stop marker poison this request.
   if (chatThreadId) stoppedChatTurns.delete(chatThreadId);
@@ -5894,7 +5972,7 @@ export async function sendChatMessage(
     if (answeringChatRequests.has(chatThreadId)) return;
     answeringChatRequests.add(chatThreadId);
     try {
-      await sendThreadFollowUp(projectId, rootPath, chatThreadId, threadTask, trimmed, chatMode || answeringAgentRequest, opts?.attachments ?? [], pendingInput?.id);
+      await sendThreadFollowUp(projectId, projectRoot, chatThreadId, threadTask, trimmed, chatMode || answeringAgentRequest, opts?.attachments ?? [], pendingInput?.id);
     } finally { answeringChatRequests.delete(chatThreadId); }
     return;
   }
@@ -5979,6 +6057,7 @@ export async function sendChatMessage(
       opts.model,
       opts.attachments ?? [],
       opts.forcedAgent,
+      accessTier(opts.accessMode ?? chatThread?.accessMode),
     );
     return;
   }
@@ -6076,7 +6155,7 @@ export async function sendChatMessage(
   }
   if (!get(tasks).some((task) => task.projectId === projectId)) {
     try {
-      await loadProjectTasks({ id: projectId, root_path: rootPath });
+      await loadProjectTasks({ id: projectId, root_path: projectRoot });
     } catch {
       // Task-panel context is helpful but must never block dispatch.
     }
@@ -6178,8 +6257,8 @@ export async function sendChatMessage(
   const requestedModel = opts?.model?.trim() || null;
   const transition = forced && existingThreadTask
     ? decideChatProviderTransition(
-      { agent: existingThreadTask.agentPreset ?? '', model: existingModel, workspace: existingThreadTask.worktree?.path ?? rootPath },
-      { agent: forced.command, model: requestedModel, workspace: existingThreadTask.worktree?.path ?? rootPath },
+      { agent: existingThreadTask.agentPreset ?? '', model: existingModel, workspace: existingThreadTask.worktree?.path ?? projectRoot },
+      { agent: forced.command, model: requestedModel, workspace: existingThreadTask.worktree?.path ?? projectRoot },
     )
     : 'create_with_handoff';
   const contextHandoff = forced && previousAgent && transition !== 'reuse'
@@ -7849,7 +7928,7 @@ async function executeRoutedOrchestratorPlan(args: {
       holdGoal: true,
       activate: !multiSpawn || isPrimary,
       model: selectedModel,
-      accessMode: opts.accessMode === 'full-access' ? 'full-access' : undefined,
+      accessMode: opts.accessMode ?? (chatThreadId ? accessTier(getChatThread(chatThreadId)?.accessMode) : undefined),
       reasoningEffort: selectedReasoning,
     });
 
@@ -7994,7 +8073,7 @@ async function executeRoutedOrchestratorPlan(args: {
         activate: false,
         model: entry.model,
         reasoningEffort: entry.reasoningEffort,
-        accessMode: opts.accessMode === 'full-access' ? 'full-access' : undefined,
+        accessMode: opts.accessMode ?? (chatThreadId ? accessTier(getChatThread(chatThreadId)?.accessMode) : undefined),
       });
       if (sessionId == null) {
         deleteOrchestratorTask(task.id);

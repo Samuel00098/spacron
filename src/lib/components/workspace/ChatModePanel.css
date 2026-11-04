@@ -3116,3 +3116,272 @@
 .chat-agent-model-fav:hover {
   background: var(--surface-hover);
 }
+
+
+/* --- Agent-reported plan (ACP plan_update) --------------------------------- */
+.chat-mode-agent-plan {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border, #333) 70%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface, #161616) 92%, transparent);
+  font-size: 12px;
+}
+.chat-mode-agent-plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.chat-mode-agent-plan-count { font-variant-numeric: tabular-nums; opacity: 0.7; }
+.chat-mode-agent-plan ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.chat-mode-agent-plan li { display: flex; gap: 6px; align-items: baseline; opacity: 0.9; }
+.chat-mode-agent-plan li[data-status='completed'] { opacity: 0.6; text-decoration: line-through; }
+.chat-mode-agent-plan li[data-status='in_progress'] { opacity: 1; }
+.chat-mode-agent-plan-mark { width: 10px; flex: none; text-align: center; }
+
+/* --- Context meter (ACP usage_update) ------------------------------------- */
+.chat-mode-context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: 11px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+.chat-mode-context-meter-track {
+  width: 42px;
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+.chat-mode-context-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, currentColor 65%, transparent);
+}
+.chat-mode-context-meter-fill.full { background: #e5a13a; }
+.chat-mode-context-meter-label { white-space: nowrap; }
+
+
+/* --- Find in thread -------------------------------------------------------- */
+.chat-mode-body { position: relative; }
+.chat-mode-find {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--border, #333) 80%, transparent);
+  border-radius: 8px;
+  background: var(--surface, #161616);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.chat-mode-find input {
+  width: 180px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.chat-mode-find-count { font-size: 11px; opacity: 0.7; min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
+.chat-mode-find button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chat-mode-find button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
+.chat-mode-find button:disabled { opacity: 0.3; cursor: default; }
+.chat-mode-message.find-target {
+  animation: chat-find-flash 1.4s ease-out;
+  border-radius: 8px;
+}
+@keyframes chat-find-flash {
+  0%, 40% { background: color-mix(in srgb, #e5a13a 22%, transparent); }
+  100% { background: transparent; }
+}
+
+
+/* --- Composer slash commands ---------------------------------------------- */
+.chat-mode-slash-menu {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 6px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--border, #333) 80%, transparent);
+  border-radius: 8px;
+  background: var(--surface, #161616);
+}
+.chat-mode-slash-menu button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-mode-slash-menu button.active,
+.chat-mode-slash-menu button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.chat-mode-slash-name { font-weight: 600; font-variant-numeric: tabular-nums; }
+.chat-mode-slash-hint { opacity: 0.65; }
+
+
+/* --- Thread lineage (fork / side chat) ------------------------------------ */
+.chat-mode-lineage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+  padding: 6px 10px;
+  border: 1px dashed color-mix(in srgb, var(--border, #333) 90%, transparent);
+  border-radius: 8px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.chat-mode-lineage-actions { display: flex; gap: 6px; }
+.chat-mode-lineage-actions button {
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-mode-lineage-actions button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+
+
+/* --- Usage limits card (/limits) ------------------------------------------ */
+.chat-mode-limits {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border, #333) 80%, transparent);
+  border-radius: 8px;
+  background: var(--surface, #161616);
+  font-size: 12px;
+}
+.chat-mode-limits-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
+.chat-mode-limits-head button { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; opacity: 0.6; }
+.chat-mode-limits-head button:hover { opacity: 1; }
+.chat-mode-limits-empty { opacity: 0.65; }
+.chat-mode-limits-provider { display: grid; gap: 3px; }
+.chat-mode-limits-window { display: grid; grid-template-columns: minmax(90px, auto) 1fr auto auto; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.chat-mode-limits-window-label { opacity: 0.8; }
+.chat-mode-limits-track { height: 4px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, currentColor 16%, transparent); }
+.chat-mode-limits-track > span { display: block; height: 100%; border-radius: inherit; background: color-mix(in srgb, currentColor 60%, transparent); }
+.chat-mode-limits-window[data-severity='warn'] .chat-mode-limits-track > span { background: #e5a13a; }
+.chat-mode-limits-window[data-severity='critical'] .chat-mode-limits-track > span { background: #e5533a; }
+.chat-mode-limits-percent { opacity: 0.85; }
+.chat-mode-limits-reset { opacity: 0.6; }
+
+/* Per-thread checkout control: one thread, one working tree, one ship button. */
+.thread-worktree-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa0a6);
+}
+
+.thread-worktree-action,
+.thread-worktree-ship {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.thread-worktree-action:hover:not(:disabled),
+.thread-worktree-ship:hover:not(:disabled) {
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.3));
+  color: var(--text-primary, #f2f3f5);
+}
+
+.thread-worktree-ship {
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 55%, transparent);
+  color: var(--accent, #6ea8fe);
+}
+
+.thread-worktree-action.subtle {
+  border-color: transparent;
+  opacity: 0.75;
+}
+
+.thread-worktree-action:disabled,
+.thread-worktree-ship:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.thread-worktree-chip {
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 14%, transparent);
+  color: var(--text-primary, #f2f3f5);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+}
+
+.thread-worktree-link {
+  color: var(--accent, #6ea8fe);
+  text-decoration: none;
+}
+
+.thread-worktree-link:hover {
+  text-decoration: underline;
+}
+
+.thread-worktree-hint,
+.thread-worktree-status,
+.thread-worktree-note,
+.thread-worktree-error {
+  opacity: 0.85;
+}
+
+.thread-worktree-note {
+  color: var(--text-primary, #f2f3f5);
+}
+
+.thread-worktree-error {
+  color: var(--danger, #ff6b6b);
+}

@@ -71,16 +71,70 @@ export async function openAcpSession(command: string, args: string[], cwd: strin
   };
 }
 
-export async function initializeAcp(session: AcpSession): Promise<Record<string, unknown>> {
-  return session.request('initialize', {
-    protocolVersion: 1,
-    clientInfo: { name: 'spacron', version: '5.1.2' },
-    clientCapabilities: {
-      fs: { readTextFile: true, writeTextFile: true },
-      terminal: { create: true, output: true, release: true, waitForExit: true },
-      mcp: { http: true, sse: true, stdio: true },
-    },
-  });
+const ACP_CLIENT_INFO = { name: 'spacron', version: '5.1.2' };
+const ACP_CLIENT_CAPABILITIES = {
+  fs: { readTextFile: true, writeTextFile: true },
+  terminal: { create: true, output: true, release: true, waitForExit: true },
+  mcp: { http: true, sse: true, stdio: true },
+};
+
+/** The handshake the rest of the app consumes, whichever protocol answered. */
+export interface AcpInitialization extends Record<string, unknown> {
+  /** The version the agent actually selected (never the one we asked for). */
+  protocolVersion: number;
+  /** True when the agent negotiated v2, which adds usage, plan and state updates. */
+  protocolV2: boolean;
+  agentInfo: { name?: string; version?: string; title?: string } | null;
+  agentCapabilities: Record<string, unknown>;
+  authMethods: unknown[];
+}
+
+function handshake(result: Record<string, unknown>): AcpInitialization {
+  const requested = result.protocolVersion;
+  const parsed = typeof requested === 'number' ? requested : Number(requested);
+  // An agent that reports nothing usable is treated as v1: v2-only behavior is
+  // never assumed from a missing field.
+  const protocolVersion = Number.isFinite(parsed) ? parsed : 1;
+  const info = result.info ?? result.agentInfo;
+  const capabilities = result.capabilities ?? result.agentCapabilities;
+  return {
+    ...result,
+    protocolVersion,
+    protocolV2: protocolVersion >= 2,
+    agentInfo: info && typeof info === 'object' ? info as { name?: string; version?: string; title?: string } : null,
+    agentCapabilities: capabilities && typeof capabilities === 'object' ? capabilities as Record<string, unknown> : {},
+    authMethods: Array.isArray(result.authMethods) ? result.authMethods : [],
+  };
+}
+
+/**
+ * Negotiate ACP, preferring the v2 preview and falling back to v1.
+ *
+ * v2 is the same handshake with `protocolVersion: 2`, renamed `info`/
+ * `capabilities` fields, and a refusal (`-32022`) carrying `{requested,
+ * supported}`. Both spellings go out in one request so an agent that ignores
+ * unknown fields answers immediately, and a strict v1 agent costs exactly one
+ * extra round trip. The version used is whatever the agent echoes back — the
+ * request never decides it.
+ */
+export async function initializeAcp(session: AcpSession): Promise<AcpInitialization> {
+  try {
+    const result = await session.request('initialize', {
+      protocolVersion: 2,
+      info: ACP_CLIENT_INFO,
+      clientInfo: ACP_CLIENT_INFO,
+      capabilities: ACP_CLIENT_CAPABILITIES,
+      clientCapabilities: ACP_CLIENT_CAPABILITIES,
+    });
+    return handshake(result);
+  } catch {
+    const result = await session.request('initialize', {
+      protocolVersion: 1,
+      clientInfo: ACP_CLIENT_INFO,
+      clientCapabilities: ACP_CLIENT_CAPABILITIES,
+    });
+    return handshake(result);
+  }
 }
 
 export async function authenticateAcp(
@@ -95,19 +149,19 @@ export async function createAcpNativeSession(
   cwd: string,
   model?: string | null,
   mcpServers: unknown[] = [],
-): Promise<{ sessionId: string }> {
-  return session.request<{ sessionId: string }>('session/new', {
+): Promise<{ sessionId: string; modes?: unknown }> {
+  return session.request<{ sessionId: string; modes?: unknown }>('session/new', {
     cwd,
     ...(model ? { mcpServers, _meta: { model } } : { mcpServers }),
   });
 }
 
-export async function loadAcpNativeSession(session: AcpSession, sessionId: string, cwd: string, mcpServers: unknown[] = []): Promise<void> {
-  await session.request('session/load', { sessionId, cwd, mcpServers });
+export async function loadAcpNativeSession(session: AcpSession, sessionId: string, cwd: string, mcpServers: unknown[] = []): Promise<Record<string, unknown>> {
+  return session.request<Record<string, unknown>>('session/load', { sessionId, cwd, mcpServers });
 }
 
-export async function resumeAcpNativeSession(session: AcpSession, sessionId: string, cwd: string, mcpServers: unknown[] = []): Promise<void> {
-  await session.request('session/resume', { sessionId, cwd, mcpServers });
+export async function resumeAcpNativeSession(session: AcpSession, sessionId: string, cwd: string, mcpServers: unknown[] = []): Promise<Record<string, unknown>> {
+  return session.request<Record<string, unknown>>('session/resume', { sessionId, cwd, mcpServers });
 }
 
 export async function promptAcpNativeSession(
@@ -127,6 +181,20 @@ export async function setAcpSessionModel(
   model: string,
 ): Promise<void> {
   await session.request('session/set_model', { sessionId, modelId: model });
+}
+
+/**
+ * Switch the agent's permission mode for this session.
+ *
+ * The mode ids come from the agent (`session/new` → `modes.availableModes`);
+ * nothing is sent that the agent did not advertise.
+ */
+export async function setAcpSessionMode(
+  session: AcpSession,
+  sessionId: string,
+  modeId: string,
+): Promise<void> {
+  await session.request('session/set_mode', { sessionId, modeId });
 }
 
 export async function waitForAcpReplayIdle(

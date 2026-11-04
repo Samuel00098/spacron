@@ -3216,7 +3216,7 @@ pub fn workspace_git_branch_delete(
 /// staging surface. It is accepted **only** when it names a checkout inside a
 /// known project's managed worktree area, so a stray path cannot turn these
 /// commands into an arbitrary-repository write primitive.
-fn resolve_repo(
+pub(crate) fn resolve_repo(
     project_id: &str,
     repo_path: Option<&str>,
     state: &AppState,

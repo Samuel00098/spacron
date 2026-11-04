@@ -34,6 +34,9 @@ import {
   createChatThread,
   selectChatThread,
   setChatThreadArchived,
+  CHAT_SNOOZE_PRESETS,
+  setChatThreadSettled,
+  setChatThreadSnoozed,
   toggleChatThreadPinned,
   type ChatThread,
   type ChatThreadStatus,
@@ -199,6 +202,11 @@ interface ProjectItem {
   id?: string;
 }
 
+/** One line in the thread list: a thread, or a collapsible group header. */
+type ThreadListEntry =
+  | { kind: 'row'; row: ChatSidebarRow }
+  | { kind: 'label'; group: 'settled' | 'snoozed'; path: string; open: boolean; text: string };
+
 interface ChatSidebarRow {
   id: string;
   projectId: string;
@@ -298,6 +306,10 @@ export default function ProjectHUD() {
   const [pinnedProjects, setPinnedProjects] = useState<Set<string>>(() => loadPathSet(PINNED_PROJECTS_KEY));
   // Per-project "Archived" thread group; collapsed unless opened this session.
   const [openArchivedGroups, setOpenArchivedGroups] = useState<Set<string>>(new Set());
+  // Settled and snoozed threads are put away, not gone: each gets a collapsed
+  // group so the live list stays short without losing the thread.
+  const [openSettledGroups, setOpenSettledGroups] = useState<Set<string>>(new Set());
+  const [openSnoozedGroups, setOpenSnoozedGroups] = useState<Set<string>>(new Set());
 
   function setProjectHidden(path: string, hidden: boolean) {
     setHiddenProjects((prev) => {
@@ -317,6 +329,17 @@ export default function ProjectHUD() {
     setPinnedProjects((prev) => {
       const next = togglePath(prev, path, pinned);
       savePathSet(PINNED_PROJECTS_KEY, next);
+      return next;
+    });
+  }
+
+  function toggleThreadGroup(path: string, group: 'settled' | 'snoozed') {
+    const [state, setState] = group === 'settled'
+      ? [openSettledGroups, setOpenSettledGroups] as const
+      : [openSnoozedGroups, setOpenSnoozedGroups] as const;
+    setState((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
       return next;
     });
   }
@@ -797,9 +820,44 @@ export default function ProjectHUD() {
       const bActivity = b.thread?.lastActivityAt ?? b.task?.completedAt ?? b.task?.startedAt ?? b.task?.createdAt ?? b.session?.lastActivatedAt ?? 0;
       return bActivity - aActivity;
     });
-    const liveChatRows = chatRows.filter((row) => !row.thread?.archived);
+    // A thread leaves the live list three ways, and each is reversible: snoozed
+    // until a time that passes on its own, settled by hand, or archived. Only
+    // the live rows compete for attention; the rest sit in collapsed groups.
+    const nowTs = Date.now();
+    const isSnoozed = (row: ChatSidebarRow) => !row.thread?.archived && !row.thread?.settledAt
+      && typeof row.thread?.snoozedUntil === 'number' && row.thread.snoozedUntil > nowTs;
+    const isSettled = (row: ChatSidebarRow) => !row.thread?.archived && Boolean(row.thread?.settledAt);
+    const liveChatRows = chatRows.filter((row) => !row.thread?.archived && !isSettled(row) && !isSnoozed(row));
+    const settledChatRows = chatRows.filter(isSettled);
+    const snoozedChatRows = chatRows.filter(isSnoozed);
     const archivedChatRows = chatRows.filter((row) => row.thread?.archived);
     const archivedOpen = openArchivedGroups.has(p.path);
+    const settledOpen = openSettledGroups.has(p.path);
+    const snoozedOpen = openSnoozedGroups.has(p.path);
+    const threadListEntries: ThreadListEntry[] = [
+      ...liveChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
+      ...(settledChatRows.length > 0 ? [
+        {
+          kind: 'label' as const,
+          group: 'settled' as const,
+          path: p.path,
+          open: settledOpen,
+          text: settledOpen ? `Hide settled (${settledChatRows.length})` : `Settled (${settledChatRows.length})`,
+        } satisfies ThreadListEntry,
+        ...(settledOpen ? settledChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
+      ] : []),
+      ...(snoozedChatRows.length > 0 ? [
+        {
+          kind: 'label' as const,
+          group: 'snoozed' as const,
+          path: p.path,
+          open: snoozedOpen,
+          text: snoozedOpen ? `Hide snoozed (${snoozedChatRows.length})` : `Snoozed (${snoozedChatRows.length})`,
+        } satisfies ThreadListEntry,
+        ...(snoozedOpen ? snoozedChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
+      ] : []),
+      ...(archivedOpen ? archivedChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
+    ];
     const isPinnedProject = Boolean(p.path) && pinnedProjects.has(normalizeProjectPath(p.path));
     const hasOpenContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
     const hasContents = hasOpenContents || chatRows.length > 0 || Boolean(p.path);
@@ -1119,15 +1177,29 @@ export default function ProjectHUD() {
                   {liveChatRows.length === 0 && (
                     <span className="project-threads-empty">No active threads</span>
                   )}
-                  {[...liveChatRows, ...(archivedOpen ? archivedChatRows : [])].map((row, rowIndex) => {
+                  {threadListEntries.map((entry) => {
+                    if (entry.kind === 'label') {
+                      return (
+                        <button
+                          key={`thread-group-${entry.group}`}
+                          type="button"
+                          className={`project-threads-archived-toggle${entry.open ? ' open' : ''}`}
+                          onClick={() => toggleThreadGroup(entry.path, entry.group)}
+                          aria-expanded={entry.open}
+                        >
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <polyline points="9 6 15 12 9 18" />
+                          </svg>
+                          <span>{entry.text}</span>
+                        </button>
+                      );
+                    }
+                    const row = entry.row;
                     const isSelected = row.thread?.id === activeThreadId;
                     const terminalSession = row.session
                       ?? (row.task?.assignedSessionId != null ? sessionById.get(row.task.assignedSessionId) ?? null : null);
                     return (
                       <Fragment key={row.id}>
-                      {rowIndex === liveChatRows.length && (
-                        <div className="project-threads-archived-label">Archived</div>
-                      )}
                       <div className={`project-thread-row-wrap${isSelected ? ' selected' : ''}${row.thread?.archived ? ' archived' : ''}`}>
                         <button
                           type="button"
@@ -1196,6 +1268,43 @@ export default function ProjectHUD() {
                                 >
                                   {row.thread.archived ? 'Unarchive' : 'Archive'}
                                 </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setChatThreadSettled(row.thread!.id, !row.thread!.settledAt);
+                                    setThreadMenuId(null);
+                                  }}
+                                >
+                                  {row.thread.settledAt ? 'Un-settle' : 'Settle'}
+                                </button>
+                                {row.thread.snoozedUntil ? (
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setChatThreadSnoozed(row.thread!.id, null);
+                                      setThreadMenuId(null);
+                                    }}
+                                  >
+                                    Wake now
+                                  </button>
+                                ) : CHAT_SNOOZE_PRESETS.map((preset) => (
+                                  <button
+                                    key={preset.label}
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setChatThreadSnoozed(row.thread!.id, Date.now() + preset.ms);
+                                      setThreadMenuId(null);
+                                    }}
+                                  >
+                                    Snooze · {preset.label}
+                                  </button>
+                                ))}
                                 <button
                                   type="button"
                                   role="menuitem"

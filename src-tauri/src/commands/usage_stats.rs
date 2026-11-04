@@ -260,7 +260,8 @@ pub const SCOPE_ALL: &str = "all";
 /// * **Gemini** — `~/.gemini/tmp/<project>/chats/*.json` records messages with
 ///   no token fields at all, and `logs.json` is empty.
 /// * **Droid** — `~/.factory/sessions/**.jsonl` has no usage fields.
-/// * **Cursor**, **Verdent**, **Antigravity** — SQLite stores, no JSON logs.
+/// * **Cursor**, **Verdent** — SQLite stores, no JSON logs. (Antigravity is
+///   also SQLite but *is* read — see `scan_antigravity`.)
 /// * **Copilot** — `~/.copilot/session-state/<id>/events.jsonl` is the near
 ///   miss: `assistant.message` carries `model` and `outputTokens`, but there is
 ///   **no per-turn input count**. The only input figure is a `session.shutdown`
@@ -274,6 +275,8 @@ pub const PROVIDER_OPENCODE: &str = "opencode";
 pub const PROVIDER_PI: &str = "pi";
 pub const PROVIDER_OMP: &str = "omp";
 pub const PROVIDER_COMMAND_CODE: &str = "command-code";
+/// Google Antigravity: conversation databases, not JSON logs.
+pub const PROVIDER_ANTIGRAVITY: &str = "antigravity";
 /// Query-only pseudo-provider: every provider folded together.
 pub const PROVIDER_ALL: &str = "all";
 
@@ -293,6 +296,8 @@ enum SourceFormat {
     Session,
     /// Aider `--analytics-log` JSONL (`message_send` events carry the counts).
     Aider,
+    /// Antigravity's SQLite conversation databases (`gen_metadata` rows).
+    Antigravity,
 }
 
 impl Default for SourceFormat {
@@ -402,6 +407,21 @@ fn builtin_provider_sources() -> Vec<ProviderSource> {
             label: "Aider".to_string(),
             format: SourceFormat::Aider,
             paths: vec![".aider".into()],
+        },
+        // Every Antigravity flavour keeps its own conversations/ directory.
+        // `ANTIGRAVITY_DATA_DIR` replaces this list at scan time.
+        ProviderSource {
+            provider: PROVIDER_ANTIGRAVITY.to_string(),
+            label: "Antigravity".to_string(),
+            format: SourceFormat::Antigravity,
+            paths: vec![
+                ".gemini/antigravity/conversations".into(),
+                ".gemini/antigravity-cli/conversations".into(),
+                ".gemini/antigravity-ide/conversations".into(),
+                ".gemini/antigravity-backup/conversations".into(),
+                ".gemini/antigravity-acp/conversations".into(),
+                ".config/antigravity/conversations".into(),
+            ],
         },
     ]
 }
@@ -2116,6 +2136,314 @@ fn scan_aider(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) -> (usiz
 }
 
 // ---------------------------------------------------------------------------
+// Antigravity (SQLite conversation databases)
+// ---------------------------------------------------------------------------
+
+/// Token counts read out of one `gen_metadata` row.
+#[derive(Default)]
+struct AntigravityUsage {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+    model: Option<String>,
+    ts_ms: Option<i64>,
+    dedupe_key: Option<String>,
+}
+
+const AG_INPUT_KEYS: &[&str] = &[
+    "input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "promptTokenCount", "input",
+];
+const AG_OUTPUT_KEYS: &[&str] = &[
+    "output_tokens", "outputTokens", "completion_tokens", "completionTokens", "candidatesTokenCount", "output",
+];
+const AG_CACHE_READ_KEYS: &[&str] = &[
+    "cache_read_tokens", "cacheReadTokens", "cached_tokens", "cachedContentTokenCount", "cacheRead",
+];
+const AG_CACHE_WRITE_KEYS: &[&str] = &[
+    "cache_write_tokens", "cacheWriteTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite",
+];
+const AG_MODEL_KEYS: &[&str] = &[
+    "model", "modelId", "model_id", "modelName", "model_name", "modelVersion",
+];
+const AG_TIME_KEYS: &[&str] = &[
+    "timestamp", "createdAt", "created_at", "createTime", "create_time", "startTime", "start_time", "time", "ts",
+];
+const AG_ID_KEYS: &[&str] = &[
+    "responseId", "response_id", "messageId", "message_id", "generationId", "generation_id", "id",
+];
+
+fn ag_number(map: &serde_json::Map<String, Value>, keys: &[&str]) -> u64 {
+    for key in keys {
+        if let Some(value) = map.get(*key) {
+            if let Some(n) = value.as_u64() {
+                return n;
+            }
+            if let Some(n) = value.as_f64() {
+                if n.is_finite() && n > 0.0 {
+                    return n as u64;
+                }
+            }
+        }
+    }
+    0
+}
+
+fn ag_text(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(text) = map.get(*key).and_then(Value::as_str) {
+            if !text.trim().is_empty() {
+                return Some(text.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn ag_ts_ms(map: &serde_json::Map<String, Value>) -> Option<i64> {
+    for key in AG_TIME_KEYS {
+        let Some(value) = map.get(*key) else { continue };
+        if let Some(n) = value.as_i64() {
+            if n > 0 {
+                // Seconds vs milliseconds: anything before 1973 in ms is far too
+                // small to be a real timestamp, so treat small values as seconds.
+                return Some(if n > 100_000_000_000 { n } else { n.saturating_mul(1000) });
+            }
+        }
+        if let Some(text) = value.as_str() {
+            if let Some(ms) = iso_to_ms(text) {
+                return Some(ms);
+            }
+        }
+    }
+    None
+}
+
+/// Walk one metadata row and accumulate every *usage object* in it.
+///
+/// The JSON shape inside `gen_metadata.data` is Google's, not ours, and it has
+/// changed between Antigravity builds, so this looks for the shape rather than a
+/// fixed path: an object carrying both an input-ish and an output-ish count is a
+/// usage object, and its subtree is not descended into (a parent that repeats the
+/// same counts must not double them). Model, timestamp and id are captured from
+/// the outermost object that has them, which is where Antigravity records them.
+fn visit_antigravity_usage(node: &Value, acc: &mut AntigravityUsage) {
+    match node {
+        Value::Object(map) => {
+            if acc.model.is_none() {
+                acc.model = ag_text(map, AG_MODEL_KEYS);
+            }
+            if acc.ts_ms.is_none() {
+                acc.ts_ms = ag_ts_ms(map);
+            }
+            if acc.dedupe_key.is_none() {
+                if let Some(id) = ag_text(map, AG_ID_KEYS) {
+                    acc.dedupe_key = Some(format!("antigravity:{id}"));
+                }
+            }
+            let has_input = AG_INPUT_KEYS.iter().any(|key| map.contains_key(*key));
+            let has_output = AG_OUTPUT_KEYS.iter().any(|key| map.contains_key(*key));
+            if has_input && has_output {
+                acc.input = acc.input.saturating_add(ag_number(map, AG_INPUT_KEYS));
+                acc.output = acc.output.saturating_add(ag_number(map, AG_OUTPUT_KEYS));
+                acc.cache_read = acc.cache_read.saturating_add(ag_number(map, AG_CACHE_READ_KEYS));
+                acc.cache_write = acc.cache_write.saturating_add(ag_number(map, AG_CACHE_WRITE_KEYS));
+                return;
+            }
+            for value in map.values() {
+                visit_antigravity_usage(value, acc);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                visit_antigravity_usage(item, acc);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Resolve the roots to scan. `ANTIGRAVITY_DATA_DIR` (comma-separated) may name
+/// either a data root that contains `conversations/` or the conversations
+/// directory itself, matching what ccusage documents.
+fn antigravity_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let from_env = std::env::var("ANTIGRAVITY_DATA_DIR").unwrap_or_default();
+    let candidates: Vec<PathBuf> = if from_env.trim().is_empty() {
+        roots.to_vec()
+    } else {
+        from_env
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(PathBuf::from)
+            .collect()
+    };
+    let mut out: Vec<PathBuf> = Vec::new();
+    for candidate in candidates {
+        let conversations = candidate.join("conversations");
+        if conversations.is_dir() {
+            out.push(conversations);
+        }
+        if candidate.is_dir() {
+            out.push(candidate);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_antigravity_dbs(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+    const MAX_DEPTH: usize = 4;
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_antigravity_dbs(&path, out, depth + 1);
+        } else if path.extension().is_some_and(|ext| ext == "db") {
+            out.push(path);
+        }
+    }
+}
+
+/// Read every `gen_metadata` row of one database, oldest first when the table
+/// has the `idx` column ccusage documents.
+fn read_gen_metadata(path: &Path) -> Vec<Value> {
+    let mut rows_out: Vec<Value> = Vec::new();
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
+        return rows_out;
+    };
+    let mut stmt = match conn.prepare("SELECT data FROM gen_metadata ORDER BY idx") {
+        Ok(stmt) => stmt,
+        Err(_) => match conn.prepare("SELECT data FROM gen_metadata") {
+            Ok(stmt) => stmt,
+            Err(_) => return rows_out,
+        },
+    };
+    let Ok(mut rows) = stmt.query([]) else { return rows_out };
+    while let Ok(Some(row)) = rows.next() {
+        use rusqlite::types::ValueRef;
+        let text = match row.get_ref(0) {
+            Ok(ValueRef::Text(bytes)) => String::from_utf8_lossy(bytes).to_string(),
+            Ok(ValueRef::Blob(bytes)) => String::from_utf8_lossy(bytes).to_string(),
+            _ => continue,
+        };
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            rows_out.push(value);
+        }
+    }
+    rows_out
+}
+
+fn parse_antigravity_db(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
+    let meta = FileMeta::default();
+    let mut turns: Vec<ParsedTurn> = Vec::new();
+    let session_id = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let file_ms = fs::metadata(path)
+        .map(|m| mtime_ms_of(&m))
+        .unwrap_or_else(|_| now_ms());
+
+    for row in read_gen_metadata(path) {
+        let mut usage = AntigravityUsage::default();
+        visit_antigravity_usage(&row, &mut usage);
+        if usage.input + usage.output + usage.cache_read + usage.cache_write == 0 {
+            continue;
+        }
+        let ts_ms = usage.ts_ms.unwrap_or(file_ms);
+        turns.push(ParsedTurn {
+            dedupe_key: usage.dedupe_key,
+            session_id: session_id.clone(),
+            ts_ms,
+            day: utc_date_str(ts_ms.div_euclid(1000)),
+            model: usage.model,
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            cache_read_tokens: usage.cache_read,
+            cache_write_tokens: usage.cache_write,
+        });
+    }
+    (meta, turns)
+}
+
+fn scan_antigravity(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) -> (usize, usize) {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for root in antigravity_roots(roots) {
+        collect_antigravity_dbs(&root, &mut files, 0);
+    }
+    files.sort();
+    files.dedup();
+    let units: Vec<ScanUnit> = files.iter().filter_map(|p| unit_from_file(p)).collect();
+    // A database is the unit: a conversation is one file, so a changed one
+    // replaces its own contribution exactly like a session log.
+    scan_simple(store, provider, units, parse_antigravity_db)
+}
+
+#[cfg(test)]
+mod antigravity_usage_tests {
+    use super::*;
+
+    fn visit(json: &str) -> AntigravityUsage {
+        let value: Value = serde_json::from_str(json).expect("json");
+        let mut usage = AntigravityUsage::default();
+        visit_antigravity_usage(&value, &mut usage);
+        usage
+    }
+
+    #[test]
+    fn reads_a_generation_row() {
+        let usage = visit(
+            r#"{"model":"gemini-3.8-flash","createTime":"2026-10-02T09:14:03.250Z",
+                "usage":{"input_tokens":120,"output_tokens":40,"cache_read_tokens":900,"cache_write_tokens":30},
+                "responseId":"resp-1"}"#,
+        );
+        assert_eq!((usage.input, usage.output), (120, 40));
+        assert_eq!((usage.cache_read, usage.cache_write), (900, 30));
+        assert_eq!(usage.model.as_deref(), Some("gemini-3.8-flash"));
+        assert_eq!(usage.dedupe_key.as_deref(), Some("antigravity:resp-1"));
+        assert!(usage.ts_ms.is_some());
+    }
+
+    #[test]
+    fn a_usage_object_is_not_descended_into() {
+        // Counts at the object's own level win, and its subtree is skipped, so a
+        // row that repeats the same numbers deeper cannot count them twice.
+        //
+        // Known limit: a summary that only repeats counts *under a different
+        // key* (`{"tokens":{...},"steps":[{"usage":{...}}]}`) cannot be told
+        // apart from two real usage objects without a real Antigravity database,
+        // so it counts both. The shape below is the one the reader guarantees.
+        let usage = visit(
+            r#"{"input_tokens":10,"output_tokens":5,
+                "steps":[{"usage":{"input_tokens":10,"output_tokens":5}}]}"#,
+        );
+        assert_eq!((usage.input, usage.output), (10, 5));
+    }
+
+    #[test]
+    fn sums_several_usage_objects_and_ignores_rows_without_usage() {
+        let usage = visit(
+            r#"{"steps":[{"usage":{"input":7,"output":3}},{"usage":{"prompt_tokens":8,"completion_tokens":2}}]}"#,
+        );
+        assert_eq!((usage.input, usage.output), (15, 5));
+        let empty = visit(r#"{"model":"gemini-3.8-flash"}"#);
+        assert_eq!(empty.input + empty.output, 0);
+    }
+
+    #[test]
+    fn a_missing_database_reads_as_no_usage() {
+        let (_, turns) = parse_antigravity_db(Path::new("/nonexistent/antigravity.db"));
+        assert!(turns.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registry sweep + convention discovery
 // ---------------------------------------------------------------------------
 
@@ -2222,6 +2550,7 @@ fn run_scan(store: &mut StoreFile, config_dir: &Path, home: &Path) -> (usize, us
             SourceFormat::OpenCode => scan_opencode(store, &spec.provider, &roots),
             SourceFormat::Session => scan_session_jsonl(store, &spec.provider, &roots),
             SourceFormat::Aider => scan_aider(store, &spec.provider, &roots),
+            SourceFormat::Antigravity => scan_antigravity(store, &spec.provider, &roots),
         };
         processed += p;
         skipped += s;
@@ -2571,6 +2900,7 @@ fn build_recent_sessions(
             SourceFormat::Session => parse_session_jsonl(&path),
             SourceFormat::Aider => parse_aider_log(&path),
             SourceFormat::Claude => parse_session_turns(&path),
+            SourceFormat::Antigravity => parse_antigravity_db(&path),
         };
         let parsed = aggregate_turns(&turns);
         if parsed.turns == 0 {
@@ -3680,7 +4010,7 @@ mod tests {
         let sources = builtin_provider_sources();
         let find = |id: &str| sources.iter().find(|s| s.provider == id).expect(id);
 
-        assert_eq!(sources.len(), 8, "six original providers + Kilo + Aider");
+        assert_eq!(sources.len(), 9, "six original providers + Kilo + Aider + Antigravity");
         assert_eq!(find(PROVIDER_CLAUDE).format, SourceFormat::Claude);
         assert_eq!(find(PROVIDER_CODEX).format, SourceFormat::Codex);
         assert_eq!(find(PROVIDER_PI).format, SourceFormat::Session);
@@ -3725,6 +4055,11 @@ mod tests {
         assert_eq!(pi.format, SourceFormat::Session, "omitted format is kept");
         assert_eq!(sources.iter().find(|s| s.provider == "kilo").unwrap().format, SourceFormat::OpenCode,
             "a path override must not change the built-in parser");
+        assert_eq!(
+            sources.iter().find(|s| s.provider == PROVIDER_ANTIGRAVITY).unwrap().format,
+            SourceFormat::Antigravity,
+            "Antigravity reads its own conversation SQLite databases"
+        );
         assert!(
             !sources.iter().any(|s| s.provider == "omp"),
             "empty paths disable a built-in"
@@ -3735,7 +4070,7 @@ mod tests {
 
         // A bad file falls back to the built-ins untouched, like the ledger store.
         fs::write(registry.join("providers.json"), "{not json").unwrap();
-        assert_eq!(load_provider_sources(&config).len(), 8);
+        assert_eq!(load_provider_sources(&config).len(), 9);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3897,6 +4232,23 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// ISO-8601 UTC, `offset` seconds before now.
+    ///
+    /// The recent-sessions table only lists work inside a rolling window, so a
+    /// fixture with a hard-coded date silently stops being visible once the
+    /// calendar moves past that window — which is what this test did.
+    fn recent_iso(offset_secs: i64) -> String {
+        let secs = now_ms().div_euclid(1000) - offset_secs;
+        let rem = secs.rem_euclid(86_400);
+        format!(
+            "{}T{:02}:{:02}:{:02}Z",
+            utc_date_str(secs),
+            rem / 3_600,
+            (rem % 3_600) / 60,
+            rem % 60,
+        )
+    }
+
     /// Tier 2: a CLI Spacron has never heard of, writing the shared
     /// `<dot>/agent/sessions` shape under either swept home, is scanned under
     /// its directory name and surfaces in the Overview.
@@ -3908,9 +4260,12 @@ mod tests {
         fs::create_dir_all(&config).unwrap();
 
         let session_rows = || {
+            let stamp = recent_iso(3_600);
             vec![
                 r#"{"type":"session","id":"ses1","cwd":"/repo"}"#.to_string(),
-                r#"{"type":"message","timestamp":"2026-09-20T10:00:00Z","message":{"provider":"xai","model":"grok-4","usage":{"input":100,"output":40,"cacheRead":0,"cacheWrite":0}}}"#.to_string(),
+                format!(
+                    r#"{{"type":"message","timestamp":"{stamp}","message":{{"provider":"xai","model":"grok-4","usage":{{"input":100,"output":40,"cacheRead":0,"cacheWrite":0}}}}}}"#
+                ),
             ]
         };
 

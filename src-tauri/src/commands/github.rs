@@ -28,7 +28,7 @@ const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_OAUTH_SCOPES: &str = "repo read:user workflow";
 /// Shown whenever GitHub rejects our credentials with a 401 — the keychain
 /// entries are cleared and the user signs in again.
-const SIGN_IN_EXPIRED: &str = "Your GitHub sign-in has expired. Sign in again.";
+pub(crate) const SIGN_IN_EXPIRED: &str = "Your GitHub sign-in has expired. Sign in again.";
 
 /// OAuth App client id for "Sign in with GitHub" (device flow).
 ///
@@ -106,7 +106,7 @@ pub fn github_token_delete() -> Result<(), String> {
     }
 }
 
-fn read_token() -> Result<String, String> {
+pub(crate) fn read_token() -> Result<String, String> {
     let entry = token_entry()?;
     match entry.get_password() {
         Ok(p) if !p.trim().is_empty() => Ok(p.trim().to_string()),
@@ -667,7 +667,7 @@ fn git_capture(root: &Path, args: &[&str]) -> Option<String> {
 /// command line or `.git/config`, so it never persists and never appears in a
 /// process listing. This guarantees the first push works even when no git
 /// credential helper is configured.
-fn push_with_token(root: &Path, token: &str, branch: &str) -> Result<(), String> {
+pub(crate) fn push_with_token(root: &Path, token: &str, branch: &str) -> Result<(), String> {
     let cred = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
     let out = git_base()
         .args(["push", "-u", "origin", "--", branch])

@@ -18,16 +18,23 @@ import {
   createSubagentChatThread,
   ensureProjectThread,
   editAssistantChatMessage,
+  bringBackSideChat,
+  createSideChatThread,
+  forkChatThreadFrom,
+  getChatThread,
   getPendingNewThreadSettings,
   removeThreadMessage,
+  revertChatThreadTo,
   selectChatThread,
   setThreadDraft,
   updateChatThread,
 } from '$lib/stores/chatThreads';
 import { openFile } from '$lib/stores/editor';
 import { setActiveView } from '$lib/stores/layout';
+import { describeReset, refreshUsage, severityOf, usageState } from '$lib/stores/usage';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
 import ReasoningSlider from '$lib/components/shared/ReasoningSlider';
+import ThreadWorktreeBar from '$lib/components/workspace/ThreadWorktreeBar';
 import ChatAgentModelPicker from './ChatAgentModelPicker';
 import { todoProgress } from '$lib/services/orchestrator/chat-turn';
 import { ProviderBrandMark } from '$lib/components/shared/providerBrands';
@@ -71,6 +78,7 @@ import {
 import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, ChatMessage, ChatReasoningEffort, ChatThread } from '$lib/types/chat';
 import type { Project } from '$lib/types/workspace';
 import { reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
+import { CHAT_ACCESS_TIER_HINTS, CHAT_ACCESS_TIER_LABELS, CHAT_ACCESS_TIERS, accessTier } from '$lib/services/orchestrator/access-policy';
 import ModelCapabilityBadges, { ModelCapabilityIcons, forgetModelVision } from './ModelCapabilityBadges';
 import { modelCapabilitiesVersion } from '$lib/services/model-capabilities';
 import {
@@ -103,6 +111,26 @@ import './ChatFileViewer.css';
 
 // The viewer pulls in CodeMirror; load it the first time a file is opened.
 const ChatFileViewer = lazy(() => import('./ChatFileViewer'));
+
+/**
+ * The composer's `/` commands. Only commands that actually do something are
+ * listed: `/image` and `/video` are prefixes the dispatcher already understands,
+ * and `/plan` `/build` flip this thread's work mode. A menu that offers a
+ * command nothing handles is worse than no menu.
+ */
+const CHAT_SLASH_COMMANDS: ReadonlyArray<{
+  name: string;
+  hint: string;
+  insert?: string;
+  action?: 'plan' | 'build' | 'side' | 'limits';
+}> = [
+  { name: 'image', hint: 'Generate an image from a description', insert: '/image ' },
+  { name: 'video', hint: 'Generate a video from a description', insert: '/video ' },
+  { name: 'plan', hint: 'Plan only: inspect and propose, make no edits', action: 'plan' },
+  { name: 'build', hint: 'Build: carry out the task with this thread’s access', action: 'build' },
+  { name: 'side', hint: 'Ask a side question without interrupting this thread', action: 'side' },
+  { name: 'limits', hint: 'Show remaining usage limits for your signed-in agents', action: 'limits' },
+];
 
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_ATTACHMENT_TEXT = 120_000;
@@ -344,6 +372,14 @@ function statusLabel(status: string): string {
     case 'draft': return 'Draft';
     default: return 'Working';
   }
+}
+
+/** Compact token counts for the context meter: 8,214 / 200,000 -> "8.2k/200k". */
+function formatTokenCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 10_000) return `${Math.round(value / 1_000)}k`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(Math.max(0, Math.round(value)));
 }
 
 function isUsageLimitFailure(message: ChatMessage): boolean {
@@ -734,7 +770,62 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   }, [viewerRoot]);
   // What is waiting to run in this thread: rendered as the queue strip above
   // the composer, with per-row steer/remove.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findAt, setFindAt] = useState(0);
+  const [findFlashId, setFindFlashId] = useState<string | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  const [slashAt, setSlashAt] = useState(0);
+  // Limits are read from the store the meters already poll; opening the card
+  // asks for a refresh rather than starting a second timer.
+  const [limitsOpen, setLimitsOpen] = useState(false);
+  const usage = useStore(usageState);
   const queuedMessages = (thread ? messageQueues[thread.id] ?? [] : []) as QueuedChatMessage[];
+  // ACP v2 reports its own context usage and plan. Both are per-thread state, so
+  // the meter and card survive a thread switch without re-reading the stream.
+  const contextUsage = thread?.contextUsage ?? null;
+  const agentPlan = thread?.turnPlan && thread.turnPlan.entries.length > 0 ? thread.turnPlan : null;
+  const limitProviders = usage.providers.filter((provider) => provider.status === 'ok' && provider.windows.length > 0);
+  const tickerOwnsPlan = Boolean(turnTicker && turnTicker.threadId === thread?.id);
+  // Find in thread: matches are the text-bearing rows in transcript order, so
+  // "next" walks the conversation the way the user reads it.
+  const findMatches = findQuery.trim()
+    ? messages.filter((message) => message.type !== 'activity' && message.type !== 'completion'
+      && message.text.toLowerCase().includes(findQuery.trim().toLowerCase()))
+    : [];
+  const findCurrent = findMatches.length ? findMatches[Math.min(findAt, findMatches.length - 1)] : null;
+  const findCurrentId = findCurrent?.id ?? null;
+
+  useEffect(() => {
+    if (!findCurrentId || typeof document === 'undefined') {
+      setFindFlashId(null);
+      return;
+    }
+    document.getElementById(`chat-msg-${findCurrentId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setFindFlashId(findCurrentId);
+    const timer = setTimeout(() => setFindFlashId(null), 1400);
+    return () => clearTimeout(timer);
+  }, [findCurrentId, findQuery]);
+
+  useEffect(() => {
+    if (!findOpen) return;
+    findInputRef.current?.focus();
+    findInputRef.current?.select();
+  }, [findOpen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onFindKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        setFindOpen(true);
+      } else if (event.key === 'Escape' && findOpen) {
+        setFindOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onFindKey);
+    return () => window.removeEventListener('keydown', onFindKey);
+  }, [findOpen]);
   const pendingRequestMessage = useMemo(
     () => [...messages].reverse().find((message) =>
       (message.type === 'approval' || message.type === 'input') &&
@@ -846,7 +937,9 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     if (source.some((entry) => entry.id === selectedModel)) return source;
     return [{ id: selectedModel, label: selectedModel, description: 'Saved model for this conversation.' }, ...source];
   }, [liveModels, providerDef.models, selectedModel]);
-  const accessMode: ChatAccessMode = thread?.accessMode === 'full-access' ? 'full-access' : 'inherit';
+  // The composer shows T3's four tiers. A thread that never picked one reads
+  // as supervised: absent means narrow, not wide.
+  const accessMode: ChatAccessMode = accessTier(thread?.accessMode);
   const workMode = thread?.workMode === 'plan' ? 'plan' : 'build';
   const acpAgents = useMemo(() => {
     void acpChatEnabled;
@@ -926,6 +1019,13 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(cursor, cursor); });
   }
   const composerValue = thread?.draft ?? '';
+  // Open while the draft is exactly a slash word, so the menu never interrupts
+  // a prompt that merely contains a slash.
+  const slashQuery = /^\/([a-z-]*)$/i.exec(composerValue)?.[1].toLowerCase() ?? null;
+  const slashMatches = slashQuery === null
+    ? []
+    : CHAT_SLASH_COMMANDS.filter((command) => command.name.startsWith(slashQuery));
+  const slashActive = slashMatches.length ? Math.min(slashAt, slashMatches.length - 1) : 0;
   const chatPlacementRequest = project && thread && placementRequest?.source === 'orchestrator'
     && placementRequest.projectId === project.id && placementRequest.threadId === thread.id
     ? placementRequest
@@ -1112,7 +1212,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     const target = ensureConversationThread();
     if (!target) return;
     updateChatThread(target.id, {
-      accessMode: nextAccess === 'full-access' ? 'full-access' : 'inherit',
+      accessMode: accessTier(nextAccess as ChatAccessMode),
       updatedAt: Date.now(),
     });
   }
@@ -1932,6 +2032,49 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     }]);
   }
 
+  function runSlashCommand(command: (typeof CHAT_SLASH_COMMANDS)[number]) {
+    if (command.action === 'limits') {
+      setLimitsOpen(true);
+      void refreshUsage(true);
+      updateDraft('');
+      setSlashAt(0);
+      return;
+    }
+    if (command.action === 'side') {
+      if (thread) createSideChatThread(thread.id);
+      updateDraft('');
+      setSlashAt(0);
+      return;
+    }
+    if (command.action) {
+      const target = thread ?? ensureConversationThread();
+      if (target) updateChatThread(target.id, { workMode: command.action, updatedAt: Date.now() });
+      updateDraft('');
+      setSlashAt(0);
+      return;
+    }
+    updateDraft(command.insert ?? `/${command.name} `);
+    setSlashAt(0);
+    textareaRef.current?.focus();
+  }
+
+  // Fork keeps this thread intact and continues from a copy, which is the other
+  // half of "branch the conversation": revert rewrites, fork branches.
+  function forkFrom(messageId: string | null) {
+    if (!thread) return;
+    forkChatThreadFrom(thread.id, messageId);
+  }
+
+  // Revert to before a message: the transcript branches there and, for a user
+  // message, its text returns to the composer so it can be re-sent differently.
+  function revertToMessage(messageId: string) {
+    if (!thread) return;
+    if (!revertChatThreadTo(thread.id, messageId)) return;
+    setFindOpen(false);
+    setFindQuery('');
+    setFindAt(0);
+  }
+
   async function submit() {
     if (pendingRequest) {
       await answerPendingRequest(requestDraft);
@@ -2048,7 +2191,55 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
 
       <div className={`chat-mode-content-stack${messages.length === 0 ? ' is-empty' : ''}`}>
         <div className={`chat-mode-body${messages.length === 0 ? ' is-empty' : ''}`}>
+          {findOpen && (
+            <div className="chat-mode-find" role="search" aria-label="Find in thread">
+              <input
+                ref={findInputRef}
+                value={findQuery}
+                onChange={(event) => { setFindQuery(event.target.value); setFindAt(0); }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    const step = event.shiftKey ? -1 : 1;
+                    setFindAt((value) => (findMatches.length ? (value + step + findMatches.length) % findMatches.length : 0));
+                  } else if (event.key === 'Escape') {
+                    setFindOpen(false);
+                  }
+                }}
+                placeholder="Find in thread"
+                aria-label="Find in thread"
+              />
+              <span className="chat-mode-find-count">
+                {findQuery.trim() ? (findMatches.length ? `${Math.min(findAt, findMatches.length - 1) + 1}/${findMatches.length}` : 'No matches') : ''}
+              </span>
+              <button type="button" onClick={() => setFindAt((value) => (findMatches.length ? (value - 1 + findMatches.length) % findMatches.length : 0))} aria-label="Previous match" disabled={findMatches.length === 0}>↑</button>
+              <button type="button" onClick={() => setFindAt((value) => (findMatches.length ? (value + 1) % findMatches.length : 0))} aria-label="Next match" disabled={findMatches.length === 0}>↓</button>
+              <button type="button" onClick={() => setFindOpen(false)} aria-label="Close find">×</button>
+            </div>
+          )}
           <div ref={scrollRef} className={`chat-mode-transcript${messages.length === 0 ? ' is-empty' : ''}`} aria-live="polite">
+            {(thread.parentThreadId || thread.forkOfThreadId) && (
+              <div className="chat-mode-lineage" role="note">
+                <span>
+                  {thread.parentThreadId ? 'Side chat of ' : 'Forked from '}
+                  <strong>{getChatThread(thread.parentThreadId ?? thread.forkOfThreadId ?? '')?.title ?? 'another thread'}</strong>
+                </span>
+                <div className="chat-mode-lineage-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const parentId = thread.parentThreadId ?? thread.forkOfThreadId;
+                      if (parentId) selectChatThread(thread.projectId, parentId);
+                    }}
+                  >
+                    Open that thread
+                  </button>
+                  {thread.parentThreadId && (
+                    <button type="button" onClick={() => { bringBackSideChat(thread.id); }}>Bring back into main</button>
+                  )}
+                </div>
+              </div>
+            )}
             {resumable && (
               <div className="chat-mode-resume-card" role="status" aria-label="Saved interrupted work">
                 <span className="chat-mode-resume-icon" aria-hidden="true">↻</span>
@@ -2092,10 +2283,36 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               if (message.type === 'orchestrator') return null;
 
               return (
-                <article key={message.id} className={`chat-mode-message ${message.role}`}>
+                <article
+                  key={message.id}
+                  id={`chat-msg-${message.id}`}
+                  className={`chat-mode-message ${message.role}${findFlashId === message.id ? ' find-target' : ''}`}
+                >
                   <div className="chat-mode-message-meta">
                     <strong>{messageLabel(message)}</strong>
                     <time>{formatTime(message.ts)}</time>
+                    {thread.status !== 'working' && (
+                      <button
+                        type="button"
+                        className="chat-mode-revert"
+                        title="Fork the thread from here, keeping this one"
+                        aria-label="Fork from this message"
+                        onClick={() => forkFrom(message.id)}
+                      >
+                        ⑂
+                      </button>
+                    )}
+                    {thread.status !== 'working' && message.id !== messages[0]?.id && (
+                      <button
+                        type="button"
+                        className="chat-mode-revert"
+                        title="Revert the thread to before this message"
+                        aria-label="Revert to before this message"
+                        onClick={() => revertToMessage(message.id)}
+                      >
+                        ↺
+                      </button>
+                    )}
                   </div>
                   {editingMessageId === message.id ? (
                     <div className="chat-mode-message-editing">
@@ -2286,6 +2503,56 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               </div>
             );
           })()}
+          {agentPlan && !tickerOwnsPlan && (
+            <div className="chat-mode-agent-plan" role="status" aria-label="Agent plan">
+              <div className="chat-mode-agent-plan-head">
+                <span>Agent plan</span>
+                <span className="chat-mode-agent-plan-count">
+                  {agentPlan.entries.filter((entry) => entry.status === 'completed').length}/{agentPlan.entries.length}
+                </span>
+              </div>
+              <ul>
+                {agentPlan.entries.map((entry, index) => (
+                  <li key={`${entry.content}-${index}`} data-status={entry.status}>
+                    <span className="chat-mode-agent-plan-mark" aria-hidden="true">
+                      {entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '●' : entry.status === 'cancelled' ? '−' : ''}
+                    </span>
+                    <span className="chat-mode-agent-plan-label">{entry.content}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {limitsOpen && (
+            <div className="chat-mode-limits" role="status" aria-label="Usage limits">
+              <div className="chat-mode-limits-head">
+                <span>Usage limits</span>
+                <button type="button" onClick={() => setLimitsOpen(false)} aria-label="Hide usage limits">×</button>
+              </div>
+              {limitProviders.length === 0 ? (
+                <span className="chat-mode-limits-empty">
+                  {usage.loading ? 'Reading limits…' : 'No metered limits reported. Sign in to an agent CLI, then run /limits again.'}
+                </span>
+              ) : limitProviders.map((provider) => (
+                <div key={provider.provider} className="chat-mode-limits-provider">
+                  <strong>{provider.name}{provider.plan ? ` · ${provider.plan}` : ''}</strong>
+                  {provider.windows.map((window) => {
+                    const reset = describeReset(window);
+                    return (
+                      <div key={`${provider.provider}-${window.label}`} className="chat-mode-limits-window" data-severity={severityOf(window.usedPercent)}>
+                        <span className="chat-mode-limits-window-label">{window.label}</span>
+                        <span className="chat-mode-limits-track" aria-hidden="true">
+                          <span style={{ width: `${Math.min(100, Math.max(0, window.usedPercent))}%` }} />
+                        </span>
+                        <span className="chat-mode-limits-percent">{Math.round(window.usedPercent)}% used</span>
+                        {reset && <span className="chat-mode-limits-reset">{reset}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
           {queuedMessages.length > 0 && (
             <div className="chat-mode-message-queue" aria-label="Queued messages">
               <div className="chat-mode-message-queue-head">
@@ -2359,6 +2626,23 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               ))}
             </div>
           )}
+          {slashMatches.length > 0 && (
+            <div className="chat-mode-slash-menu" role="listbox" aria-label="Chat commands">
+              {slashMatches.map((command, index) => (
+                <button
+                  key={command.name}
+                  type="button"
+                  role="option"
+                  aria-selected={index === slashActive}
+                  className={index === slashActive ? 'active' : ''}
+                  onMouseDown={(event) => { event.preventDefault(); runSlashCommand(command); }}
+                >
+                  <span className="chat-mode-slash-name">/{command.name}</span>
+                  <span className="chat-mode-slash-hint">{command.hint}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <div className={`chat-mode-composer-input-shell${dictationLive ? ' is-dictating' : ''}${voiceActive ? ' is-voice-active' : ''}`}>
             <textarea
               ref={textareaRef}
@@ -2367,6 +2651,24 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               onChange={(event) => { updateDraft(event.target.value); updateFileMention(event.target.value, event.target.selectionStart); }}
               onPaste={(event) => void handlePaste(event)}
               onKeyDown={(event) => {
+                if (slashMatches.length > 0) {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    const step = event.key === 'ArrowDown' ? 1 : -1;
+                    setSlashAt((value) => (value + step + slashMatches.length) % slashMatches.length);
+                    return;
+                  }
+                  if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+                    event.preventDefault();
+                    runSlashCommand(slashMatches[slashActive]);
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    updateDraft('');
+                    return;
+                  }
+                }
                 if (fileMention && fileMatches.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                     event.preventDefault();
@@ -2439,6 +2741,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
             )}
           </div>
           <input ref={fileInputRef} className="chat-mode-file-input" type="file" multiple onChange={(event) => void handleFiles(event.target.files)} />
+          {thread && <ThreadWorktreeBar thread={thread} projectId={project?.id ?? ''} />}
           <div className="chat-mode-composer-footer">
             <div className="chat-mode-composer-settings">
               <ChatAgentModelPicker
@@ -2467,10 +2770,11 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
               <div className="chat-mode-access-dropdown">
                 <Dropdown
                   value={accessMode}
-                  options={[
-                    { value: 'full-access', label: 'Full access', tooltip: 'Full access: the orchestrator edits files and runs commands on its own, without stopping to ask you first. Fastest; best when you trust the task.' },
-                    { value: 'inherit', label: 'Ask before edit', tooltip: 'Ask before edit: the orchestrator can read and search freely, but stops and asks you before it changes a file or runs a command that could change anything.' },
-                  ] as DropdownOption[]}
+                  options={CHAT_ACCESS_TIERS.map((tier) => ({
+                    value: tier,
+                    label: CHAT_ACCESS_TIER_LABELS[tier],
+                    tooltip: `${CHAT_ACCESS_TIER_LABELS[tier]}: ${CHAT_ACCESS_TIER_HINTS[tier]}`,
+                  })) as DropdownOption[]}
                   onChange={selectAccess}
                   ariaLabel="Agent access"
                   disabled={!thread && !standalone}
@@ -2499,6 +2803,23 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                     dropdown
                   />
                 </div>
+              )}
+              {contextUsage && contextUsage.size > 0 && (
+                <span
+                  className="chat-mode-context-meter"
+                  role="status"
+                  title={`${contextUsage.used.toLocaleString()} of ${contextUsage.size.toLocaleString()} context tokens in use${contextUsage.cost ? ` · ${contextUsage.cost.amount.toFixed(2)} ${contextUsage.cost.currency} this turn` : ''}`}
+                >
+                  <span className="chat-mode-context-meter-track" aria-hidden="true">
+                    <span
+                      className={`chat-mode-context-meter-fill${contextUsage.used / contextUsage.size >= 0.9 ? ' full' : ''}`}
+                      style={{ width: `${Math.min(100, Math.max(2, Math.round((contextUsage.used / contextUsage.size) * 100)))}%` }}
+                    />
+                  </span>
+                  <span className="chat-mode-context-meter-label">
+                    {formatTokenCount(contextUsage.used)}/{formatTokenCount(contextUsage.size)}
+                  </span>
+                </span>
               )}
               <ModelCapabilityBadges provider={selectedProvider} model={selectedModel} />
               {modelErrors[selectedProvider] && (

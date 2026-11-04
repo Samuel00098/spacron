@@ -94,3 +94,6 @@ ytm*.html
 enc_headers.txt
 enc_test_*.bin
 cj.txt
+
+# Local compile-verification harnesses (not part of the app)
+.verify/

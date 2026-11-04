@@ -132,6 +132,8 @@ export interface ChatHandoffRecord {
 
 export interface ChatAcpCapabilities {
   protocolVersion: number | string;
+  /** The agent negotiated ACP v2, which adds usage, plan and state updates. */
+  protocolV2?: boolean;
   agentInfo?: { name?: string; version?: string; title?: string } | null;
   agentCapabilities?: Record<string, unknown>;
   authMethods?: Array<{ id: string; name?: string; type?: string }>;
@@ -163,6 +165,30 @@ export interface ChatMessage {
   legacy?: Record<string, unknown>;
 }
 
+/** A chat thread's own git checkout, so parallel threads never share a tree. */
+export interface ChatThreadWorktree {
+  /** Absolute path to the isolated checkout the thread's agent works in. */
+  path: string;
+  branch: string;
+  baseBranch: string;
+  baseCommit: string;
+  createdAt: number;
+}
+
+/**
+ * What the thread's ship action produced. `url` is null when the branch was
+ * pushed but no pull request could be opened (no GitHub sign-in, another host);
+ * `compareUrl` is then the page where the user can open one by hand.
+ */
+export interface ChatThreadPullRequest {
+  url: string | null;
+  number: number | null;
+  compareUrl: string;
+  branch: string;
+  base: string;
+  openedAt: number;
+}
+
 export interface ChatThread {
   /** Standalone conversation with its own app-managed file area. */
   standalone?: boolean;
@@ -176,6 +202,12 @@ export interface ChatThread {
   nativeAcpCommand?: string | null;
   nativeAcpModel?: string | null;
   nativeAcpCapabilities?: ChatAcpCapabilities | null;
+  /** Set when this thread was forked from another: transcript copied, session new. */
+  forkOfThreadId?: string | null;
+  /** Isolated checkout for this thread; its path becomes the agent's cwd. */
+  worktree?: ChatThreadWorktree | null;
+  /** Pull request (or compare page) shipped from this thread's worktree. */
+  pullRequest?: ChatThreadPullRequest | null;
   /** Parent conversation when this is a dedicated sub-agent thread. */
   parentThreadId?: string | null;
   subagentTaskId?: string | null;
@@ -212,6 +244,29 @@ export interface ChatThread {
    *  because status is recomputed from activity and would drop it. */
   archived?: boolean;
   order?: number;
+  /** Hidden from the live list until this time passes (a snooze). */
+  snoozedUntil?: number | null;
+  /** Put away like a closed task: still listed, but under its own group. */
+  settledAt?: number | null;
+  /** Latest context usage the agent reported (`usage_update`), if it reports one. */
+  contextUsage?: ChatContextUsage | null;
+  /** The plan the agent published for this turn (`plan_update`), when it plans. */
+  turnPlan?: ChatTurnPlan | null;
+}
+
+/** Context tokens in use against the agent's window, plus its own cost figure. */
+export interface ChatContextUsage {
+  used: number;
+  size: number;
+  cost?: { amount: number; currency: string } | null;
+  updatedAt: number;
+}
+
+/** One agent-published plan. Each update replaces the entries for its plan. */
+export interface ChatTurnPlan {
+  planId: string;
+  entries: Array<{ content: string; status: string; priority?: string }>;
+  updatedAt: number;
 }
 
 /** Provider/model to use for the next explicit conversation after deletion. */
