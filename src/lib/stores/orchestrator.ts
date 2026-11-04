@@ -264,6 +264,7 @@ import {
   postMailboxMessage,
   dismissMailboxCard,
   type MailboxCard,
+  type MailboxKind,
 } from '$lib/services/orchestrator/mailbox';
 import {
   acknowledge,
@@ -1259,6 +1260,37 @@ async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurn
       text: `Failed on ${label}: ${task.failureReason ?? 'exited with errors'}`,
     });
   }
+}
+
+/** Post a chat-mode direct-agent completion to the mailbox/inbox and notify the user,
+ * mirroring what terminal-mode agents get via completeLeasedTask. */
+async function notifyChatCompletion(
+  projectId: string,
+  rootPath: string | null | undefined,
+  agentName: string,
+  status: 'done' | 'failed' | 'blocked',
+  title?: string
+): Promise<void> {
+  const kind: MailboxKind = status === 'done' ? 'done' : 'note';
+  await postMailboxMessage(projectId, rootPath ?? projectPaths.get(projectId), {
+    from: agentName,
+    to: null,
+    kind,
+    taskId: null,
+    text:
+      status === 'done'
+        ? `Finished: ${title ?? agentName}`
+        : status === 'failed'
+          ? `Failed: ${title ?? agentName}`
+          : `Needs input: ${title ?? agentName}`,
+  });
+  showToast(
+    `${agentName} ${status === 'done' ? 'finished' : status === 'failed' ? 'failed' : 'needs input'}`,
+    status === 'done' ? 'success' : status === 'failed' ? 'error' : 'warning',
+    6000
+  );
+  if (!get(announceAgentCompletions)) return;
+  playNudge(status);
 }
 
 // ─── Mailbox card actions ─────────────────────────────────────────────────────
@@ -6283,6 +6315,7 @@ export async function sendChatMessage(
       const { text, sessionId } = await runClaudeNativeTurn(sdkOpts);
       patchChat(projectId, assistantId, { text: text || 'Claude completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { claudeSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'Claude', 'done');
     } catch (error) {
       try {
         const cliOpts = {
@@ -6296,9 +6329,11 @@ export async function sendChatMessage(
         const result = await runClaudeCliTurn(cliOpts);
         patchChat(projectId, assistantId, { text: result || 'Claude completed the turn without returning text.', pending: false });
         updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+        await notifyChatCompletion(projectId, rootPath, 'Claude', 'done');
       } catch (cliError) {
         patchChat(projectId, assistantId, { text: `Claude failed: ${error instanceof Error ? error.message : String(error)}${cliError instanceof Error ? ` / ${cliError.message}` : ''}`, pending: false, type: 'failure' });
         updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+        await notifyChatCompletion(projectId, rootPath, 'Claude', 'failed');
       }
     }
     return;
@@ -6326,9 +6361,11 @@ export async function sendChatMessage(
       const { text, sessionId } = await runCursorNativeTurn(nativeOpts);
       patchChat(projectId, assistantId, { text: text || 'Cursor completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { cursorSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'Cursor', 'done');
     } catch (error) {
       patchChat(projectId, assistantId, { text: `Cursor failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
       updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+      await notifyChatCompletion(projectId, rootPath, 'Cursor', 'failed');
     }
     return;
   }
@@ -6355,9 +6392,11 @@ export async function sendChatMessage(
       const { text, sessionId } = await runOpenCodeNativeTurn(nativeOpts);
       patchChat(projectId, assistantId, { text: text || 'OpenCode completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { opencodeSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'OpenCode', 'done');
     } catch (error) {
       patchChat(projectId, assistantId, { text: `OpenCode failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
       updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+      await notifyChatCompletion(projectId, rootPath, 'OpenCode', 'failed');
     }
     return;
   }
@@ -6384,9 +6423,11 @@ export async function sendChatMessage(
       const { text, sessionId } = await runMuseNativeTurn(nativeOpts);
       patchChat(projectId, assistantId, { text: text || 'Muse completed the turn without returning text.', pending: false });
       updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { museSdkSessionId: sessionId } : {}) });
+      await notifyChatCompletion(projectId, rootPath, 'Muse', 'done');
     } catch (error) {
       patchChat(projectId, assistantId, { text: `Muse failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
       updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+      await notifyChatCompletion(projectId, rootPath, 'Muse', 'failed');
     }
     return;
   }
