@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { backendInvoke } from '$lib/services/backend';
-import { deriveTaskBranch } from '$lib/services/orchestrator/worktree-manager';
+import { deriveThreadBranch as deriveWorktreeBranch } from '$lib/services/orchestrator/worktree-manager';
 import type { ChatThreadPullRequest, ChatThreadWorktree } from '$lib/types/chat';
 
 /**
@@ -49,7 +49,7 @@ export function threadWorkingRoot(
 
 /** Branch name for a thread: `spacron/<title-slug>-<short>`, stable per thread. */
 export function deriveThreadBranch(threadId: string, title?: string | null): string {
-  return deriveTaskBranch(threadId, title);
+  return deriveWorktreeBranch(threadId, title);
 }
 
 /** Create this thread's checkout. Throws with the git reason when it can't. */

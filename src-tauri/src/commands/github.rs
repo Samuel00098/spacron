@@ -1114,6 +1114,151 @@ fn classify_clone_error(stderr: &str, had_token: bool) -> String {
     sanitize_git_error(stderr)
 }
 
+/// Generic source control token management for GitLab, Bitbucket, and Other
+/// providers. Each provider gets its own keychain entry (`{provider}_token` /
+/// `{provider}_token_meta`) so credentials are isolated per provider and removed
+/// together on sign-out. GitHub keeps using its own dedicated commands above.
+const fn sc_token_username(provider: &str) -> String {
+    format!("{provider}_token")
+}
+const fn sc_meta_username(provider: &str) -> String {
+    format!("{provider}_token_meta")
+}
+
+fn sc_entry(provider: &str) -> Result<Entry, String> {
+    Entry::new(KEYCHAIN_SERVICE, sc_token_username(provider))
+        .map_err(|e| format!("Failed to access the system keychain: {e}"))
+}
+
+fn sc_meta_entry(provider: &str) -> Result<Entry, String> {
+    Entry::new(KEYCHAIN_SERVICE, sc_meta_username(provider))
+        .map_err(|e| format!("Failed to access the system keychain: {e}"))
+}
+
+/// Which sign-in entry points are available for a provider.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct SourceControlAuthOptions {
+    pub oauth_available: bool,
+    pub pat_available: bool,
+}
+
+/// The signed-in user for a provider (login may be empty for PAT-only).
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct SourceControlIdentity {
+    pub login: String,
+    pub source: String, // "pat" | "oauth"
+    pub scopes: Vec<String>,
+}
+
+/// Save (or, when empty, clear) a source control personal access token.
+#[tauri::command]
+pub fn source_control_token_set(provider: String, token: String) -> Result<(), String> {
+    let provider = provider.trim().to_lowercase();
+    let token = token.trim().to_string();
+    let entry = sc_entry(&provider)?;
+    if token.is_empty() {
+        let _ = sc_clear_meta(&provider);
+        return match entry.delete_credential() {
+            Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+            Err(e) => Err(format!("Failed to remove the token: {e}")),
+        };
+    }
+    if token.len() > 512 || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("That doesn't look like a valid token.".to_string());
+    }
+    entry
+        .set_password(&token)
+        .map_err(|e| format!("Failed to save the token: {e}"))?;
+    let _ = sc_write_meta(&provider, &SourceControlMeta {
+        source: "pat".to_string(),
+        login: String::new(),
+        scopes: Vec::new(),
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn source_control_token_exists(provider: String) -> Result<bool, String> {
+    let provider = provider.trim().to_lowercase();
+    let entry = sc_entry(&provider)?;
+    match entry.get_password() {
+        Ok(p) => Ok(!p.trim().is_empty()),
+        Err(KeyringError::NoEntry) => Ok(false),
+        Err(e) => Err(format!("Failed to check the token: {e}")),
+    }
+}
+
+#[tauri::command]
+pub fn source_control_token_delete(provider: String) -> Result<(), String> {
+    let provider = provider.trim().to_lowercase();
+    let _ = sc_clear_meta(&provider);
+    let entry = sc_entry(&provider)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(e) => Err(format!("Failed to remove the token: {e}")),
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct SourceControlMeta {
+    source: String,
+    login: String,
+    scopes: Vec<String>,
+}
+
+fn sc_write_meta(provider: &str, meta: &SourceControlMeta) -> Result<(), String> {
+    let json = serde_json::to_string(meta).map_err(|e| format!("Failed to encode metadata: {e}"))?;
+    sc_meta_entry(provider)?
+        .set_password(&json)
+        .map_err(|e| format!("Failed to save metadata: {e}"))
+}
+
+fn sc_read_meta(provider: &str) -> Option<SourceControlMeta> {
+    let entry = sc_meta_entry(provider).ok()?;
+    let raw = entry.get_password().ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn sc_clear_meta(provider: &str) -> Result<(), String> {
+    match sc_meta_entry(provider)?.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(e) => Err(format!("Failed to remove metadata: {e}")),
+    }
+}
+
+/// The signed-in user for a provider, or null when no token is saved.
+#[tauri::command]
+pub fn source_control_signed_in_user(provider: String) -> Result<Option<SourceControlIdentity>, String> {
+    let provider = provider.trim().to_lowercase();
+    if let Some(meta) = sc_read_meta(&provider) {
+        return Ok(Some(SourceControlIdentity {
+            login: meta.login,
+            source: meta.source,
+            scopes: meta.scopes,
+        }));
+    }
+    let entry = sc_entry(&provider)?;
+    match entry.get_password() {
+        Ok(p) if !p.trim().is_empty() => Ok(Some(SourceControlIdentity {
+            login: String::new(),
+            source: "pat".to_string(),
+            scopes: Vec::new(),
+        })),
+        Ok(_) | Err(KeyringError::NoEntry) => Ok(None),
+        Err(e) => Err(format!("Failed to read the token: {e}")),
+    }
+}
+
+/// Which sign-in methods are available for a provider.
+#[tauri::command]
+pub fn source_control_auth_options(provider: String) -> Result<SourceControlAuthOptions, String> {
+    let _ = provider.trim().to_lowercase();
+    Ok(SourceControlAuthOptions {
+        oauth_available: false,
+        pat_available: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { McpServer } from '$lib/services/mcp-servers';
+import type { ChatAccessMode } from '$lib/types/chat';
 import { DEFAULT_MEDIA_GENERATION, type MediaGenerationSettings } from '$lib/services/media-generation';
 
 export type CloseBehavior = 'quit' | 'minimize';
@@ -20,6 +21,8 @@ export interface KeyboardShortcut {
   id: string;
   label: string;
   keys: string;
+  /** When-clause context — shortcut only fires when this matches. */
+  when?: string;
   action?: string; // For custom shortcuts: id of the app action (see shortcutActions) this key triggers
 }
 
@@ -313,6 +316,17 @@ function createSettingsState() {
     mediaGeneration: { ...DEFAULT_MEDIA_GENERATION, ...persistentValue<Partial<MediaGenerationSettings>>('mediaGeneration', {}) },
     // Keep the machine awake while agents are mid-turn — see stores/settings.ts.
     keepSystemAwake: persistentValue('keepSystemAwake', false),
+    // Which source control provider Spacron uses for clone, push and PR.
+    sourceControlProvider: persistentValue<'github' | 'gitlab' | 'bitbucket' | 'other'>('sourceControlProvider', 'github'),
+    // Chat mode behavior.
+    chatQueueWhileBusy: persistentValue('chatQueueWhileBusy', true),
+    chatAutoAnswerInline: persistentValue('chatAutoAnswerInline', false),
+    chatDefaultAccessMode: persistentValue<ChatAccessMode>('chatDefaultAccessMode', 'inherit'),
+    // Auto-settle idle threads so they drop out of the active list after a
+    // quiet period. T3 Code's "Working section" equivalent — settled threads
+    // are one click from resumption but stop competing for attention.
+    autoSettleEnabled: persistentValue('autoSettleEnabled', true),
+    autoSettleIdleMs: persistentValue('autoSettleIdleMs', 5 * 60 * 1000),
   };
 }
 
@@ -442,6 +456,12 @@ const defaults: SettingsValues = {
   mcpServers: [],
   mediaGeneration: DEFAULT_MEDIA_GENERATION,
   keepSystemAwake: false,
+  autoSettleEnabled: true,
+  autoSettleIdleMs: 5 * 60 * 1000,
+  sourceControlProvider: 'github',
+  chatQueueWhileBusy: true,
+  chatAutoAnswerInline: false,
+  chatDefaultAccessMode: 'inherit',
 };
 
 export const useSettingsStore = create<SettingsState>((set, getState) => ({
@@ -525,6 +545,10 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       mcpServers: 'mcpServers',
       mediaGeneration: 'mediaGeneration',
       keepSystemAwake: 'keepSystemAwake',
+      sourceControlProvider: 'sourceControlProvider',
+      chatQueueWhileBusy: 'chatQueueWhileBusy',
+      chatAutoAnswerInline: 'chatAutoAnswerInline',
+      chatDefaultAccessMode: 'chatDefaultAccessMode',
     };
     const stateKey = setters[key];
     if (stateKey) {

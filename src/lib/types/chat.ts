@@ -202,6 +202,14 @@ export interface ChatThread {
   nativeAcpCommand?: string | null;
   nativeAcpModel?: string | null;
   nativeAcpCapabilities?: ChatAcpCapabilities | null;
+  /** Claude Agent SDK session identity, when Chat reuses a native SDK session. */
+  claudeSdkSessionId?: string | null;
+  /** Cursor native SDK session identity, when Chat reuses a native SDK session. */
+  cursorSdkSessionId?: string | null;
+  /** OpenCode native SDK session identity, when Chat reuses a native SDK session. */
+  opencodeSdkSessionId?: string | null;
+  /** Muse native SDK session identity, when Chat reuses a native SDK session. */
+  museSdkSessionId?: string | null;
   /** Set when this thread was forked from another: transcript copied, session new. */
   forkOfThreadId?: string | null;
   /** Isolated checkout for this thread; its path becomes the agent's cwd. */

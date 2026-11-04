@@ -197,7 +197,7 @@ import { requestAgentPlacement, defaultAgentPlacement, type AgentLaunchChoice, t
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
-import { getAgentProviderLaunchOptions, isChatAgentProvider, isCodexProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
+import { getAgentProviderLaunchOptions, isChatAgentProvider, isClaudeProvider, isCodexProvider, isCursorProvider, isMuseProvider, isOpenCodeProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
 import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
 import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
@@ -226,6 +226,10 @@ import { normalizeAcpUpdate, parseAcpPlan, parseAcpUsage } from '$lib/services/a
 import { activityFromAcpUpdate, type AcpActivity } from '$lib/services/acp-activity';
 import { openPty, type PtySession } from '$lib/services/pty-bridge';
 import { isPiSettled, openPiRpcSession, piPrompt, piTextDelta, type PiRpcSession } from '$lib/services/pi-rpc';
+import { runClaudeAgentSdkTurn, runClaudeCliTurn, runClaudeNativeTurn, type ClaudePermissionMode, claudePermissionModeForAccess } from '$lib/services/claude-agent-sdk';
+import { runCursorNativeTurn, type CursorPermissionMode, cursorPermissionModeForAccess } from '$lib/services/cursor-sdk';
+import { runOpenCodeNativeTurn, type OpenCodePermissionMode, opencodePermissionModeForAccess } from '$lib/services/opencode-sdk';
+import { runMuseNativeTurn, type MusePermissionMode, musePermissionModeForAccess } from '$lib/services/muse-sdk';
 
 type AcpApprovalWaiter = {
   respond: (result: Record<string, unknown>, error?: Record<string, unknown>) => Promise<void>;
@@ -238,6 +242,9 @@ const activeAcpTurns = new Map<string, {
   session: { notify(method: string, params: Record<string, unknown>): Promise<void> };
   sessionId?: string;
 }>();
+/** Maps a thread id to the ACP session id the agent reported for its terminal,
+ *  so the terminal pane can link agent terminal output to a live session. */
+const acpTerminalSessions = new Map<string, string>();
 const activePiTurns = new Map<string, PiRpcSession>();
 const piSessions = new Map<string, { command: string; session: PiRpcSession }>();
 import {
@@ -2493,7 +2500,7 @@ export async function launchOrchestratorTask(
     if (!worktree && !task.skipWorktree) {
       worktree = await createTaskWorktree({
         projectId: task.projectId,
-        taskId: task.id,
+        threadId: threadIdForTask(task) ?? undefined,
         label: task.name ?? task.title,
       });
       if (worktree) {
@@ -4633,6 +4640,18 @@ function acpActivity(value: unknown): AcpActivity | null {
   return activityFromAcpUpdate(value);
 }
 
+/** Map an ACP agent state name to a Spacron thread status. */
+function acpStateToThreadStatus(state: string): ChatThreadStatus | null {
+  switch (state) {
+    case 'idle': return 'idle';
+    case 'working': case 'active': case 'running': return 'working';
+    case 'needs-input': case 'waiting-input': case 'awaiting-input': return 'needs-input';
+    case 'complete': case 'finished': case 'done': return 'complete';
+    case 'failed': case 'error': return 'failed';
+    default: return null;
+  }
+}
+
 /** Status words that mean a tool call is no longer in flight. */
 const ACP_FINISHED_STATUS_RE = /complete|success|done|fail|error|cancel/i;
 
@@ -4881,24 +4900,51 @@ async function sendNativeAcpChatTurn(
       patchChat(projectId, assistantId, { text: responseText, pending: true });
     }
     const activity = acpActivity(notification);
-    if (!activity) return;
-    const label = `${activity.label}${activity.detail ? ` — ${activity.detail}` : ''}`;
-    const finished = Boolean(activity.status && ACP_FINISHED_STATUS_RE.test(activity.status));
-    const existingId = activity.id ? activityMessageIds.get(activity.id) : undefined;
-    if (existingId) {
-      patchChat(projectId, existingId, { text: label, pending: !finished });
-      return;
+    if (activity) {
+      // ── Compaction ──
+      // When the agent reports it is compacting the conversation, actually run
+      // our own compaction so the context window stays bounded instead of only
+      // showing the activity as a chat line.
+      if (activity.kind === 'plan' && activity.label.includes('Compacting')) {
+        void scheduleChatCompact(projectId);
+      }
+      // ── State updates ──
+      // When the agent reports its state, reflect it on the thread so the
+      // sidebar can show whether an agent is idle, working, or needs input.
+      if (activity.kind === 'status' && activity.label.startsWith('Agent state:')) {
+        const stateName = activity.label.slice('Agent state: '.length).trim().toLowerCase();
+        const mapped = acpStateToThreadStatus(stateName);
+        if (mapped) {
+          updateChatThread(thread.id, { status: mapped, updatedAt: Date.now() });
+        }
+      }
+      // ── Terminal updates ──
+      // When the agent reports terminal activity, record the session id so the
+      // terminal pane can link the agent's terminal output to a live session.
+      if (activity.kind === 'tool' && activity.label.startsWith('Terminal')) {
+        if (activity.id) {
+          acpTerminalSessions.set(thread.id, activity.id);
+        }
+      }
+
+      const label = `${activity.label}${activity.detail ? ` — ${activity.detail}` : ''}`;
+      const finished = Boolean(activity.status && ACP_FINISHED_STATUS_RE.test(activity.status));
+      const existingId = activity.id ? activityMessageIds.get(activity.id) : undefined;
+      if (existingId) {
+        patchChat(projectId, existingId, { text: label, pending: !finished });
+        return;
+      }
+      const id = msgId();
+      if (activity.id) activityMessageIds.set(activity.id, id);
+      appendChat(projectId, {
+        id,
+        role: 'assistant',
+        type: 'activity',
+        text: label,
+        pending: !finished,
+        ts: Date.now(),
+      }, thread.id);
     }
-    const id = msgId();
-    if (activity.id) activityMessageIds.set(activity.id, id);
-    appendChat(projectId, {
-      id,
-      role: 'assistant',
-      type: 'activity',
-      text: label,
-      pending: !finished,
-      ts: Date.now(),
-    }, thread.id);
   });
   const unlistenRequest = await session.onRequest(async (request) => {
     const permission = acpPermissionRequest(request);
@@ -6212,6 +6258,136 @@ export async function sendChatMessage(
       opts.forcedAgent,
       opts.reasoningEffort,
     );
+    return;
+  }
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isClaudeProvider(opts.forcedAgent)) {
+    const userId = msgId();
+    const assistantId = msgId();
+    appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
+    appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: opts.forcedAgent }, chatThread.id);
+    updateChatThread(chatThread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+    const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
+    const permissionMode = claudePermissionModeForAccess(tier);
+    const sdkOpts = {
+      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      cwd: threadWorkingRoot(chatThread, rootPath),
+      model: opts.model,
+      permissionMode,
+      systemPrompt: 'You are Claude Code in Spacron Chat. Work directly in the current checkout when needed. Reply to the user clearly and concisely. Do not describe yourself as an unavailable tool.',
+      images: (opts.attachments ?? []).map((attachment) => attachment.path).filter((path): path is string => Boolean(path)),
+      effort: opts.reasoningEffort ?? null,
+      accessMode: chatThread.accessMode,
+      sessionId: chatThread.claudeSdkSessionId ?? null,
+    };
+    try {
+      const { text, sessionId } = await runClaudeNativeTurn(sdkOpts);
+      patchChat(projectId, assistantId, { text: text || 'Claude completed the turn without returning text.', pending: false });
+      updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { claudeSdkSessionId: sessionId } : {}) });
+    } catch (error) {
+      try {
+        const cliOpts = {
+          prompt: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+          cwd: threadWorkingRoot(chatThread, rootPath),
+          model: opts.model,
+          permissionMode,
+          onText: () => {},
+          signal: undefined as AbortSignal | undefined,
+        };
+        const result = await runClaudeCliTurn(cliOpts);
+        patchChat(projectId, assistantId, { text: result || 'Claude completed the turn without returning text.', pending: false });
+        updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+      } catch (cliError) {
+        patchChat(projectId, assistantId, { text: `Claude failed: ${error instanceof Error ? error.message : String(error)}${cliError instanceof Error ? ` / ${cliError.message}` : ''}`, pending: false, type: 'failure' });
+        updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+      }
+    }
+    return;
+  }
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isCursorProvider(opts.forcedAgent)) {
+    const userId = msgId();
+    const assistantId = msgId();
+    appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
+    appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: opts.forcedAgent }, chatThread.id);
+    updateChatThread(chatThread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+    const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
+    const permissionMode = cursorPermissionModeForAccess(tier);
+    const nativeOpts = {
+      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      cwd: threadWorkingRoot(chatThread, rootPath),
+      model: opts.model,
+      permissionMode,
+      systemPrompt: 'You are Cursor in Spacron Chat. Work directly in the current checkout when needed. Reply to the user clearly and concisely. Do not describe yourself as an unavailable tool.',
+      images: (opts.attachments ?? []).map((attachment) => attachment.path).filter((path): path is string => Boolean(path)),
+      effort: opts.reasoningEffort ?? null,
+      accessMode: chatThread.accessMode,
+      sessionId: (chatThread as unknown as { cursorSdkSessionId?: string | null }).cursorSdkSessionId ?? null,
+    };
+    try {
+      const { text, sessionId } = await runCursorNativeTurn(nativeOpts);
+      patchChat(projectId, assistantId, { text: text || 'Cursor completed the turn without returning text.', pending: false });
+      updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { cursorSdkSessionId: sessionId } : {}) });
+    } catch (error) {
+      patchChat(projectId, assistantId, { text: `Cursor failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
+      updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    }
+    return;
+  }
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isOpenCodeProvider(opts.forcedAgent)) {
+    const userId = msgId();
+    const assistantId = msgId();
+    appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
+    appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: opts.forcedAgent }, chatThread.id);
+    updateChatThread(chatThread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+    const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
+    const permissionMode = opencodePermissionModeForAccess(tier);
+    const nativeOpts = {
+      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      cwd: threadWorkingRoot(chatThread, rootPath),
+      model: opts.model,
+      permissionMode,
+      systemPrompt: 'You are OpenCode in Spacron Chat. Work directly in the current checkout when needed. Reply to the user clearly and concisely. Do not describe yourself as an unavailable tool.',
+      images: (opts.attachments ?? []).map((attachment) => attachment.path).filter((path): path is string => Boolean(path)),
+      effort: opts.reasoningEffort ?? null,
+      accessMode: chatThread.accessMode,
+      sessionId: (chatThread as unknown as { opencodeSdkSessionId?: string | null }).opencodeSdkSessionId ?? null,
+    };
+    try {
+      const { text, sessionId } = await runOpenCodeNativeTurn(nativeOpts);
+      patchChat(projectId, assistantId, { text: text || 'OpenCode completed the turn without returning text.', pending: false });
+      updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { opencodeSdkSessionId: sessionId } : {}) });
+    } catch (error) {
+      patchChat(projectId, assistantId, { text: `OpenCode failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
+      updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    }
+    return;
+  }
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isMuseProvider(opts.forcedAgent)) {
+    const userId = msgId();
+    const assistantId = msgId();
+    appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
+    appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: opts.forcedAgent }, chatThread.id);
+    updateChatThread(chatThread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+    const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
+    const permissionMode = musePermissionModeForAccess(tier);
+    const nativeOpts = {
+      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      cwd: threadWorkingRoot(chatThread, rootPath),
+      model: opts.model,
+      permissionMode,
+      systemPrompt: 'You are Muse Code in Spacron Chat. Work directly in the current checkout when needed. Reply to the user clearly and concisely. Do not describe yourself as an unavailable tool.',
+      images: (opts.attachments ?? []).map((attachment) => attachment.path).filter((path): path is string => Boolean(path)),
+      effort: opts.reasoningEffort ?? null,
+      accessMode: chatThread.accessMode,
+      sessionId: (chatThread as unknown as { museSdkSessionId?: string | null }).museSdkSessionId ?? null,
+    };
+    try {
+      const { text, sessionId } = await runMuseNativeTurn(nativeOpts);
+      patchChat(projectId, assistantId, { text: text || 'Muse completed the turn without returning text.', pending: false });
+      updateChatThread(chatThread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now(), ...(sessionId ? { museSdkSessionId: sessionId } : {}) });
+    } catch (error) {
+      patchChat(projectId, assistantId, { text: `Muse failed: ${error instanceof Error ? error.message : String(error)}`, pending: false, type: 'failure' });
+      updateChatThread(chatThread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    }
     return;
   }
   if (opts?.chatMode && chatThread && opts.forcedAgent && isPiProvider(opts.forcedAgent)) {

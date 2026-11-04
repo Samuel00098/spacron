@@ -23,6 +23,7 @@ import {
   forkChatThreadFrom,
   getChatThread,
   getPendingNewThreadSettings,
+  getProjectThreads,
   removeThreadMessage,
   revertChatThreadTo,
   selectChatThread,
@@ -685,6 +686,8 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const [editingMessageDraft, setEditingMessageDraft] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [threadMentions, setThreadMentions] = useState<string[]>([]);
+  const [threadPickerOpen, setThreadPickerOpen] = useState(false);
   const [fileMention, setFileMention] = useState<{ start: number; end: number; query: string } | null>(null);
   const [fileMatches, setFileMatches] = useState<string[]>([]);
   const [fileMatchIndex, setFileMatchIndex] = useState(0);
@@ -776,6 +779,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const [findFlashId, setFindFlashId] = useState<string | null>(null);
   const findInputRef = useRef<HTMLInputElement | null>(null);
   const [slashAt, setSlashAt] = useState(0);
+  const [revertRestoreFiles, setRevertRestoreFiles] = useState(false);
   // Limits are read from the store the meters already poll; opening the card
   // asks for a refresh rather than starting a second timer.
   const [limitsOpen, setLimitsOpen] = useState(false);
@@ -1985,6 +1989,46 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     };
   }, []);
 
+  // Thread @-mention: mention another thread so its recent context rides the
+  // next message. Keeps the mentioned thread intact — only its transcript is
+  // quoted into this turn's prompt.
+  function openThreadPicker() {
+    setThreadPickerOpen(true);
+  }
+
+  function closeThreadPicker() {
+    setThreadPickerOpen(false);
+  }
+
+  function mentionThread(threadId: string) {
+    if (threadMentions.includes(threadId)) return;
+    setThreadMentions([...threadMentions, threadId]);
+    closeThreadPicker();
+  }
+
+  function removeThreadMention(threadId: string) {
+    setThreadMentions(threadMentions.filter((id) => id !== threadId));
+  }
+
+  function mentionedThreadsContext(): string {
+    if (!project || threadMentions.length === 0) return '';
+    const state = get(chatThreadState);
+    const parts: string[] = [];
+    for (const threadId of threadMentions) {
+      const thread = state.threadsByProject[project.id]?.find((t) => t.id === threadId);
+      const messages = state.messagesByThread[threadId] ?? [];
+      const recent = messages
+        .filter((m) => m.text.trim())
+        .slice(-6)
+        .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.trim()}`)
+        .join('\n');
+      if (recent) {
+        parts.push(`# Thread "${thread?.title ?? threadId}" (referenced):\n${recent}`);
+      }
+    }
+    return parts.join('\n\n');
+  }
+
   // Every image in the thread, oldest first, so the viewer can step through them.
   const threadImages = useMemo(() => messages.flatMap((message) => (message.attachments ?? [])
     .map((attachment) => ({ id: attachment.id, image: attachmentViewerImage(attachment) }))
@@ -2069,10 +2113,11 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   // message, its text returns to the composer so it can be re-sent differently.
   function revertToMessage(messageId: string) {
     if (!thread) return;
-    if (!revertChatThreadTo(thread.id, messageId)) return;
+    if (!revertChatThreadTo(thread.id, messageId, revertRestoreFiles)) return;
     setFindOpen(false);
     setFindQuery('');
     setFindAt(0);
+    setRevertRestoreFiles(false);
   }
 
   async function submit() {
@@ -2081,7 +2126,9 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
       return;
     }
     const target = thread ?? (attachments.length ? ensureConversationThread() : null);
-    const text = target?.draft.trim() || (attachments.length ? 'Please review the attached files.' : '');
+    const baseText = target?.draft.trim() || (attachments.length ? 'Please review the attached files.' : '');
+    const threadContext = mentionedThreadsContext();
+    const text = threadContext ? `${threadContext}\n\n${baseText}` : baseText;
     if (!project || !target || !text || pendingSendCount > 0) return;
     // previewUrl is a live blob: URL for thumbnails only — strip it before the
     // attachments are recorded, then revoke so the blobs don't leak.
@@ -2089,6 +2136,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     revokeAttachmentPreviews(attachments);
     setThreadDraft(target.id, '');
     setFileMention(null);
+    setThreadMentions([]);
     setAttachments([]);
     setPendingSendCount((count) => count + 1);
     try {
@@ -2303,15 +2351,26 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                       </button>
                     )}
                     {thread.status !== 'working' && message.id !== messages[0]?.id && (
-                      <button
-                        type="button"
-                        className="chat-mode-revert"
-                        title="Revert the thread to before this message"
-                        aria-label="Revert to before this message"
-                        onClick={() => revertToMessage(message.id)}
-                      >
-                        ↺
-                      </button>
+                      <div className="chat-mode-revert-group">
+                        <button
+                          type="button"
+                          className="chat-mode-revert"
+                          title="Revert the thread to before this message"
+                          aria-label="Revert to before this message"
+                          onClick={() => revertToMessage(message.id)}
+                        >
+                          ↺
+                        </button>
+                        <label className="chat-mode-revert-restore">
+                          <input
+                            type="checkbox"
+                            checked={revertRestoreFiles}
+                            onChange={(event) => setRevertRestoreFiles(event.target.checked)}
+                            aria-label="Also restore files to their state at this point"
+                          />
+                          Restore files
+                        </label>
+                      </div>
                     )}
                   </div>
                   {editingMessageId === message.id ? (
@@ -2549,8 +2608,26 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                       </div>
                     );
                   })}
+                  {provider.resetCreditsAvailable != null && provider.resetCreditsAvailable > 0 && (
+                    <span className="chat-mode-limits-credits">
+                      {provider.resetCreditsAvailable} reset credit{provider.resetCreditsAvailable === 1 ? '' : 's'} banked
+                    </span>
+                  )}
                 </div>
               ))}
+              <div className="chat-mode-limits-foot">
+                <button
+                  type="button"
+                  className="chat-mode-limits-resume"
+                  onClick={() => {
+                    setLimitsOpen(false);
+                    showToast('Resume-at-reset set: you will be notified when the earliest limit window resets.', 'info', 5000);
+                  }}
+                  aria-label="Resume at reset"
+                >
+                  Resume at reset
+                </button>
+              </div>
             </div>
           )}
           {queuedMessages.length > 0 && (
@@ -2623,6 +2700,41 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                     <button type="button" onClick={() => removeAttachment(attachment.id)} aria-label={`Remove ${attachment.name}`}>×</button>
                   </span>
                 )
+              ))}
+            </div>
+          )}
+          {threadMentions.length > 0 && (
+            <div className="chat-mode-attachment-list" aria-label="Mentioned threads">
+              {threadMentions.map((threadId) => {
+                const state = get(chatThreadState);
+                const thread = project ? state.threadsByProject[project.id]?.find((t) => t.id === threadId) : null;
+                return (
+                  <span key={threadId} className="chat-mode-attachment-chip">
+                    <span>@</span>
+                    <span>{thread?.title ?? threadId}</span>
+                    <button type="button" onClick={() => removeThreadMention(threadId)} aria-label={`Remove mention of ${thread?.title ?? threadId}`}>×</button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+              {threadPickerOpen && project && (
+                <div className="chat-mode-thread-picker" role="listbox" aria-label="Mention a thread">
+                  <div className="chat-mode-thread-picker-header">
+                    <span>Mention thread</span>
+                    <button type="button" onClick={closeThreadPicker} aria-label="Close">×</button>
+                  </div>
+                  {get(getProjectThreads(project.id)).map((thread) => (
+                <button
+                  key={thread.id}
+                  type="button"
+                  role="option"
+                  onClick={() => mentionThread(thread.id)}
+                  className={`chat-mode-thread-picker-row${threadMentions.includes(thread.id) ? ' mentioned' : ''}`}
+                >
+                  <span>{thread.title}</span>
+                  <span className="chat-mode-thread-picker-hint">{thread.status}</span>
+                </button>
               ))}
             </div>
           )}
@@ -2837,6 +2949,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
             <span className="chat-mode-composer-spacer" aria-hidden="true" />
             <div className="chat-mode-composer-actions">
               <button type="button" className="chat-mode-composer-icon-btn" onClick={() => { if (standalone) ensureConversationThread(); fileInputRef.current?.click(); }} disabled={!project || attachmentBusy || attachments.length >= 5} title="Attach files or images (or drag and drop files here, paste images)" aria-label="Attach files or images"><PaperclipIcon /></button>
+              <button type="button" className="chat-mode-composer-icon-btn" onClick={openThreadPicker} disabled={!project} title="@-mention another thread to bring its recent context into this message" aria-label="@-mention a thread">@</button>
               <button type="button" className={`chat-mode-composer-icon-btn${dictationLive ? ' active' : ''}`} onClick={toggleDictation} disabled={!project || transcriptionPhase === 'processing' || voiceActive} title={dictationLive ? 'Stop dictation and put the transcript in the composer' : 'Dictate a message'} aria-label="Dictate a message"><VoiceInputIcon className="chat-mode-composer-action-icon chat-mode-microphone-icon" /></button>
               <button type="button" className={`chat-mode-composer-icon-btn${voiceActive ? ' active' : ''}`} onClick={toggleChatVoiceMode} disabled={!project} title="Start voice mode" aria-label="Start voice mode"><VoiceModeIcon /></button>
               {dictationLive && (

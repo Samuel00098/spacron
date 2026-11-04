@@ -1,4 +1,5 @@
 import { deleteAgentCheckpoint } from '$lib/services/orchestrator/agent-checkpoints';
+import { forkClaudeSession } from '$lib/services/claude-agent-sdk';
 import { derived, get, writable } from '$lib/stores/storeCompat';
 import { loadJson } from '$lib/utils/storage';
 import { invoke } from '@tauri-apps/api/core';
@@ -550,6 +551,10 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
       && typeof raw.nativeAcpCapabilities.negotiatedAt === 'number'
       ? raw.nativeAcpCapabilities as unknown as ChatThread['nativeAcpCapabilities']
       : undefined,
+    claudeSdkSessionId: asString(raw.claudeSdkSessionId),
+    cursorSdkSessionId: asString(raw.cursorSdkSessionId),
+    opencodeSdkSessionId: asString(raw.opencodeSdkSessionId),
+    museSdkSessionId: asString(raw.museSdkSessionId),
     parentThreadId: asString(raw.parentThreadId),
     subagentTaskId: asString(raw.subagentTaskId),
     subagentRole:
@@ -842,7 +847,7 @@ export function selectChatThread(projectId: string, threadId: string): boolean {
 
 export function createChatThread(
   projectId: string,
-  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'workMode' | 'reasoningEffort' | 'taskId' | 'sessionId' | 'standalone' | 'standaloneWorkspaceId' | 'parentThreadId' | 'subagentTaskId' | 'subagentRole'>> = {},
+  overrides: Partial<Pick<ChatThread, 'title' | 'agentName' | 'agentPreset' | 'provider' | 'model' | 'accessMode' | 'workMode' | 'reasoningEffort' | 'taskId' | 'sessionId' | 'claudeSdkSessionId' | 'cursorSdkSessionId' | 'opencodeSdkSessionId' | 'museSdkSessionId' | 'standalone' | 'standaloneWorkspaceId' | 'parentThreadId' | 'subagentTaskId' | 'subagentRole'>> = {},
   now = Date.now(),
 ): ChatThread {
   const state = get(chatThreadState);
@@ -859,6 +864,10 @@ export function createChatThread(
     parentThreadId: overrides.parentThreadId ?? null,
     subagentTaskId: overrides.subagentTaskId ?? null,
     subagentRole: overrides.subagentRole ?? null,
+    claudeSdkSessionId: overrides.claudeSdkSessionId ?? null,
+    cursorSdkSessionId: overrides.cursorSdkSessionId ?? null,
+    opencodeSdkSessionId: overrides.opencodeSdkSessionId ?? null,
+    museSdkSessionId: overrides.museSdkSessionId ?? null,
     title: overrides.title?.trim() || 'New thread',
     agentName: overrides.agentName ?? null,
     agentPreset: overrides.agentPreset ?? null,
@@ -936,6 +945,13 @@ export function updateChatThread(threadId: string, patch: Partial<ChatThread>): 
   return updated;
 }
 
+/** Reorder a thread within its project by setting a numeric order key.
+ *  Threads with lower `order` sort first; threads without an order sort last
+ *  (by activity). Callers compute sequential integers on drag. */
+export function reorderChatThread(threadId: string, order: number): boolean {
+  return updateChatThread(threadId, { order, updatedAt: Date.now() });
+}
+
 export function recordChatHandoff(
   threadId: string,
   handoff: Omit<ChatHandoffRecord, 'id' | 'createdAt' | 'status'> & Partial<Pick<ChatHandoffRecord, 'id' | 'createdAt' | 'status'>>,
@@ -1007,6 +1023,58 @@ export function setChatThreadSettled(threadId: string, settled: boolean): boolea
     ...(settled ? { snoozedUntil: null } : {}),
     updatedAt: Date.now(),
   });
+}
+
+/**
+ * Auto-settle threads that have been idle long enough to stop reading as
+ * "in flight". Settling is a *presentation* move — it drops the row out of the
+ * active list and out of the unread badge. Nothing about the agent session
+ * itself changes, so a settled thread is still one click from being resumed.
+ *
+ * The threshold is deliberately long: this is not a "close the tab" gesture,
+ * it is a "this turn is genuinely over" one. A thread that is still producing
+ * output keeps its `lastActivityAt` advancing and stays active.
+ */
+export const AUTO_SETTLE_IDLE_MS = 5 * 60 * 1000;
+
+export function autoSettleStaleThreads(
+  threads: ChatThread[],
+  now = Date.now(),
+): { settled: string[]; remaining: ChatThread[] } {
+  const settled: string[] = [];
+  const remaining: ChatThread[] = [];
+  for (const thread of threads) {
+    if (thread.pinned) {
+      remaining.push(thread);
+      continue;
+    }
+    if (thread.status === 'working' || thread.status === 'needs-input') {
+      remaining.push(thread);
+      continue;
+    }
+    if (thread.settledAt && thread.settledAt > now - AUTO_SETTLE_IDLE_MS) {
+      remaining.push(thread);
+      continue;
+    }
+    if (thread.lastActivityAt && thread.lastActivityAt > now - AUTO_SETTLE_IDLE_MS) {
+      remaining.push(thread);
+      continue;
+    }
+    if (!thread.settledAt) {
+      settled.push(thread.id);
+    }
+    remaining.push({ ...thread, settledAt: now, snoozedUntil: undefined, updatedAt: now });
+  }
+  return { settled, remaining };
+}
+
+/** Apply the stale-idle heuristic to every persisted thread once per run. */
+export function runAutoSettle(): string[] {
+  const state = get(chatThreadState);
+  const threads: ChatThread[] = Object.values(state.threadsByProject).flat();
+  const { settled, remaining } = autoSettleStaleThreads(threads, Date.now());
+  for (const id of settled) updateChatThread(id, { settledAt: Date.now(), snoozedUntil: null, updatedAt: Date.now() });
+  return settled;
 }
 
 /**
@@ -1502,7 +1570,7 @@ export function patchThreadMessage(threadId: string, messageId: string, patch: P
  * rewritten because ids are looked up per thread — a shared id would let an
  * edit in one thread patch the other.
  */
-export function forkChatThreadFrom(threadId: string, messageId: string | null = null): ChatThread | null {
+export async function forkChatThreadFrom(threadId: string, messageId: string | null = null): Promise<ChatThread | null> {
   const thread = getChatThread(threadId);
   if (!thread) return null;
   const messages = get(chatThreadState).messagesByThread[threadId] ?? [];
@@ -1520,6 +1588,10 @@ export function forkChatThreadFrom(threadId: string, messageId: string | null = 
     reasoningEffort: thread.reasoningEffort,
     standalone: thread.standalone,
     standaloneWorkspaceId: thread.standaloneWorkspaceId,
+    claudeSdkSessionId: thread.claudeSdkSessionId,
+    cursorSdkSessionId: thread.cursorSdkSessionId,
+    opencodeSdkSessionId: thread.opencodeSdkSessionId,
+    museSdkSessionId: thread.museSdkSessionId,
   });
   const suffix = fork.id.slice(-6);
   chatThreadState.update((state) => ({
@@ -1538,6 +1610,27 @@ export function forkChatThreadFrom(threadId: string, messageId: string | null = 
     forkOfThreadId: thread.id,
     status: copied.length ? 'idle' : 'draft',
   });
+
+  // Natively fork the Claude SDK session so the fork reuses the source's
+  // agent conversation instead of replaying the transcript.
+  if (thread.claudeSdkSessionId) {
+    const forked = await forkClaudeSession(thread.claudeSdkSessionId, {
+      dir: thread.projectId,
+      title: fork.title,
+    });
+    if (forked) {
+      updateChatThread(fork.id, { claudeSdkSessionId: forked.sessionId, updatedAt: Date.now() });
+    }
+  }
+  // Carry over the remaining native SDK session IDs so forks can attempt
+  // --resume on the source agent conversation.
+  updateChatThread(fork.id, {
+    ...(thread.cursorSdkSessionId ? { cursorSdkSessionId: thread.cursorSdkSessionId } : {}),
+    ...(thread.opencodeSdkSessionId ? { opencodeSdkSessionId: thread.opencodeSdkSessionId } : {}),
+    ...(thread.museSdkSessionId ? { museSdkSessionId: thread.museSdkSessionId } : {}),
+    updatedAt: Date.now(),
+  });
+
   return getChatThread(fork.id);
 }
 
@@ -1620,7 +1713,7 @@ export function bringBackSideChat(sideThreadId: string): boolean {
  * alone: undoing those belongs to the worktree review, which knows what the
  * turn actually changed.
  */
-export function revertChatThreadTo(threadId: string, messageId: string): boolean {
+export function revertChatThreadTo(threadId: string, messageId: string, restoreFiles: boolean = false): boolean {
   let reverted = false;
   const now = Date.now();
   chatThreadState.update((state) => {
@@ -1648,6 +1741,10 @@ export function revertChatThreadTo(threadId: string, messageId: string): boolean
               turnPlan: null,
               agentCheckpoint: undefined,
               nativeAcpSessionId: null,
+              claudeSdkSessionId: null,
+              cursorSdkSessionId: null,
+              opencodeSdkSessionId: null,
+              museSdkSessionId: null,
             }
             : thread),
         ]),
@@ -1655,7 +1752,24 @@ export function revertChatThreadTo(threadId: string, messageId: string): boolean
     };
   });
   if (reverted) void deleteAgentCheckpoint(threadId).catch(() => {});
+  if (reverted && restoreFiles) {
+    void restoreThreadFiles(threadId).catch(() => {});
+  }
   return reverted;
+}
+
+/** Restore a thread's working-tree files to their last committed state. */
+async function restoreThreadFiles(threadId: string): Promise<void> {
+  const thread = getChatThread(threadId);
+  if (!thread) return;
+  try {
+    await invoke('workspace_git_discard_all', {
+      projectId: thread.projectId,
+      confirmation: 'discard all changes',
+    });
+  } catch {
+    /* best-effort: file restore failures must not block the revert */
+  }
 }
 
 /** Edit a stored message in place. The owning thread and its title are left untouched. */
@@ -1717,6 +1831,10 @@ export function clearProjectThreadMessages(projectId: string): void {
           status: 'draft' as ChatThreadStatus,
           taskId: null,
           sessionId: null,
+          claudeSdkSessionId: null,
+          cursorSdkSessionId: null,
+          opencodeSdkSessionId: null,
+          museSdkSessionId: null,
           updatedAt: Date.now(),
           lastActivityAt: Date.now(),
         })),
@@ -1741,6 +1859,10 @@ export function clearChatThreadMessages(threadId: string): boolean {
             status: 'draft' as ChatThreadStatus,
             taskId: null,
             sessionId: null,
+            claudeSdkSessionId: null,
+            cursorSdkSessionId: null,
+            opencodeSdkSessionId: null,
+            museSdkSessionId: null,
             updatedAt: Date.now(),
             lastActivityAt: Date.now(),
           }

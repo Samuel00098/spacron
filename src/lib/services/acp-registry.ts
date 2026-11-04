@@ -3,7 +3,7 @@ export const ACP_REGISTRY_URL = 'https://cdn.agentclientprotocol.com/registry/v1
 export type AcpDistribution =
   | { kind: 'npx'; package: string; args?: string[] }
   | { kind: 'uvx'; package: string; args?: string[] }
-  | { kind: 'binary'; command: string; args?: string[] };
+  | { kind: 'binary'; command: string; args?: string[]; url?: string; sha256?: string };
 
 export interface AcpRegistryAgent {
   id: string;
