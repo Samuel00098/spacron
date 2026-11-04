@@ -470,6 +470,10 @@ export function isClaudeProvider(command: string): boolean {
   return getChatProviderAdapter(command)?.id === 'claude';
 }
 
+export function isCodexProvider(command: string): boolean {
+  return getChatProviderAdapter(command)?.id === 'codex';
+}
+
 export function getAgentProviderLaunchOptions(
   command: string,
   selection: {
