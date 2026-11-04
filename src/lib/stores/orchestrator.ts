@@ -197,7 +197,7 @@ import { requestAgentPlacement, defaultAgentPlacement, type AgentLaunchChoice, t
 import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/services/orchestrator/agent-charter';
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
-import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
+import { getAgentProviderLaunchOptions, isChatAgentProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
 import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
 import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
@@ -225,6 +225,7 @@ import { acpMcpServers } from '$lib/services/orchestrator/mcp-client';
 import { normalizeAcpUpdate, parseAcpPlan, parseAcpUsage } from '$lib/services/acp-protocol';
 import { activityFromAcpUpdate, type AcpActivity } from '$lib/services/acp-activity';
 import { openPty, type PtySession } from '$lib/services/pty-bridge';
+import { isPiSettled, openPiRpcSession, piPrompt, piTextDelta, type PiRpcSession } from '$lib/services/pi-rpc';
 
 type AcpApprovalWaiter = {
   respond: (result: Record<string, unknown>, error?: Record<string, unknown>) => Promise<void>;
@@ -237,6 +238,7 @@ const activeAcpTurns = new Map<string, {
   session: { notify(method: string, params: Record<string, unknown>): Promise<void> };
   sessionId?: string;
 }>();
+const activePiTurns = new Map<string, PiRpcSession>();
 import {
   getProjectMemoryLines,
   loadProjectMemory,
@@ -4678,6 +4680,63 @@ function acpPermissionRequest(value: Record<string, unknown>): {
   };
 }
 
+async function sendPiRpcChatTurn(
+  projectId: string,
+  rootPath: string,
+  text: string,
+  thread: NonNullable<ReturnType<typeof getChatThread>>,
+  command: string,
+  attachments: ChatAttachment[],
+  displayName?: string,
+): Promise<void> {
+  const userId = msgId();
+  const assistantId = msgId();
+  const cwd = threadWorkingRoot(thread, rootPath);
+  const prompt = attachments.length ? buildAttachmentPrompt(text, attachments) : text;
+  appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, thread.id);
+  appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: displayName ?? command }, thread.id);
+  updateChatThread(thread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
+
+  const { executable, args } = splitAcpCommand(command);
+  const session = await openPiRpcSession(executable, args, cwd);
+  activePiTurns.set(thread.id, session);
+  let responseText = '';
+  let stderrText = '';
+  let settled = false;
+  const unlisten = await session.onEvent((record) => {
+    const delta = piTextDelta(record);
+    if (delta) {
+      responseText += delta;
+      patchChat(projectId, assistantId, { text: responseText, pending: true });
+    }
+    if (isPiSettled(record)) settled = true;
+  });
+  const unlistenStderr = await session.onStderr((value) => {
+    stderrText = `${stderrText}${stderrText ? '\n' : ''}${value}`.slice(-4000);
+  });
+  const unlistenExit = await session.onExit(() => {
+    if (!settled && getChatThread(thread.id)?.status === 'working') {
+      patchChat(projectId, assistantId, { text: `Pi exited unexpectedly.${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`, pending: false, type: 'failure' });
+      updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+    }
+  });
+  try {
+    await session.command(piPrompt(prompt));
+    while (!settled) await new Promise((resolve) => setTimeout(resolve, 50));
+    patchChat(projectId, assistantId, { text: responseText || 'Pi completed the turn without returning text.', pending: false });
+    updateChatThread(thread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
+  } catch (error) {
+    patchChat(projectId, assistantId, { text: `Native Pi RPC failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`, pending: false, type: 'failure' });
+    updateChatThread(thread.id, { status: 'failed', updatedAt: Date.now(), turnEndedAt: Date.now() });
+  } finally {
+    await unlisten();
+    await unlistenStderr();
+    await unlistenExit();
+    activePiTurns.delete(thread.id);
+    await session.close().catch(() => {});
+  }
+}
+
 async function sendNativeAcpChatTurn(
   projectId: string,
   rootPath: string,
@@ -5652,6 +5711,8 @@ export function stopChatTurn(threadId: string): void {
   clearChatTurnTicker(threadId);
   const thread = getChatThread(threadId);
   const activeAcp = activeAcpTurns.get(threadId);
+  const activePi = activePiTurns.get(threadId);
+  if (activePi) void activePi.close().catch(() => {});
   if (activeAcp?.sessionId) {
     void activeAcp.session.notify('session/cancel', { sessionId: activeAcp.sessionId }).catch(() => {});
   }
@@ -6047,6 +6108,23 @@ export async function sendChatMessage(
     ?? (opts?.forcedAgent
       ? resolveAcpLaunchCommand(opts.forcedAgent, isAcpChatCommand(opts.forcedAgent, registryAcpCommands))
       : null);
+  if (opts?.chatMode && chatThread && opts.forcedAgent && isPiProvider(opts.forcedAgent)) {
+    const piLaunch = getAgentProviderLaunchOptions(opts.forcedAgent, {
+      model: opts.model,
+      accessMode: accessTier(opts.accessMode ?? chatThread.accessMode),
+    });
+    const piCommand = [opts.forcedAgent, piLaunch.permissionArgs, piLaunch.runtimeArgs].filter(Boolean).join(' ');
+    await sendPiRpcChatTurn(
+      projectId,
+      rootPath,
+      trimmed,
+      chatThread,
+      piCommand,
+      opts.attachments ?? [],
+      opts.forcedAgent,
+    );
+    return;
+  }
   if (opts?.chatMode && chatThread && acpSpawnCommand) {
     await sendNativeAcpChatTurn(
       projectId,

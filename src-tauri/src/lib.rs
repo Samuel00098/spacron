@@ -1,5 +1,6 @@
 mod commands;
 mod acp;
+mod pi;
 mod desktop;
 mod error;
 mod lsp;
@@ -446,6 +447,9 @@ pub fn run() {
             commands::acp::acp_respond,
             commands::acp::acp_notify,
             commands::acp::acp_close,
+            commands::pi::pi_start,
+            commands::pi::pi_command,
+            commands::pi::pi_close,
             commands::terminal::terminal_attach,
             commands::terminal::terminal_instance_id,
             commands::terminal::terminal_write,

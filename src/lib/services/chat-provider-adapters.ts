@@ -8,7 +8,22 @@ export type ChatProviderProtocol =
   | 'cursor-stream-json'
   | 'grok-stream-json'
   | 'opencode-server'
+  | 'pi-rpc'
   | 'antigravity-cli';
+
+/**
+ * The process protocol is deliberately separate from ACP. ACP is the common
+ * fallback, while these provider protocols are the vendor surfaces that can
+ * preserve provider-native sessions and events.
+ */
+export type ChatProviderTransport =
+  | 'codex-app-server'
+  | 'claude-agent-sdk'
+  | 'cursor-sdk'
+  | 'opencode-sdk'
+  | 'pi-rpc'
+  | 'acp-fallback'
+  | 'terminal-fallback';
 
 export interface AgentProviderModel {
   id: string;
@@ -30,6 +45,10 @@ export interface AgentProviderCapabilities {
   supportsChat: boolean;
   /** Native protocol used by the Chat driver. */
   protocol?: ChatProviderProtocol;
+  /** Transport currently used by Chat for this provider. */
+  transport?: ChatProviderTransport;
+  /** Native provider surface available for a future/active driver. */
+  nativeTransport?: ChatProviderTransport;
   /**
    * Only the "CLI default" entry. Real model ids come solely from the
    * installed CLI's live catalogue — nothing is pre-listed.
@@ -56,6 +75,8 @@ export interface ChatProviderAdapter {
   aliases: readonly string[];
   label: string;
   protocol: ChatProviderProtocol;
+  transport: ChatProviderTransport;
+  nativeTransport?: ChatProviderTransport;
   models: readonly AgentProviderModel[];
   accessModes: readonly ChatAccessMode[];
   reasoningEfforts: readonly ChatReasoningEffort[];
@@ -187,6 +208,8 @@ const codexAdapter: ChatProviderAdapter = {
   aliases: ['codex'],
   label: 'Codex',
   protocol: 'codex-app-server',
+  transport: 'acp-fallback',
+  nativeTransport: 'codex-app-server',
   models: [{ id: 'default', label: 'Auto', description: 'Let Codex choose the available model.' }],
   accessModes: ['supervised', 'auto-edits', 'auto', 'full-access'],
   reasoningEfforts: CODEX_REASONING,
@@ -216,6 +239,8 @@ const claudeAdapter: ChatProviderAdapter = {
   aliases: ['claude', 'claude-code'],
   label: 'Claude Code',
   protocol: 'claude-stream-json',
+  transport: 'acp-fallback',
+  nativeTransport: 'claude-agent-sdk',
   models: [{ id: 'default', label: 'CLI default', description: 'Let Claude Code choose the available model.' }],
   accessModes: ['supervised', 'auto-edits', 'auto', 'full-access'],
   reasoningEfforts: CLAUDE_REASONING,
@@ -245,6 +270,8 @@ const cursorAdapter: ChatProviderAdapter = {
   aliases: ['cursor-agent', 'cursor'],
   label: 'Cursor',
   protocol: 'cursor-stream-json',
+  transport: 'acp-fallback',
+  nativeTransport: 'cursor-sdk',
   models: [{ id: 'default', label: 'Auto', description: 'Let Cursor choose the available model.' }],
   accessModes: ['supervised', 'full-access'],
   // Cursor exposes effort as part of each model id, not as a separate option.
@@ -268,6 +295,7 @@ const grokAdapter: ChatProviderAdapter = {
   aliases: ['grok'],
   label: 'Grok Build',
   protocol: 'grok-stream-json',
+  transport: 'acp-fallback',
   models: [{ id: 'default', label: 'Auto', description: 'Use Grok Build’s current model.' }],
   accessModes: ['supervised', 'auto-edits', 'auto', 'full-access'],
   reasoningEfforts: GROK_REASONING,
@@ -297,6 +325,8 @@ const openCodeAdapter: ChatProviderAdapter = {
   aliases: ['opencode'],
   label: 'OpenCode',
   protocol: 'opencode-server',
+  transport: 'acp-fallback',
+  nativeTransport: 'opencode-sdk',
   models: [{ id: 'default', label: 'Auto', description: 'Let OpenCode choose the configured model.' }],
   accessModes: ['supervised', 'full-access'],
   // Every launch here is the interactive `opencode` TUI, which accepts no
@@ -314,8 +344,37 @@ const openCodeAdapter: ChatProviderAdapter = {
       }),
       runtimeArgs: runtimeArgs.join(' '),
     };
+
   },
   parseModels: parseOpenCodeModels,
+};
+
+const piAdapter: ChatProviderAdapter = {
+  id: 'pi',
+  aliases: ['pi', 'coding-agent'],
+  label: 'Pi',
+  protocol: 'pi-rpc',
+  transport: 'terminal-fallback',
+  nativeTransport: 'pi-rpc',
+  models: [{ id: 'default', label: 'Configured model', description: 'Use Pi’s configured provider and model.' }],
+  accessModes: ['supervised', 'full-access'],
+  reasoningEfforts: [],
+  modelCommand: null,
+  buildLaunchOptions(selection) {
+    const model = safeProviderValue(selection.model);
+    return {
+      permissionArgs: permissionArgs(selection.accessMode ?? 'inherit', this.accessModes, {
+        supervised: '',
+        'full-access': '',
+      }),
+      runtimeArgs: [
+        '--mode rpc',
+        '--no-session',
+        model && model !== 'default' ? `--model ${model}` : '',
+      ].filter(Boolean).join(' '),
+    };
+  },
+  parseModels: () => [],
 };
 
 /**
@@ -331,6 +390,7 @@ const antigravityAdapter: ChatProviderAdapter = {
   aliases: ['agy', 'antigravity'],
   label: 'Antigravity',
   protocol: 'antigravity-cli',
+  transport: 'acp-fallback',
   models: [{ id: 'default', label: 'CLI default', description: 'Let Antigravity choose the available model.' }],
   accessModes: ['supervised', 'full-access'],
   reasoningEfforts: [],
@@ -353,6 +413,7 @@ export const CHAT_PROVIDER_ADAPTERS = [
   cursorAdapter,
   grokAdapter,
   openCodeAdapter,
+  piAdapter,
   antigravityAdapter,
 ] as const;
 
@@ -383,12 +444,26 @@ export function getAgentProviderCapabilities(command: string, label?: string): A
     label: label ?? adapter?.label ?? command,
     supportsChat: adapter !== null,
     protocol: adapter?.protocol,
+    transport: adapter?.transport ?? (command.trim() ? 'terminal-fallback' : undefined),
     models: adapter ? [...adapter.models] : [],
     accessModes: adapter ? [...adapter.accessModes] : [],
     reasoningEfforts: adapter ? [...adapter.reasoningEfforts] : [],
     sessionModelSwitch: 'unsupported',
     ...(adapter || command.trim() ? { acp: getAcpCapabilities(command) } : {}),
   };
+}
+
+/** Return the provider transport without exposing adapter implementation details. */
+export function getChatProviderTransport(command: string): ChatProviderTransport {
+  return getChatProviderAdapter(command)?.transport ?? 'terminal-fallback';
+}
+
+export function getNativeChatProviderTransport(command: string): ChatProviderTransport | null {
+  return getChatProviderAdapter(command)?.nativeTransport ?? null;
+}
+
+export function isPiProvider(command: string): boolean {
+  return getChatProviderAdapter(command)?.id === 'pi';
 }
 
 export function getAgentProviderLaunchOptions(
