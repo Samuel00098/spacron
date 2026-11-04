@@ -40,6 +40,7 @@ import {
   toggleChatThreadPinned,
   type ChatThread,
   type ChatThreadStatus,
+  runAutoSettle,
 } from '$lib/stores/chatThreads';
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import { aiProviders, getProviderDef, type AiProviderId } from '$lib/stores/settings';
@@ -712,6 +713,11 @@ export default function ProjectHUD() {
   }
 
   useEffect(() => () => pendingFocusRef.current?.(), []);
+
+  useEffect(() => {
+    const handle = setInterval(runAutoSettle, 60_000);
+    return () => clearInterval(handle);
+  }, []);
 
   async function openRoom(wsId: string, path: string, room: string, op: RoomOp = 'focus') {
     const projectId = projectIdByPath.get(path);

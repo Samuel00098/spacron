@@ -1010,6 +1010,58 @@ export function setChatThreadSettled(threadId: string, settled: boolean): boolea
 }
 
 /**
+ * Auto-settle threads that have been idle long enough to stop reading as
+ * "in flight". Settling is a *presentation* move — it drops the row out of the
+ * active list and out of the unread badge. Nothing about the agent session
+ * itself changes, so a settled thread is still one click from being resumed.
+ *
+ * The threshold is deliberately long: this is not a "close the tab" gesture,
+ * it is a "this turn is genuinely over" one. A thread that is still producing
+ * output keeps its `lastActivityAt` advancing and stays active.
+ */
+export const AUTO_SETTLE_IDLE_MS = 5 * 60 * 1000;
+
+export function autoSettleStaleThreads(
+  threads: ChatThread[],
+  now = Date.now(),
+): { settled: string[]; remaining: ChatThread[] } {
+  const settled: string[] = [];
+  const remaining: ChatThread[] = [];
+  for (const thread of threads) {
+    if (thread.pinned) {
+      remaining.push(thread);
+      continue;
+    }
+    if (thread.status === 'working' || thread.status === 'needs-input') {
+      remaining.push(thread);
+      continue;
+    }
+    if (thread.settledAt && thread.settledAt > now - AUTO_SETTLE_IDLE_MS) {
+      remaining.push(thread);
+      continue;
+    }
+    if (thread.lastActivityAt && thread.lastActivityAt > now - AUTO_SETTLE_IDLE_MS) {
+      remaining.push(thread);
+      continue;
+    }
+    if (!thread.settledAt) {
+      settled.push(thread.id);
+    }
+    remaining.push({ ...thread, settledAt: now, snoozedUntil: undefined, updatedAt: now });
+  }
+  return { settled, remaining };
+}
+
+/** Apply the stale-idle heuristic to every persisted thread once per run. */
+export function runAutoSettle(): string[] {
+  const state = get(chatThreadState);
+  const threads: ChatThread[] = Object.values(state.threadsByProject).flat();
+  const { settled, remaining } = autoSettleStaleThreads(threads, Date.now());
+  for (const id of settled) updateChatThread(id, { settledAt: Date.now(), snoozedUntil: null, updatedAt: Date.now() });
+  return settled;
+}
+
+/**
  * Bind an isolated checkout to a thread, or clear it. Every later turn runs its
  * agent in `worktree.path`, so two threads on one project stop colliding.
  */
