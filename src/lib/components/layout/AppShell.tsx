@@ -1000,6 +1000,25 @@ export default function AppShell() {
     [minimizedRooms, openRooms],
   );
 
+  // A project opens on a terminal, never on the empty "Start with agents"
+  // stage. Once per project open: after its restore has finished (and a beat
+  // more, for agent rooms that come back a render or two later), an empty
+  // stage gets the Terminal room. TerminalPanel's own auto-open then starts
+  // the shell. Closing everything afterwards still leaves the stage empty.
+  const openRoomsRef = useRef(openRooms);
+  openRoomsRef.current = openRooms;
+  const terminalOpenedForProjectRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!project || projectSwitching || currentInteractionMode !== 'cli') return;
+    const projectKey = activeProjectIdValue ?? project.root_path ?? '';
+    if (terminalOpenedForProjectRef.current === projectKey) return;
+    const timer = window.setTimeout(() => {
+      terminalOpenedForProjectRef.current = projectKey;
+      if (openRoomsRef.current.length === 0) terminalRoomOpenStore.set(true);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [project, projectSwitching, activeProjectIdValue, currentInteractionMode]);
+
   const orderedVisibleRooms = useMemo(
     () => roomOrder.filter((room) => visibleRooms.includes(room)),
     [roomOrder, visibleRooms],
