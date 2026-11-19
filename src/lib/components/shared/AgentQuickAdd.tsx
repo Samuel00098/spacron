@@ -183,14 +183,20 @@ export default function AgentQuickAdd({
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('blur', onBlur);
-    const id = requestAnimationFrame(() => rootEl.current?.querySelector<HTMLButtonElement>('.aqa-agent:not(:disabled)')?.focus());
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('blur', onBlur);
-      cancelAnimationFrame(id);
     };
   }, [open, selected]);
+
+  // Focus the first agent when the launcher opens (only then: re-running on
+  // every pick would pull focus out of the model search).
+  useEffect(() => {
+    if (!open) return;
+    const id = requestAnimationFrame(() => rootEl.current?.querySelector<HTMLButtonElement>('.aqa-agent:not(:disabled)')?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(id);
+  }, [open]);
 
   function close() {
     setOpen(false);
@@ -230,7 +236,7 @@ export default function AgentQuickAdd({
     const list = (event.target as HTMLElement).closest('.aqa-list');
     if (!list) return;
     event.preventDefault();
-    const items = Array.from(list.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+    const items = Array.from(list.querySelectorAll<HTMLButtonElement>('button.aqa-nav:not(:disabled), .aqa-models button:not(:disabled)'));
     const index = items.indexOf(document.activeElement as HTMLButtonElement);
     const next = (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
     items[next]?.focus();
@@ -262,23 +268,27 @@ export default function AgentQuickAdd({
       {open && createPortal(
         <div ref={rootEl} className="aqa-root" style={rootStyle} onKeyDown={moveFocus}>
           <div className="dd-menu aqa-pane aqa-agents" role="menu" aria-label="Add an agent">
+            {items.length > 0 && (
+              <div className="aqa-quick-row" role="group" aria-label="Open">
+                {items.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="aqa-quick-item"
+                    role="menuitem"
+                    title={item.label}
+                    aria-label={item.label}
+                    onClick={() => {
+                      close();
+                      item.onSelect();
+                    }}
+                  >
+                    {item.icon}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="aqa-list">
-              {items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="dd-item aqa-agent aqa-quick-item"
-                  role="menuitem"
-                  onClick={() => {
-                    close();
-                    item.onSelect();
-                  }}
-                >
-                  <span className="agent-quick-add-brand" aria-hidden="true">{item.icon}</span>
-                  <span className="dd-item-label">{item.label}</span>
-                </button>
-              ))}
-              {items.length > 0 && presets.length > 0 && <div className="agent-quick-add-divider" aria-hidden="true" />}
               {presets.length === 0 && (
                 <div className="agent-quick-add-empty">
                   {project ? 'No agents found on this computer.' : 'Open a project to add an agent.'}
@@ -286,31 +296,49 @@ export default function AgentQuickAdd({
               )}
               {presets.map((preset) => {
                 const updating = $agentUpdates.updating.includes(preset.command);
+                const openConfig = () => {
+                  pickAgent(preset.command);
+                  requestAnimationFrame(() => rootEl.current?.querySelector<HTMLInputElement>('.aqa-model-search')?.focus());
+                };
                 return (
-                  <button
-                    key={preset.command}
-                    type="button"
-                    className={`dd-item aqa-agent${selected === preset.command ? ' active' : ''}`}
-                    role="menuitem"
-                    aria-haspopup="true"
-                    aria-expanded={selected === preset.command}
-                    disabled={updating}
-                    title={updating ? `${preset.name} is updating` : preset.name}
-                    onClick={() => pickAgent(preset.command)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'ArrowRight') {
-                        event.preventDefault();
-                        pickAgent(preset.command);
-                        requestAnimationFrame(() => rootEl.current?.querySelector<HTMLInputElement>('.aqa-model-search')?.focus());
-                      }
-                    }}
-                  >
-                    <AgentBrandMark command={preset.command} name={preset.name} className="agent-quick-add-brand" />
-                    <span className="dd-item-label">{preset.name}</span>
-                    {updating
-                      ? <span className="dd-item-sub">updating</span>
-                      : <svg className="aqa-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>}
-                  </button>
+                  <div key={preset.command} className={`aqa-agent-row${selected === preset.command ? ' active' : ''}`}>
+                    {/* The name launches straight away with the CLI's defaults. */}
+                    <button
+                      type="button"
+                      className="dd-item aqa-agent aqa-nav"
+                      role="menuitem"
+                      disabled={updating}
+                      title={updating ? `${preset.name} is updating` : `Launch ${preset.name}`}
+                      onClick={() => {
+                        close();
+                        void quickSpawnAgent(preset.command);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'ArrowRight') {
+                          event.preventDefault();
+                          openConfig();
+                        }
+                      }}
+                    >
+                      <AgentBrandMark command={preset.command} name={preset.name} className="agent-quick-add-brand" />
+                      <span className="dd-item-label">{preset.name}</span>
+                      {updating && <span className="dd-item-sub">updating</span>}
+                    </button>
+                    {/* The arrow opens the model / level / prompt pane. */}
+                    <button
+                      type="button"
+                      className="aqa-config-btn"
+                      disabled={updating}
+                      tabIndex={-1}
+                      title={`Choose ${preset.name} model and level`}
+                      aria-label={`Choose ${preset.name} model and level`}
+                      aria-haspopup="true"
+                      aria-expanded={selected === preset.command}
+                      onClick={openConfig}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+                    </button>
+                  </div>
                 );
               })}
             </div>

@@ -25,6 +25,8 @@
   gap: 1px;
   min-height: 0;
   overflow-y: auto;
+  /* Vertical only: a horizontal bar appeared under the agent list. */
+  overflow-x: hidden;
   overscroll-behavior: none;
 }
 
@@ -37,13 +39,80 @@
   flex: 1 1 auto;
 }
 
-.aqa-agent .aqa-chevron {
+/* Editor / Terminal: icon buttons side by side above the agents. */
+.aqa-quick-row {
+  display: flex;
+  gap: 2px;
   flex: 0 0 auto;
-  color: var(--text-muted);
+  padding: 2px 2px 5px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border);
 }
 
-.aqa-agent.active .aqa-chevron {
+.aqa-quick-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.aqa-quick-item svg {
+  width: 15px;
+  height: 15px;
+}
+
+.aqa-quick-item:hover,
+.aqa-quick-item:focus-visible {
+  background: var(--bg-hover);
   color: var(--text-primary);
+  outline: none;
+}
+
+/* Agent row: the name launches with defaults; the arrow opens the options. */
+.aqa-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.aqa-agent-row .aqa-agent {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.aqa-config-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 30px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.aqa-config-btn:hover:not(:disabled),
+.aqa-agent-row.active .aqa-config-btn {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.aqa-config-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .agent-quick-add-brand {
