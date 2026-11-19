@@ -74,6 +74,8 @@ pub struct TranscriptResult {
     pub context_used: Option<u64>,
     /// Size of that window, when the CLI records it (Codex does; others are inferred client-side).
     pub context_window: Option<u64>,
+    /// Permission mode the session last reported: `ask` | `accept-edits` | `auto` | `full-access` | `plan`.
+    pub permission: Option<String>,
 }
 
 #[tauri::command]
@@ -221,6 +223,7 @@ fn finish(session_id: Option<String>, revision: Option<String>, parsed: Parsed) 
         effort: parsed.effort,
         context_used: parsed.context_used,
         context_window: parsed.context_window,
+        permission: parsed.permission,
     }
 }
 
@@ -232,6 +235,7 @@ struct Parsed {
     effort: Option<String>,
     context_used: Option<u64>,
     context_window: Option<u64>,
+    permission: Option<String>,
 }
 
 impl Parsed {
@@ -386,6 +390,34 @@ fn claude_candidates(cwd: &str) -> Vec<Candidate> {
         .collect()
 }
 
+/// Claude Code's `permissionMode` in the chat view's vocabulary.
+fn claude_permission(mode: &str) -> Option<String> {
+    let mapped = match mode {
+        "default" | "manual" => "ask",
+        "acceptEdits" => "accept-edits",
+        "auto" | "dontAsk" => "auto",
+        "bypassPermissions" => "full-access",
+        "plan" => "plan",
+        _ => return None,
+    };
+    Some(mapped.to_string())
+}
+
+/// Codex's thread settings in the chat view's vocabulary.
+fn codex_permission(settings: &Value) -> Option<String> {
+    let approval = settings.get("approval_policy").and_then(Value::as_str)?;
+    let reviewer = settings.get("approvals_reviewer").and_then(Value::as_str).unwrap_or("user");
+    let profile = settings.pointer("/permission_profile/type").and_then(Value::as_str).unwrap_or("");
+    let mode = if approval == "never" && (profile == "disabled" || profile.is_empty()) {
+        "full-access"
+    } else if reviewer == "auto_review" {
+        "auto"
+    } else {
+        "ask"
+    };
+    Some(mode.to_string())
+}
+
 /// Slash commands that only change session settings; never shown as messages.
 const SETTINGS_COMMANDS: &[&str] = &["/model", "/effort", "/fast", "/permissions", "/approvals"];
 
@@ -466,7 +498,26 @@ fn parse_claude(path: &Path) -> Parsed {
         }
         let time = str_of(&line, "timestamp");
         let uuid = str_of(&line, "uuid").unwrap_or_else(|| format!("line-{index}"));
+        if let Some(mode) = line.get("permissionMode").and_then(Value::as_str) {
+            parsed.permission = claude_permission(mode);
+        }
         let Some(message) = line.get("message") else { continue };
+        if kind == "user" {
+            // The chat's own /model and /effort leave no message, but they are
+            // the latest word on what the session runs on.
+            let raw = value_text(message.get("content").unwrap_or(&Value::Null));
+            if let Some(name) = tag_body(&raw, "command-name") {
+                let args = tag_body(&raw, "command-args").unwrap_or_default();
+                let args = args.trim();
+                if !args.is_empty() {
+                    match name.trim() {
+                        "/model" => parsed.model = Some(args.to_string()),
+                        "/effort" => parsed.effort = Some(args.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+        }
         let content = message.get("content").cloned().unwrap_or(Value::Null);
         if kind == "user" {
             if line.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
@@ -639,6 +690,21 @@ fn parse_codex(path: &Path) -> Parsed {
             Some("event_msg") => match ptype {
                 "task_started" => parsed.busy = Some(true),
                 "task_complete" | "turn_aborted" => parsed.busy = Some(false),
+                // Written whenever the session's settings change, including a
+                // /model or /permissions pick made mid-session.
+                "thread_settings_applied" => {
+                    if let Some(settings) = p.get("thread_settings") {
+                        if let Some(model) = str_of(settings, "model") {
+                            parsed.model = Some(model);
+                        }
+                        if let Some(effort) = str_of(settings, "reasoning_effort") {
+                            parsed.effort = Some(effort);
+                        }
+                        if let Some(mode) = codex_permission(settings) {
+                            parsed.permission = Some(mode);
+                        }
+                    }
+                }
                 "token_count" => {
                     if let Some(info) = p.get("info").filter(|i| i.is_object()) {
                         let last = info.get("last_token_usage").cloned().unwrap_or(Value::Null);
@@ -1045,6 +1111,19 @@ mod tests {
         assert_eq!(toml_top_level_string(text, "model").as_deref(), Some("gpt-6-luna"));
         assert_eq!(toml_top_level_string(text, "model_reasoning_effort").as_deref(), Some("medium"));
         assert_eq!(toml_top_level_string("[a]\nmodel = \"x\"\n", "model"), None);
+    }
+
+    #[test]
+    fn maps_permission_modes() {
+        assert_eq!(claude_permission("bypassPermissions").as_deref(), Some("full-access"));
+        assert_eq!(claude_permission("acceptEdits").as_deref(), Some("accept-edits"));
+        assert_eq!(claude_permission("manual").as_deref(), Some("ask"));
+        let full = serde_json::json!({"approval_policy": "never", "approvals_reviewer": "user", "permission_profile": {"type": "disabled"}});
+        let auto = serde_json::json!({"approval_policy": "on-request", "approvals_reviewer": "auto_review"});
+        let ask = serde_json::json!({"approval_policy": "on-request", "approvals_reviewer": "user", "permission_profile": {"type": "managed"}});
+        assert_eq!(codex_permission(&full).as_deref(), Some("full-access"));
+        assert_eq!(codex_permission(&auto).as_deref(), Some("auto"));
+        assert_eq!(codex_permission(&ask).as_deref(), Some("ask"));
     }
 
     #[test]

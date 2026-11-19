@@ -21,11 +21,14 @@ import {
   sendMatchKey,
   setTerminalChatView,
   transcriptAgentFor,
-  typeSlashCommand,
   permissionDescription,
   permissionModesFor,
-  relaunchTerminalAgent,
-  useSessionPermissionMode,
+  applyModelChange,
+  applyPermissionChange,
+  clearSessionPicks,
+  setSessionPicks,
+  sessionPermissionMode,
+  useSessionPicks,
   PERMISSION_MODE_COPY,
   type ChatPermissionMode,
   type ContextUsage,
@@ -123,7 +126,7 @@ export default function TerminalChatView({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
-  const permissionMode = useSessionPermissionMode(sessionId);
+  const picks = useSessionPicks(sessionId);
   const [relaunching, setRelaunching] = useState(false);
   const dictationOn = useStore(transcriptionActive);
   // Dictation is app-wide; only show it as recording here when it aims at this composer.
@@ -131,10 +134,9 @@ export default function TerminalChatView({
   const root = getSessionRoot(sessionId);
   // What the transcript says the session runs on, and what was picked here
   // since (shown until a later turn records it).
-  const [reported, setReported] = useState<{ model: string | null; effort: string | null; used: number | null; window: number | null }>({
-    model: null, effort: null, used: null, window: null,
-  });
-  const [picked, setPicked] = useState<{ model: string | null; effort: string | null }>({ model: null, effort: null });
+  const [reported, setReported] = useState<{
+    model: string | null; effort: string | null; used: number | null; window: number | null; permission: ChatPermissionMode | null;
+  }>({ model: null, effort: null, used: null, window: null, permission: null });
   const [models, setModels] = useState<AgentProviderModel[]>(() => peekLiveAgentProviderModels(agentPreset) ?? []);
 
   const boundRef = useRef<string | null>(null);
@@ -182,7 +184,13 @@ export default function TerminalChatView({
             setItems(result.messages);
             setTranscriptBusy(result.busy);
             setTruncated(result.truncated);
-            setReported({ model: result.model, effort: result.effort, used: result.contextUsed, window: result.contextWindow });
+            setReported({
+              model: result.model,
+              effort: result.effort,
+              used: result.contextUsed,
+              window: result.contextWindow,
+              permission: isChatPermission(result.permission) ? result.permission : null,
+            });
           }
         } catch (err) {
           if (cancelled) return;
@@ -213,11 +221,12 @@ export default function TerminalChatView({
 
   // A pick stays shown until a later turn reports that value.
   useEffect(() => {
-    setPicked((current) => ({
-      model: current.model && reported.model && sameModel(reported.model, current.model) ? null : current.model,
-      effort: current.effort && reported.effort === current.effort ? null : current.effort,
-    }));
-  }, [reported.model, reported.effort]);
+    const confirmed: ('model' | 'effort' | 'permission')[] = [];
+    if (picks.model && reported.model && sameModel(reported.model, picks.model)) confirmed.push('model');
+    if (picks.effort && reported.effort === picks.effort) confirmed.push('effort');
+    if (picks.permission && reported.permission === picks.permission) confirmed.push('permission');
+    if (confirmed.length) clearSessionPicks(sessionId, confirmed);
+  }, [reported.model, reported.effort, reported.permission, picks.model, picks.effort, picks.permission, sessionId]);
 
   // The pane closed or the agent changed: release the transcript binding.
   useEffect(() => () => bindTranscript(sessionId, null), [sessionId]);
@@ -295,7 +304,7 @@ export default function TerminalChatView({
 
   const modelApply: SessionOptionApply = agent ? modelApplyFor(agent) : { kind: 'none' };
   const effortApply: SessionOptionApply = agent ? effortApplyFor(agent) : { kind: 'none' };
-  const currentModelId = picked.model ?? reported.model;
+  const currentModelId = picks.model ?? reported.model;
   // Until the CLI answers with its own list (or if it can't), Claude Code still
   // takes its aliases, so a model can be picked before any conversation.
   const menuModels: AgentProviderModel[] = models.length ? models : agent === 'claude' ? CLAUDE_ALIAS_MODELS : [];
@@ -303,35 +312,49 @@ export default function TerminalChatView({
   const modelLabel = currentModel?.label ?? (currentModelId ? prettyModel(currentModelId) : 'Default model');
   const efforts = (currentModel?.reasoningEfforts ?? (agent === 'claude' ? CLAUDE_EFFORTS : []))
     .filter((e) => e !== 'default');
-  const currentEffort = picked.effort ?? reported.effort;
+  const currentEffort = picks.effort ?? reported.effort;
+  const permissionMode: ChatPermissionMode = picks.permission ?? reported.permission ?? sessionPermissionMode(sessionId);
   const context = agent ? contextUsageFor(agent, currentModelId, reported.used, reported.window) : null;
   // A slash command typed mid-turn would queue as prompt text, so options
   // change between turns.
   const optionsLocked = busy || !isRunning || relaunching;
 
   async function applyOption(apply: SessionOptionApply, value: string | null, which: 'model' | 'effort') {
-    if (apply.kind === 'none' || optionsLocked || !value) return;
-    setPicked((current) => ({ ...current, [which]: value }));
-    if (apply.kind === 'command') {
-      await typeSlashCommand(sessionId, apply.build(value));
-      return;
-    }
-    // Launch-time only (Codex): restart and resume the same conversation with it.
-    await relaunch({ [which]: value });
+    if (apply.kind === 'none' || optionsLocked || !value || !agent) return;
+    const before = { model: picks.model, effort: picks.effort };
+    setSessionPicks(sessionId, { [which]: value });
+    await runSetting(async () => {
+      const label = which === 'model' ? menuModels.find((m) => m.id === value)?.label ?? null : currentModel?.label ?? null;
+      return applyModelChange(sessionId, agent, {
+        model: which === 'model' ? value : null,
+        modelLabel: which === 'model' ? label : null,
+        effort: which === 'effort' ? value : null,
+      });
+    }, () => setSessionPicks(sessionId, before));
   }
 
-  async function relaunch(patch: Parameters<typeof relaunchTerminalAgent>[3]) {
-    if (optionsLocked || relaunching) return;
+  async function applyPermission(mode: ChatPermissionMode) {
+    if (optionsLocked) return;
+    const before = picks.permission;
+    setSessionPicks(sessionId, { permission: mode });
+    await runSetting(
+      () => applyPermissionChange(sessionId, agentPreset, boundRef.current, mode),
+      () => (before ? setSessionPicks(sessionId, { permission: before }) : clearSessionPicks(sessionId, ['permission'])),
+    );
+    revisionRef.current = null;
+  }
+
+  /** Run a settings change inside the CLI; on failure, show why and undo the pick. */
+  async function runSetting(apply: () => Promise<string | null>, undo: () => void) {
+    if (relaunching) return;
     setRelaunching(true);
     setError(null);
     try {
-      const problem = await relaunchTerminalAgent(sessionId, agentPreset, boundRef.current, patch);
+      const problem = await apply();
       if (problem) {
         setError(problem);
-        setPicked({ model: null, effort: null });
+        undo();
       }
-      // The resumed CLI may write a fresh file; let discovery pick it again.
-      revisionRef.current = null;
     } finally {
       setRelaunching(false);
     }
@@ -414,7 +437,7 @@ export default function TerminalChatView({
           {relaunching && (
             <div className="terminal-chat-working">
               <Dots />
-              <span>Restarting {agentLabel} with the new settings</span>
+              <span>Applying the new settings in {agentLabel}</span>
             </div>
           )}
           {busy && !relaunching && (
@@ -472,7 +495,7 @@ export default function TerminalChatView({
                 mode={permissionMode}
                 disabled={optionsLocked}
                 title={optionsLocked ? 'Change permissions between turns' : 'Permissions'}
-                onPick={(mode) => void relaunch({ permission: mode })}
+                onPick={(mode) => void applyPermission(mode)}
               />
             )}
             <button
@@ -596,6 +619,10 @@ function prettyModel(id: string): string {
     out += joinsVersion ? `.${part}` : `${i ? ' ' : ''}${part.charAt(0).toUpperCase()}${part.slice(1)}`;
   });
   return out;
+}
+
+function isChatPermission(value: string | null): value is ChatPermissionMode {
+  return value === 'ask' || value === 'accept-edits' || value === 'auto' || value === 'full-access';
 }
 
 function shortEffort(value: string): string {

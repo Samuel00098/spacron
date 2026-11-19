@@ -64,6 +64,7 @@ export interface TranscriptResult {
   effort: string | null;
   contextUsed: number | null;
   contextWindow: number | null;
+  permission: string | null;
 }
 
 export type AgentLaunchView = 'terminal' | 'chat';
@@ -193,15 +194,14 @@ export function sendMatchKey(text: string): string {
  */
 export type SessionOptionApply =
   | { kind: 'command'; build: (value: string) => string }
-  | { kind: 'relaunch' }
+  | { kind: 'inplace' }
   | { kind: 'none' };
 
 /**
- * How each CLI takes a model or effort change. Claude Code and Grok accept
- * `/model <id>` and `/effort <level>` mid-session (Orca's table). Codex only
- * has its own picker, so Spacron applies the pick at launch instead: exit and
- * resume the same session with `-m` / `model_reasoning_effort`. OpenCode's
- * model shows read-only.
+ * How each CLI takes a model or effort change, always inside the running
+ * session so its conversation is kept. Claude Code and Grok accept `/model
+ * <id>` and `/effort <level>`. Codex and OpenCode only have their own pickers,
+ * which `terminal-chat-inplace.ts` drives through the terminal.
  */
 export function modelApplyFor(agent: TranscriptAgent): SessionOptionApply {
   switch (agent) {
@@ -209,7 +209,8 @@ export function modelApplyFor(agent: TranscriptAgent): SessionOptionApply {
     case 'grok':
       return { kind: 'command', build: (value) => `/model ${value}` };
     case 'codex':
-      return { kind: 'relaunch' };
+    case 'opencode':
+      return { kind: 'inplace' };
     default:
       return { kind: 'none' };
   }
@@ -221,10 +222,53 @@ export function effortApplyFor(agent: TranscriptAgent): SessionOptionApply {
     case 'grok':
       return { kind: 'command', build: (value) => `/effort ${value}` };
     case 'codex':
-      return { kind: 'relaunch' };
+      return { kind: 'inplace' };
     default:
       return { kind: 'none' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Picks: what the user chose here, kept outside the view
+// ---------------------------------------------------------------------------
+
+export interface SessionPicks {
+  model?: string | null;
+  effort?: string | null;
+  permission?: ChatPermissionMode;
+}
+
+/**
+ * The model, effort and permission picked in each pane's chat view. Module
+ * state, not component state: the view unmounts whenever its tab is hidden,
+ * and a pick must not snap back to the previous value when it remounts. A pick
+ * is shown until the CLI's own transcript reports that same value.
+ */
+const sessionPicks = new Map<number, SessionPicks>();
+const sessionPicksTick = writable(0);
+
+export function getSessionPicks(sessionId: number): SessionPicks {
+  return sessionPicks.get(sessionId) ?? {};
+}
+
+export function setSessionPicks(sessionId: number, patch: SessionPicks): void {
+  sessionPicks.set(sessionId, { ...getSessionPicks(sessionId), ...patch });
+  sessionPicksTick.update((n) => n + 1);
+}
+
+/** Drop picks the transcript now confirms (or that were rolled back). */
+export function clearSessionPicks(sessionId: number, keys: (keyof SessionPicks)[]): void {
+  const current = sessionPicks.get(sessionId);
+  if (!current || !keys.some((k) => k in current)) return;
+  const next = { ...current };
+  for (const key of keys) delete next[key];
+  sessionPicks.set(sessionId, next);
+  sessionPicksTick.update((n) => n + 1);
+}
+
+export function useSessionPicks(sessionId: number): SessionPicks {
+  useStore(sessionPicksTick);
+  return getSessionPicks(sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +458,54 @@ export async function relaunchTerminalAgent(
   launchState.set(sessionId, next);
   launchStateStore.update((n) => n + 1);
   return null;
+}
+
+/**
+ * Change model and/or effort inside the running session. Returns an error or null.
+ */
+export async function applyModelChange(
+  sessionId: number,
+  agent: TranscriptAgent,
+  change: { model: string | null; modelLabel: string | null; effort: string | null },
+): Promise<string | null> {
+  const inplace = await import('$lib/services/terminal-chat-inplace');
+  if (agent === 'codex') return inplace.codexSetModelInPlace(sessionId, change);
+  if (agent === 'opencode') {
+    const label = change.modelLabel ?? change.model;
+    return label ? inplace.opencodeSetModelInPlace(sessionId, label) : null;
+  }
+  if (agent === 'claude' || agent === 'grok') {
+    if (change.model) await typeSlashCommand(sessionId, `/model ${change.model}`);
+    if (change.effort) {
+      if (change.model) await sleep(500);
+      await typeSlashCommand(sessionId, `/effort ${change.effort}`);
+    }
+    return null;
+  }
+  return 'This agent cannot change models mid-session.';
+}
+
+/**
+ * Change the permission mode, inside the running session where the CLI allows
+ * it (Claude Code's Shift+Tab cycle, Codex's /permissions). Otherwise, or when
+ * the mode is outside Claude's cycle, the CLI is restarted with the new flags
+ * and resumes the same conversation.
+ */
+export async function applyPermissionChange(
+  sessionId: number,
+  preset: string,
+  providerSessionId: string | null,
+  mode: ChatPermissionMode,
+): Promise<string | null> {
+  const agent = transcriptAgentFor(preset);
+  if (!agent) return 'This agent has no chat view.';
+  const inplace = await import('$lib/services/terminal-chat-inplace');
+  if (agent === 'codex') return inplace.codexSetPermissionInPlace(sessionId, mode);
+  if (agent === 'claude') {
+    const result = await inplace.claudeSetPermissionInPlace(sessionId, mode);
+    if (result !== 'not-in-cycle') return result;
+  }
+  return relaunchTerminalAgent(sessionId, preset, providerSessionId, { permission: mode });
 }
 
 /**

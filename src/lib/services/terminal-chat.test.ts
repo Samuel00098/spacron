@@ -37,8 +37,8 @@ describe('terminal chat view', () => {
   it('changes models the way each CLI accepts mid-session', () => {
     const claude = modelApplyFor('claude');
     expect(claude.kind === 'command' && claude.build('opus')).toBe('/model opus');
-    expect(modelApplyFor('codex')).toEqual({ kind: 'relaunch' });
-    expect(modelApplyFor('opencode').kind).toBe('none');
+    expect(modelApplyFor('codex')).toEqual({ kind: 'inplace' });
+    expect(modelApplyFor('opencode')).toEqual({ kind: 'inplace' });
   });
 
   it('offers Orca’s permission modes per agent with each CLI’s own flags', () => {

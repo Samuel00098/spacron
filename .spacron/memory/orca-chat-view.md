@@ -64,3 +64,12 @@ Traps that no single file explains:
 - Model and effort changes are typed into the TUI as slash commands (`typeSlashCommand`), and only
   between turns. Codex only has its own `/model` picker, so picking there switches the pane to the
   terminal.
+- Model, effort and permission changes happen **in place**, by driving the CLI's own pickers through the
+  PTY (`terminal-chat-inplace.ts`, which carries the screens and keys it was built against). Never restart
+  for a model change, because that lost the user's context. Codex's effort step must use `s` (this session
+  only): Enter or a digit **saves it as the user's default in `~/.codex/config.toml`**. A restart (with
+  resume) is only the fallback for permissions that have no in-place route (Grok, OpenCode, Claude bypass
+  outside its Shift+Tab cycle).
+- Picks live in module state (`setSessionPicks`), not component state, because the view unmounts when its tab
+  hides. Picks are cleared once the transcript reports the same value (Codex: `thread_settings_applied`;
+  Claude: `/model` and `/effort` command rows, `permissionMode`).
