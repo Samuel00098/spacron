@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import EditorTabs from './EditorTabs.tsx';
 import ImageViewer from './ImageViewer.tsx';
 import MediaViewer from './MediaViewer.tsx';
+import { isAudioPath, isVideoPath } from '$lib/stores/editor';
 import RichMarkdownEditor from './RichMarkdownEditor.tsx';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import CodeEditor from './CodeEditor.tsx';
@@ -100,5 +101,13 @@ export default function EditorPanel() {
     </div>
   );
 }
-        ) : (file.kind === 'audio' || file.kind === 'video') && file.imageSrc ? (
-          <MediaViewer kind={file.kind} src={file.imageSrc} path={file.path} mimeType={file.mimeType} size={file.size} />
+        ) : file.kind === 'audio' || file.kind === 'video' || isVideoPath(file.path) || isAudioPath(file.path) ? (
+          // Decided by the file name too, so a media tab never lands in the text
+          // editor; the viewer finds its own source when the entry has none.
+          <MediaViewer
+            kind={file.kind === 'audio' || file.kind === 'video' ? file.kind : isVideoPath(file.path) ? 'video' : 'audio'}
+            src={file.imageSrc ?? null}
+            path={file.path}
+            mimeType={file.mimeType}
+            size={file.size}
+          />

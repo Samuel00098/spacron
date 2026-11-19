@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { fileName, formatBytes } from './ImageViewer.tsx';
 import './ImageViewer.css';
 
 interface Props {
   kind: 'audio' | 'video';
-  src: string;
+  /** Stream URL; when missing, the file is allowed and streamed from disk. */
+  src: string | null;
   path: string;
   mimeType?: string | null;
   size?: number | null;
@@ -20,7 +22,18 @@ function formatDuration(seconds: number): string {
 }
 
 /** The editor's audio and video tabs: the platform player, centered. */
-export default function MediaViewer({ kind, src, path, mimeType = null, size = null }: Props) {
+export default function MediaViewer({ kind, src: givenSrc, path, mimeType = null, size = null }: Props) {
+  const [ownSrc, setOwnSrc] = useState<string | null>(null);
+  useEffect(() => {
+    setOwnSrc(null);
+    if (givenSrc) return;
+    let cancelled = false;
+    invoke('fs_allow_media', { path })
+      .then(() => { if (!cancelled) setOwnSrc(convertFileSrc(path)); })
+      .catch(() => { if (!cancelled) setOwnSrc(''); });
+    return () => { cancelled = true; };
+  }, [givenSrc, path]);
+  const src = givenSrc || ownSrc;
   const [duration, setDuration] = useState<number | null>(null);
   const [videoSize, setVideoSize] = useState<{ w: number; h: number } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -50,7 +63,7 @@ export default function MediaViewer({ kind, src, path, mimeType = null, size = n
         {size ? <span className="meta-pill">{formatBytes(size)}</span> : null}
       </div>
       <div className="media-stage">
-        {failed ? (
+        {src === null ? null : failed || !src ? (
           <div className="media-error">
             This {kind} could not be played. The format may not be supported here
             {kind === 'video' ? ' (MP4 / H.264 and WebM play best).' : ' (MP3, WAV, OGG, M4A and FLAC play best).'}
