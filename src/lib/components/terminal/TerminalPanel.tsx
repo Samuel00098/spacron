@@ -36,6 +36,7 @@ import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import { useAction } from '$lib/react/useAction';
 import { useStore } from '$lib/react/useStore';
 import './TerminalPanel.css';
+import { workingRootFor } from '$lib/stores/projectWorktrees';
 
 type CellInfo = { index: number };
 type ColumnInfo = { cells: CellInfo[] };
@@ -222,7 +223,9 @@ export default function TerminalPanel({
   shellSessionsRef.current = shellSessions;
 
   function getStartingCwd(): string | undefined {
-    return resolveStartingCwd(fileRef.current, projectRef.current?.root_path);
+    // Inside the active worktree when one is selected for this project.
+    const project = projectRef.current;
+    return resolveStartingCwd(fileRef.current, workingRootFor(project?.id, project?.root_path));
   }
 
   function clampMinimums(values: number[], minValue = 10) {

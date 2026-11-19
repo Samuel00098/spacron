@@ -153,7 +153,7 @@ static REPO_LOCKS: OnceLock<Mutex<HashMap<PathBuf, &'static Mutex<()>>>> = OnceL
 ///
 /// Poisoning is ignored deliberately: the guard protects nothing but ordering, so
 /// a panic in an unrelated command must not wedge every later git write.
-fn lock_repo_write(root: &Path) -> MutexGuard<'static, ()> {
+pub(crate) fn lock_repo_write(root: &Path) -> MutexGuard<'static, ()> {
     let registry = REPO_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let lock: &'static Mutex<()> = {
         let mut map = match registry.lock() {
@@ -1250,7 +1250,7 @@ fn apply_spacron_exclude_rules(current: &str) -> Option<String> {
 /// directory in the project's own status — and `git add -A` would try to embed
 /// it. The shared agent memory is exempted; see [`SPACRON_MEMORY_EXCEPTION`].
 /// Best-effort: a linked worktree or a repo without an exclude file is skipped.
-fn ensure_spacron_excluded(root: &std::path::Path) {
+pub(crate) fn ensure_spacron_excluded(root: &std::path::Path) {
     let exclude = root.join(".git").join("info").join("exclude");
     let Ok(current) = std::fs::read_to_string(&exclude) else {
         return; // no plain .git/info/exclude — not a standard checkout

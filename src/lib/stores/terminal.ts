@@ -58,6 +58,7 @@ import {
 } from './mcpBridge';
 import { attachTurnSignals, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
 import { readTerminalScreen } from '$lib/services/terminal-screen';
+import { getActiveWorktreePath } from '$lib/stores/projectWorktrees';
 
 export type TerminalSessionInfo = {
   id: number;
@@ -1271,7 +1272,12 @@ export async function createTerminalSession(
       return null;
     }
 
-    const resolvedCwd = cwd ?? terminalProjectRoots.get(owningProjectId);
+    // No explicit folder: start in the project's active worktree (the row the
+    // user selected in the sidebar), else the project root. Restores and agent
+    // spawns pass their own cwd and are unaffected.
+    const resolvedCwd = cwd
+      ?? (isDev ? null : getActiveWorktreePath(owningProjectId))
+      ?? terminalProjectRoots.get(owningProjectId);
  
     const env = buildTerminalColorEnv(opts?.extraEnv);
 

@@ -14,6 +14,7 @@ short enough that it says what the note is *about*, never what it says.
 - [agent-history-persistence](agent-history-persistence.md) — spacron persists agent structure not content; Orca indexer model + two viable approaches
 - [agent-background-poll-budget](agent-background-poll-budget.md) — what each running agent costs at rest, and the rules for anything that polls per agent
 - [agent-failover](agent-failover.md) — moving unfinished work off an agent that is running out of usage: the invariants it spans, and two traps
+- [project-worktrees](project-worktrees.md) — sidebar worktree rows vs agent worktrees, the sweep trap, and where the selected row applies
 - [agent-turn-detection](agent-turn-detection.md) — how a turn is judged to have ended, and why a guess may not say "finished"
 - [agent-turn-reporting](agent-turn-reporting.md) — who owns a session's watcher, and which turn ends may release the lease
 - [agent-report-status](agent-report-status.md) — the `report_status` tool and per-launch agent tokens; only a declared end may interrupt

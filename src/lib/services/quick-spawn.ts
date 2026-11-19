@@ -20,6 +20,7 @@ import { pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import { applyOrchestratorAgentName } from '$lib/services/orchestrator/terminal-lease';
 import { adoptSpawnedAgent } from '$lib/stores/orchestrator';
 import { isDeepSeekHarness, openDeepSeekHarnessPanel } from '$lib/services/deepseek-harness';
+import { workingRootFor } from '$lib/stores/projectWorktrees';
 
 export interface QuickLaunchOptions {
   /** Provider model id; null/undefined keeps the CLI's configured model. */
@@ -56,7 +57,7 @@ export async function quickSpawnAgent(command: string, options: QuickLaunchOptio
       model: options.model ?? null,
       reasoningEffort: options.reasoningEffort ?? 'default',
     });
-    const id = await spawnAgentPreset(command, project.root_path, {
+    const id = await spawnAgentPreset(command, workingRootFor(project.id, project.root_path), {
       isDev: get(layoutSnapshot).ambient === 'development',
       projectId: project.id,
       runtimeArgs: launch.runtimeArgs || undefined,

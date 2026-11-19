@@ -173,6 +173,12 @@ export interface ChatThreadWorktree {
   baseBranch: string;
   baseCommit: string;
   createdAt: number;
+  /**
+   * A project worktree (the sidebar's worktree rows) the thread joined rather
+   * than a checkout made for it alone. Other agents may be working in it, so
+   * leaving only detaches the thread — it never removes the worktree.
+   */
+  shared?: boolean;
 }
 
 /**

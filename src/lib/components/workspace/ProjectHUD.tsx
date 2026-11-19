@@ -62,6 +62,11 @@ import {
 import './ProjectHUD.css';
 import PinIcon from '$lib/components/shared/PinIcon';
 import StandaloneChatsSidebar from './StandaloneChatsSidebar';
+import ProjectWorktreeList from './ProjectWorktreeList';
+import CreateWorktreeModal from './CreateWorktreeModal';
+import { createWorktreeRequest, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
+import { worktreeForPath } from '$lib/services/project-worktrees';
+import { openAgentSpawn } from '$lib/stores/layout';
 import { showProjectChat } from '$lib/stores/chatNavigation';
 
 function getFilename(path: string): string {
@@ -264,6 +269,8 @@ export default function ProjectHUD() {
   const activeWsId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const activeProjId = useWorkspaceStore((s) => s.activeProjectId);
   const projectsMap = useWorkspaceStore((s) => s.projects);
+  const worktreeDialog = useStore(createWorktreeRequest);
+  const allWorktreeLists = useStore(worktreesByProject);
 
   const [search, setSearch] = useState('');
   const [projectSearchOpen, setProjectSearchOpen] = useState(false);
@@ -910,49 +917,69 @@ export default function ProjectHUD() {
     const isSnoozed = (row: ChatSidebarRow) => !row.thread?.archived && !row.thread?.settledAt
       && typeof row.thread?.snoozedUntil === 'number' && row.thread.snoozedUntil > nowTs;
     const isSettled = (row: ChatSidebarRow) => !row.thread?.archived && Boolean(row.thread?.settledAt);
-    const liveChatRows = chatRows.filter((row) => !row.thread?.archived && !isSettled(row) && !isSnoozed(row));
-    const workingChatRows = liveChatRows.filter((row) => row.status === 'working');
-    const idleChatRows = liveChatRows.filter((row) => row.status !== 'working');
-    const settledChatRows = chatRows.filter(isSettled);
-    const snoozedChatRows = chatRows.filter(isSnoozed);
-    const archivedChatRows = chatRows.filter((row) => row.thread?.archived);
-    const archivedOpen = openArchivedGroups.has(p.path);
-    const settledOpen = openSettledGroups.has(p.path);
-    const snoozedOpen = openSnoozedGroups.has(p.path);
-    const threadListEntries: ThreadListEntry[] = [
-      ...(workingChatRows.length > 0 ? [
-        {
-          kind: 'label' as const,
-          group: 'working' as const,
-          path: p.path,
-          open: true,
-          text: `Working (${workingChatRows.length})`,
-        } satisfies ThreadListEntry,
-        ...workingChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
-      ] : []),
-      ...idleChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
-      ...(settledChatRows.length > 0 ? [
-        {
-          kind: 'label' as const,
-          group: 'settled' as const,
-          path: p.path,
-          open: settledOpen,
-          text: settledOpen ? `Hide settled (${settledChatRows.length})` : `Settled (${settledChatRows.length})`,
-        } satisfies ThreadListEntry,
-        ...(settledOpen ? settledChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
-      ] : []),
-      ...(snoozedChatRows.length > 0 ? [
-        {
-          kind: 'label' as const,
-          group: 'snoozed' as const,
-          path: p.path,
-          open: snoozedOpen,
-          text: snoozedOpen ? `Hide snoozed (${snoozedChatRows.length})` : `Snoozed (${snoozedChatRows.length})`,
-        } satisfies ThreadListEntry,
-        ...(snoozedOpen ? snoozedChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
-      ] : []),
-      ...(archivedOpen ? archivedChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
-    ];
+    // One thread list, drawn once per worktree when the project has worktrees.
+    // `key` scopes the settled/snoozed/archived toggles to that list.
+    const buildThreadList = (rows: ChatSidebarRow[], key: string) => {
+      const liveChatRows = rows.filter((row) => !row.thread?.archived && !isSettled(row) && !isSnoozed(row));
+      const workingChatRows = liveChatRows.filter((row) => row.status === 'working');
+      const idleChatRows = liveChatRows.filter((row) => row.status !== 'working');
+      const settledChatRows = rows.filter(isSettled);
+      const snoozedChatRows = rows.filter(isSnoozed);
+      const archivedChatRows = rows.filter((row) => row.thread?.archived);
+      const archivedOpen = openArchivedGroups.has(key);
+      const settledOpen = openSettledGroups.has(key);
+      const snoozedOpen = openSnoozedGroups.has(key);
+      const threadListEntries: ThreadListEntry[] = [
+        ...(workingChatRows.length > 0 ? [
+          {
+            kind: 'label' as const,
+            group: 'working' as const,
+            path: key,
+            open: true,
+            text: `Working (${workingChatRows.length})`,
+          } satisfies ThreadListEntry,
+          ...workingChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
+        ] : []),
+        ...idleChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })),
+        ...(settledChatRows.length > 0 ? [
+          {
+            kind: 'label' as const,
+            group: 'settled' as const,
+            path: key,
+            open: settledOpen,
+            text: settledOpen ? `Hide settled (${settledChatRows.length})` : `Settled (${settledChatRows.length})`,
+          } satisfies ThreadListEntry,
+          ...(settledOpen ? settledChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
+        ] : []),
+        ...(snoozedChatRows.length > 0 ? [
+          {
+            kind: 'label' as const,
+            group: 'snoozed' as const,
+            path: key,
+            open: snoozedOpen,
+            text: snoozedOpen ? `Hide snoozed (${snoozedChatRows.length})` : `Snoozed (${snoozedChatRows.length})`,
+          } satisfies ThreadListEntry,
+          ...(snoozedOpen ? snoozedChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
+        ] : []),
+        ...(archivedOpen ? archivedChatRows.map((row): ThreadListEntry => ({ kind: 'row', row })) : []),
+      ];
+      return { key, rows, live: liveChatRows, archived: archivedChatRows, archivedOpen, entries: threadListEntries };
+    };
+    type ThreadList = ReturnType<typeof buildThreadList>;
+    // Worktree grouping: every agent, terminal and thread is listed under the
+    // worktree it works in; tools (editor, preview…) stay at the project level.
+    const projectWorktreeRows = projectId ? allWorktreeLists[projectId] ?? [] : [];
+    const groupByWorktree = projectWorktreeRows.length > 0;
+    const ownerPath = (path: string | null | undefined) =>
+      worktreeForPath(projectWorktreeRows, path)?.path ?? projectWorktreeRows[0]?.path ?? '';
+    const threadListFor = (worktreePath: string, isMain: boolean) =>
+      buildThreadList(
+        chatRows.filter((row) => ownerPath(row.thread?.worktree?.path) === worktreePath),
+        isMain ? p.path : `${p.path}::${worktreePath}`,
+      );
+    const sessionsFor = (worktreePath: string) =>
+      projectSessions.filter((session) => ownerPath(session.worktree?.path ?? session.cwd) === worktreePath);
+    const mainThreadList = buildThreadList(chatRows, p.path);
     const isPinnedProject = Boolean(p.path) && pinnedProjects.has(normalizeProjectPath(p.path));
     const hasOpenContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
     const hasContents = hasOpenContents || chatRows.length > 0 || Boolean(p.path);
@@ -1039,6 +1066,231 @@ export default function ProjectHUD() {
       );
     };
 
+    // Thread rows for one list; `emptyText` null draws nothing when it is empty.
+    const renderThreadList = (list: ThreadList, emptyText: string | null): ReactNode => (
+      <>
+        {list.rows.length === 0 ? (emptyText === null ? null : (
+        <span className="project-threads-empty">{emptyText}</span>
+      )) : (
+        <div className="project-thread-list">
+          {list.live.length === 0 && (
+            <span className="project-threads-empty">No active threads</span>
+          )}
+          {list.entries.map((entry) => {
+            if (entry.kind === 'label') {
+              return (
+                <button
+                  key={`thread-group-${entry.group}`}
+                  type="button"
+                  className={`project-threads-archived-toggle${entry.open ? ' open' : ''}`}
+                  onClick={() => {
+                    if (entry.group !== 'working') toggleThreadGroup(entry.path, entry.group);
+                  }}
+                  aria-expanded={entry.open}
+                >
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="9 6 15 12 9 18" />
+                  </svg>
+                  <span>{entry.text}</span>
+                </button>
+              );
+            }
+            const row = entry.row;
+            const isSelected = row.thread?.id === activeThreadId;
+            const terminalSession = row.session
+              ?? (row.task?.assignedSessionId != null ? sessionById.get(row.task.assignedSessionId) ?? null : null);
+            return (
+              <Fragment key={row.id}>
+              <div className={`project-thread-row-wrap${isSelected ? ' selected' : ''}${row.thread?.archived ? ' archived' : ''}`}>
+                <button
+                  type="button"
+                  className={`project-thread-row status-${row.status}${dragThreadId === row.id ? ' dragging' : ''}${dropBeforeId === row.id ? ' drop-before' : ''}`}
+                  data-thread-id={row.id}
+                  onClick={() => void openChatThread(p.workspaceId, p.path, row)}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    dragRef.current = {
+                      startX: event.clientX,
+                      startY: event.clientY,
+                      armed: false,
+                      threadId: row.id,
+                    };
+                    setDragThreadId(row.id);
+                  }}
+                  title={`${row.title} · ${row.provider} · ${row.model} · ${chatStatusLabel(row.status)}`}
+                >
+                  <span className="project-thread-copy">
+                    <span className="project-thread-title-line">
+                      <strong>{row.title || 'New conversation'}</strong>
+                      {row.thread?.pinned && (
+                        <PinIcon variant="mark" size={11} className="project-thread-pin" label="Pinned thread" />
+                      )}
+                    </span>
+                    <span className="project-thread-meta">
+                      <span className="project-thread-status" aria-hidden="true" />
+                      <span className="project-thread-provider" title={`${row.provider} · ${row.model}`}>
+                        {row.provider} · {row.model}
+                      </span>
+                      <span className="project-thread-meta-sep" aria-hidden="true">·</span>
+                      <span className="project-thread-state">{chatStatusLabel(row.status)}</span>
+                    </span>
+                  </span>
+                  {row.unreadCount > 0 && <span className="project-thread-unread" title={`${row.unreadCount} unread`} />}
+                </button>
+                {row.thread && (
+                  <div className="project-thread-actions">
+                    <button
+                      type="button"
+                      className="project-thread-action-btn"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setThreadMenuId((current) => current === row.thread?.id ? null : row.thread?.id ?? null);
+                      }}
+                      title="Thread actions"
+                      aria-label={`Actions for ${row.title}`}
+                      aria-expanded={threadMenuId === row.thread.id}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <circle cx="12" cy="5" r="2" />
+                        <circle cx="12" cy="12" r="2" />
+                        <circle cx="12" cy="19" r="2" />
+                      </svg>
+                    </button>
+                    {threadMenuId === row.thread.id && (
+                      <div className="project-thread-action-menu" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleChatThreadPinned(row.thread!.id);
+                            setThreadMenuId(null);
+                          }}
+                        >
+                          {row.thread.pinned ? 'Unpin' : 'Pin'}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setChatThreadArchived(row.thread!.id, !row.thread!.archived);
+                            setThreadMenuId(null);
+                          }}
+                        >
+                          {row.thread.archived ? 'Unarchive' : 'Archive'}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setChatThreadSettled(row.thread!.id, !row.thread!.settledAt);
+                            setThreadMenuId(null);
+                          }}
+                        >
+                          {row.thread.settledAt ? 'Un-settle' : 'Settle'}
+                        </button>
+                        {row.thread.snoozedUntil ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setChatThreadSnoozed(row.thread!.id, null);
+                              setThreadMenuId(null);
+                            }}
+                          >
+                            Wake now
+                          </button>
+                        ) : CHAT_SNOOZE_PRESETS.map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            role="menuitem"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setChatThreadSnoozed(row.thread!.id, Date.now() + preset.ms);
+                              setThreadMenuId(null);
+                            }}
+                          >
+                            Snooze · {preset.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="danger"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (window.confirm(`Delete “${row.thread?.title ?? 'this thread'}”?`)) {
+                              closeChatThread(row.thread!.id);
+                            }
+                            setThreadMenuId(null);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {terminalSession && (
+                  <button
+                    type="button"
+                    className="project-thread-terminal-btn"
+                    onClick={() => void openRoom(p.workspaceId, p.path, `agent:${terminalSession.id}`)}
+                    title="Open agent terminal"
+                    aria-label={`Open terminal for ${row.agentName}`}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="4 17 10 11 4 5" />
+                      <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              </Fragment>
+            );
+          })}
+          {list.archived.length > 0 && (
+            <button
+              type="button"
+              className={`project-threads-archived-toggle${list.archivedOpen ? ' open' : ''}`}
+              onClick={() => toggleArchivedGroup(list.key)}
+              aria-expanded={list.archivedOpen}
+            >
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+              <span>{list.archivedOpen ? 'Hide archived' : `Archived (${list.archived.length})`}</span>
+            </button>
+          )}
+        </div>
+      )}
+      </>
+    );
+
+    // One running session (agent or shell) as a sidebar row.
+    const renderSessionRow = (session: TerminalSessionInfo): ReactNode => {
+      const isAgent = isAgentSession(session);
+      const name = isAgent ? getSessionPromptTargetLabel(session, projectSessions) : session.title;
+      const task = getSessionPaneDisplayTitle(session, projectSessions);
+      // An agent is listed like the DeepSeek row: its name, then what it
+      // is. The task it is on moves to the hover text.
+      const agentType = isAgent ? getAgentDisplayName(session.agentPreset) : null;
+      const detail = agentType ?? task;
+      const state = session.isExecuting ? 'working' : 'running';
+      const hover = [name, agentType, task && task !== name ? task : null, state]
+        .filter(Boolean)
+        .join(': ');
+      return renderOpenRoomRow(
+        isAgent ? `agent:${session.id}` : 'terminal', name,
+        isAgent ? <AgentBrandMark command={session.agentPreset} name={name} /> : ROOM_GLYPHS.terminal,
+        detail !== name ? detail : null, hover, String(session.id), session.isExecuting,
+      );
+    };
+
     return (
       <div key={`${p.workspaceId}-${p.path}`} className="project-sidebar-entry">
         <div
@@ -1118,6 +1370,23 @@ export default function ProjectHUD() {
 
           {/* Action Buttons: Three Dots Menu */}
           <div className={`project-card-actions hud-menu-container${showOptionsMenu ? ' has-active-menu' : ''}`} onClick={(e) => e.stopPropagation()}>
+            {projectId && (
+              <button
+                type="button"
+                className="hud-card-action-btn"
+                onClick={() => {
+                  if (p.path && !isExpanded) toggleProjectExpanded(p.path);
+                  openCreateWorktree(projectId);
+                }}
+                title="Create worktree"
+                aria-label={`Create worktree in ${p.name}`}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+            )}
             <button
               type="button"
               className="hud-card-action-btn hud-options-trigger"
@@ -1248,7 +1517,28 @@ export default function ProjectHUD() {
         {/* Expanded Contents */}
         {isExpanded && p.path && (
           <div className="project-contents">
-            {currentInteractionMode === 'chat' && (
+            {projectId && groupByWorktree && (
+              <ProjectWorktreeList
+                projectId={projectId}
+                sessions={projectSessions}
+                threads={storedThreads}
+                newItemLabel={currentInteractionMode === 'chat' ? 'New chat thread here' : 'New agent here'}
+                onNewItem={(worktree) => {
+                  setActiveWorktree(projectId, worktree.is_main ? null : worktree.path);
+                  if (currentInteractionMode === 'chat') void openChatThread(p.workspaceId, p.path, null);
+                  else openAgentSpawn();
+                }}
+                renderChildren={(worktree) => {
+                  if (currentInteractionMode === 'chat') {
+                    const list = threadListFor(worktree.path, worktree.is_main);
+                    return list.rows.length > 0 ? renderThreadList(list, null) : null;
+                  }
+                  const rows = sessionsFor(worktree.path);
+                  return rows.length > 0 ? <>{rows.map(renderSessionRow)}</> : null;
+                }}
+              />
+            )}
+            {currentInteractionMode === 'chat' && !groupByWorktree && (
               <div className="project-contents-section project-threads-section">
               <div className="project-contents-label project-threads-label">
                 <span>Threads</span>
@@ -1265,214 +1555,16 @@ export default function ProjectHUD() {
                   </svg>
                 </button>
               </div>
-              {chatRows.length === 0 ? (
-                <span className="project-threads-empty">No threads yet</span>
-              ) : (
-                <div className="project-thread-list">
-                  {liveChatRows.length === 0 && (
-                    <span className="project-threads-empty">No active threads</span>
-                  )}
-                  {threadListEntries.map((entry) => {
-                    if (entry.kind === 'label') {
-                      return (
-                        <button
-                          key={`thread-group-${entry.group}`}
-                          type="button"
-                          className={`project-threads-archived-toggle${entry.open ? ' open' : ''}`}
-                          onClick={() => {
-                            if (entry.group !== 'working') toggleThreadGroup(entry.path, entry.group);
-                          }}
-                          aria-expanded={entry.open}
-                        >
-                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <polyline points="9 6 15 12 9 18" />
-                          </svg>
-                          <span>{entry.text}</span>
-                        </button>
-                      );
-                    }
-                    const row = entry.row;
-                    const isSelected = row.thread?.id === activeThreadId;
-                    const terminalSession = row.session
-                      ?? (row.task?.assignedSessionId != null ? sessionById.get(row.task.assignedSessionId) ?? null : null);
-                    return (
-                      <Fragment key={row.id}>
-                      <div className={`project-thread-row-wrap${isSelected ? ' selected' : ''}${row.thread?.archived ? ' archived' : ''}`}>
-                        <button
-                          type="button"
-                          className={`project-thread-row status-${row.status}${dragThreadId === row.id ? ' dragging' : ''}${dropBeforeId === row.id ? ' drop-before' : ''}`}
-                          data-thread-id={row.id}
-                          onClick={() => void openChatThread(p.workspaceId, p.path, row)}
-                          onPointerDown={(event) => {
-                            if (event.button !== 0) return;
-                            dragRef.current = {
-                              startX: event.clientX,
-                              startY: event.clientY,
-                              armed: false,
-                              threadId: row.id,
-                            };
-                            setDragThreadId(row.id);
-                          }}
-                          title={`${row.title} · ${row.provider} · ${row.model} · ${chatStatusLabel(row.status)}`}
-                        >
-                          <span className="project-thread-copy">
-                            <span className="project-thread-title-line">
-                              <strong>{row.title || 'New conversation'}</strong>
-                              {row.thread?.pinned && (
-                                <PinIcon variant="mark" size={11} className="project-thread-pin" label="Pinned thread" />
-                              )}
-                            </span>
-                            <span className="project-thread-meta">
-                              <span className="project-thread-status" aria-hidden="true" />
-                              <span className="project-thread-provider" title={`${row.provider} · ${row.model}`}>
-                                {row.provider} · {row.model}
-                              </span>
-                              <span className="project-thread-meta-sep" aria-hidden="true">·</span>
-                              <span className="project-thread-state">{chatStatusLabel(row.status)}</span>
-                            </span>
-                          </span>
-                          {row.unreadCount > 0 && <span className="project-thread-unread" title={`${row.unreadCount} unread`} />}
-                        </button>
-                        {row.thread && (
-                          <div className="project-thread-actions">
-                            <button
-                              type="button"
-                              className="project-thread-action-btn"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setThreadMenuId((current) => current === row.thread?.id ? null : row.thread?.id ?? null);
-                              }}
-                              title="Thread actions"
-                              aria-label={`Actions for ${row.title}`}
-                              aria-expanded={threadMenuId === row.thread.id}
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                <circle cx="12" cy="5" r="2" />
-                                <circle cx="12" cy="12" r="2" />
-                                <circle cx="12" cy="19" r="2" />
-                              </svg>
-                            </button>
-                            {threadMenuId === row.thread.id && (
-                              <div className="project-thread-action-menu" role="menu">
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    toggleChatThreadPinned(row.thread!.id);
-                                    setThreadMenuId(null);
-                                  }}
-                                >
-                                  {row.thread.pinned ? 'Unpin' : 'Pin'}
-                                </button>
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setChatThreadArchived(row.thread!.id, !row.thread!.archived);
-                                    setThreadMenuId(null);
-                                  }}
-                                >
-                                  {row.thread.archived ? 'Unarchive' : 'Archive'}
-                                </button>
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setChatThreadSettled(row.thread!.id, !row.thread!.settledAt);
-                                    setThreadMenuId(null);
-                                  }}
-                                >
-                                  {row.thread.settledAt ? 'Un-settle' : 'Settle'}
-                                </button>
-                                {row.thread.snoozedUntil ? (
-                                  <button
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      setChatThreadSnoozed(row.thread!.id, null);
-                                      setThreadMenuId(null);
-                                    }}
-                                  >
-                                    Wake now
-                                  </button>
-                                ) : CHAT_SNOOZE_PRESETS.map((preset) => (
-                                  <button
-                                    key={preset.label}
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      setChatThreadSnoozed(row.thread!.id, Date.now() + preset.ms);
-                                      setThreadMenuId(null);
-                                    }}
-                                  >
-                                    Snooze · {preset.label}
-                                  </button>
-                                ))}
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="danger"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    if (window.confirm(`Delete “${row.thread?.title ?? 'this thread'}”?`)) {
-                                      closeChatThread(row.thread!.id);
-                                    }
-                                    setThreadMenuId(null);
-                                  }}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        {terminalSession && (
-                          <button
-                            type="button"
-                            className="project-thread-terminal-btn"
-                            onClick={() => void openRoom(p.workspaceId, p.path, `agent:${terminalSession.id}`)}
-                            title="Open agent terminal"
-                            aria-label={`Open terminal for ${row.agentName}`}
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="4 17 10 11 4 5" />
-                              <line x1="12" y1="19" x2="20" y2="19" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      </Fragment>
-                    );
-                  })}
-                  {archivedChatRows.length > 0 && (
-                    <button
-                      type="button"
-                      className={`project-threads-archived-toggle${archivedOpen ? ' open' : ''}`}
-                      onClick={() => toggleArchivedGroup(p.path)}
-                      aria-expanded={archivedOpen}
-                    >
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <polyline points="9 6 15 12 9 18" />
-                      </svg>
-                      <span>{archivedOpen ? 'Hide archived' : `Archived (${archivedChatRows.length})`}</span>
-                    </button>
-                  )}
-                </div>
-              )}
+              {renderThreadList(mainThreadList, 'No threads yet')}
             </div>
             )}
             {/* The CLI view lists rooms and sessions only, so tasks alone must
                 not hide the empty state and leave a blank box. */}
-            {currentInteractionMode === 'cli' && projectRooms.length === 0 && projectSessions.length === 0 && (
+            {currentInteractionMode === 'cli' && !groupByWorktree && projectRooms.length === 0 && projectSessions.length === 0 && (
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
             {currentInteractionMode === 'cli' && <>
-            {(projectRooms.length > 0 || projectSessions.length > 0) && (
+            {(projectRooms.length > 0 || (!groupByWorktree && projectSessions.length > 0)) && (
               <div className="project-contents-section">
                 {/* Covers both senses: a panel that is open, and a process
                     that is actually running inside one. */}
@@ -1497,24 +1589,7 @@ export default function ProjectHUD() {
                   .map((room) => renderOpenRoomRow(
                     room, TOOL_ROW_LABELS[room] ?? room, ROOM_GLYPHS[room] ?? DEFAULT_ROOM_GLYPH,
                   ))}
-                {projectSessions.map((session) => {
-                  const isAgent = isAgentSession(session);
-                  const name = isAgent ? getSessionPromptTargetLabel(session, projectSessions) : session.title;
-                  const task = getSessionPaneDisplayTitle(session, projectSessions);
-                  // An agent is listed like the DeepSeek row: its name, then what it
-                  // is. The task it is on moves to the hover text.
-                  const agentType = isAgent ? getAgentDisplayName(session.agentPreset) : null;
-                  const detail = agentType ?? task;
-                  const state = session.isExecuting ? 'working' : 'running';
-                  const hover = [name, agentType, task && task !== name ? task : null, state]
-                    .filter(Boolean)
-                    .join(': ');
-                  return renderOpenRoomRow(
-                    isAgent ? `agent:${session.id}` : 'terminal', name,
-                    isAgent ? <AgentBrandMark command={session.agentPreset} name={name} /> : ROOM_GLYPHS.terminal,
-                    detail !== name ? detail : null, hover, String(session.id), session.isExecuting,
-                  );
-                })}
+                {!groupByWorktree && projectSessions.map(renderSessionRow)}
               </div>
             )}
 
@@ -1778,6 +1853,15 @@ export default function ProjectHUD() {
           </div>
         )}
       </div>
+      {/* Mounted only while open, so its modal focus hook never pins the
+          app-wide shortcut gate (see the modal-open-count note). */}
+      {worktreeDialog && (
+        <CreateWorktreeModal
+          key={`${worktreeDialog.projectId}:${worktreeDialog.parent ?? ''}`}
+          projectId={worktreeDialog.projectId}
+          initialParent={worktreeDialog.parent}
+        />
+      )}
     </div>
   );
 }

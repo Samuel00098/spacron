@@ -79,6 +79,15 @@ export default function ThreadWorktreeBar({ thread, projectId }: { thread: ChatT
 
   const leave = async () => {
     if (!worktree) return;
+    // A shared project worktree belongs to the sidebar, not to this thread:
+    // other agents may be working in it, so leaving only detaches the thread.
+    if (worktree.shared) {
+      setChatThreadWorktree(thread.id, null);
+      setChatThreadPullRequest(thread.id, null);
+      setError(null);
+      setNote('This thread now works in the project root. The worktree is still there for its other agents.');
+      return;
+    }
     setBusy('leaving');
     setError(null);
     setNote(null);
@@ -159,7 +168,9 @@ export default function ThreadWorktreeBar({ thread, projectId }: { thread: ChatT
             className="thread-worktree-action subtle"
             onClick={() => void leave()}
             disabled={locked}
-            title="Remove this checkout but keep its branch"
+            title={worktree.shared
+              ? 'Move this thread back to the project root. The worktree itself stays.'
+              : 'Remove this checkout but keep its branch'}
           >
             {busy === 'leaving' ? 'Leaving…' : 'Leave worktree'}
           </button>

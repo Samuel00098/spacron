@@ -536,6 +536,11 @@ fn handle_control(
                 "workspace_git_status" => git_status(&state.workspace),
                 "workspace_git_diff" => git_diff(args, &state.workspace),
                 "workspace_git_create_worktree" => git_create_worktree(args, &state.workspace),
+                "project_worktree_list" => project_worktree_list(&state.workspace),
+                "project_worktree_bases" => project_worktree_bases(&state.workspace),
+                "project_worktree_create" => project_worktree_create(args, &state.workspace),
+                "project_worktree_delete" => project_worktree_delete(args, &state.workspace),
+                "project_worktree_update" => project_worktree_update(args, &state.workspace),
                 "workspace_git_remove_worktree" => git_remove_worktree(args, &state.workspace),
                 "workspace_git_worktree_status" => git_worktree_status(args, &state.workspace),
                 "workspace_git_worktree_has_changes" => git_worktree_has_changes(args, &state.workspace),
@@ -919,6 +924,74 @@ fn in_managed_worktree_area(path: &Path, workspace: &Path) -> bool {
     };
     under(&worktree_area(workspace))
         || legacy_worktree_area(workspace).is_some_and(|area| under(&area))
+}
+
+// ── Project worktrees (the sidebar's worktree rows) ─────────────────────────
+// Same core as the desktop commands in `commands/project_worktrees.rs`; the
+// remote box has one project, its workspace root.
+
+fn str_arg(args: &Value, key: &str) -> Option<String> {
+    args.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn require_git_repo(workspace: &Path) -> Result<(), String> {
+    check_git_remote()?;
+    if workspace.join(".git").exists() {
+        Ok(())
+    } else {
+        Err("This project is not a Git repository.".to_string())
+    }
+}
+
+fn project_worktree_list(workspace: &Path) -> Result<Value, String> {
+    require_git_repo(workspace)?;
+    let list = crate::commands::project_worktrees::list_worktrees(workspace)?;
+    serde_json::to_value(list).map_err(|e| e.to_string())
+}
+
+fn project_worktree_bases(workspace: &Path) -> Result<Value, String> {
+    require_git_repo(workspace)?;
+    serde_json::to_value(crate::commands::project_worktrees::list_bases(workspace)).map_err(|e| e.to_string())
+}
+
+fn project_worktree_create(args: Value, workspace: &Path) -> Result<Value, String> {
+    require_git_repo(workspace)?;
+    let opts = crate::commands::project_worktrees::CreateOptions {
+        name: str_arg(&args, "name").unwrap_or_default(),
+        branch: str_arg(&args, "branch"),
+        base_ref: str_arg(&args, "baseRef"),
+        note: str_arg(&args, "note"),
+        parent: str_arg(&args, "parent"),
+        skip_fetch: false,
+    };
+    let created = crate::commands::project_worktrees::create_worktree(workspace, opts)?;
+    serde_json::to_value(created).map_err(|e| e.to_string())
+}
+
+fn project_worktree_delete(args: Value, workspace: &Path) -> Result<Value, String> {
+    require_git_repo(workspace)?;
+    let path = str_arg(&args, "worktreePath").ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
+    let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+    let deleted = crate::commands::project_worktrees::delete_worktree(workspace, &path, force)?;
+    serde_json::to_value(deleted).map_err(|e| e.to_string())
+}
+
+fn project_worktree_update(args: Value, workspace: &Path) -> Result<Value, String> {
+    require_git_repo(workspace)?;
+    let path = str_arg(&args, "worktreePath").ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
+    let parent = if args.get("clearParent").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Some(None)
+    } else {
+        str_arg(&args, "parent").map(Some)
+    };
+    crate::commands::project_worktrees::update_worktree_meta(
+        workspace,
+        &path,
+        str_arg(&args, "name"),
+        str_arg(&args, "note"),
+        parent,
+    )?;
+    Ok(Value::Null)
 }
 
 /// workspace_git_create_worktree: create an isolated git worktree for an agent.

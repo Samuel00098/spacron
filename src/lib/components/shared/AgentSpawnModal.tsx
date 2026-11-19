@@ -53,6 +53,7 @@ import { getAgentProviderLaunchOptions } from '$lib/services/agent-provider-cata
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import type { ChatReasoningEffort } from '$lib/types/chat';
 import './AgentSpawnModal.css';
+import { activeWorktreeByProject, workingRootFor, worktreesByProject } from '$lib/stores/projectWorktrees';
 
 export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const project = useStore(activeProject);
@@ -61,6 +62,9 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
   const $customAgents = useStore(customAgents);
   const $removedPresetAgents = useStore(removedPresetAgents);
   const $usage = useStore(usageState);
+  // The sidebar's selected worktree, where "main" placement now starts agents.
+  const $worktrees = useStore(worktreesByProject);
+  const $activeWorktrees = useStore(activeWorktreeByProject);
   const $agentUpdates = useStore(agentUpdates);
   const layout = useStore(layoutSnapshot);
   const isDev = layout.ambient === 'development';
@@ -176,6 +180,13 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
     }, SPAWN_MODAL_POLL_MS);
     return () => clearInterval(timer);
   }, []);
+
+  const selectedWorktree = useMemo(() => {
+    if (!project) return null;
+    const path = $activeWorktrees[project.id];
+    if (!path) return null;
+    return ($worktrees[project.id] ?? []).find((w) => !w.is_main && !w.missing && w.path === path) ?? null;
+  }, [project, $worktrees, $activeWorktrees]);
 
   const spawnPresets = useMemo(() => {
     void $removedPresetAgents;
@@ -378,7 +389,9 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
 
     onclose();
 
-    const cwd = project?.root_path;
+    // "Main" placement means the project's active worktree — Orca's selected
+    // workspace row — which is the project root until the user picks another.
+    const cwd = workingRootFor(project?.id, project?.root_path);
     const projectId = project?.id;
     const currentSessions = get(sessions);
     const takenNames = currentSessions
@@ -742,9 +755,13 @@ export default function AgentSpawnModal({ onclose }: { onclose: () => void }) {
                       <circle cx="6" cy="18" r="3" />
                       <path d="M18 9a9 9 0 0 1-9 9" />
                     </svg>
-                    <strong>Main repo</strong>
+                    <strong>{selectedWorktree ? selectedWorktree.name : 'Main repo'}</strong>
                   </div>
-                  <small>Edits appear in tree immediately</small>
+                  <small>
+                    {selectedWorktree
+                      ? `The selected worktree, on ${selectedWorktree.branch ?? 'a detached HEAD'}`
+                      : 'Edits appear in tree immediately'}
+                  </small>
                 </button>
 
                 <button

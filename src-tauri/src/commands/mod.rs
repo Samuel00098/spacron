@@ -49,6 +49,7 @@ pub mod onnx_runtime;
 pub mod parakeet;
 pub mod preview;
 pub mod project_state;
+pub mod project_worktrees;
 pub mod remote_deploy;
 pub mod remote_relay;
 pub mod search;

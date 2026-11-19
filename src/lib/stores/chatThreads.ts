@@ -12,6 +12,7 @@ import {
   type AiProviderId,
 } from '$lib/stores/settings';
 import { providerApiKeyExists } from '$lib/services/ai-keychain';
+import { getActiveWorktreePath, worktreesByProject } from '$lib/stores/projectWorktrees';
 import type {
   ChatCompletion,
   ChatDispatchReference,
@@ -168,6 +169,7 @@ function readThreadWorktree(value: unknown, fallbackAt: number): ChatThreadWorkt
     baseBranch: asString(value.baseBranch) || 'main',
     baseCommit: asString(value.baseCommit) || '',
     createdAt: asNumber(value.createdAt) ?? fallbackAt,
+    ...(value.shared === true ? { shared: true } : {}),
   };
 }
 
@@ -887,6 +889,12 @@ export function createChatThread(
     unreadCount: 0,
     draft: '',
   };
+  // A new top-level thread starts in the project's selected worktree, like a
+  // new agent does. Sub-agent threads keep their own placement.
+  if (!thread.standalone && !thread.parentThreadId) {
+    const joined = sharedWorktreeFor(projectId, now);
+    if (joined) thread.worktree = joined;
+  }
   chatThreadState.update((state) => ({
     ...state,
     threadsByProject: {
@@ -900,6 +908,21 @@ export function createChatThread(
     ),
   }));
   return thread;
+}
+
+/** The project's selected worktree as a thread checkout, or null for the root. */
+function sharedWorktreeFor(projectId: string, now: number): ChatThreadWorktree | null {
+  const path = getActiveWorktreePath(projectId);
+  if (!path) return null;
+  const row = (get(worktreesByProject)[projectId] ?? []).find((w) => w.path === path);
+  return {
+    path,
+    branch: row?.branch || row?.name || path.split(/[\\/]/).pop() || 'worktree',
+    baseBranch: row?.base_ref || 'main',
+    baseCommit: row?.head || '',
+    createdAt: now,
+    shared: true,
+  };
 }
 
 export function createSubagentChatThread(
