@@ -45,6 +45,8 @@ import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { getSessionVisuals, requestTerminalInput, terminalInputRequest } from '$lib/stores/terminal';
 import { ChatVisual, splitReply } from './ChatVisual';
+import PromptCard from './PromptCard';
+import { answerScreenPrompt, dismissScreenPrompt, promptKey, readScreenPrompt, type ScreenPrompt } from '$lib/services/terminal-prompt';
 import { get } from '$lib/stores/storeCompat';
 import './TerminalChatView.css';
 
@@ -157,6 +159,10 @@ export default function TerminalChatView({
   const [showKeys, setShowKeys] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null);
+  // A question or approval the CLI is waiting on, read from its screen.
+  const [screenPrompt, setScreenPrompt] = useState<ScreenPrompt | null>(null);
+  const [answering, setAnswering] = useState<number | null>(null);
+  const promptKeyRef = useRef<string | null>(null);
   const attachmentIdRef = useRef(0);
   const picks = useSessionPicks(sessionId);
   const [relaunching, setRelaunching] = useState(false);
@@ -259,6 +265,39 @@ export default function TerminalChatView({
     if (picks.permission && reported.permission === picks.permission) confirmed.push('permission');
     if (confirmed.length) clearSessionPicks(sessionId, confirmed);
   }, [reported.model, reported.effort, reported.permission, picks.model, picks.effort, picks.permission, sessionId]);
+
+  // Watch the terminal for a question or approval prompt while the chat is open.
+  useEffect(() => {
+    if (!isRunning) {
+      setScreenPrompt(null);
+      return undefined;
+    }
+    const check = () => {
+      const prompt = readScreenPrompt(sessionId);
+      const key = prompt ? promptKey(prompt) : null;
+      if (key !== promptKeyRef.current) {
+        promptKeyRef.current = key;
+        setScreenPrompt(prompt);
+        setAnswering(null);
+      }
+    };
+    check();
+    const timer = setInterval(check, 450);
+    return () => clearInterval(timer);
+  }, [sessionId, isRunning]);
+
+  async function answerPrompt(index: number, text?: string) {
+    if (answering !== null) return;
+    setAnswering(index);
+    const problem = await answerScreenPrompt(sessionId, index, text);
+    revisionRef.current = null;
+    if (problem) {
+      setError(problem);
+      setAnswering(null);
+    }
+    // Success: the prompt leaves the screen and the watcher clears the card.
+    setTimeout(() => setAnswering((current) => (current === index ? null : current)), 4000);
+  }
 
   // The pane closed or the agent changed: release the transcript binding.
   useEffect(() => () => bindTranscript(sessionId, null), [sessionId]);
@@ -492,6 +531,14 @@ export default function TerminalChatView({
   }
 
   const visualsSpot = getSessionVisuals(sessionId);
+
+  // A visual's "send to agent" button: the request lands in the composer for
+  // the user to read and send. Never sent on its own: the page is the agent's
+  // own output, and auto-sending it could loop.
+  function composeFromVisual(text: string) {
+    setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, '')}\n${text}` : text));
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
   const folderName = root ? root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? null : null;
   const empty = loaded && items.length === 0 && pending.length === 0;
   const canSend = (Boolean(draft.trim()) || attachments.length > 0) && !sending && isRunning;
@@ -522,7 +569,7 @@ export default function TerminalChatView({
               return (
                 <div key={block.item.id} className="terminal-chat-agent">
                   {splitReply(block.item.text).map((segment, index) => (segment.type === 'visual'
-                    ? <ChatVisual key={`v-${index}`} visual={segment.visual} spot={visualsSpot} />
+                    ? <ChatVisual key={`v-${index}`} visual={segment.visual} spot={visualsSpot} onCompose={composeFromVisual} />
                     : <Markdown key={`t-${index}`} text={segment.text} onOpenImage={openViewer} />))}
                 </div>
               );
@@ -540,7 +587,7 @@ export default function TerminalChatView({
               <span>Applying the new settings in {agentLabel}</span>
             </div>
           )}
-          {busy && !relaunching && (
+          {busy && !relaunching && !screenPrompt && (
             <div className="terminal-chat-working">
               <Dots />
               <span>Working</span>
@@ -550,6 +597,16 @@ export default function TerminalChatView({
       </div>
 
       <div className="terminal-chat-dock">
+        {screenPrompt && (
+          <PromptCard
+            prompt={screenPrompt}
+            agentLabel={agentLabel}
+            answering={answering}
+            onAnswer={(index, text) => void answerPrompt(index, text)}
+            onDismiss={() => dismissScreenPrompt(sessionId)}
+            onOpenTerminal={() => setTerminalChatView(sessionId, false)}
+          />
+        )}
         {error && (
           <div className="terminal-chat-error" role="alert">
             <span>{error}</span>

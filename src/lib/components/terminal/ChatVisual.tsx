@@ -117,11 +117,13 @@ function themeTokens(): Record<string, string> {
 const MIN_HEIGHT = 60;
 const MAX_INLINE_HEIGHT = 900;
 
-function VisualFrame({ src, title, height, onHeight, className }: {
+function VisualFrame({ src, title, height, onHeight, onCompose, className }: {
   src: string;
   title: string;
   height: number | null;
   onHeight?: (h: number) => void;
+  /** The page's `window.spacron.compose(text)`: a request handed back to the chat composer. */
+  onCompose?: (text: string) => void;
   className: string;
 }) {
   const channel = useMemo(() => crypto.randomUUID(), []);
@@ -129,15 +131,18 @@ function VisualFrame({ src, title, height, onHeight, className }: {
   const theme = useMemo(() => encodeURIComponent(JSON.stringify(themeTokens())), []);
 
   useEffect(() => {
-    if (!onHeight) return undefined;
     const onMessage = (event: MessageEvent) => {
-      const data = event.data as { spacronVisual?: string; height?: number } | null;
+      const data = event.data as { spacronVisual?: string; height?: number; action?: string; text?: string } | null;
       if (!data || data.spacronVisual !== channel || event.source !== frameRef.current?.contentWindow) return;
-      if (typeof data.height === 'number' && Number.isFinite(data.height)) onHeight(data.height);
+      if (data.action === 'compose') {
+        if (typeof data.text === 'string' && data.text.trim()) onCompose?.(data.text.slice(0, 4000));
+        return;
+      }
+      if (onHeight && typeof data.height === 'number' && Number.isFinite(data.height)) onHeight(data.height);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [channel, onHeight]);
+  }, [channel, onHeight, onCompose]);
 
   return (
     <iframe
@@ -155,7 +160,11 @@ function VisualFrame({ src, title, height, onHeight, className }: {
 }
 
 /** One visual in a reply: a card with the live page, sized to its content, with a full-size view. */
-export function ChatVisual({ visual, spot }: { visual: VisualDirective; spot: ChatVisualsSpot | null }) {
+export function ChatVisual({ visual, spot, onCompose }: {
+  visual: VisualDirective;
+  spot: ChatVisualsSpot | null;
+  onCompose?: (text: string) => void;
+}) {
   const [height, setHeight] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const title = visual.title ?? visual.file;
@@ -202,6 +211,7 @@ export function ChatVisual({ visual, spot }: { visual: VisualDirective; spot: Ch
         src={src}
         title={title}
         className="chat-visual-frame"
+        onCompose={onCompose}
         height={height}
         onHeight={(h) => setHeight(Math.min(MAX_INLINE_HEIGHT, Math.max(MIN_HEIGHT, h)))}
       />
@@ -214,7 +224,16 @@ export function ChatVisual({ visual, spot }: { visual: VisualDirective; spot: Ch
                 <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2 2 10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
               </button>
             </div>
-            <VisualFrame src={src} title={title} className="chat-visual-frame full" height={null} />
+            <VisualFrame
+              src={src}
+              title={title}
+              className="chat-visual-frame full"
+              height={null}
+              onCompose={(text) => {
+                onCompose?.(text);
+                setExpanded(false);
+              }}
+            />
           </div>
         </div>,
         document.body,

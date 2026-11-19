@@ -78,3 +78,5 @@ Traps that no single file explains:
   document inherits the app CSP (`script-src 'self'`), so the page's scripts never run. The folder is per
   spawn (`$SPACRON_CHAT_VISUALS_DIR`, set in `spawnAgentPreset`). Agents started by typing in a shell, or
   restored after a restart, have no folder, and their visuals show a "can't be shown" card.
+- **Ask cards** (`services/terminal-prompt.ts`, `PromptCard`): questions and approvals are read from the TUI's screen (footer hint + numbered rows with a highlight marker) and answered with arrows and Enter. A "Type something." row is answered by typing ON that row, then Enter. Pressing Enter on it while empty **declines the whole question** (verified on Claude Code 2.1). Multi-select checkbox prompts fall back to the terminal.
+- Visuals talk back only through `window.spacron.compose(text)`, which fills the composer and **never sends**: the page is agent output, and auto-sending it could loop.

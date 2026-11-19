@@ -75,8 +75,9 @@ const SHELL_HEAD: &str = r#"<meta charset="utf-8"><meta name="viewport" content=
 var channel=new URLSearchParams(location.search).get('c')||'';
 function applyTheme(){try{var t=JSON.parse(decodeURIComponent(location.hash.slice(1)||'%7B%7D'));var r=document.documentElement;for(var k in t){if(/^--[a-z0-9-]+$/.test(k))r.style.setProperty(k,String(t[k]).replace(/[;{}<>]/g,''))}if(t['color-scheme'])r.style.colorScheme=t['color-scheme']}catch(e){}}
 applyTheme();window.addEventListener('hashchange',applyTheme);
-var last=0;function report(){var h=Math.ceil(Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0));if(Math.abs(h-last)>1){last=h;parent.postMessage({spacronVisual:channel,height:h},'*')}}
-window.addEventListener('load',report);new ResizeObserver(report).observe(document.documentElement);setInterval(report,1000);
+window.spacron={compose:function(t){parent.postMessage({spacronVisual:channel,action:'compose',text:String(t==null?'':t).slice(0,4000)},'*')}};
+var last=0;function report(){var b=document.body;if(!b)return;var h=Math.ceil(b.getBoundingClientRect().height+parseFloat(getComputedStyle(b).marginTop||0)+parseFloat(getComputedStyle(b).marginBottom||0));if(Math.abs(h-last)>1){last=h;parent.postMessage({spacronVisual:channel,height:h},'*')}}
+var ro=new ResizeObserver(report);ro.observe(document.documentElement);document.addEventListener('DOMContentLoaded',function(){ro.observe(document.body);report()});window.addEventListener('load',report);setInterval(report,1000);
 })();</script>"#;
 
 /// Put the shell right after `<head>` (or first, for a fragment) so it applies before the page's own markup.
