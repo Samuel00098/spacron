@@ -674,10 +674,6 @@ fn date_prefix(iso: &str) -> Option<String> {
 /// (input, output, cache read, cache write).
 type Price = (f64, f64, f64, f64);
 
-/// The long-context tier kicks in above this many input tokens.
-const LONG_CONTEXT_THRESHOLD: u64 = 200_000;
-const LONG_CONTEXT_PRICE: Price = (6.0, 22.5, 0.6, 7.5);
-
 /// Hardcoded $/MTok table, mirroring the prices the provider publishes at
 /// release time. This is an *estimate*, not a bill — see rule 3 in the module
 /// docs. Unknown models cost `None` and surface as `hasPartialCost`.
@@ -748,21 +744,219 @@ fn normalize_model_for_pricing(model: &str) -> Option<&'static str> {
     }
 }
 
-/// The $/MTok price tuple a model bills at, or `None` when unpriced.
-fn model_price(model: &str, input: u64) -> Option<Price> {
-    let key = normalize_model_for_pricing(model)?;
-    let price = MODEL_PRICING.iter().find(|(k, _)| *k == key).unwrap().1;
-    Some(if input > LONG_CONTEXT_THRESHOLD { LONG_CONTEXT_PRICE } else { price })
+// ---- Live rates (LiteLLM) --------------------------------------------------
+//
+// Costs are estimated the way T3 Code does: against LiteLLM's public
+// `model_prices_and_context_window.json`, the community-maintained list of
+// per-token API prices for every major provider. It is fetched at most once a
+// day (a plain GET of a public file; nothing about the user is sent), cached in
+// `usage-stats/model-rates.json` so offline launches still price, and the
+// hardcoded table above remains the fallback for models it lacks.
+//
+// Long-context tiers are deliberately not applied: they are per *request* (a
+// prompt over 200K tokens), and the ledger only keeps per-day totals. The old
+// code applied them to a whole range's summed input, which priced almost every
+// busy model at the long-context rate.
+
+const LITELLM_RATES_URL: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const LITELLM_RATES_API_URL: &str =
+    "https://api.github.com/repos/BerriAI/litellm/contents/model_prices_and_context_window.json?ref=main";
+const RATES_TTL_MS: i64 = 86_400_000;
+const RATES_RETRY_MS: i64 = 60_000;
+
+struct RateTable {
+    fetched_at_ms: i64,
+    rates: HashMap<String, Price>,
+}
+
+static LIVE_RATES: Mutex<Option<RateTable>> = Mutex::new(None);
+static RATES_LAST_FAILURE_MS: Mutex<i64> = Mutex::new(0);
+
+/// Providers whose own listing wins when two entries share a bare model name.
+const FIRST_PARTY_PROVIDERS: &[&str] = &["anthropic", "deepseek", "gemini", "meta", "mistral", "openai", "xai"];
+/// Names that are a family, not a model: pricing them would be a guess.
+const UNPRICEABLE_MODELS: &[&str] = &["<synthetic>", "synthetic", "opus", "sonnet", "haiku", "fable", "unknown"];
+
+/// LiteLLM's document to `$/MTok` per lowercased model key, plus a bare-name
+/// alias (`xai/grok-4` to `grok-4`) where that does not clash, first-party
+/// listings first. Entries without both an input and an output rate are
+/// dropped rather than priced low.
+fn parse_rate_table(document: &Value) -> HashMap<String, Price> {
+    let mut table: HashMap<String, Price> = HashMap::new();
+    let Some(entries) = document.as_object() else { return table };
+    for (name, entry) in entries {
+        let num = |k: &str| entry[k].as_f64().filter(|v| v.is_finite());
+        let (Some(input), Some(output)) = (num("input_cost_per_token"), num("output_cost_per_token")) else {
+            continue;
+        };
+        let cache_read = num("cache_read_input_token_cost").unwrap_or(input);
+        let cache_write = num("cache_creation_input_token_cost").unwrap_or(input);
+        let key = name.trim().to_lowercase();
+        if !key.is_empty() {
+            table.insert(key, (input * 1e6, output * 1e6, cache_read * 1e6, cache_write * 1e6));
+        }
+    }
+    let mut aliases: Vec<(String, Price, bool)> = Vec::new();
+    for (key, price) in &table {
+        let (alias, first_party) = match key.split_once('/') {
+            Some((provider, _)) => (
+                key.rsplit('/').next().unwrap_or(key).to_string(),
+                FIRST_PARTY_PROVIDERS.contains(&provider),
+            ),
+            None => (key.strip_prefix("anthropic.").unwrap_or(key).to_string(), false),
+        };
+        if !alias.is_empty() && alias != *key && !table.contains_key(&alias) {
+            aliases.push((alias, *price, first_party));
+        }
+    }
+    // First-party first, then by key, so a refresh never reshuffles prices.
+    aliases.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    for (alias, price, _) in aliases {
+        table.entry(alias).or_insert(price);
+    }
+    table
+}
+
+fn rates_cache_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("usage-stats").join("model-rates.json")
+}
+
+fn install_rates(fetched_at_ms: i64, document: &Value) -> bool {
+    let rates = parse_rate_table(document);
+    if rates.is_empty() {
+        return false;
+    }
+    *LIVE_RATES.lock().unwrap() = Some(RateTable { fetched_at_ms, rates });
+    true
+}
+
+async fn fetch_rate_document() -> Option<Value> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("spacron-usage-stats")
+        .build()
+        .ok()?;
+    for (url, accept) in [
+        (LITELLM_RATES_URL, "application/json"),
+        (LITELLM_RATES_API_URL, "application/vnd.github.raw+json"),
+    ] {
+        let Ok(response) = client.get(url).header("Accept", accept).send().await else { continue };
+        if !response.status().is_success() {
+            continue;
+        }
+        if let Ok(document) = response.json::<Value>().await {
+            if !parse_rate_table(&document).is_empty() {
+                return Some(document);
+            }
+        }
+    }
+    None
+}
+
+/// Make sure live rates are loaded: from memory, else the disk cache, and
+/// re-fetched when a day old. Only the very first launch without any table
+/// waits on the network; a stale table is refreshed in the background.
+async fn ensure_model_rates(config_dir: &Path) {
+    let now = now_ms();
+    let in_memory = LIVE_RATES.lock().unwrap().as_ref().map(|t| t.fetched_at_ms);
+    let loaded_at = match in_memory {
+        Some(at) => Some(at),
+        None => fs::read_to_string(rates_cache_path(config_dir))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|cached| {
+                let at = cached["fetchedAtMs"].as_i64()?;
+                install_rates(at, &cached["document"]).then_some(at)
+            }),
+    };
+    if loaded_at.is_some_and(|at| now - at < RATES_TTL_MS) {
+        return;
+    }
+    if now - *RATES_LAST_FAILURE_MS.lock().unwrap() < RATES_RETRY_MS {
+        return;
+    }
+    let config_dir = config_dir.to_path_buf();
+    let refresh = async move {
+        match fetch_rate_document().await {
+            Some(document) => {
+                let at = now_ms();
+                if install_rates(at, &document) {
+                    let path = rates_cache_path(&config_dir);
+                    if let Some(parent) = path.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let body = serde_json::json!({ "fetchedAtMs": at, "document": document });
+                    let _ = fs::write(path, body.to_string());
+                }
+            }
+            None => *RATES_LAST_FAILURE_MS.lock().unwrap() = now_ms(),
+        }
+    };
+    if loaded_at.is_some() {
+        tauri::async_runtime::spawn(refresh);
+    } else {
+        refresh.await;
+    }
+}
+
+/// Antigravity reports effort and tier variants (`gemini-3.8-flash-high`);
+/// they bill as the base model.
+fn strip_variant_suffix(model: &str) -> Option<&str> {
+    ["-extra-low", "-low", "-medium", "-high", "-tiered", "-thinking", "-agent", "-control"]
+        .iter()
+        .find_map(|suffix| model.strip_suffix(suffix))
+}
+
+/// The $/MTok a model bills at, or `None` when nothing prices it: the live
+/// table (exact, bare name, dashed spelling, variant-stripped), then the
+/// built-in family table, then the live table with trailing version segments
+/// dropped.
+fn rate_for(model: &str) -> Option<Price> {
+    let lower = model.trim().to_lowercase();
+    let key = lower.split('[').next().unwrap_or(&lower).to_string();
+    let bare = key.rsplit('/').next().unwrap_or(&key).to_string();
+    if bare.is_empty() || UNPRICEABLE_MODELS.contains(&bare.as_str()) {
+        return None;
+    }
+    let live = LIVE_RATES.lock().unwrap();
+    if let Some(table) = live.as_ref().map(|t| &t.rates) {
+        let mut candidates = vec![key.clone(), bare.clone(), bare.replace('.', "-")];
+        if let Some(base) = strip_variant_suffix(&bare) {
+            candidates.push(base.to_string());
+        }
+        for candidate in &candidates {
+            if let Some(price) = table.get(candidate) {
+                return Some(*price);
+            }
+        }
+    }
+    if let Some(name) = normalize_model_for_pricing(model) {
+        return MODEL_PRICING.iter().find(|(k, _)| *k == name).map(|(_, p)| *p);
+    }
+    let table = live.as_ref().map(|t| &t.rates)?;
+    let mut candidate = bare.as_str();
+    while let Some((rest, last)) = candidate.rsplit_once('-') {
+        if !last.chars().all(|c| c.is_ascii_digit()) {
+            break;
+        }
+        if let Some(price) = table.get(rest) {
+            return Some(*price);
+        }
+        candidate = rest;
+    }
+    None
 }
 
 /// USD saved by reading `cache_read` tokens from cache instead of paying the
 /// full input price for them, or `None` when the model is unpriced.
-fn cache_savings(model: &str, input: u64, cache_read: u64) -> Option<f64> {
-    let (in_p, _, cr_p, _) = model_price(model, input)?;
-    Some(cache_read as f64 * (in_p - cr_p) / 1_000_000.0)
+fn cache_savings(model: &str, cache_read: u64) -> Option<f64> {
+    let (in_p, _, cr_p, _) = rate_for(model)?;
+    Some(cache_read as f64 * (in_p - cr_p).max(0.0) / 1_000_000.0)
 }
 
 /// Estimated USD for a model's token totals, or `None` when unpriced.
+/// Unrounded: callers sum several of these and round once.
 fn estimated_cost(
     model: &str,
     input: u64,
@@ -770,19 +964,24 @@ fn estimated_cost(
     cache_read: u64,
     cache_write: u64,
 ) -> Option<f64> {
-    let key = normalize_model_for_pricing(model)?;
-    let price = MODEL_PRICING.iter().find(|(k, _)| *k == key).unwrap().1;
-    let (in_p, out_p, cr_p, cw_p) = if input > LONG_CONTEXT_THRESHOLD {
-        LONG_CONTEXT_PRICE
-    } else {
-        price
-    };
-    let cost = (input as f64 * in_p
-        + output as f64 * out_p
-        + cache_read as f64 * cr_p
-        + cache_write as f64 * cw_p)
-        / 1_000_000.0;
-    Some((cost * 100.0).round() / 100.0)
+    let (in_p, out_p, cr_p, cw_p) = rate_for(model)?;
+    Some(
+        (input as f64 * in_p + output as f64 * out_p + cache_read as f64 * cr_p + cache_write as f64 * cw_p)
+            / 1_000_000.0,
+    )
+}
+
+/// A model group's cost: what the agent itself billed when it reported that
+/// (preferred, as in T3 Code), else the list-price estimate.
+fn group_cost(model: &str, totals: (u64, u64, u64, u64), reported: f64) -> Option<f64> {
+    if reported > 0.0 {
+        return Some(reported);
+    }
+    estimated_cost(model, totals.0, totals.1, totals.2, totals.3)
+}
+
+fn round_cents(usd: f64) -> f64 {
+    (usd * 100.0).round() / 100.0
 }
 
 // ---------------------------------------------------------------------------
@@ -817,6 +1016,7 @@ struct DayBucket {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
+    reported_cost_usd: f64,
 }
 
 /// File-level metadata captured while parsing (not per-turn).
@@ -840,6 +1040,9 @@ struct ParsedTurn {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
+    /// What the agent itself billed for the turn, when its log says (Grok).
+    /// Preferred over a list-price estimate, as T3 Code does.
+    reported_cost_usd: Option<f64>,
 }
 
 /// The dedupe identity of one assistant message, matching Orca's ordering:
@@ -968,6 +1171,7 @@ fn parse_session_turns(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
                     output_tokens: reading.1,
                     cache_read_tokens: reading.2,
                     cache_write_tokens: reading.3,
+                    reported_cost_usd: None,
                 });
             }
             _ => {}
@@ -1020,6 +1224,7 @@ fn aggregate_turns(turns: &[ParsedTurn]) -> ParsedFile {
         bucket.output_tokens = bucket.output_tokens.saturating_add(turn.output_tokens);
         bucket.cache_read_tokens = bucket.cache_read_tokens.saturating_add(turn.cache_read_tokens);
         bucket.cache_write_tokens = bucket.cache_write_tokens.saturating_add(turn.cache_write_tokens);
+        bucket.reported_cost_usd += turn.reported_cost_usd.unwrap_or(0.0);
     }
     out.model = model_tokens
         .iter()
@@ -1111,6 +1316,8 @@ struct FpDay {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
+    #[serde(default)]
+    reported_cost_usd: f64,
 }
 
 /// Per-file fingerprint: the incremental bookkeeping. `mtime`+`size` decide
@@ -1162,6 +1369,10 @@ struct DayRow {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
+    /// Sum of the agent's own billed cost for these turns (Grok); 0 when the
+    /// log reports none. See `ParsedTurn::reported_cost_usd`.
+    #[serde(default)]
+    reported_cost_usd: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1189,7 +1400,7 @@ struct StoreFile {
 /// worktree twice under two spellings. The rebuild re-reads every provider,
 /// which on a heavy machine is a ~2 minute first scan — the pane shows its
 /// scanning state throughout, and `enabled` survives it.
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 fn enabled_default() -> bool {
     true
@@ -1463,6 +1674,7 @@ fn scan_claude(store: &mut StoreFile, roots: &[PathBuf]) -> (usize, usize) {
                         output_tokens: bucket.output_tokens,
                         cache_read_tokens: bucket.cache_read_tokens,
                         cache_write_tokens: bucket.cache_write_tokens,
+                        reported_cost_usd: bucket.reported_cost_usd,
                     })
                     .collect(),
             },
@@ -1565,6 +1777,7 @@ where
                 bucket.cache_read_tokens,
                 bucket.cache_write_tokens,
             );
+            add_reported_cost(store, provider, day, model, &label, managed, bucket.reported_cost_usd);
         }
 
         store.files.insert(
@@ -1599,6 +1812,7 @@ where
                         output_tokens: bucket.output_tokens,
                         cache_read_tokens: bucket.cache_read_tokens,
                         cache_write_tokens: bucket.cache_write_tokens,
+                        reported_cost_usd: bucket.reported_cost_usd,
                     })
                     .collect(),
             },
@@ -1753,6 +1967,7 @@ fn parse_codex_session(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
                     output_tokens: d_out,
                     cache_read_tokens: d_cached,
                     cache_write_tokens: 0,
+                    reported_cost_usd: None,
                 });
             }
             _ => {}
@@ -1869,6 +2084,7 @@ fn parse_opencode_session(dir: &Path) -> (FileMeta, Vec<ParsedTurn>) {
             output_tokens: output,
             cache_read_tokens: cache_read,
             cache_write_tokens: cache_write,
+            reported_cost_usd: None,
         });
     }
     (meta, turns)
@@ -2034,6 +2250,7 @@ fn parse_session_jsonl(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
                     output_tokens: output,
                     cache_read_tokens: cache_read,
                     cache_write_tokens: cache_write,
+                    reported_cost_usd: None,
                 });
             }
             _ => {}
@@ -2144,6 +2361,7 @@ fn parse_aider_log(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
             output_tokens: output,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            reported_cost_usd: None,
         });
     }
     (meta, turns)
@@ -2839,6 +3057,7 @@ mod antigravity_pb {
                 output_tokens: c.output,
                 cache_read_tokens: c.cached,
                 cache_write_tokens: c.cache_write,
+                reported_cost_usd: None,
             })
             .collect()
     }
@@ -2873,6 +3092,7 @@ fn parse_antigravity_db_json(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
             output_tokens: usage.output,
             cache_read_tokens: usage.cache_read,
             cache_write_tokens: usage.cache_write,
+            reported_cost_usd: None,
         });
     }
     (meta, turns)
@@ -2991,10 +3211,11 @@ fn grok_turns(row: &Value, fallback_session: &str) -> Vec<ParsedTurn> {
             output_tokens: output,
             cache_read_tokens: cached,
             cache_write_tokens: created,
+            reported_cost_usd: grok_ticks_to_usd(&totals["costUsdTicks"]),
         })
     };
 
-    let per_model: Vec<ParsedTurn> = usage["modelUsage"]
+    let mut per_model: Vec<ParsedTurn> = usage["modelUsage"]
         .as_object()
         .map(|models| {
             models
@@ -3005,10 +3226,27 @@ fn grok_turns(row: &Value, fallback_session: &str) -> Vec<ParsedTurn> {
         })
         .unwrap_or_default();
     if per_model.is_empty() {
-        make("grok", usage).into_iter().collect()
-    } else {
-        per_model
+        return make("grok", usage).into_iter().collect();
     }
+    // A model without its own cost gets the turn's unclaimed cost, split by
+    // tokens — the same apportioning T3 Code does.
+    if let Some(top) = grok_ticks_to_usd(&usage["costUsdTicks"]) {
+        let claimed: f64 = per_model.iter().filter_map(|t| t.reported_cost_usd).sum();
+        let remaining = (top - claimed).max(0.0);
+        let tokens = |t: &ParsedTurn| (t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_write_tokens) as f64;
+        let unpriced: f64 = per_model.iter().filter(|t| t.reported_cost_usd.is_none()).map(tokens).sum();
+        if unpriced > 0.0 {
+            for turn in per_model.iter_mut().filter(|t| t.reported_cost_usd.is_none()) {
+                turn.reported_cost_usd = Some(remaining * tokens(turn) / unpriced);
+            }
+        }
+    }
+    per_model
+}
+
+/// Grok bills in ticks: 10^10 per US dollar.
+fn grok_ticks_to_usd(ticks: &Value) -> Option<f64> {
+    ticks.as_f64().filter(|t| t.is_finite() && *t >= 0.0).map(|t| t / 1e10)
 }
 
 fn scan_grok(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) -> (usize, usize) {
@@ -3435,6 +3673,7 @@ fn subtract_file(store: &mut StoreFile, prev: &FileFingerprint) {
             row.output_tokens = row.output_tokens.saturating_sub(fp_day.output_tokens);
             row.cache_read_tokens = row.cache_read_tokens.saturating_sub(fp_day.cache_read_tokens);
             row.cache_write_tokens = row.cache_write_tokens.saturating_sub(fp_day.cache_write_tokens);
+            row.reported_cost_usd = (row.reported_cost_usd - fp_day.reported_cost_usd).max(0.0);
         }
     }
     store.days.retain(|r| r.turns > 0);
@@ -3485,7 +3724,28 @@ fn upsert_day(
         output_tokens: output,
         cache_read_tokens: cache_read,
         cache_write_tokens: cache_write,
+        reported_cost_usd: 0.0,
     });
+}
+
+/// Add a file's reported cost to the ledger row `upsert_day` just wrote.
+fn add_reported_cost(
+    store: &mut StoreFile,
+    provider: &str,
+    day: &str,
+    model: &str,
+    project_key: &str,
+    managed: bool,
+    cost: f64,
+) {
+    if cost <= 0.0 {
+        return;
+    }
+    if let Some(row) = store.days.iter_mut().find(|r| {
+        r.provider == provider && r.day == day && r.model == model && r.project_key == project_key && r.managed == managed
+    }) {
+        row.reported_cost_usd += cost;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3512,11 +3772,33 @@ fn filter_rows<'a>(
         .collect()
 }
 
+/// Sessions with at least one turn in the range, each counted once.
+///
+/// The ledger cannot answer this: every (day, model) row of a file carries
+/// that file's whole session count, so summing rows counted a conversation
+/// once per model per day it touched. The per-file fingerprints can — a file
+/// is one session log (Claude forks aside, which its `sessions` field already
+/// accounts for).
+fn count_sessions(store: &StoreFile, provider: &str, scope: &str, range: &str) -> u64 {
+    let cutoff = range_days(range)
+        .map(|days| utc_date_str(now_ms() / 1000 - (days.saturating_sub(1) * 86_400) as i64))
+        .unwrap_or_else(|| "0000-01-01".to_string());
+    store
+        .files
+        .values()
+        .filter(|f| provider == PROVIDER_ALL || f.provider == provider)
+        .filter(|f| scope != SCOPE_SPACRON || f.managed)
+        .filter(|f| f.days.iter().any(|d| d.turns > 0 && d.day >= cutoff))
+        .map(|f| f.sessions.max(1))
+        .sum()
+}
+
 /// Sum the ledger into a Summary. Cost is computed per model over the filtered
 /// rows so the long-context tier applies to real totals.
 fn build_summary(rows: &[&DayRow]) -> Summary {
     let mut summary = Summary::default();
     let mut per_model: HashMap<&str, (u64, u64, u64, u64)> = HashMap::new();
+    let mut reported: HashMap<&str, f64> = HashMap::new();
     let mut per_project: HashMap<&str, u64> = HashMap::new();
 
     for row in rows {
@@ -3533,6 +3815,7 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
         m.1 += row.output_tokens;
         m.2 += row.cache_read_tokens;
         m.3 += row.cache_write_tokens;
+        *reported.entry(&row.model).or_insert(0.0) += row.reported_cost_usd;
     }
 
     summary.top_model = per_model
@@ -3548,24 +3831,22 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
     let mut total_savings = 0.0;
     let mut unpriced = false;
     let mut any_priced = false;
-    for (model, (input, output, cr, cw)) in &per_model {
-        match estimated_cost(model, *input, *output, *cr, *cw) {
+    for (model, totals) in &per_model {
+        match group_cost(model, *totals, reported.get(model).copied().unwrap_or(0.0)) {
             Some(cost) => {
                 any_priced = true;
                 total_cost += cost;
-                total_savings += cache_savings(model, *input, *cr).unwrap_or(0.0);
+                total_savings += cache_savings(model, totals.2).unwrap_or(0.0);
             }
             None => unpriced = true,
         }
     }
     summary.has_partial_cost = unpriced;
-    if any_priced {
-        summary.cache_savings_usd = Some((total_savings * 100.0).round() / 100.0);
-    }
-    // `null` when nothing was priced at all — mirrors Orca's
+    // `null` when nothing was priced at all, mirroring Orca's
     // `hasAnyBillableCost ? estimatedCostUsd : null`.
     if any_priced {
-        summary.estimated_cost_usd = Some((total_cost * 100.0).round() / 100.0);
+        summary.cache_savings_usd = Some(round_cents(total_savings));
+        summary.estimated_cost_usd = Some(round_cents(total_cost));
     }
 
     let billable_input = summary.input_tokens + summary.cache_read_tokens;
@@ -3577,9 +3858,8 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
 
 fn build_daily(rows: &[&DayRow]) -> Vec<DailyPoint> {
     let mut by_day: HashMap<&str, DailyPoint> = HashMap::new();
-    // Cost is priced per (day, model): only a model has a price, and the
-    // long-context tier has to see that model's real daily total.
-    let mut per_model: HashMap<(&str, &str), (u64, u64, u64, u64)> = HashMap::new();
+    // Cost is priced per (day, model): only a model has a price.
+    let mut per_model: HashMap<(&str, &str), (u64, u64, u64, u64, f64)> = HashMap::new();
     for row in rows {
         let point = by_day.entry(&row.day).or_insert_with(|| DailyPoint {
             day: row.day.clone(),
@@ -3593,19 +3873,22 @@ fn build_daily(rows: &[&DayRow]) -> Vec<DailyPoint> {
         point.output_tokens += row.output_tokens;
         point.cache_read_tokens += row.cache_read_tokens;
         point.cache_write_tokens += row.cache_write_tokens;
-        let m = per_model.entry((&row.day, &row.model)).or_insert((0, 0, 0, 0));
+        let m = per_model.entry((&row.day, &row.model)).or_insert((0, 0, 0, 0, 0.0));
         m.0 += row.input_tokens;
         m.1 += row.output_tokens;
         m.2 += row.cache_read_tokens;
         m.3 += row.cache_write_tokens;
+        m.4 += row.reported_cost_usd;
     }
-    for ((day, model), (input, output, cr, cw)) in &per_model {
-        if let Some(cost) = estimated_cost(model, *input, *output, *cr, *cw) {
+    for ((day, model), (input, output, cr, cw, reported)) in &per_model {
+        if let Some(cost) = group_cost(model, (*input, *output, *cr, *cw), *reported) {
             if let Some(point) = by_day.get_mut(day) {
-                let total = point.estimated_cost_usd.unwrap_or(0.0) + cost;
-                point.estimated_cost_usd = Some((total * 100.0).round() / 100.0);
+                point.estimated_cost_usd = Some(point.estimated_cost_usd.unwrap_or(0.0) + cost);
             }
         }
+    }
+    for point in by_day.values_mut() {
+        point.estimated_cost_usd = point.estimated_cost_usd.map(round_cents);
     }
     let mut daily: Vec<DailyPoint> = by_day.into_values().collect();
     daily.sort_by(|a, b| a.day.cmp(&b.day));
@@ -3629,7 +3912,7 @@ fn build_breakdown(
     top: usize,
 ) -> Vec<BreakdownRow> {
     let mut groups: HashMap<String, BreakdownRow> = HashMap::new();
-    let mut per_model: HashMap<String, HashMap<&str, (u64, u64, u64, u64)>> = HashMap::new();
+    let mut per_model: HashMap<String, HashMap<&str, (u64, u64, u64, u64, f64)>> = HashMap::new();
     for row in rows {
         let key = key_of(row);
         let entry = groups
@@ -3656,33 +3939,31 @@ fn build_breakdown(
             .entry(key)
             .or_default()
             .entry(row.model.as_str())
-            .or_insert((0, 0, 0, 0));
+            .or_insert((0, 0, 0, 0, 0.0));
         model.0 += row.input_tokens;
         model.1 += row.output_tokens;
         model.2 += row.cache_read_tokens;
         model.3 += row.cache_write_tokens;
+        model.4 += row.reported_cost_usd;
     }
     for (key, entry) in groups.iter_mut() {
         let mut total = 0.0;
         let mut any_priced = false;
-        for (model, (input, output, cache_read, cache_write)) in
+        for (model, (input, output, cache_read, cache_write, reported)) in
             per_model.get(key).into_iter().flatten()
         {
-            if let Some(cost) = estimated_cost(model, *input, *output, *cache_read, *cache_write) {
+            if let Some(cost) = group_cost(model, (*input, *output, *cache_read, *cache_write), *reported) {
                 any_priced = true;
                 total += cost;
             }
         }
-        entry.estimated_cost_usd = any_priced.then(|| (total * 100.0).round() / 100.0);
+        entry.estimated_cost_usd = any_priced.then(|| round_cents(total));
     }
     let mut rows: Vec<BreakdownRow> = groups.into_values().collect();
     // Key breaks ties: the groups come out of a HashMap, so equal-token rows
     // would otherwise reorder themselves between two identical refreshes.
-    rows.sort_by(|a, b| {
-        (b.input_tokens + b.output_tokens)
-            .cmp(&(a.input_tokens + a.output_tokens))
-            .then_with(|| a.key.cmp(&b.key))
-    });
+    let tokens = |r: &BreakdownRow| r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    rows.sort_by(|a, b| tokens(b).cmp(&tokens(a)).then_with(|| a.key.cmp(&b.key)));
     rows.truncate(top);
     rows
 }
@@ -3896,12 +4177,15 @@ pub async fn stats_get_snapshot(
     let limit = limit.unwrap_or(10);
     let config_dir = state.config_dir.clone();
     let store = store_after_first_scan(config_dir.clone()).await?;
+    ensure_model_rates(&config_dir).await;
     let sources = load_provider_sources(&config_dir);
 
     let rows = filter_rows(&store, &provider, &scope, &range);
+    let mut summary = build_summary(&rows);
+    summary.sessions = count_sessions(&store, &provider, &scope, &range);
     Ok(Snapshot {
         scan_state: scan_state_of(&store, false),
-        summary: build_summary(&rows),
+        summary,
         daily: build_daily(&rows),
         model_breakdown: build_breakdown(&rows, |r| r.model.clone(), 5),
         project_breakdown: build_breakdown(&rows, |r| r.project_key.clone(), 5),
@@ -3924,10 +4208,12 @@ pub async fn stats_get_overview(
     let range = range.unwrap_or_else(|| RANGE_ALL.to_string());
     let config_dir = state.config_dir.clone();
     let store = store_after_first_scan(config_dir.clone()).await?;
+    ensure_model_rates(&config_dir).await;
     let sources = load_provider_sources(&config_dir);
 
     let all_rows = filter_rows(&store, PROVIDER_ALL, &scope, &range);
-    let summary = build_summary(&all_rows);
+    let mut summary = build_summary(&all_rows);
+    summary.sessions = count_sessions(&store, PROVIDER_ALL, &scope, &range);
     let total_tokens = summary.input_tokens
         + summary.output_tokens
         + summary.cache_read_tokens
@@ -3941,7 +4227,8 @@ pub async fn stats_get_overview(
         .iter()
         .map(|(id, label)| {
             let rows = filter_rows(&store, id, &scope, &range);
-            let s = build_summary(&rows);
+            let mut s = build_summary(&rows);
+            s.sessions = count_sessions(&store, id, &scope, &range);
             let tokens =
                 s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens;
             ProviderCard {
@@ -4168,9 +4455,10 @@ mod tests {
         assert_eq!(normalize_model_for_pricing("claude-skynet-9-9"), None);
 
         // 100K input + 100K output of sonnet-4-5 = $0.30 + $1.50.
-        assert_eq!(estimated_cost("claude-sonnet-4-5", 100_000, 100_000, 0, 0), Some(1.8));
-        // A 300K-input total crosses into the long-context tier ($6/MTok).
-        assert_eq!(estimated_cost("claude-sonnet-4-5", 300_000, 0, 0, 0), Some(1.8));
+        assert_eq!(estimated_cost("claude-sonnet-4-5", 100_000, 100_000, 0, 0).map(round_cents), Some(1.8));
+        // Long-context tiers are per request; a 300K total summed over many
+        // requests still bills at the standard $3/MTok.
+        assert_eq!(estimated_cost("claude-sonnet-4-5", 300_000, 0, 0, 0).map(round_cents), Some(0.9));
         assert_eq!(estimated_cost("claude-skynet-1", 1, 1, 0, 0), None);
     }
 
@@ -4218,7 +4506,9 @@ mod tests {
         assert_eq!(summary.turns, 3);
         assert_eq!(summary.input_tokens, 200 + 400 + 10);
         assert_eq!(summary.zero_cache_read_turns, 2, "m2 and m3 read no cache");
-        assert_eq!(summary.estimated_cost_usd, Some(0.0));
+        // Summed unrounded and rounded once: the fixture's fractions of a cent
+        // add up to one, where per-model rounding used to report $0.00.
+        assert_eq!(summary.estimated_cost_usd, Some(0.01));
         assert!(!summary.has_partial_cost);
 
         // Managed scope excludes this plain cwd.
@@ -4694,6 +4984,7 @@ mod tests {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            reported_cost_usd: None,
         };
         let parsed = aggregate_turns(&[
             turn("claude-opus-5", 300_000, "2026-08-01T10:00:00.000Z"),
@@ -4779,6 +5070,135 @@ mod tests {
         upsert_day(&mut store, PROVIDER_CLAUDE, "2026-08-10", "m", "p", false, 1, 0, 1, 10, 0, 0, 0);
         upsert_day(&mut store, PROVIDER_CODEX, "2026-08-10", "m", "p", false, 1, 0, 1, 10, 0, 0, 0);
         assert_eq!(store.days.len(), 2, "provider is part of the row identity");
+    }
+
+    #[test]
+    fn a_session_spanning_models_and_days_counts_once() {
+        let mut store = StoreFile::default();
+        let today = utc_date_str(now_ms() / 1000);
+        let day = |d: &str, m: &str| FpDay { day: d.to_string(), model: m.to_string(), turns: 1, sessions: 1, ..Default::default() };
+        store.files.insert(
+            "a.jsonl".into(),
+            FileFingerprint {
+                provider: PROVIDER_CLAUDE.into(),
+                sessions: 1,
+                days: vec![day(&today, "opus"), day(&today, "haiku"), day("2020-01-01", "opus")],
+                ..Default::default()
+            },
+        );
+        store.files.insert(
+            "old.jsonl".into(),
+            FileFingerprint { provider: PROVIDER_CLAUDE.into(), sessions: 1, days: vec![day("2020-01-01", "opus")], ..Default::default() },
+        );
+        assert_eq!(count_sessions(&store, PROVIDER_ALL, SCOPE_ALL, RANGE_ALL), 2);
+        assert_eq!(count_sessions(&store, PROVIDER_CLAUDE, SCOPE_ALL, RANGE_7D), 1, "only the file active this week");
+        assert_eq!(count_sessions(&store, PROVIDER_CODEX, SCOPE_ALL, RANGE_ALL), 0);
+    }
+
+    #[test]
+    fn rate_table_aliases_prefer_first_party_listings() {
+        let doc = serde_json::json!({
+            "xai/grok-4": { "input_cost_per_token": 3e-6, "output_cost_per_token": 15e-6 },
+            "openrouter/grok-4": { "input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6 },
+            "claude-opus-4-5": { "input_cost_per_token": 5e-6, "output_cost_per_token": 25e-6,
+                                 "cache_read_input_token_cost": 0.5e-6 },
+            "sample_spec": { "max_tokens": 1 }
+        });
+        let table = parse_rate_table(&doc);
+        assert_eq!(table.get("grok-4").map(|p| p.0), Some(3.0), "xai's own listing wins the bare name");
+        assert_eq!(table.get("claude-opus-4-5").map(|p| p.2), Some(0.5));
+        assert_eq!(table.get("claude-opus-4-5").map(|p| p.3), Some(5.0), "no cache-write rate falls back to input");
+        assert!(!table.contains_key("sample_spec"), "entries without both rates are dropped");
+    }
+
+    #[test]
+    fn a_reported_cost_wins_over_the_list_price() {
+        let mut store = StoreFile::default();
+        upsert_day(&mut store, "grok", "2026-11-16", "grok-4.7", "p", false, 1, 0, 1, 1_000_000, 0, 0, 0);
+        add_reported_cost(&mut store, "grok", "2026-11-16", "grok-4.7", "p", false, 0.79);
+        let rows: Vec<&DayRow> = store.days.iter().collect();
+        assert_eq!(build_summary(&rows).estimated_cost_usd, Some(0.79));
+        assert_eq!(build_daily(&rows)[0].estimated_cost_usd, Some(0.79));
+    }
+
+    #[test]
+    fn grok_splits_unclaimed_cost_by_tokens() {
+        let row: Value = serde_json::from_str(
+            r#"{"timestamp":1794856816,"params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed",
+            "usage":{"costUsdTicks":30000000000,"modelUsage":{
+              "a":{"inputTokens":100,"outputTokens":0,"costUsdTicks":10000000000},
+              "b":{"inputTokens":300,"outputTokens":0},
+              "c":{"inputTokens":100,"outputTokens":0}}}}}}"#,
+        )
+        .unwrap();
+        let turns = grok_turns(&row, "d");
+        let cost = |m: &str| turns.iter().find(|t| t.model.as_deref() == Some(m)).and_then(|t| t.reported_cost_usd);
+        assert_eq!(cost("a"), Some(1.0));
+        assert_eq!(cost("b"), Some(1.5));
+        assert_eq!(cost("c"), Some(0.5));
+    }
+
+    /// End to end over this machine's real logs with live prices, without
+    /// touching the saved ledger:
+    /// `cargo test --lib live_overview_figures -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_overview_figures() {
+        let home = dirs::home_dir().unwrap();
+        let config = dirs::config_dir().unwrap().join("spacron");
+        let doc = tauri::async_runtime::block_on(fetch_rate_document()).expect("rates");
+        install_rates(now_ms(), &doc);
+        let mut store = StoreFile::default();
+        run_scan(&mut store, &config, &home);
+        for range in [RANGE_ALL, RANGE_7D] {
+            let rows = filter_rows(&store, PROVIDER_ALL, SCOPE_ALL, range);
+            let s = build_summary(&rows);
+            println!(
+                "[{range}] total {} tokens, {} sessions, cost {:?}, savings {:?}, partial {}",
+                s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens,
+                count_sessions(&store, PROVIDER_ALL, SCOPE_ALL, range),
+                s.estimated_cost_usd,
+                s.cache_savings_usd,
+                s.has_partial_cost
+            );
+            let mut providers: Vec<String> = store.days.iter().map(|r| r.provider.clone()).collect();
+            providers.sort();
+            providers.dedup();
+            for p in providers {
+                let rows = filter_rows(&store, &p, SCOPE_ALL, range);
+                let s = build_summary(&rows);
+                let tokens = s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens;
+                if tokens == 0 {
+                    continue;
+                }
+                println!(
+                    "   {p:12} {tokens:>12} tokens  {:>3} sessions (row-sum {:>3})  cost {:?}",
+                    count_sessions(&store, &p, SCOPE_ALL, range),
+                    s.sessions,
+                    s.estimated_cost_usd
+                );
+            }
+            for b in build_breakdown(&rows, |r| r.model.clone(), 6) {
+                println!(
+                    "      model {:28} {:>12}  {:?}",
+                    b.label,
+                    b.input_tokens + b.output_tokens + b.cache_read_tokens + b.cache_write_tokens,
+                    b.estimated_cost_usd
+                );
+            }
+        }
+    }
+
+    /// `cargo test --lib live_litellm_rates -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_litellm_rates() {
+        let doc = tauri::async_runtime::block_on(fetch_rate_document()).expect("fetch");
+        assert!(install_rates(now_ms(), &doc));
+        for model in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "gemini-3.8-flash-n",
+                      "gemini-3.8-flash-high", "grok-4.7", "gpt-6-luna", "big-pickle", "gpt-5.4"] {
+            println!("{model:24} {:?}", rate_for(model));
+        }
     }
 
     #[test]

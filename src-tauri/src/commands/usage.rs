@@ -363,26 +363,11 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // badge say "Signed in" here instead of the keychain-blind
         // "Installed" it used to fall back to.
         auth_path: None,
-        // No usable usage endpoint — this was checked live, so don't re-derive
-        // it from the fact that Antigravity is a Google product:
-        //   * `v1internal:retrieveUserQuota` (the Gemini CLI meter below) DOES
-        //     answer 200 for an Antigravity token, but it reports the legacy
-        //     Code Assist model buckets. Running a real `agy` prompt moved none
-        //     of them, so wiring it up here would render a meter that is always
-        //     "0% used" — precisely the empty-bar lie rule 3 exists to prevent.
-        //   * `v1internal:retrieveUserQuotaSummary` is the RPC behind
-        //     Antigravity's own quota UI (groups → buckets, each with a window,
-        //     a remaining fraction and a reset time). It is gated on a Google
-        //     API key issued from Antigravity's own project: without one it is
-        //     403 PERMISSION_DENIED, and with a key from any other project it is
-        //     400 "The API Key and the authentication credential are from
-        //     different projects". No such key ships in `agy` or in the IDE.
-        //   * The CLI's own `quota_manager` never calls it for a consumer login
-        //     — a full session logs `doRefreshQuota` three times and issues no
-        //     quota request at all.
-        // Revisit if Antigravity starts shipping a key, not before.
+        // Usage: `fetch_antigravity` reads the quota summary Antigravity's own
+        // UI shows. An earlier note here said that RPC needed an API key from
+        // Antigravity's project; it needs Antigravity's User-Agent instead.
         probe: None,
-        supports_usage: false,
+        supports_usage: true,
     },
     ProviderSpec {
         provider: "cody",
@@ -951,10 +936,9 @@ const ANTIGRAVITY_CREDENTIAL_TARGET: &str = "gemini:antigravity";
 
 /// Whether Antigravity has a credential in the OS store.
 ///
-/// Antigravity is the one CLI whose login Spacron can *see* but whose token it
-/// deliberately never reads: existence is the whole question a badge asks, so
-/// only existence is checked — `CredentialBlob` is never touched, and nothing
-/// read here is logged or returned to the webview (rule 2).
+/// Existence is the whole question a badge asks, so only existence is checked
+/// here — `CredentialBlob` is never touched. The usage meter is the one reader
+/// of the token itself, in [`antigravity_credential_json`].
 ///
 /// Read straight from the credential store rather than through the `keyring`
 /// crate, which cannot address this item: on Windows `keyring` names its
@@ -994,6 +978,68 @@ fn antigravity_credential_present() -> bool {
 #[cfg(not(windows))]
 fn antigravity_credential_present() -> bool {
     false
+}
+
+/// The Antigravity login JSON, for the usage meter only.
+///
+/// Shape (as `agy` writes it): `{"token":{"access_token","refresh_token",
+/// "expiry",…},"auth_method","id_token_email",…}`. Read from the Windows
+/// credential store, else from the file `agy` falls back to on hosts without
+/// one (`~/.gemini/antigravity-cli/antigravity-oauth-token`, which Orca reads
+/// too). The value stays inside [`fetch_antigravity`]: the access token goes to
+/// Google's Cloud Code API, which the token was minted for, and nothing from it
+/// is logged or returned to the webview (rule 2). The refresh token is never
+/// used (rule 1) — `agy` rotates its own login.
+fn antigravity_credential_json() -> Option<Value> {
+    #[cfg(windows)]
+    {
+        use windows::core::PCWSTR;
+        use windows::Win32::Security::Credentials::{
+            CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+        };
+        let target: Vec<u16> = ANTIGRAVITY_CREDENTIAL_TARGET
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+        // SAFETY: as in `antigravity_credential_present`; the blob is copied
+        // out before the allocation is freed.
+        let read = unsafe {
+            CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None, &mut credential)
+        };
+        if read.is_ok() && !credential.is_null() {
+            let bytes = unsafe {
+                let c = &*credential;
+                std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize).to_vec()
+            };
+            unsafe { CredFree(credential as *const std::ffi::c_void) };
+            if let Ok(json) = serde_json::from_slice::<Value>(&bytes) {
+                return Some(json);
+            }
+        }
+    }
+    let path = dirs::home_dir()?
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// An RFC 3339 instant with or without a UTC offset (`agy` writes
+/// `2026-11-19T10:57:22.5183514+01:00`), as epoch seconds.
+fn rfc3339_to_epoch_secs(text: &str) -> Option<i64> {
+    let text = text.trim();
+    if text.ends_with('Z') || text.ends_with('z') {
+        return iso8601_to_epoch_secs(text);
+    }
+    let t = text.find('T')?;
+    let sign_at = text[t..].rfind(['+', '-'])? + t;
+    let (local, offset) = text.split_at(sign_at);
+    let sign = if offset.starts_with('-') { -1 } else { 1 };
+    let (h, m) = offset[1..].split_once(':')?;
+    let offset_secs = sign * (h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60);
+    Some(iso8601_to_epoch_secs(&format!("{local}Z"))? - offset_secs)
 }
 
 /// Whether the OS keychain holds a credential for this provider — the question
@@ -2923,6 +2969,219 @@ async fn fetch_gemini(client: &reqwest::Client, spec: &ProviderSpec) -> Provider
     usage
 }
 
+// ---------------------------------------------------------------------------
+// Antigravity
+// ---------------------------------------------------------------------------
+
+/// Antigravity's Cloud Code hosts. A consumer login is served by the daily
+/// host first (prod second); a business login the other way round. Both are
+/// asked and the first reading of each bucket wins — the same order T3 Code
+/// uses, and verified live: the two hosts can disagree, and the preferred one
+/// is the one Antigravity's own quota screen matches.
+const ANTIGRAVITY_DAILY_HOST: &str = "https://daily-cloudcode-pa.googleapis.com";
+const ANTIGRAVITY_PROD_HOST: &str = "https://cloudcode-pa.googleapis.com";
+
+/// `retrieveUserQuotaSummary` answers only to Antigravity's own client
+/// identity — without this User-Agent it is a 403, which is what an earlier
+/// attempt here concluded meant "needs a key we do not have".
+const ANTIGRAVITY_USER_AGENT: &str =
+    "antigravity/hub/2.24.0 (aidev_client; os_type=windows; arch=amd64; cl=963137146)";
+
+/// Antigravity's 5-hour and weekly quotas, per model family.
+///
+/// Reads the access token `agy` keeps in the OS credential store and asks
+/// Cloud Code for the quota summary Antigravity's own UI renders (groups →
+/// buckets, each a remaining fraction with a window and a reset). An older
+/// account without the summary falls back to `fetchAvailableModels`, whose
+/// per-model quotas are folded to one meter per family.
+///
+/// The token lasts an hour and is never refreshed here (rule 1: `agy` owns its
+/// rotation, and its OAuth client is not one Spacron can use). A stale token is
+/// reported as `Expired`, whose fix — run `agy` once — the UI already states.
+///
+/// Running `agy -p /usage` (Orca's route) is deliberately not used: on current
+/// `agy` builds `/usage` is sent to the model as a prompt and spends quota.
+async fn fetch_antigravity(client: &reqwest::Client, spec: &ProviderSpec) -> ProviderUsage {
+    let Some(login) = antigravity_credential_json() else {
+        return ProviderUsage::blank(spec, UsageStatus::SignedOut);
+    };
+    let Some(token) = login["token"]["access_token"].as_str().filter(|t| !t.is_empty()) else {
+        return ProviderUsage::blank(spec, UsageStatus::SignedOut);
+    };
+    let expired = login["token"]["expiry"]
+        .as_str()
+        .and_then(rfc3339_to_epoch_secs)
+        .is_some_and(|secs| secs <= now_secs() + 30);
+    if expired {
+        return ProviderUsage::blank(spec, UsageStatus::Expired);
+    }
+
+    let business = matches!(login["auth_method"].as_str(), Some(m) if m.contains("business") || m.contains("enterprise"));
+    let hosts = if business {
+        [ANTIGRAVITY_PROD_HOST, ANTIGRAVITY_DAILY_HOST]
+    } else {
+        [ANTIGRAVITY_DAILY_HOST, ANTIGRAVITY_PROD_HOST]
+    };
+
+    let call = |host: &str, operation: &str| {
+        client
+            .post(format!("{host}/v1internal:{operation}"))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+    };
+
+    let mut unauthorized = false;
+    let mut last_error: Option<String> = None;
+    let mut windows: Vec<(String, UsageWindow)> = Vec::new();
+    for operation in ["retrieveUserQuotaSummary", "fetchAvailableModels"] {
+        for host in hosts {
+            let response = match call(host, operation).await {
+                Ok(r) => r,
+                Err(e) => {
+                    last_error = Some(describe_network_error(&e));
+                    continue;
+                }
+            };
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                unauthorized = true;
+                continue;
+            }
+            if !response.status().is_success() {
+                last_error = Some(format!("Google returned {}", response.status()));
+                continue;
+            }
+            let Ok(body) = response.json::<Value>().await else { continue };
+            let found = if operation == "retrieveUserQuotaSummary" {
+                antigravity_summary_windows(&body, now_secs())
+            } else {
+                antigravity_model_windows(&body)
+            };
+            for (id, window) in found {
+                if !windows.iter().any(|(seen, _)| *seen == id) {
+                    windows.push((id, window));
+                }
+            }
+        }
+        if !windows.is_empty() {
+            break;
+        }
+    }
+
+    if windows.is_empty() {
+        if unauthorized {
+            return ProviderUsage::blank(spec, UsageStatus::Expired);
+        }
+        return ProviderUsage::failed(
+            spec,
+            last_error.unwrap_or_else(|| "Antigravity reported no quota for this account".to_string()),
+        );
+    }
+    let mut usage = ProviderUsage::blank(spec, UsageStatus::Ok);
+    usage.account = login["id_token_email"].as_str().map(str::to_string);
+    usage.windows = windows.into_iter().map(|(_, w)| w).collect();
+    usage
+}
+
+fn antigravity_family(bucket_id: &str, group: Option<&str>) -> String {
+    let group = group.map(str::trim).filter(|g| !g.is_empty());
+    if bucket_id.starts_with("gemini-argon-") {
+        group.unwrap_or("Gemini Argon").to_string()
+    } else if bucket_id.starts_with("gemini-carbon-") {
+        group.unwrap_or("Gemini Carbon").to_string()
+    } else if bucket_id.starts_with("gemini-") {
+        "Gemini".to_string()
+    } else if bucket_id.starts_with("3p-") {
+        "Claude & GPT".to_string()
+    } else {
+        group.unwrap_or(bucket_id).to_string()
+    }
+}
+
+/// `retrieveUserQuotaSummary` → one window per enabled bucket, labelled
+/// "<family> · 5-hour" / "· Weekly". Like every Google meter the API reports
+/// what is *left*; it is flipped to used here.
+fn antigravity_summary_windows(body: &Value, now: i64) -> Vec<(String, UsageWindow)> {
+    let groups: Vec<(Option<&str>, &Vec<Value>)> = match body["groups"].as_array() {
+        Some(groups) if groups.iter().any(|g| g["buckets"].as_array().is_some_and(|b| !b.is_empty())) => groups
+            .iter()
+            .filter_map(|g| Some((g["displayName"].as_str(), g["buckets"].as_array()?)))
+            .collect(),
+        _ => body["buckets"].as_array().map(|b| vec![(None, b)]).unwrap_or_default(),
+    };
+    let mut out = Vec::new();
+    for (group, buckets) in groups {
+        for bucket in buckets {
+            if bucket["disabled"].as_bool() == Some(true) {
+                continue;
+            }
+            let (Some(id), Some(remaining)) = (bucket["bucketId"].as_str(), bucket["remainingFraction"].as_f64()) else {
+                continue;
+            };
+            let (name, minutes) = match bucket["window"].as_str() {
+                Some("5h") => ("5-hour".to_string(), Some(300u64)),
+                Some("weekly") => ("Weekly".to_string(), Some(10_080)),
+                _ => (bucket["displayName"].as_str().unwrap_or("Quota").trim().to_string(), None),
+            };
+            let label = format!("{} · {name}", antigravity_family(id, group));
+            let mut window = UsageWindow::new(&label, (1.0 - remaining.clamp(0.0, 1.0)) * 100.0);
+            if let Some(m) = minutes {
+                window = window.with_window(m);
+            }
+            // An untouched bucket reports a reset exactly one window from now:
+            // that is "the clock has not started", not a real reset to show.
+            let reset = bucket["resetTime"].as_str();
+            let idle = remaining >= 1.0
+                && minutes.is_some_and(|m| {
+                    reset
+                        .and_then(iso8601_to_epoch_secs)
+                        .is_some_and(|at| (at - now - m as i64 * 60).abs() <= 60)
+                });
+            if !idle {
+                window = window.with_reset(reset.map(|r| Value::String(r.to_string())).as_ref());
+            }
+            out.push((id.to_string(), window));
+        }
+    }
+    out
+}
+
+/// `fetchAvailableModels` (older accounts) → the most-used reading per family.
+fn antigravity_model_windows(body: &Value) -> Vec<(String, UsageWindow)> {
+    let Some(models) = body["models"].as_object() else { return Vec::new() };
+    let mut best: Vec<(String, UsageWindow)> = Vec::new();
+    for (model_id, model) in models {
+        let provider = model["modelProvider"].as_str().unwrap_or("");
+        let family = if provider == "MODEL_PROVIDER_GOOGLE" || model_id.starts_with("gemini-") {
+            "Gemini"
+        } else if provider == "MODEL_PROVIDER_ANTHROPIC" || model_id.starts_with("claude-") {
+            "Claude"
+        } else if provider == "MODEL_PROVIDER_OPENAI" || model_id.starts_with("gpt-") {
+            "GPT"
+        } else {
+            continue;
+        };
+        for (suffix, quota) in [("quota", &model["quotaInfo"]), ("weekly", &model["weeklyQuotaInfo"])] {
+            let Some(remaining) = quota["remainingFraction"].as_f64() else { continue };
+            let id = format!("{}-{suffix}", family.to_lowercase());
+            let label = format!("{family} · {}", if suffix == "weekly" { "Weekly" } else { "Quota" });
+            let mut window = UsageWindow::new(&label, (1.0 - remaining.clamp(0.0, 1.0)) * 100.0)
+                .with_reset(quota.get("resetTime"));
+            if suffix == "weekly" {
+                window = window.with_window(10_080);
+            }
+            match best.iter_mut().find(|(seen, _)| *seen == id) {
+                Some((_, prev)) if window.used_percent > prev.used_percent => *prev = window,
+                Some(_) => {}
+                None => best.push((id, window)),
+            }
+        }
+    }
+    best
+}
+
 /// Exchange a refresh token for a short-lived access token. Returns `None` on
 /// any failure — the caller reports `Expired`, which is the honest outcome.
 async fn refresh_google_token(client: &reqwest::Client, refresh_token: &str) -> Option<String> {
@@ -3214,6 +3473,7 @@ async fn fetch_one(
         "codex" => fetch_codex(client, spec, account).await,
         "grok" => fetch_grok(client, spec).await,
         "gemini" => fetch_gemini(client, spec).await,
+        "antigravity" => fetch_antigravity(client, spec).await,
         "kimi" => fetch_kimi(client, spec).await,
         "amp" => fetch_amp(client, spec).await,
         "opencode" => fetch_opencode(client, spec).await,
@@ -3245,6 +3505,55 @@ mod web_provider_tests {
     // -----------------------------------------------------------------------
     // Expiry parsing (Grok)
     // -----------------------------------------------------------------------
+
+    /// Live check against this machine's Antigravity login:
+    /// `cargo test --lib live_antigravity_meter -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_antigravity_meter() {
+        let spec = PROVIDERS.iter().find(|s| s.provider == "antigravity").unwrap();
+        let client = reqwest::Client::builder().timeout(FETCH_TIMEOUT).build().unwrap();
+        let usage = tauri::async_runtime::block_on(fetch_antigravity(&client, spec));
+        println!("status {:?} error {:?}", usage.status, usage.error);
+        for w in &usage.windows {
+            println!("  {} {:.1}% used, window {:?}, resets {:?}", w.label, w.used_percent, w.window_minutes, w.resets_at_iso);
+        }
+    }
+
+    #[test]
+    fn rfc3339_offsets_convert_to_utc() {
+        assert_eq!(
+            rfc3339_to_epoch_secs("2026-11-19T10:57:22.5183514+01:00"),
+            iso8601_to_epoch_secs("2026-11-19T09:57:22Z")
+        );
+        assert_eq!(
+            rfc3339_to_epoch_secs("2026-11-19T04:57:22-05:00"),
+            iso8601_to_epoch_secs("2026-11-19T09:57:22Z")
+        );
+    }
+
+    #[test]
+    fn antigravity_summary_flips_remaining_and_labels_by_family() {
+        let now = iso8601_to_epoch_secs("2026-11-19T09:38:49Z").unwrap();
+        let body: Value = serde_json::from_str(
+            r#"{"groups":[
+              {"displayName":"Gemini Models","buckets":[
+                {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.75,"resetTime":"2026-11-19T14:37:28Z"},
+                {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.5,"resetTime":"2026-11-25T13:25:46Z"}]},
+              {"displayName":"Claude and GPT models","buckets":[
+                {"bucketId":"3p-5h","window":"5h","remainingFraction":1,"resetTime":"2026-11-19T14:38:49Z"},
+                {"bucketId":"3p-off","window":"5h","remainingFraction":1,"disabled":true}]}]}"#,
+        )
+        .unwrap();
+        let windows = antigravity_summary_windows(&body, now);
+        let labels: Vec<_> = windows.iter().map(|(_, w)| w.label.as_str()).collect();
+        assert_eq!(labels, ["Gemini · 5-hour", "Gemini · Weekly", "Claude & GPT · 5-hour"]);
+        assert_eq!(windows[0].1.used_percent, 25.0);
+        assert_eq!(windows[1].1.window_minutes, Some(10_080));
+        // An untouched bucket's reset is just "one window from now".
+        assert_eq!(windows[2].1.resets_at_iso, None);
+        assert!(windows[0].1.resets_at_iso.is_some());
+    }
 
     #[test]
     fn iso_instants_parse_to_the_right_epoch_second() {
@@ -4428,15 +4737,17 @@ mod tests {
     #[test]
     fn a_provider_with_a_usage_fetcher_can_always_check_sign_in() {
         // Fetching usage requires a credential, so any provider claiming
-        // `supports_usage` must declare where one comes from. There are exactly
-        // two sources: a file the CLI wrote, or a linked browser session
+        // `supports_usage` must declare where one comes from. There are three
+        // sources: a file the CLI wrote, a linked browser session
         // (`commands::web_session`) for the providers that publish no
-        // CLI-readable token at all. Declaring neither means the fetcher has
-        // nothing to authenticate with.
+        // CLI-readable token at all, or the OS credential store for the one CLI
+        // that keeps its login there (Antigravity, `antigravity_credential_json`).
+        // Declaring none means the fetcher has nothing to authenticate with.
+        const OS_CREDENTIAL_STORE: &[&str] = &["antigravity"];
         for spec in PROVIDERS.iter().filter(|s| s.supports_usage) {
             let has_web_session = crate::commands::web_session::spec_for(spec.provider).is_some();
             assert!(
-                spec.auth_path.is_some() || has_web_session,
+                spec.auth_path.is_some() || has_web_session || OS_CREDENTIAL_STORE.contains(&spec.provider),
                 "{} fetches usage but declares neither a credential path nor a web session",
                 spec.command
             );

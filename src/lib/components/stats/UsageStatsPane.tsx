@@ -61,7 +61,9 @@ import {
   dayTotal,
   Segmented,
   SeriesList,
-  seriesColor,
+  agentColor,
+  distinctColors,
+  modelColor,
   TokensByType,
   TotalsRow,
   type ChartMetric,
@@ -352,6 +354,7 @@ function entryTokens(e: BreakdownEntry): number {
 /** A model's brand, from the bundled table only — a model name must never be
  *  sent off to the logo fetcher. */
 function modelRows(entries: BreakdownEntry[], total: number): RankedRow[] {
+  const colors = distinctColors(entries.map((e) => modelColor(e.label)));
   return entries.map((e, i) => {
     const brand = lookupAgentBrand(e.label, e.label);
     return {
@@ -366,7 +369,7 @@ function modelRows(entries: BreakdownEntry[], total: number): RankedRow[] {
           {brand.mark}
         </span>
       ) : undefined,
-      color: seriesColor(brand?.color, i),
+      color: colors[i],
       tokens: entryTokens(e),
       share: total > 0 ? entryTokens(e) / total : 0,
       cost: e.estimatedCostUsd,
@@ -375,10 +378,11 @@ function modelRows(entries: BreakdownEntry[], total: number): RankedRow[] {
 }
 
 function projectRows(entries: BreakdownEntry[], total: number): RankedRow[] {
+  const colors = distinctColors(entries.map(() => undefined));
   return entries.map((e, i) => ({
     key: e.key,
     label: e.label,
-    color: seriesColor(null, i),
+    color: colors[i],
     tokens: entryTokens(e),
     share: total > 0 ? entryTokens(e) / total : 0,
     cost: e.estimatedCostUsd,
@@ -484,9 +488,11 @@ function OverviewPane({
   const withData = overview.providers
     .filter((p) => p.hasData)
     .sort((a, b) => b.totalTokens - a.totalTokens);
-  const sessions = overview.providers.reduce((n, p) => n + p.sessions, 0);
-  const colorOf = (card: ProviderCard, i: number) =>
-    seriesColor(lookupAgentBrand(card.id, card.label)?.color, i);
+  // Counted once per session by the backend; a sum over providers would be
+  // the same here, but the summary is the one figure that is right by design.
+  const sessions = overview.summary.sessions;
+  const colors = distinctColors(withData.map((card) => agentColor(card.id)));
+  const colorOf = (_card: ProviderCard, i: number) => colors[i];
 
   const series: ChartSeries[] = withData.map((card, i) => ({
     key: card.id,
@@ -561,7 +567,7 @@ function ProviderPane({
       </p>
     );
   }
-  const color = seriesColor(lookupAgentBrand(snapshot.provider, label)?.color, 0);
+  const [color] = distinctColors([agentColor(snapshot.provider)]);
   const series: ChartSeries[] = [{ key: snapshot.provider, label, color, daily: snapshot.daily }];
   // The left column lists this provider's models: the chart already is the
   // provider, so repeating it as the only row would say nothing.

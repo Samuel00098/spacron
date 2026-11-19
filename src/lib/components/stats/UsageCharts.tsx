@@ -69,14 +69,63 @@ export function dayTotal(d: DailyPoint): number {
 // Series colours
 // ---------------------------------------------------------------------------
 
-/** For series whose brand has no colour of its own (most CLIs are mono). */
-const SERIES_PALETTE = ['#a78bfa', '#4fa3c7', '#8f9499', '#e0a458', '#6cc58f', '#e06c9f'];
+/**
+ * One fixed colour per agent, so an agent reads the same in the list, the
+ * chart and the breakdown, and never trades colours with another agent when
+ * the ranking changes. Close to T3 Code's choices. Codex is the theme's text
+ * colour — white on dark, black on light — rather than a literal white that
+ * would vanish in the light theme.
+ */
+const AGENT_COLORS: Record<string, string> = {
+  claude: '#D97757',
+  antigravity: '#8B7CF6',
+  opencode: '#4FA3C7',
+  grok: '#9CA3AF',
+  codex: 'var(--text-primary)',
+  pi: '#F59E0B',
+  omp: '#EC4899',
+  'command-code': '#22C55E',
+  kilo: '#EAB308',
+  aider: '#14B8A6',
+  cursor: '#60A5FA',
+  gemini: '#4285F4',
+};
 
-/** A brand colour when there is one, else the next palette entry. The last
- *  resort is the theme foreground, which is what a mono brand looks like. */
-export function seriesColor(brandColor: string | null | undefined, index: number): string {
-  if (brandColor && brandColor !== 'mono') return brandColor;
-  return SERIES_PALETTE[index % SERIES_PALETTE.length] ?? 'var(--text-primary)';
+/** For agents and models without a fixed colour. None repeats an agent's. */
+const SERIES_PALETTE = ['#F472B6', '#34D399', '#FB923C', '#38BDF8', '#C084FC', '#A3E635', '#FACC15', '#F87171'];
+
+/** An agent's fixed colour, if it has one. */
+export function agentColor(agentId: string): string | undefined {
+  return AGENT_COLORS[agentId.toLowerCase()];
+}
+
+/** A model wears its maker's agent colour: Claude models Claude's orange,
+ *  Gemini models Antigravity's purple (the agent that serves them here). */
+export function modelColor(model: string): string | undefined {
+  const m = model.toLowerCase().split('/').pop() ?? '';
+  if (m.startsWith('claude')) return AGENT_COLORS.claude;
+  if (m.startsWith('gemini')) return AGENT_COLORS.antigravity;
+  if (m.startsWith('grok')) return AGENT_COLORS.grok;
+  if (/^(gpt|o\d|codex)/.test(m)) return AGENT_COLORS.codex;
+  return undefined;
+}
+
+/**
+ * Colours for one chart's worth of series: each takes its preferred colour
+ * unless an earlier series already has it, then the first unused palette
+ * entry. Two lines never share a colour.
+ */
+export function distinctColors(preferred: (string | undefined)[]): string[] {
+  const used = new Set<string>();
+  const pick = (want: string | undefined) => {
+    if (want && !used.has(want)) return want;
+    return SERIES_PALETTE.find((c) => !used.has(c)) ?? SERIES_PALETTE[used.size % SERIES_PALETTE.length];
+  };
+  return preferred.map((want) => {
+    const color = pick(want);
+    used.add(color);
+    return color;
+  });
 }
 
 // ---------------------------------------------------------------------------
