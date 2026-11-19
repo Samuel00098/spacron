@@ -1,0 +1,356 @@
+/* Rich (WYSIWYG) Markdown editor: outline on the left, toolbar on top, the
+   document below it. Document typography comes from MarkdownPreview.css
+   (`.markdown-container .markdown-body`), so the editor reads like the old
+   preview; this file only adds what editing needs. */
+
+.rich-md-editor {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.rich-md-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────── */
+
+.rich-md-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.rich-md-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  box-shadow: none !important;
+}
+
+.rich-md-tool:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.rich-md-tool.active {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.rich-md-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.rich-md-tool-text {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.rich-md-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 6px;
+  background: var(--border);
+}
+
+.rich-md-urlbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.rich-md-urlbar input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: var(--surface-outline) !important;
+  outline: none;
+}
+
+.rich-md-urlbar button {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  cursor: pointer;
+}
+
+/* ── Document ────────────────────────────────────────────── */
+
+.rich-md-scroll {
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
+.rich-md-scroll .markdown-body {
+  max-width: 960px;
+}
+
+.rich-md-prose {
+  outline: none;
+  min-height: 100%;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  caret-color: var(--accent);
+}
+
+.rich-md-prose p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--text-muted);
+}
+
+.rich-md-prose a {
+  cursor: text;
+}
+
+.rich-md-prose img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+}
+
+/* Tables: ProseMirror wraps them, and cells hold paragraphs. */
+.rich-md-prose .tableWrapper {
+  overflow-x: auto;
+  margin: 1.2rem 0;
+}
+
+.rich-md-prose .tableWrapper table {
+  margin: 0;
+  table-layout: fixed;
+}
+
+.rich-md-prose th p,
+.rich-md-prose td p {
+  margin: 0;
+}
+
+.rich-md-prose td,
+.rich-md-prose th {
+  position: relative;
+  vertical-align: top;
+}
+
+.rich-md-prose .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent-light);
+  pointer-events: none;
+}
+
+/* Task lists */
+.rich-md-prose ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0.3rem;
+}
+
+.rich-md-prose ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.rich-md-prose ul[data-type='taskList'] li > label {
+  flex: 0 0 auto;
+  margin-top: 0.22rem;
+  user-select: none;
+}
+
+.rich-md-prose ul[data-type='taskList'] li > label input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.rich-md-prose ul[data-type='taskList'] li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.rich-md-prose ul[data-type='taskList'] li > div p {
+  margin-bottom: 0.3rem;
+}
+
+.rich-md-prose ul[data-type='taskList'] li[data-checked='true'] > div {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.rich-md-prose li p {
+  margin-bottom: 0.3rem;
+}
+
+.rich-md-prose .ProseMirror-gapcursor::after {
+  border-top-color: var(--text-primary);
+}
+
+/* ── Table of contents ───────────────────────────────────── */
+
+.rich-md-toc {
+  width: 232px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.rich-md-toc-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 41px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.rich-md-toc-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.rich-md-toc-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rich-md-toc-levels {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.rich-md-toc-levels button,
+.rich-md-toc-close {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 3px;
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  box-shadow: none !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rich-md-toc-levels button:hover,
+.rich-md-toc-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.rich-md-toc-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  padding: 8px 6px 16px;
+}
+
+.rich-md-toc-empty {
+  padding: 6px 10px;
+  color: var(--text-muted);
+}
+
+.rich-md-toc-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+}
+
+.rich-md-toc-item:hover {
+  background: var(--bg-hover);
+}
+
+.rich-md-toc-item.active .rich-md-toc-link {
+  color: var(--accent);
+}
+
+.rich-md-toc-chevron,
+.rich-md-toc-chevron-spacer {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.rich-md-toc-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 3px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  box-shadow: none !important;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.rich-md-toc-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.rich-md-toc-link {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 4px;
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: none !important;
+}
+
+.rich-md-toc-link:hover {
+  color: var(--text-primary);
+}
+
+@media (max-width: 720px) {
+  .rich-md-toc {
+    width: 180px;
+  }
+}

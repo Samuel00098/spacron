@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import EditorTabs from './EditorTabs.tsx';
 import ImageViewer from './ImageViewer.tsx';
-import MarkdownPreview from '$lib/components/preview/MarkdownPreview.tsx';
+import RichMarkdownEditor from './RichMarkdownEditor.tsx';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import CodeEditor from './CodeEditor.tsx';
 import './EditorPanel.css';
@@ -15,11 +15,10 @@ function CodeIcon() {
   );
 }
 
-function EyeIcon() {
+function PencilIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0z" />
-      <circle cx="12" cy="12" r="3" />
+      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
     </svg>
   );
 }
@@ -74,11 +73,11 @@ export default function EditorPanel() {
           <button
             className={`markdown-toggle-btn${showMarkdownPreview ? ' active' : ''}`}
             onClick={() => active && setMarkdownPreview(active, !showMarkdownPreview)}
-            title={showMarkdownPreview ? 'Edit Markdown source' : 'Show Markdown preview'}
-            aria-label={showMarkdownPreview ? 'Edit Markdown source' : 'Show Markdown preview'}
+            title={showMarkdownPreview ? 'Edit the Markdown source' : 'Edit as formatted text'}
+            aria-label={showMarkdownPreview ? 'Edit the Markdown source' : 'Edit as formatted text'}
           >
-            {showMarkdownPreview ? <CodeIcon /> : <EyeIcon />}
-            <span>{showMarkdownPreview ? 'Edit Markdown' : 'Show Preview'}</span>
+            {showMarkdownPreview ? <CodeIcon /> : <PencilIcon />}
+            <span>{showMarkdownPreview ? 'Source' : 'Rich editor'}</span>
           </button>
         )}
       </div>
@@ -87,7 +86,7 @@ export default function EditorPanel() {
         {file.kind === 'image' && file.imageSrc ? (
           <ImageViewer src={file.imageSrc} path={file.path} mimeType={file.mimeType} size={file.size} />
         ) : file.language === 'markdown' && showMarkdownPreview ? (
-          <MarkdownPreview content={file.content} />
+          <RichMarkdownEditor key={file.path} filePath={file.path} content={file.content} />
         ) : (
           codeEditorProps && (
             <CodeEditor
