@@ -1968,27 +1968,34 @@ function TerminalPane({
               type="button"
               className={showChat ? '' : 'active'}
               aria-pressed={!showChat}
-              title="Show the agent's terminal"
+              aria-label="Terminal view"
+              title="Terminal (Ctrl+Shift+J)"
               onClick={(e) => {
                 e.stopPropagation();
                 onActivate();
                 setTerminalChatView(sessionId, false);
               }}
             >
-              Terminal
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="2.5" />
+                <path d="m7.5 9.5 3 2.5-3 2.5M13 15h3.5" />
+              </svg>
             </button>
             <button
               type="button"
               className={showChat ? 'active' : ''}
               aria-pressed={showChat}
-              title="Show this agent's conversation as chat (same session)"
+              aria-label="Chat view"
+              title="Chat, same session (Ctrl+Shift+J)"
               onClick={(e) => {
                 e.stopPropagation();
                 onActivate();
                 setTerminalChatView(sessionId, true);
               }}
             >
-              Chat
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M20 12.5a7.5 7.5 0 0 1-11 6.6L4 20.5l1.4-4.6A7.5 7.5 0 1 1 20 12.5z" />
+              </svg>
             </button>
           </div>
         )}
@@ -2003,14 +2010,21 @@ function TerminalPane({
           outer div's onClick + term.onKey. An onFocus/onMouseDown handler here
           that both activates AND calls term.focus() created a focus→activate→
           refocus loop that repainted every frame (the flicker). */}
-      <div className="xterm-container" ref={containerRef}>
-        <div className="xterm-fit-host" ref={fitHostRef}></div>
+      {/* The body holds the terminal and, in chat view, the chat over it. The
+          chat is a sibling rather than a child of .xterm-container: global.css
+          treats everything inside that container as raw terminal output and
+          drops the app's typography there. */}
+      <div className="pane-body">
+        <div className="xterm-container" ref={containerRef}>
+          <div className="xterm-fit-host" ref={fitHostRef}></div>
+        </div>
         {showChat && sessionInfo?.agentPreset && (
           <TerminalChatView
             sessionId={sessionId}
             agentPreset={sessionInfo.agentPreset}
             isExecuting={Boolean(sessionInfo.isExecuting)}
             isRunning={Boolean(sessionInfo.isRunning)}
+            worktree={sessionInfo.worktree ?? null}
           />
         )}
       </div>

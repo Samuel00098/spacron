@@ -5,6 +5,7 @@
 // new agent joins it; elsewhere it is the sidebar's selected worktree.
 
 import { get } from '$lib/stores/storeCompat';
+import { applyLaunchView, type AgentLaunchView } from '$lib/services/terminal-chat';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
@@ -27,6 +28,8 @@ export interface QuickLaunchOptions {
   reasoningEffort?: ChatReasoningEffort;
   /** Sent as the agent's first prompt once its CLI has come up. */
   prompt?: string;
+  /** Open in the terminal or its chat view; omitted uses Settings → Agents. */
+  view?: AgentLaunchView;
   /**
    * The project worktree to start in: a worktree path, `null` for the main
    * checkout, or omitted for the sidebar's selected worktree.
@@ -75,6 +78,7 @@ export async function quickSpawnAgent(command: string, options: QuickLaunchOptio
     }
     applyOrchestratorAgentName(id, name);
     adoptSpawnedAgent(id, project.id);
+    applyLaunchView(id, command, options.view);
     manualPromptTargetId.set(id);
     showToast(`Spawned ${name}`, 'success', undefined, true);
     const prompt = options.prompt?.trim();

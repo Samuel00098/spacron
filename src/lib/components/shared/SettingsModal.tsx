@@ -158,6 +158,7 @@ import {
   type RulesFileDetection,
 } from '$lib/services/orchestrator/agent-rules-file';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
+import { agentLaunchView } from '$lib/services/terminal-chat';
 import { useGithubSignIn } from '$lib/react/useGithubSignIn';
 import { useSourceControlSignIn } from '$lib/react/useSourceControlSignIn';
 import {
@@ -247,6 +248,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'terminal-renderer', tab: 'terminal', section: 'Appearance', label: 'Renderer', keywords: 'terminal webgl canvas dom' },
   { id: 'terminal-scrollback', tab: 'terminal', section: 'Appearance', label: 'Scrollback', keywords: 'terminal history lines' },
   { id: 'default-shell', tab: 'terminal', section: 'Default shell', label: 'Default shell', keywords: 'terminal command prompt', target: 'section' },
+  { id: 'agent-launch-view', tab: 'agents', section: 'Launch view', label: 'Open new agents in', keywords: 'terminal chat default launch view' },
   { id: 'agent-isolation', tab: 'agents', section: 'Isolation & changes', label: 'Isolate agents in worktrees', keywords: 'git branches checkout' },
   { id: 'auto-stage', tab: 'agents', section: 'Isolation & changes', label: 'Auto-stage agent changes', keywords: 'git review' },
   { id: 'stay-awake', tab: 'agents', section: 'Power', label: 'Stay awake while agents work', keywords: 'sleep idle power' },
@@ -2237,6 +2239,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentPreviewPlacement = useStore(previewPlacement);
   const currentNotifications = useStore(notificationsEnabled);
   const currentAgentWorktrees = useStore(agentWorktrees);
+  const currentAgentLaunchView = useStore(agentLaunchView);
   const currentAutoStage = useStore(autoStageAgentChanges);
   const currentAgentBrowserTools = useStore(agentBrowserTools);
   const currentComputerUse = useStore(computerUse);
@@ -3656,6 +3659,29 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'agents' && (
               <>
+                <Section title="Launch view">
+                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
+                    Every agent runs its real CLI in a terminal. Chat is another view of that same
+                    terminal: it shows the agent's conversation and sends what you type into it, so you
+                    can switch between the two at any time from the pane's title bar (Ctrl+Shift+J).
+                    Chat is available for Claude Code, Codex, OpenCode and Grok; other agents always
+                    open in the terminal.
+                  </p>
+                  <SettingRow
+                    title="Open new agents in"
+                    detail="What the spawn picker's Enter key and the one-click + launchers open. The picker's other button still opens the other view."
+                  >
+                    <Dropdown
+                      options={[
+                        { value: 'terminal', label: 'Terminal' },
+                        { value: 'chat', label: 'Chat' },
+                      ]}
+                      value={currentAgentLaunchView}
+                      onChange={(val) => agentLaunchView.set(val === 'chat' ? 'chat' : 'terminal')}
+                    />
+                  </SettingRow>
+                </Section>
+
                 <Section title="Isolation & changes">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Each agent works on its own git branch in a private checkout, so several can edit

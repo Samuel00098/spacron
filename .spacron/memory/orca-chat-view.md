@@ -53,3 +53,14 @@ Traps that no single file explains:
   A pane launched under a non-default account gets its own env var, which the reader cannot see. That
   pane's transcript is not found.
 - Grok's dir name is `encodeURIComponent(cwd)`. Grok hashes names longer than 255 bytes, which is not handled.
+- Cursor, Antigravity, Copilot, Kimi and Hermes have **no chat view**, and Orca has none for them either.
+  Orca's modules for those five parse hook events (status, tool names), not transcripts. On this machine,
+  Antigravity keeps protobuf blobs in SQLite (`~/.gemini/antigravity/conversations/*.db`), Copilot's
+  `session-state/<id>/` folders hold no message log, and Cursor's CLI had saved no chats. Building a
+  reader for any of them means finding a stable format first.
+- The chat lives in `.pane-body`, as a **sibling** of `.xterm-container`, and must stay there.
+  global.css excludes `.xterm-container *` from app typography, so a chat placed inside it renders
+  in terminal type.
+- Model and effort changes are typed into the TUI as slash commands (`typeSlashCommand`), and only
+  between turns. Codex only has its own `/model` picker, so picking there switches the pane to the
+  terminal.

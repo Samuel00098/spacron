@@ -6,9 +6,9 @@ import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { getPresetRuns, filterInstalledAgents } from '$lib/stores/runs';
 import { usageState, installedAgentCommands, haveAgentDetection } from '$lib/stores/usage';
 import { agentUpdates } from '$lib/stores/agentUpdates';
-import { quickSpawnAgent, quickStartAgentChat } from '$lib/services/quick-spawn';
+import { quickSpawnAgent } from '$lib/services/quick-spawn';
+import { agentLaunchView, canShowTerminalChat } from '$lib/services/terminal-chat';
 import { loadLiveAgentProviderModels, peekLiveAgentProviderModels, prewarmLiveAgentProviderModels } from '$lib/services/live-agent-models';
-import { isChatAgentProvider } from '$lib/services/chat-provider-adapters';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import type { ChatReasoningEffort } from '$lib/types/chat';
 import { REASONING_LABELS } from '$lib/services/orchestrator/reasoning-levels';
@@ -100,6 +100,7 @@ export default function AgentQuickAdd({
   const [models, setModels] = useState<Record<string, AgentProviderModel[]>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
 
+  const defaultLaunchView = useStore(agentLaunchView);
   const project = useStore(activeProject);
   const $customAgents = useStore(customAgents);
   const $removedPresetAgents = useStore(removedPresetAgents);
@@ -300,8 +301,9 @@ export default function AgentQuickAdd({
     };
     close();
     setPrompt('');
-    if (kind === 'chat') quickStartAgentChat(selectedPreset, opts);
-    else void quickSpawnAgent(selectedPreset.command, opts);
+    // Both open the agent's real CLI in a terminal; "chat" just shows that
+    // terminal's chat view (services/terminal-chat.ts).
+    void quickSpawnAgent(selectedPreset.command, { ...opts, view: kind });
   }
 
   function moveFocus(event: React.KeyboardEvent) {
@@ -315,7 +317,9 @@ export default function AgentQuickAdd({
     items[next]?.focus();
   }
 
-  const chatAvailable = selectedPreset ? isChatAgentProvider(selectedPreset.command) : false;
+  const chatAvailable = selectedPreset ? canShowTerminalChat(selectedPreset.command) : false;
+  // Enter launches the default view from Settings → Agents; Ctrl+Enter the other.
+  const enterView: 'terminal' | 'chat' = defaultLaunchView === 'chat' && chatAvailable ? 'chat' : 'terminal';
   const defaultModelLabel = options?.defaultModel ? `Default · ${options.defaultModel.label}` : 'CLI default';
 
   return (
@@ -513,27 +517,34 @@ export default function AgentQuickAdd({
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' || event.shiftKey) return;
                   event.preventDefault();
-                  if (event.ctrlKey || event.metaKey || !chatAvailable) launch('terminal');
-                  else launch('chat');
+                  const alternate = enterView === 'chat' ? 'terminal' : chatAvailable ? 'chat' : 'terminal';
+                  launch(event.ctrlKey || event.metaKey ? alternate : enterView);
                 }}
               />
 
               <div className="aqa-actions">
-                <button type="button" className="aqa-launch" onClick={() => launch('terminal')} title="Launch in a terminal (Ctrl+Enter)">
+                <button
+                  type="button"
+                  className={`aqa-launch${enterView === 'terminal' ? ' primary' : ''}`}
+                  onClick={() => launch('terminal')}
+                  title={`Launch in a terminal (${enterView === 'terminal' ? 'Enter' : 'Ctrl+Enter'})`}
+                >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></svg>
                   <span>Launch terminal</span>
-                  <kbd>Ctrl+↵</kbd>
+                  <kbd>{enterView === 'terminal' ? '↵' : 'Ctrl+↵'}</kbd>
                 </button>
                 <button
                   type="button"
-                  className="aqa-launch primary"
+                  className={`aqa-launch${enterView === 'chat' ? ' primary' : ''}`}
                   onClick={() => launch('chat')}
                   disabled={!chatAvailable}
-                  title={chatAvailable ? 'Launch as a chat (Enter)' : `${selectedPreset.name} can't run in Chat mode`}
+                  title={chatAvailable
+                    ? `Launch in its terminal, shown as chat (${enterView === 'chat' ? 'Enter' : 'Ctrl+Enter'})`
+                    : `${selectedPreset.name} has no chat view yet: Spacron can't read its conversation`}
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
                   <span>Launch chat</span>
-                  <kbd>↵</kbd>
+                  {chatAvailable && <kbd>{enterView === 'chat' ? '↵' : 'Ctrl+↵'}</kbd>}
                 </button>
               </div>
             </div>

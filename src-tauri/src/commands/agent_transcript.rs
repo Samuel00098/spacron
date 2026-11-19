@@ -66,6 +66,14 @@ pub struct TranscriptResult {
     /// Whether the transcript itself says a turn is still running, when it can tell.
     pub busy: Option<bool>,
     pub truncated: bool,
+    /// Model the latest turn ran on, as the CLI names it.
+    pub model: Option<String>,
+    /// Reasoning effort the latest turn ran at, when the transcript records it.
+    pub effort: Option<String>,
+    /// Tokens the conversation occupies in the model's context window now.
+    pub context_used: Option<u64>,
+    /// Size of that window, when the CLI records it (Codex does; others are inferred client-side).
+    pub context_window: Option<u64>,
 }
 
 #[tauri::command]
@@ -152,13 +160,28 @@ fn finish(session_id: Option<String>, revision: Option<String>, parsed: Parsed) 
     if truncated {
         items.drain(..items.len() - MAX_ITEMS);
     }
-    TranscriptResult { session_id, revision, unchanged: false, messages: items, busy: parsed.busy, truncated }
+    TranscriptResult {
+        session_id,
+        revision,
+        unchanged: false,
+        messages: items,
+        busy: parsed.busy,
+        truncated,
+        model: parsed.model,
+        effort: parsed.effort,
+        context_used: parsed.context_used,
+        context_window: parsed.context_window,
+    }
 }
 
 #[derive(Default)]
 struct Parsed {
     items: Vec<ChatItem>,
     busy: Option<bool>,
+    model: Option<String>,
+    effort: Option<String>,
+    context_used: Option<u64>,
+    context_window: Option<u64>,
 }
 
 impl Parsed {
@@ -207,6 +230,10 @@ fn read_lines(path: &Path) -> Vec<Value> {
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
         .collect()
+}
+
+fn u64_at(v: &Value, pointer: &str) -> u64 {
+    v.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
 }
 
 fn str_of(v: &Value, key: &str) -> Option<String> {
@@ -417,6 +444,18 @@ fn parse_claude(path: &Path) -> Parsed {
             continue;
         }
         // assistant
+        if let Some(model) = message.get("model").and_then(Value::as_str).filter(|m| !m.starts_with('<')) {
+            parsed.model = Some(model.to_string());
+        }
+        if let Some(usage) = message.get("usage").filter(|u| u.is_object()) {
+            let used = u64_at(usage, "/input_tokens")
+                + u64_at(usage, "/cache_creation_input_tokens")
+                + u64_at(usage, "/cache_read_input_tokens")
+                + u64_at(usage, "/output_tokens");
+            if used > 0 {
+                parsed.context_used = Some(used);
+            }
+        }
         if let Value::Array(blocks) = &content {
             for (bi, block) in blocks.iter().enumerate() {
                 let id = format!("{uuid}:{bi}");
@@ -533,8 +572,30 @@ fn parse_codex(path: &Path) -> Parsed {
             Some("event_msg") => match ptype {
                 "task_started" => parsed.busy = Some(true),
                 "task_complete" | "turn_aborted" => parsed.busy = Some(false),
+                "token_count" => {
+                    if let Some(info) = p.get("info").filter(|i| i.is_object()) {
+                        let last = info.get("last_token_usage").cloned().unwrap_or(Value::Null);
+                        let used = last.get("total_tokens").and_then(Value::as_u64).unwrap_or_else(|| {
+                            u64_at(&last, "/input_tokens") + u64_at(&last, "/output_tokens")
+                        });
+                        if used > 0 {
+                            parsed.context_used = Some(used);
+                        }
+                        if let Some(window) = info.get("model_context_window").and_then(Value::as_u64) {
+                            parsed.context_window = Some(window);
+                        }
+                    }
+                }
                 _ => {}
             },
+            Some("turn_context") => {
+                if let Some(model) = str_of(p, "model") {
+                    parsed.model = Some(model);
+                }
+                parsed.effort = str_of(p, "effort")
+                    .or_else(|| str_of(p, "reasoning_effort"))
+                    .or_else(|| p.pointer("/collaboration_mode/settings/reasoning_effort").and_then(Value::as_str).map(str::to_string));
+            }
             Some("compacted") => parsed.push_text("notice", format!("c-{index}"), "Conversation compacted".into(), time),
             Some("response_item") => {
                 let id = str_of(p, "id").unwrap_or_else(|| format!("r-{index}"));
@@ -683,6 +744,12 @@ fn parse_grok(path: &Path) -> Parsed {
                 parsed.push_text("user", id, text, None);
             }
             Some("assistant") => {
+                if let Some(model) = str_of(&line, "model_id") {
+                    parsed.model = Some(model);
+                }
+                if let Some(effort) = str_of(&line, "reasoning_effort") {
+                    parsed.effort = Some(effort);
+                }
                 parsed.push_text("assistant", id.clone(), value_text(line.get("content").unwrap_or(&Value::Null)), None);
                 if let Some(calls) = line.get("tool_calls").and_then(Value::as_array) {
                     for (ci, call) in calls.iter().enumerate() {
@@ -813,6 +880,20 @@ fn read_opencode(q: &TranscriptQuery) -> Result<TranscriptResult, String> {
             }
             "assistant" => {
                 parsed.busy = Some(v.pointer("/time/completed").is_none());
+                if let Some(model) = v.pointer("/model/id").and_then(Value::as_str) {
+                    parsed.model = Some(model.to_string());
+                    parsed.effort = v.pointer("/model/variant").and_then(Value::as_str).filter(|x| *x != "default").map(str::to_string);
+                }
+                if let Some(tokens) = v.get("tokens").filter(|t| t.is_object()) {
+                    let used = u64_at(tokens, "/input")
+                        + u64_at(tokens, "/output")
+                        + u64_at(tokens, "/reasoning")
+                        + u64_at(tokens, "/cache/read")
+                        + u64_at(tokens, "/cache/write");
+                    if used > 0 {
+                        parsed.context_used = Some(used);
+                    }
+                }
                 for (bi, block) in v.get("content").and_then(Value::as_array).cloned().unwrap_or_default().iter().enumerate() {
                     let bid = format!("{id}:{bi}");
                     match block.get("type").and_then(Value::as_str) {
@@ -911,7 +992,10 @@ mod tests {
                         *m.entry(i.kind.clone()).or_insert(0) += 1;
                         m
                     });
-                    println!("{agent}: session={:?} busy={:?} kinds={kinds:?}", r.session_id, r.busy);
+                    println!(
+                        "{agent}: session={:?} busy={:?} model={:?} effort={:?} ctx={:?}/{:?} kinds={kinds:?}",
+                        r.session_id, r.busy, r.model, r.effort, r.context_used, r.context_window
+                    );
                     if let Some(u) = r.messages.iter().rev().find(|i| i.kind == "user") {
                         println!("  last user: {}", u.text.chars().take(100).collect::<String>().replace('\n', " "));
                     }

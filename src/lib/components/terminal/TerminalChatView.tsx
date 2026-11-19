@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import ChatDocument from '$lib/components/workspace/ChatDocument';
+import { invoke } from '@tauri-apps/api/core';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 import {
   getAgentDisplayName,
   getSessionAgentStartedAt,
@@ -9,12 +13,27 @@ import {
 } from '$lib/stores/terminal';
 import {
   bindTranscript,
+  contextUsageFor,
+  effortApplyFor,
+  formatTokens,
+  modelApplyFor,
   readTerminalTranscript,
   sendMatchKey,
   setTerminalChatView,
   transcriptAgentFor,
+  typeSlashCommand,
+  type ContextUsage,
+  type SessionOptionApply,
   type TerminalChatItem,
 } from '$lib/services/terminal-chat';
+import { loadLiveAgentProviderModels, peekLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import type { AgentProviderModel } from '$lib/services/chat-provider-adapters';
+import { REASONING_LABELS } from '$lib/services/orchestrator/reasoning-levels';
+import type { ChatReasoningEffort } from '$lib/types/chat';
+import { useStore } from '$lib/react/useStore';
+import { agentPermissionMode } from '$lib/stores/settings';
+import { toggleTerminalTranscription, transcriptionActive } from '$lib/services/transcription-hotkey';
+import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import './TerminalChatView.css';
 
 const POLL_MS = 900;
@@ -36,23 +55,59 @@ const PROMPT_KEYS: { label: string; title: string; data: string }[] = [
   { label: 'Esc', title: 'Press Escape', data: '\x1b' },
 ];
 
+/** The transcript as a reader sees it: turns, with each run of tool calls folded into one activity block. */
+type Block =
+  | { type: 'user'; item: TerminalChatItem }
+  | { type: 'assistant'; item: TerminalChatItem; leads: boolean }
+  | { type: 'activity'; id: string; items: TerminalChatItem[]; leads: boolean }
+  | { type: 'notice'; item: TerminalChatItem };
+
+function toBlocks(items: TerminalChatItem[]): Block[] {
+  const blocks: Block[] = [];
+  // Whether the agent has written since the last user turn; its first block
+  // after one carries its name.
+  let agentSpoke = false;
+  for (const item of items) {
+    if (item.kind === 'user') {
+      blocks.push({ type: 'user', item });
+      agentSpoke = false;
+    } else if (item.kind === 'notice') {
+      blocks.push({ type: 'notice', item });
+    } else if (item.kind === 'assistant') {
+      blocks.push({ type: 'assistant', item, leads: !agentSpoke });
+      agentSpoke = true;
+    } else {
+      const last = blocks[blocks.length - 1];
+      if (last?.type === 'activity') last.items.push(item);
+      else {
+        blocks.push({ type: 'activity', id: item.id, items: [item], leads: !agentSpoke });
+        agentSpoke = true;
+      }
+    }
+  }
+  return blocks;
+}
+
 /**
  * The chat face of an agent terminal. It reads the CLI's own transcript and
- * types into the same PTY; the terminal underneath stays mounted and live.
+ * types into the same PTY; the terminal beside it stays mounted and live.
  */
 export default function TerminalChatView({
   sessionId,
   agentPreset,
   isExecuting,
   isRunning,
+  worktree = null,
 }: {
   sessionId: number;
   agentPreset: string;
   isExecuting: boolean;
   isRunning: boolean;
+  worktree?: WorktreeInfo | null;
 }) {
   const agent = transcriptAgentFor(agentPreset);
   const agentLabel = getAgentDisplayName(agentPreset) ?? agentPreset;
+  const textareaRefEarly = useRef<HTMLTextAreaElement | null>(null);
   const [items, setItems] = useState<TerminalChatItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,12 +117,24 @@ export default function TerminalChatView({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
+  const permissionMode = useStore(agentPermissionMode);
+  const dictationOn = useStore(transcriptionActive);
+  // Dictation is app-wide; only show it as recording here when it aims at this composer.
+  const dictating = dictationOn && document.activeElement === textareaRefEarly.current;
+  const root = getSessionRoot(sessionId);
+  // What the transcript says the session runs on, and what was picked here
+  // since (shown until a later turn records it).
+  const [reported, setReported] = useState<{ model: string | null; effort: string | null; used: number | null; window: number | null }>({
+    model: null, effort: null, used: null, window: null,
+  });
+  const [picked, setPicked] = useState<{ model: string | null; effort: string | null }>({ model: null, effort: null });
+  const [models, setModels] = useState<AgentProviderModel[]>(() => peekLiveAgentProviderModels(agentPreset) ?? []);
 
   const boundRef = useRef<string | null>(null);
   const revisionRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const textareaRef = textareaRefEarly;
   const pendingIdRef = useRef(0);
   // The started-at time is fixed for this agent run; read it once per mount.
   const sinceMs = useMemo(() => getSessionAgentStartedAt(sessionId) ?? Date.now(), [sessionId, agentPreset]);
@@ -81,7 +148,7 @@ export default function TerminalChatView({
     const tick = async () => {
       const cwd = getSessionRoot(sessionId);
       if (!cwd) {
-        setError('This terminal has no working folder, so its transcript cannot be found.');
+        setError('This terminal has no working folder, so its conversation cannot be found.');
         setLoaded(true);
       } else {
         try {
@@ -104,6 +171,7 @@ export default function TerminalChatView({
             setItems(result.messages);
             setTranscriptBusy(result.busy);
             setTruncated(result.truncated);
+            setReported({ model: result.model, effort: result.effort, used: result.contextUsed, window: result.contextWindow });
           }
         } catch (err) {
           if (cancelled) return;
@@ -122,6 +190,23 @@ export default function TerminalChatView({
       if (timer) clearTimeout(timer);
     };
   }, [agent, sessionId, sinceMs]);
+
+  // The CLI's own model list (the spawn picker's catalogue), for the model menu.
+  useEffect(() => {
+    let cancelled = false;
+    loadLiveAgentProviderModels(agentPreset)
+      .then((list) => { if (!cancelled && list.length) setModels(list); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [agentPreset]);
+
+  // A pick stays shown until a later turn reports that value.
+  useEffect(() => {
+    setPicked((current) => ({
+      model: current.model && reported.model && sameModel(reported.model, current.model) ? null : current.model,
+      effort: current.effort && reported.effort === current.effort ? null : current.effort,
+    }));
+  }, [reported.model, reported.effort]);
 
   // The pane closed or the agent changed: release the transcript binding.
   useEffect(() => () => bindTranscript(sessionId, null), [sessionId]);
@@ -142,13 +227,14 @@ export default function TerminalChatView({
     );
   }, [userKeys, pending.length]);
 
-  const busy = isExecuting || transcriptBusy === true || pending.length > 0;
+  const blocks = useMemo(() => toBlocks(items), [items]);
+  const busy = isRunning && (isExecuting || transcriptBusy === true || pending.length > 0);
 
   // Follow the conversation while the reader is at the bottom.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [items, pending]);
+  }, [items, pending, busy]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -195,94 +281,244 @@ export default function TerminalChatView({
     }
   }
 
+  const modelApply: SessionOptionApply = agent ? modelApplyFor(agent) : { kind: 'none' };
+  const effortApply: SessionOptionApply = agent ? effortApplyFor(agent) : { kind: 'none' };
+  const currentModelId = picked.model ?? reported.model;
+  const currentModel = models.find((m) => currentModelId && sameModel(currentModelId, m.id)) ?? null;
+  const modelLabel = currentModel?.label ?? (currentModelId ? prettyModel(currentModelId) : 'Default model');
+  const efforts = (currentModel?.reasoningEfforts ?? (agent === 'claude' ? CLAUDE_EFFORTS : []))
+    .filter((e) => e !== 'default');
+  const currentEffort = picked.effort ?? reported.effort;
+  const context = agent ? contextUsageFor(agent, currentModelId, reported.used, reported.window) : null;
+  // A slash command typed mid-turn would queue as prompt text, so options
+  // change between turns.
+  const optionsLocked = busy || !isRunning;
+
+  async function applyOption(apply: SessionOptionApply, value: string | null, which: 'model' | 'effort') {
+    if (apply.kind === 'none' || optionsLocked) return;
+    if (apply.kind === 'picker') {
+      // The CLI only offers its own picker: open it and show the terminal to pick in.
+      await typeSlashCommand(sessionId, apply.command);
+      setTerminalChatView(sessionId, false);
+      return;
+    }
+    if (!value) return;
+    setPicked((current) => ({ ...current, [which]: value }));
+    await typeSlashCommand(sessionId, apply.build(value));
+  }
+
+  // The F9 dictation, aimed at this composer: focus it first so the capture's
+  // field target is this textarea (it inserts React-safely, see transcription-hotkey).
+  function dictate() {
+    textareaRef.current?.focus();
+    toggleTerminalTranscription();
+  }
+
+  // Agents read files by path; images given as a path are attached by Claude
+  // Code and Codex the way a dropped file is.
+  async function attachFiles() {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({ multiple: true, directory: false });
+      const paths = (Array.isArray(picked) ? picked : picked ? [picked] : []).map(String);
+      if (!paths.length) return;
+      const quoted = paths.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ');
+      setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, '')} ${quoted} ` : `${quoted} `));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      textareaRef.current?.focus();
+    }
+  }
+
+  const folderName = root ? root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? null : null;
   const empty = loaded && items.length === 0 && pending.length === 0;
-  // Relative links in a reply resolve against the agent's folder.
-  const docPath = `${(getSessionRoot(sessionId) ?? '').replace(/[\\/]+$/, '')}/chat.md`;
+  const canSend = Boolean(draft.trim()) && !sending && isRunning;
+  const lastBlock = blocks[blocks.length - 1];
 
   return (
     <div
       className="terminal-chat-view"
-      // The terminal container's own mouse handlers (middle-click paste,
-      // copy-on-select) belong to xterm; keep chat clicks out of them.
+      // The terminal's own mouse handlers (middle-click paste, copy-on-select)
+      // belong to xterm; keep chat clicks out of them.
       onMouseDown={(e) => { if (e.button === 1) e.stopPropagation(); }}
       onMouseUp={(e) => e.stopPropagation()}
     >
-      <div className="terminal-chat-scroll" ref={scrollRef} onScroll={onScroll}>
-        {truncated && <div className="terminal-chat-notice">Earlier messages are in the terminal history.</div>}
-        {!loaded && <div className="terminal-chat-empty">Loading conversation…</div>}
-        {empty && (
-          <div className="terminal-chat-empty">
-            <strong>No conversation yet</strong>
-            <span>Send a message to start, or switch to the terminal to see what {agentLabel} is doing.</span>
-          </div>
-        )}
-        {items.map((item) => (
-          <ChatRow key={item.id} item={item} docPath={docPath} />
-        ))}
-        {pending.map((p) => (
-          <div key={`pending-${p.id}`} className="terminal-chat-row user pending">
-            <div className="terminal-chat-bubble">{p.text}</div>
-          </div>
-        ))}
-        {busy && isRunning && (
-          <div className="terminal-chat-working">
-            <span className="terminal-chat-dots" aria-hidden="true"><i /><i /><i /></span>
-            {agentLabel} is working
-          </div>
-        )}
-      </div>
-
-      {error && (
-        <div className="terminal-chat-error" role="alert">
-          <span>{error}</span>
-          <button type="button" onClick={() => setTerminalChatView(sessionId, false)}>Open terminal</button>
+      {!empty && (
+        <div className="terminal-chat-watermark" aria-hidden="true">
+          <AgentBrandMark command={agentPreset} name={agentLabel} className="terminal-chat-watermark-mark" />
         </div>
       )}
+      <div className="terminal-chat-scroll" ref={scrollRef} onScroll={onScroll}>
+        <div className="terminal-chat-thread">
+          {truncated && <div className="terminal-chat-notice">Earlier messages are in the terminal history</div>}
+          {!loaded && <div className="terminal-chat-loading"><Dots /></div>}
+          {empty && (
+            <div className="terminal-chat-empty">
+              <AgentBrandMark command={agentPreset} name={agentLabel} className="terminal-chat-empty-mark" />
+              <div className="terminal-chat-empty-title">{agentLabel}</div>
+              <div className="terminal-chat-empty-hint">
+                Same session as the terminal. Send a message to start, or switch back any time.
+              </div>
+            </div>
+          )}
+          {blocks.map((block) => {
+            if (block.type === 'user') return <UserTurn key={block.item.id} text={block.item.text} />;
+            if (block.type === 'notice') return <div key={block.item.id} className="terminal-chat-notice">{block.item.text}</div>;
+            if (block.type === 'assistant') {
+              return (
+                <div key={block.item.id} className="terminal-chat-agent">
+                  {block.leads && <AgentHeader preset={agentPreset} label={agentLabel} />}
+                  <Markdown text={block.item.text} />
+                </div>
+              );
+            }
+            return (
+              <div key={block.id} className="terminal-chat-agent">
+                {block.leads && <AgentHeader preset={agentPreset} label={agentLabel} />}
+                <Activity items={block.items} live={busy && block === lastBlock} />
+              </div>
+            );
+          })}
+          {pending.map((p) => <UserTurn key={`pending-${p.id}`} text={p.text} pending />)}
+          {busy && (
+            <div className="terminal-chat-working">
+              <Dots />
+              <span>Working</span>
+            </div>
+          )}
+        </div>
+      </div>
 
-      <div className="terminal-chat-composer">
-        {showKeys && (
-          <div className="terminal-chat-keys" role="group" aria-label="Send keys to the terminal">
-            <span className="terminal-chat-keys-hint">Answer a terminal prompt:</span>
-            {PROMPT_KEYS.map((k) => (
-              <button key={k.label} type="button" title={k.title} onClick={() => writeToSession(sessionId, k.data)}>
-                {k.label}
-              </button>
-            ))}
+      <div className="terminal-chat-dock">
+        {error && (
+          <div className="terminal-chat-error" role="alert">
+            <span>{error}</span>
+            <button type="button" onClick={() => setTerminalChatView(sessionId, false)}>Open terminal</button>
           </div>
         )}
-        <div className="terminal-chat-input">
+        <div className={`terminal-chat-composer${isRunning ? '' : ' exited'}`}>
+          {showKeys && (
+            <div className="terminal-chat-keys" role="group" aria-label="Send keys to the terminal">
+              <span className="terminal-chat-keys-hint">Answer a prompt in the terminal</span>
+              <div className="terminal-chat-keys-row">
+                {PROMPT_KEYS.map((k) => (
+                  <button key={k.label} type="button" title={k.title} onClick={() => writeToSession(sessionId, k.data)}>
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={draft}
             rows={1}
-            placeholder={isRunning ? `Message ${agentLabel}…` : `${agentLabel} has exited`}
+            placeholder={isRunning ? `Message ${agentLabel}` : `${agentLabel} has exited`}
             disabled={!isRunning}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <button
-            type="button"
-            className={`terminal-chat-keys-toggle${showKeys ? ' active' : ''}`}
-            title="Keys for terminal prompts (approvals, pickers)"
-            aria-pressed={showKeys}
-            onClick={() => setShowKeys((v) => !v)}
-          >
-            ⌨
-          </button>
-          {busy && isRunning && !draft.trim() ? (
-            <button type="button" className="terminal-chat-send stop" title="Stop (Esc)" onClick={stop}>
-              <svg width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" rx="2" fill="currentColor" /></svg>
-            </button>
-          ) : (
+          <div className="terminal-chat-composer-bar">
             <button
               type="button"
-              className="terminal-chat-send"
-              title="Send (Enter)"
-              disabled={!draft.trim() || sending || !isRunning}
-              onClick={() => void send()}
+              className="terminal-chat-icon-btn"
+              title="Attach files (their paths go into the message)"
+              aria-label="Attach files"
+              disabled={!isRunning}
+              onClick={() => void attachFiles()}
             >
-              <svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 10V2M2.5 5.5 6 2l3.5 3.5" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             </button>
+            <span
+              className={`terminal-chat-access${permissionMode === 'yolo' ? ' full' : ''}`}
+              title={permissionMode === 'yolo'
+                ? 'Full access: this agent was launched without permission prompts. Change it in Settings → Agents for new agents.'
+                : 'Ask first: this agent asks before acting. Answer its prompts with the keys button.'}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3 5 6v5c0 4.5 3 8.2 7 10 4-1.8 7-5.5 7-10V6l-7-3z" />
+                {permissionMode === 'yolo' ? <path d="M12 8v4M12 16h.01" /> : <path d="m9 12 2 2 4-4" />}
+              </svg>
+              <span>{permissionMode === 'yolo' ? 'Full access' : 'Ask first'}</span>
+            </span>
+            <button
+              type="button"
+              className={`terminal-chat-icon-btn${showKeys ? ' active' : ''}`}
+              title="Keys for terminal prompts (approvals, pickers)"
+              aria-label="Keys for terminal prompts"
+              aria-pressed={showKeys}
+              onClick={() => setShowKeys((v) => !v)}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="2" y="6" width="20" height="12" rx="2.5" />
+                <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
+              </svg>
+            </button>
+            <span className="terminal-chat-bar-spacer" />
+            {context && <ContextRing usage={context} />}
+            <ModelMenu
+              modelLabel={modelLabel}
+              effortLabel={currentEffort ? shortEffort(currentEffort) : null}
+              title={modelApply.kind === 'none'
+                ? `${agentLabel} can't switch models mid-session`
+                : optionsLocked ? 'Change the model between turns' : 'Model and reasoning'}
+              disabled={modelApply.kind === 'none' || optionsLocked}
+              direct={modelApply.kind === 'picker' ? () => void applyOption(modelApply, null, 'model') : undefined}
+              models={models.filter((m) => m.supported !== false).map((m) => ({ value: m.id, label: m.label, hint: m.description }))}
+              model={currentModel?.id ?? null}
+              onModel={(value) => void applyOption(modelApply, value, 'model')}
+              efforts={effortApply.kind === 'command' ? efforts.map((e) => ({ value: e, label: effortLabel(e) })) : []}
+              effort={currentEffort}
+              onEffort={(value) => void applyOption(effortApply, value, 'effort')}
+            />
+            <button
+              type="button"
+              className={`terminal-chat-icon-btn${dictating ? ' recording' : ''}`}
+              title={dictating ? 'Stop dictation (F9)' : 'Dictate (F9)'}
+              aria-label={dictating ? 'Stop dictation' : 'Dictate'}
+              aria-pressed={dictating}
+              disabled={!isRunning}
+              onClick={dictate}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+              </svg>
+            </button>
+            {busy && !draft.trim() ? (
+              <button type="button" className="terminal-chat-send stop" title="Stop (Esc)" aria-label="Stop" onClick={stop}>
+                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2.2" fill="currentColor" /></svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="terminal-chat-send"
+                title="Send (Enter)"
+                aria-label="Send"
+                disabled={!canSend}
+                onClick={() => void send()}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="terminal-chat-context-line">
+          {folderName && (
+            <span title={root ?? undefined}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+              {folderName}
+              <em>· {worktree ? 'Worktree' : 'Main checkout'}</em>
+            </span>
+          )}
+          {worktree?.branch && (
+            <span className="branch">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7v10M18 10c0 4-6 3-12 7" /></svg>
+              {worktree.branch}
+            </span>
           )}
         </div>
       </div>
@@ -290,42 +526,360 @@ export default function TerminalChatView({
   );
 }
 
-function ChatRow({ item, docPath }: { item: TerminalChatItem; docPath: string }) {
-  if (item.kind === 'user') {
-    return (
-      <div className="terminal-chat-row user">
-        <div className="terminal-chat-bubble">{item.text}</div>
-      </div>
-    );
+const CLAUDE_EFFORTS: ChatReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+function effortLabel(value: string): string {
+  return REASONING_LABELS[value as ChatReasoningEffort] ?? value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** Transcript ids carry versions and vendor prefixes the catalogue may not ("claude-opus-5-5" vs "opus"). */
+function sameModel(a: string, b: string): boolean {
+  const norm = (v: string) => v.toLowerCase().replace(/\[1m\]$/, '').replace(/^.*\//, '');
+  const x = norm(a);
+  const y = norm(b);
+  return x === y || x.startsWith(`${y}-`) || y.startsWith(`${x}-`);
+}
+
+/** "claude-opus-5-5" → "Opus 5.5", "gpt-6-luna" → "Gpt 6 Luna". */
+function prettyModel(id: string): string {
+  const bare = id.replace(/^.*\//, '');
+  // OpenAI names read as written: "gpt-6-luna" → "GPT-6-Luna".
+  if (/^(gpt|o\d)/i.test(bare)) {
+    return bare.split('-').map((part, i) => (i === 0 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1))).join('-');
   }
-  if (item.kind === 'assistant') {
-    return (
-      <div className="terminal-chat-row assistant">
-        <ChatDocument source={item.text} filePath={docPath} />
-      </div>
-    );
+  const parts = id.replace(/^.*\//, '').replace(/^claude-/, '').replace(/\[1m\]$/i, '').split('-');
+  let out = '';
+  parts.forEach((part, i) => {
+    const joinsVersion = /^\d+$/.test(part) && /^\d+$/.test(parts[i - 1] ?? '');
+    out += joinsVersion ? `.${part}` : `${i ? ' ' : ''}${part.charAt(0).toUpperCase()}${part.slice(1)}`;
+  });
+  return out;
+}
+
+function shortEffort(value: string): string {
+  const short: Record<string, string> = { minimal: 'Min', low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
+  return short[value] ?? effortLabel(value);
+}
+
+type MenuOption = { value: string; label: string; hint?: string };
+
+/**
+ * The composer's "Model Effort ▾" pill (T3 Code style): one menu with the
+ * model list and, below it, the reasoning levels. With `direct` it just runs
+ * that (Codex opens its own picker).
+ */
+function ModelMenu({
+  modelLabel,
+  effortLabel: effortText,
+  title,
+  disabled,
+  direct,
+  models,
+  model,
+  onModel,
+  efforts,
+  effort,
+  onEffort,
+}: {
+  modelLabel: string;
+  effortLabel: string | null;
+  title: string;
+  disabled?: boolean;
+  direct?: () => void;
+  models: MenuOption[];
+  model: string | null;
+  onModel: (value: string) => void;
+  efforts: MenuOption[];
+  effort: string | null;
+  onEffort: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+
+  const hasMenu = models.length > 0 || efforts.length > 0;
+
+  return (
+    <div className="terminal-chat-option" ref={rootRef}>
+      <button
+        type="button"
+        className={`terminal-chat-pill model${open ? ' open' : ''}`}
+        title={title}
+        disabled={disabled}
+        aria-haspopup={direct ? undefined : 'menu'}
+        aria-expanded={direct ? undefined : open}
+        onClick={() => (direct ? direct() : hasMenu && setOpen((v) => !v))}
+      >
+        <span className="terminal-chat-pill-label">{modelLabel}</span>
+        {effortText && <span className="terminal-chat-pill-effort">{effortText}</span>}
+        <svg className="terminal-chat-pill-caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M2.5 3.8 5 6.3l2.5-2.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="terminal-chat-menu right" role="menu">
+          {models.length > 0 && <div className="terminal-chat-menu-section">Model</div>}
+          {models.map((option) => (
+            <MenuItem key={option.value} option={option} selected={option.value === model} onPick={() => {
+              setOpen(false);
+              if (option.value !== model) onModel(option.value);
+            }} />
+          ))}
+          {efforts.length > 0 && <div className="terminal-chat-menu-section">Reasoning</div>}
+          {efforts.length > 0 && (
+            <div className="terminal-chat-effort-row" role="group" aria-label="Reasoning level">
+              {efforts.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={option.value === effort}
+                  className={option.value === effort ? 'selected' : ''}
+                  onClick={() => {
+                    setOpen(false);
+                    if (option.value !== effort) onEffort(option.value);
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ option, selected, onPick }: { option: MenuOption; selected: boolean; onPick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      className={`terminal-chat-menu-item${selected ? ' selected' : ''}`}
+      onClick={onPick}
+    >
+      <span className="terminal-chat-menu-text">
+        <span className="terminal-chat-menu-label">{option.label}</span>
+        {option.hint && <span className="terminal-chat-menu-hint">{option.hint}</span>}
+      </span>
+      {selected && (
+        <svg className="terminal-chat-menu-check" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="m2.5 6.2 2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/** How much of the model's context window the conversation fills. */
+function ContextRing({ usage }: { usage: ContextUsage }) {
+  const percent = usage.window ? Math.min(100, (usage.used / usage.window) * 100) : null;
+  const r = 7;
+  const circumference = 2 * Math.PI * r;
+  const tone = percent == null ? '' : percent >= 90 ? ' critical' : percent >= 75 ? ' warn' : '';
+  const title = usage.window
+    ? `Context: ${formatTokens(usage.used)} of ${formatTokens(usage.window)} tokens (${Math.round(percent ?? 0)}%)${usage.estimated ? ', window estimated' : ''}`
+    : `Context: ${formatTokens(usage.used)} tokens`;
+  return (
+    <div className={`terminal-chat-context${tone}`} title={title} aria-label={title}>
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <circle cx="9" cy="9" r={r} className="track" />
+        {percent != null && (
+          <circle
+            cx="9"
+            cy="9"
+            r={r}
+            className="fill"
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - percent / 100)}
+            transform="rotate(-90 9 9)"
+          />
+        )}
+      </svg>
+      <span>{usage.window ? `${formatTokens(usage.used)} / ${formatTokens(usage.window)}` : formatTokens(usage.used)}</span>
+    </div>
+  );
+}
+
+function Dots() {
+  return <span className="terminal-chat-dots" aria-hidden="true"><i /><i /><i /></span>;
+}
+
+function AgentHeader({ preset, label }: { preset: string; label: string }) {
+  return (
+    <div className="terminal-chat-agent-header">
+      <AgentBrandMark command={preset} name={label} className="terminal-chat-agent-mark" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function UserTurn({ text, pending = false }: { text: string; pending?: boolean }) {
+  return (
+    <div className={`terminal-chat-user${pending ? ' pending' : ''}`}>
+      <div className="terminal-chat-user-bubble">{text}</div>
+    </div>
+  );
+}
+
+function firstLine(text: string): string {
+  return text.split('\n').find((line) => line.trim())?.trim() ?? '';
+}
+
+/** A run of tool calls and thinking, folded to one line until opened. */
+function Activity({ items, live }: { items: TerminalChatItem[]; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const tools = items.filter((i) => i.kind === 'tool');
+  const failed = tools.filter((i) => i.toolStatus === 'error').length;
+  const last = items[items.length - 1];
+  const running = live && (last.kind === 'reasoning' || last.toolStatus === 'running');
+  let summary: string;
+  if (running) {
+    const detail = last.kind === 'tool' ? firstLine(last.toolInput ?? '') : '';
+    summary = `${last.kind === 'reasoning' ? 'Thinking' : last.toolName ?? 'Tool'}${detail ? ` · ${detail}` : ''}`;
+  } else if (tools.length) {
+    summary = `${tools.length === 1 ? 'Used 1 tool' : `Used ${tools.length} tools`}${failed ? ` · ${failed} failed` : ''}`;
+  } else {
+    summary = 'Thought';
   }
-  if (item.kind === 'reasoning') {
-    return (
-      <details className="terminal-chat-row reasoning">
-        <summary>Thinking</summary>
-        <div className="terminal-chat-reasoning-body">{item.text}</div>
-      </details>
-    );
-  }
-  if (item.kind === 'tool') {
-    const status = item.toolStatus ?? 'running';
-    return (
-      <details className={`terminal-chat-row tool ${status}`}>
-        <summary>
-          <span className={`terminal-chat-tool-dot ${status}`} aria-hidden="true" />
-          <span className="terminal-chat-tool-name">{item.toolName}</span>
-          {item.toolInput && <span className="terminal-chat-tool-input">{item.toolInput}</span>}
-        </summary>
-        {item.toolInput && <pre className="terminal-chat-tool-block">{item.toolInput}</pre>}
-        {item.toolOutput && <pre className="terminal-chat-tool-block output">{item.toolOutput}</pre>}
-      </details>
-    );
-  }
-  return <div className="terminal-chat-notice">{item.text}</div>;
+
+  return (
+    <div className={`terminal-chat-activity${open ? ' open' : ''}`}>
+      <button type="button" className="terminal-chat-activity-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className={`terminal-chat-status-dot${running ? ' running' : failed ? ' error' : ' done'}`} aria-hidden="true" />
+        <span className="terminal-chat-activity-summary">{summary}</span>
+        <svg className="terminal-chat-chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M3.5 2 6.5 5l-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="terminal-chat-activity-list">
+          {items.map((item) => (item.kind === 'reasoning'
+            ? <Reasoning key={item.id} text={item.text} />
+            : <ToolRow key={item.id} item={item} />))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Reasoning({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="terminal-chat-step">
+      <button type="button" className="terminal-chat-step-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="terminal-chat-step-icon" aria-hidden="true">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z" /></svg>
+        </span>
+        <span className="terminal-chat-step-name">Thinking</span>
+        {!open && <span className="terminal-chat-step-detail">{firstLine(text)}</span>}
+      </button>
+      {open && <div className="terminal-chat-reasoning">{text}</div>}
+    </div>
+  );
+}
+
+function ToolRow({ item }: { item: TerminalChatItem }) {
+  const [open, setOpen] = useState(false);
+  const status = item.toolStatus ?? 'running';
+  return (
+    <div className={`terminal-chat-step ${status}`}>
+      <button type="button" className="terminal-chat-step-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="terminal-chat-step-icon" aria-hidden="true">
+          <span className={`terminal-chat-status-dot ${status}`} />
+        </span>
+        <span className="terminal-chat-step-name">{item.toolName}</span>
+        <span className="terminal-chat-step-detail">{firstLine(item.toolInput ?? '')}</span>
+      </button>
+      {open && (
+        <div className="terminal-chat-step-body">
+          {item.toolInput && <pre>{item.toolInput}</pre>}
+          {item.toolOutput
+            ? <pre className="output">{item.toolOutput}</pre>
+            : status === 'running' ? <div className="terminal-chat-step-wait">Running…</div> : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** An agent reply as Markdown. Links never navigate the app window. */
+function Markdown({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const html = useMemo(() => {
+    try {
+      return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }) as string);
+    } catch {
+      return DOMPurify.sanitize(text);
+    }
+  }, [text]);
+  // One object per `html`, so React doesn't rewrite the markup (and drop the copy buttons) every render.
+  const innerHtml = useMemo(() => ({ __html: html }), [html]);
+
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    root.querySelectorAll<HTMLElement>('pre > code').forEach((code) => {
+      const pre = code.parentElement!;
+      if (pre.dataset.enhanced) return;
+      pre.dataset.enhanced = 'true';
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'terminal-chat-code-copy';
+      copy.textContent = 'Copy';
+      copy.addEventListener('click', () => {
+        void copyTextToClipboard(code.textContent ?? '').then(() => {
+          copy.textContent = 'Copied';
+          setTimeout(() => { copy.textContent = 'Copy'; }, 1400);
+        });
+      });
+      pre.appendChild(copy);
+    });
+    root.querySelectorAll('table').forEach((table) => {
+      if (table.parentElement?.classList.contains('terminal-chat-table')) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'terminal-chat-table';
+      table.replaceWith(wrap);
+      wrap.appendChild(table);
+    });
+  }, [html]);
+
+  return (
+    <div
+      ref={ref}
+      className="terminal-chat-md"
+      onClick={(event) => {
+        const anchor = (event.target as HTMLElement).closest('a');
+        if (!anchor) return;
+        event.preventDefault();
+        const href = anchor.getAttribute('href') ?? '';
+        if (/^(?:https?:|mailto:)/i.test(href)) {
+          void invoke('preview_open_in_browser', { url: href }).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
+        }
+      }}
+      dangerouslySetInnerHTML={innerHtml}
+    />
+  );
 }
