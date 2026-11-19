@@ -300,3 +300,28 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Which worktree a launch from this "+" lands in. */
+.aqa-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 7px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.aqa-target svg { flex: none; }
+
+.aqa-target span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aqa-target strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}

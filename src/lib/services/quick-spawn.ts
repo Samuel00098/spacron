@@ -1,9 +1,8 @@
 // One-click spawn of a single agent, for the "+" agent launcher (agent
-// pane headers, terminal rooms and the empty stage). It walks the same steps as one agent picked in AgentSpawnModal —
-// name, launch, adopt — with the CLI's own model. Unlike the picker it always
-// runs in the main repo, never a worktree: the "+" is the fast path, and the
-// picker ("More options…") is where placement is chosen. Keep the shared steps
-// in step with the picker.
+// pane headers, terminal rooms, sidebar worktree rows and the empty stage):
+// name, launch, adopt. It starts in a project worktree, never an isolated
+// checkout — the "+" on an agent's room passes that agent's worktree, so the
+// new agent joins it; elsewhere it is the sidebar's selected worktree.
 
 import { get } from '$lib/stores/storeCompat';
 import { activeProject } from '$lib/stores/workspace';
@@ -11,7 +10,7 @@ import { showToast } from '$lib/stores/notification';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
 import { sessions, spawnAgentPreset, manualPromptTargetId, waitForAgentReady, sendPromptToSession } from '$lib/stores/terminal';
 import { getAgentProviderLaunchOptions } from '$lib/services/chat-provider-adapters';
-import { createChatThread, setThreadDraft } from '$lib/stores/chatThreads';
+import { createChatThread, setChatThreadWorktree, setThreadDraft, sharedWorktreeAt } from '$lib/stores/chatThreads';
 import { showProjectChat } from '$lib/stores/chatNavigation';
 import { setInteractionMode } from '$lib/stores/interactionMode';
 import type { ChatReasoningEffort } from '$lib/types/chat';
@@ -28,6 +27,11 @@ export interface QuickLaunchOptions {
   reasoningEffort?: ChatReasoningEffort;
   /** Sent as the agent's first prompt once its CLI has come up. */
   prompt?: string;
+  /**
+   * The project worktree to start in: a worktree path, `null` for the main
+   * checkout, or omitted for the sidebar's selected worktree.
+   */
+  worktreePath?: string | null;
 }
 
 export async function quickSpawnAgent(command: string, options: QuickLaunchOptions = {}): Promise<void> {
@@ -57,7 +61,10 @@ export async function quickSpawnAgent(command: string, options: QuickLaunchOptio
       model: options.model ?? null,
       reasoningEffort: options.reasoningEffort ?? 'default',
     });
-    const id = await spawnAgentPreset(command, workingRootFor(project.id, project.root_path), {
+    const cwd = options.worktreePath === undefined
+      ? workingRootFor(project.id, project.root_path)
+      : options.worktreePath ?? project.root_path;
+    const id = await spawnAgentPreset(command, cwd, {
       isDev: get(layoutSnapshot).ambient === 'development',
       projectId: project.id,
       runtimeArgs: launch.runtimeArgs || undefined,
@@ -103,6 +110,11 @@ export function quickStartAgentChat(
     model: options.model ?? null,
     reasoningEffort: options.reasoningEffort ?? 'default',
   });
+  // Started from another agent's room: join that agent's worktree instead of
+  // the sidebar's selected one.
+  if (options.worktreePath !== undefined) {
+    setChatThreadWorktree(thread.id, sharedWorktreeAt(project.id, options.worktreePath));
+  }
   const prompt = options.prompt?.trim();
   if (prompt) setThreadDraft(thread.id, prompt);
   showProjectChat();

@@ -8,7 +8,6 @@ import AppShell from '$lib/components/layout/AppShell.tsx';
 import CommandPalette from '$lib/components/shared/CommandPalette.tsx';
 import FloatingSearch from '$lib/components/shared/FloatingSearch.tsx';
 import Toasts from '$lib/components/shared/Toasts.tsx';
-import AgentSpawnModal from '$lib/components/shared/AgentSpawnModal.tsx';
 import AgentPlacementModal from '$lib/components/shared/AgentPlacementModal.tsx';
 import NewFolderModal from '$lib/components/shared/NewFolderModal.tsx';
 import CloneRepoModal from '$lib/components/shared/CloneRepoModal.tsx';
@@ -99,6 +98,17 @@ export default function App() {
   useNativeSystemIcon();
   const isSettingsOpen = useStore(settingsOpen);
   const isAgentSpawnOpen = useStore(agentSpawnOpen);
+  // The old Spawn Agents dialog is gone: the "spawn agent" shortcut opens the
+  // "+" agent launcher instead (AgentQuickAdd clears this flag when it does).
+  // With no launcher on screen nothing would ever clear it, and a launcher
+  // mounting later would pop open unasked — so drop an unanswered request.
+  useEffect(() => {
+    if (!isAgentSpawnOpen) return;
+    const timer = window.setTimeout(() => {
+      if (get(agentSpawnOpen)) closeAgentSpawn();
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [isAgentSpawnOpen]);
   const isNewFolderPromptOpen = useStore(newFolderPromptOpen);
   const isCloneRepoPromptOpen = useStore(cloneRepoPromptOpen);
 
@@ -309,7 +319,6 @@ export default function App() {
 
       {isSettingsOpen && <SettingsModal onclose={closeSettings} />}
 
-      {isAgentSpawnOpen && <AgentSpawnModal onclose={closeAgentSpawn} />}
 
       {/* Layers over the spawn modal — every spawn path (manual or orchestrator)
           routes its "worktree or main repo?" question through this one host. */}

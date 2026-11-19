@@ -16,12 +16,41 @@ import { launchFieldOptions } from './AgentLaunchConfigFields';
 import { AgentBrandMark } from './useAgentBrand';
 import './Dropdown.css';
 import './AgentQuickAdd.css';
+import { agentSpawnOpen, closeAgentSpawn } from '$lib/stores/layout';
+import { launchWorktreeFor, worktreesByProject } from '$lib/stores/projectWorktrees';
 
 // The "+" launcher: optional quick items (Editor, Terminal) on top, then every
-// installed agent. Picking an agent opens a second pane beside it with that
-// CLI's models (searchable), a reasoning level, an optional first prompt, and
-// two ways to launch: a terminal agent in the main repo, or a Chat-mode thread
-// driven by that agent.
+// installed agent. Clicking an agent's name starts it straight away; its arrow
+// opens a second pane with that CLI's models (searchable), a reasoning level,
+// an optional first prompt, and two ways to launch: a terminal agent or a
+// Chat-mode thread driven by that agent.
+//
+// Where it starts: on an agent's room, `launchFrom` is that agent's folder, so
+// the new agent joins the same project worktree (master or another). Without
+// it, the sidebar's selected worktree. This replaced the old Spawn Agents
+// dialog; its keyboard shortcut now opens the first visible launcher.
+
+/** Mounted launchers, in mount order, for the "spawn agent" shortcut. */
+const launchers = new Set<{ trigger: () => HTMLButtonElement | null; open: () => void }>();
+
+/** Open the launcher the shortcut should reach: the first one on screen in the
+ *  stage (sidebar rows are skipped — they are per-worktree, not general). */
+function openPrimaryLauncher(): boolean {
+  for (const entry of launchers) {
+    const el = entry.trigger();
+    if (!el || el.offsetParent === null || el.closest('.projects-sidebar-panel')) continue;
+    entry.open();
+    return true;
+  }
+  for (const entry of launchers) {
+    const el = entry.trigger();
+    if (el && el.offsetParent !== null) {
+      entry.open();
+      return true;
+    }
+  }
+  return false;
+}
 
 const GAP = 6;
 const EDGE_MARGIN = 8;
@@ -42,6 +71,7 @@ export default function AgentQuickAdd({
   icon,
   title = 'Add another agent',
   items = [],
+  launchFrom,
 }: {
   className?: string;
   /** Visible text beside the "+" (the empty-stage button uses one). */
@@ -50,6 +80,11 @@ export default function AgentQuickAdd({
   title?: string;
   /** Shown above the agents, e.g. "Editor" and "Terminal". */
   items?: LauncherItem[];
+  /**
+   * The folder of the agent this "+" belongs to. New agents join the project
+   * worktree that contains it. Omit for the sidebar's selected worktree.
+   */
+  launchFrom?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [rootStyle, setRootStyle] = useState<CSSProperties>({ visibility: 'hidden' });
@@ -70,6 +105,43 @@ export default function AgentQuickAdd({
   const $removedPresetAgents = useStore(removedPresetAgents);
   const $usage = useStore(usageState);
   const $agentUpdates = useStore(agentUpdates);
+  const $worktrees = useStore(worktreesByProject);
+  const spawnShortcut = useStore(agentSpawnOpen);
+
+  // Where a launch from here lands: resolved at launch time, so a worktree
+  // created after this rendered is still found.
+  const targetWorktree = (): string | null | undefined =>
+    launchFrom === undefined || !project ? undefined : launchWorktreeFor(project.id, launchFrom);
+  const targetLabel = useMemo(() => {
+    if (launchFrom === undefined || !project) return null;
+    const list = $worktrees[project.id];
+    if (!list || list.length === 0) return null;
+    const path = launchWorktreeFor(project.id, launchFrom);
+    const row = path ? list.find((w) => w.path === path) : list.find((w) => w.is_main);
+    return row ? (row.is_main ? row.branch ?? row.name : row.name) : null;
+  }, [launchFrom, project, $worktrees]);
+
+  // Register for the "spawn agent" shortcut, which used to open the old dialog.
+  useEffect(() => {
+    const entry = {
+      trigger: () => triggerEl.current,
+      open: () => {
+        setRootStyle({ visibility: 'hidden' });
+        setOpen(true);
+      },
+    };
+    launchers.add(entry);
+    return () => {
+      launchers.delete(entry);
+    };
+  }, []);
+  useEffect(() => {
+    if (!spawnShortcut) return;
+    // Every mounted launcher sees the flag; the first to run handles it and
+    // clears it, so exactly one opens.
+    closeAgentSpawn();
+    openPrimaryLauncher();
+  }, [spawnShortcut]);
 
   // The same roster the Spawn Agents picker offers.
   const presets: Preset[] = useMemo(() => {
@@ -224,6 +296,7 @@ export default function AgentQuickAdd({
       model: model === DEFAULT_MODEL ? null : model,
       reasoningEffort: effort,
       prompt,
+      worktreePath: targetWorktree(),
     };
     close();
     setPrompt('');
@@ -268,6 +341,15 @@ export default function AgentQuickAdd({
       {open && createPortal(
         <div ref={rootEl} className="aqa-root" style={rootStyle} onKeyDown={moveFocus}>
           <div className="dd-menu aqa-pane aqa-agents" role="menu" aria-label="Add an agent">
+            {targetLabel && (
+              <div className="aqa-target" title="New agents join this worktree">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" />
+                  <path d="M6 8.5v7M18 10.5c0 4-6 3-11 5.5" />
+                </svg>
+                <span>Starts in <strong>{targetLabel}</strong></span>
+              </div>
+            )}
             {items.length > 0 && (
               <div className="aqa-quick-row" role="group" aria-label="Open">
                 {items.map((item) => (
@@ -311,7 +393,7 @@ export default function AgentQuickAdd({
                       title={updating ? `${preset.name} is updating` : `Launch ${preset.name}`}
                       onClick={() => {
                         close();
-                        void quickSpawnAgent(preset.command);
+                        void quickSpawnAgent(preset.command, { worktreePath: targetWorktree() });
                       }}
                       onKeyDown={(event) => {
                         if (event.key === 'ArrowRight') {

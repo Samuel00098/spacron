@@ -2,6 +2,7 @@ import { writable, get } from '$lib/stores/storeCompat';
 import {
   isPathInside,
   listProjectWorktrees,
+  worktreeForPath,
   type ProjectWorktree,
 } from '$lib/services/project-worktrees';
 
@@ -116,6 +117,21 @@ export function getActiveWorktreePath(projectId: string | null | undefined): str
   if (!list) return active;
   const match = list.find((w) => !w.is_main && !w.missing && samePath(w.path, active));
   return match ? match.path : null;
+}
+
+/**
+ * The worktree a new agent joins when it is started from another agent's
+ * folder (the "+" on that agent's room): that folder's worktree path, `null`
+ * for the main checkout, or `undefined` when the list is not loaded (the caller
+ * then falls back to the active worktree).
+ */
+export function launchWorktreeFor(projectId: string | null | undefined, folder: string | null | undefined): string | null | undefined {
+  if (!projectId) return undefined;
+  const list = get(worktreesByProject)[projectId];
+  if (!list || list.length === 0) return undefined;
+  const owner = worktreeForPath(list, folder);
+  if (!owner || owner.is_main || owner.missing) return null;
+  return owner.path;
 }
 
 /** The folder new work should start in: the active worktree, else `root`. */

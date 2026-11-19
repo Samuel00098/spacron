@@ -120,6 +120,22 @@ describe('active worktree', () => {
     expect(store.getActiveWorktreePath('p')).toBeNull();
   });
 
+  it("starts an agent launched from another agent in that agent's worktree", async () => {
+    backendMock.mockResolvedValueOnce([main, login]);
+    await store.refreshProjectWorktrees('p');
+    // Selection elsewhere must not matter: the source agent decides.
+    store.setActiveWorktree('p', login.path);
+    expect(store.launchWorktreeFor('p', `${ROOT}\\src`)).toBeNull();
+    expect(store.launchWorktreeFor('p', null)).toBeNull();
+    expect(store.launchWorktreeFor('p', `${login.path}\\pkg`)).toBe(login.path);
+    // An orchestrator-isolated agent checkout is not a project worktree: master.
+    expect(store.launchWorktreeFor('p', `${ROOT}\\.spacron\\worktrees\\alex`)).toBeNull();
+  });
+
+  it('leaves the target open when the list has not loaded', () => {
+    expect(store.launchWorktreeFor('unknown', ROOT)).toBeUndefined();
+  });
+
   it('treats a failed list as no worktrees rather than throwing', async () => {
     backendMock.mockRejectedValueOnce(new Error('unsupported remote command'));
     await expect(store.refreshProjectWorktrees('p')).resolves.toEqual([]);

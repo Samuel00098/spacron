@@ -3561,7 +3561,14 @@ export default function AppShell() {
             {/* DeepSeek Harness is an agent too, but its room is a web panel
                 with no agent session behind it. */}
             {(agentSession || id === 'deepseek' || id === 'terminal' || id === 'dev-terminal') && (
-              <AgentQuickAdd className="room-action" title={agentSession || id === 'deepseek' ? 'Add another agent' : 'Add an agent'} items={launcherItems} />
+              <AgentQuickAdd
+                className="room-action"
+                title={agentSession || id === 'deepseek' ? 'Add another agent' : 'Add an agent'}
+                items={launcherItems}
+                // An agent's "+" starts the new agent in that agent's worktree
+                // (master, or the worktree it works in).
+                launchFrom={agentSession ? agentSession.worktree?.path ?? agentSession.cwd ?? null : undefined}
+              />
             )}
             {isThisForcedFullscreen ? null : isThisExpanded ? (
               <button

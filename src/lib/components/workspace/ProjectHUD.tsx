@@ -66,7 +66,7 @@ import ProjectWorktreeList from './ProjectWorktreeList';
 import CreateWorktreeModal from './CreateWorktreeModal';
 import { createWorktreeRequest, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
 import { worktreeForPath } from '$lib/services/project-worktrees';
-import { openAgentSpawn } from '$lib/stores/layout';
+import AgentQuickAdd from '$lib/components/shared/AgentQuickAdd';
 import { showProjectChat } from '$lib/stores/chatNavigation';
 
 function getFilename(path: string): string {
@@ -1522,12 +1522,26 @@ export default function ProjectHUD() {
                 projectId={projectId}
                 sessions={projectSessions}
                 threads={storedThreads}
-                newItemLabel={currentInteractionMode === 'chat' ? 'New chat thread here' : 'New agent here'}
-                onNewItem={(worktree) => {
+                newItemLabel="New chat thread here"
+                onNewItem={currentInteractionMode === 'chat' ? (worktree) => {
                   setActiveWorktree(projectId, worktree.is_main ? null : worktree.path);
-                  if (currentInteractionMode === 'chat') void openChatThread(p.workspaceId, p.path, null);
-                  else openAgentSpawn();
-                }}
+                  void openChatThread(p.workspaceId, p.path, null);
+                } : undefined}
+                // Agent mode: the agent launcher, aimed at this worktree. It
+                // launches into the open project, so only that project gets it.
+                renderNewItem={currentInteractionMode === 'cli' && projectId === activeProjId ? (worktree) => (
+                  <AgentQuickAdd
+                    className="project-thread-action-btn"
+                    title={`New agent in ${worktree.is_main ? worktree.branch ?? worktree.name : worktree.name}`}
+                    launchFrom={worktree.path}
+                    icon={(
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+                        <line x1="12" y1="5" x2="12" y2="19" />
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                      </svg>
+                    )}
+                  />
+                ) : undefined}
                 renderChildren={(worktree) => {
                   if (currentInteractionMode === 'chat') {
                     const list = threadListFor(worktree.path, worktree.is_main);

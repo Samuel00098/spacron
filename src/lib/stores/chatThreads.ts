@@ -912,7 +912,11 @@ export function createChatThread(
 
 /** The project's selected worktree as a thread checkout, or null for the root. */
 function sharedWorktreeFor(projectId: string, now: number): ChatThreadWorktree | null {
-  const path = getActiveWorktreePath(projectId);
+  return sharedWorktreeAt(projectId, getActiveWorktreePath(projectId), now);
+}
+
+/** A project worktree as a shared thread checkout; null path = the project root. */
+export function sharedWorktreeAt(projectId: string, path: string | null, now = Date.now()): ChatThreadWorktree | null {
   if (!path) return null;
   const row = (get(worktreesByProject)[projectId] ?? []).find((w) => w.path === path);
   return {

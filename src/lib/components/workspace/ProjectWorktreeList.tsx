@@ -47,6 +47,7 @@ export default function ProjectWorktreeList({
   renderChildren,
   onNewItem,
   newItemLabel = 'New agent here',
+  renderNewItem,
 }: {
   projectId: string;
   sessions: TerminalSessionInfo[];
@@ -57,6 +58,9 @@ export default function ProjectWorktreeList({
   /** Start new work in a worktree, from the row's + button. */
   onNewItem?: (worktree: ProjectWorktree) => void;
   newItemLabel?: string;
+  /** Replaces the row's + button with a control of the caller's (the agent
+   *  launcher, aimed at this worktree). */
+  renderNewItem?: (worktree: ProjectWorktree) => ReactNode;
 }) {
   const all = useStore(worktreesByProject);
   const active = useStore(activeWorktreeByProject);
@@ -296,7 +300,7 @@ export default function ProjectWorktreeList({
                 </button>
               )}
               <div className="project-worktree-actions" ref={menuPath === worktree.path ? menuRef : undefined}>
-                {onNewItem && !worktree.missing && (
+                {renderNewItem && !worktree.missing ? renderNewItem(worktree) : onNewItem && !worktree.missing && (
                   <button
                     type="button"
                     className="project-thread-action-btn"
