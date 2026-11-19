@@ -71,7 +71,7 @@ export async function openAcpSession(command: string, args: string[], cwd: strin
   };
 }
 
-const ACP_CLIENT_INFO = { name: 'spacron', version: '5.1.2' };
+const ACP_CLIENT_INFO = { name: 'spacron', version: '5.1.3' };
 const ACP_CLIENT_CAPABILITIES = {
   fs: { readTextFile: true, writeTextFile: true },
   terminal: { create: true, output: true, release: true, waitForExit: true },

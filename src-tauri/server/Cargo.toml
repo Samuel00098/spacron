@@ -19,11 +19,11 @@
 # the single source of the sidecar and the two copies cannot diverge.
 [package]
 name = "spacron-server"
-version = "5.1.2"
+version = "5.1.3"
 description = "Headless Spacron remote-workspace server"
 authors = ["samue"]
 edition = "2021"
-license-file = "../../LICENSE"
+license = "MIT"
 publish = false
 
 [dependencies]
