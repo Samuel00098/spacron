@@ -15,7 +15,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { get, writable } from '$lib/stores/storeCompat';
 import { remoteTarget } from '$lib/stores/remoteWorkspace';
-import { activeSessionId, getSessionOutputLength, relaunchAgentInSession, sessions, writeToSession } from '$lib/stores/terminal';
+import { activeSessionId, getSessionOutputLength, getSessionRoot, relaunchAgentInSession, sessions, writeToSession } from '$lib/stores/terminal';
 import { agentPermissionMode } from '$lib/stores/settings';
 import { readTerminalScreen } from '$lib/services/terminal-screen';
 
@@ -318,38 +318,79 @@ export function useSessionPermissionMode(sessionId: number): ChatPermissionMode 
   return sessionPermissionMode(sessionId);
 }
 
-/** PowerShell, cmd and POSIX prompts, i.e. the CLI has handed the shell back. */
-const SHELL_PROMPT = /(^PS [^>]*>\s*$)|(^[A-Za-z]:\\[^>]*>\s*$)|([$#%]\s*$)/;
+/**
+ * Whether a screen line is the shell's prompt in this pane's folder, i.e. the
+ * CLI has handed the shell back. Strict on purpose: a loose `[$#%]$` also
+ * matched agent status lines ("… 100%"), which once let a relaunch line be
+ * typed into a CLI that was still running. Windows prompts must end in the
+ * folder; POSIX prompts must name it (or `~`) and end in `$ # %`, not after a digit.
+ */
+export function isShellPromptLine(line: string, folder: string | null): boolean {
+  const text = line.trimEnd();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const name = folder?.toLowerCase() ?? null;
+  // cmd: `C:\path\folder>`   PowerShell: `PS C:\path\folder>`
+  if (/^(PS )?[A-Za-z]:\\[^<>|]*>$/.test(text)) {
+    return name == null || lower.endsWith(`\\${name}>`) || lower.endsWith(`${name}>`);
+  }
+  // `user@host:~/dir$`: ends in $ # %, never right after a digit ("100%").
+  if (/[^\d\s][$#%]$|\s[$#%]$/.test(text)) {
+    return name == null || lower.includes(name) || text.includes('~');
+  }
+  return false;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Wait until the pane shows a shell prompt again after output has gone quiet. */
-async function waitForShellPrompt(sessionId: number, timeoutMs: number): Promise<boolean> {
+/** Wait until output has gone quiet and the last screen line is this pane's shell prompt. */
+async function waitForShellPrompt(sessionId: number, timeoutMs: number, folder: string | null): Promise<boolean> {
   const started = Date.now();
   let lastLen = getSessionOutputLength(sessionId);
   let quietSince = Date.now();
   while (Date.now() - started < timeoutMs) {
-    await sleep(200);
+    await sleep(150);
     const len = getSessionOutputLength(sessionId);
     if (len !== lastLen) {
       lastLen = len;
       quietSince = Date.now();
       continue;
     }
-    if (Date.now() - quietSince < 500) continue;
-    const screen = readTerminalScreen(sessionId, { maxLines: 6 }) ?? '';
+    if (Date.now() - quietSince < 400) continue;
+    const screen = readTerminalScreen(sessionId, { maxLines: 8 }) ?? '';
     const lastLine = screen.split('\n').map((l) => l.trimEnd()).filter(Boolean).pop() ?? '';
-    if (SHELL_PROMPT.test(lastLine)) return true;
+    if (isShellPromptLine(lastLine, folder)) return true;
   }
   return false;
 }
 
 /**
- * Apply a launch-time option by restarting the CLI in its own terminal and
- * resuming the same conversation; Orca applies Claude permission picks the same
- * way. Callers only offer this between turns. Returns an error, or null.
+ * Quit the CLI with its quit key rather than by typing a command. Every one of
+ * these TUIs quits on Ctrl+C pressed twice at an idle prompt (the first clears
+ * a half-typed draft or arms "press again to quit"), and a Ctrl+C that reaches
+ * the shell after the CLI is gone only redraws its prompt. A typed `/exit` did
+ * the opposite: once the CLI had quit, the rest of it landed in cmd as a
+ * command. Returns whether the shell prompt came back.
+ */
+async function quitAgentCli(sessionId: number): Promise<boolean> {
+  const folder = (getSessionRoot(sessionId) ?? '').split(/[\\/]/).filter(Boolean).pop() ?? null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    writeToSession(sessionId, '\x03');
+    await sleep(120);
+    writeToSession(sessionId, '\x03');
+    if (await waitForShellPrompt(sessionId, 2500, folder)) return true;
+  }
+  return waitForShellPrompt(sessionId, 3000, folder);
+}
+
+/**
+ * Apply a launch-time option by restarting the CLI in its own terminal; Orca
+ * applies Claude permission picks the same way. With a conversation it is
+ * resumed; before the first message there is nothing to resume, so the CLI
+ * simply starts again with the new settings. Callers only offer this between
+ * turns. Returns an error, or null.
  */
 export async function relaunchTerminalAgent(
   sessionId: number,
@@ -359,15 +400,13 @@ export async function relaunchTerminalAgent(
 ): Promise<string | null> {
   const agent = transcriptAgentFor(preset);
   if (!agent) return 'This agent has no chat view.';
-  if (!providerSessionId) return 'Send a first message so there is a conversation to resume.';
   const current = launchState.get(sessionId) ?? { permission: sessionPermissionMode(sessionId), model: null, effort: null };
   const next = { ...current, ...patch };
-  await typeSlashCommand(sessionId, '/exit');
-  if (!(await waitForShellPrompt(sessionId, 8000))) {
-    return "The agent didn't exit, so nothing changed. Check the terminal view.";
+  if (!(await quitAgentCli(sessionId))) {
+    return "The agent didn't quit, so nothing changed. Check the terminal view.";
   }
   const args = [
-    resumeArgs(agent, providerSessionId),
+    providerSessionId ? resumeArgs(agent, providerSessionId) : '',
     permissionArgs(agent, next.permission),
     modelArgs(agent, next.model, next.effort),
   ].filter(Boolean).join(' ');

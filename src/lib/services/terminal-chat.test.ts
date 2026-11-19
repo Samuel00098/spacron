@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-import { canShowTerminalChat, contextUsageFor, formatTokens, modelApplyFor, permissionArgs, permissionModesFor, resumeArgs, sendMatchKey, transcriptAgentFor } from './terminal-chat';
+import { canShowTerminalChat, contextUsageFor, formatTokens, modelApplyFor, isShellPromptLine, permissionArgs, permissionModesFor, resumeArgs, sendMatchKey, transcriptAgentFor } from './terminal-chat';
 
 describe('terminal chat view', () => {
   it('offers chat only for agents whose transcripts it can read', () => {
@@ -50,5 +50,17 @@ describe('terminal chat view', () => {
     expect(permissionArgs('codex', 'ask')).toBe('-a on-request -s read-only -c approvals_reviewer="user"');
     expect(resumeArgs('codex', 'abc')).toBe('resume abc');
     expect(resumeArgs('claude', 'abc')).toBe('--resume abc');
+  });
+
+  it('only takes the pane folder shell prompt as "the CLI has quit"', () => {
+    const folder = '3D works';
+    expect(isShellPromptLine(String.raw`C:\Users\SMIDS MAN\Documents\Samuel Works\3D works>`, folder)).toBe(true);
+    expect(isShellPromptLine(String.raw`PS C:\Users\SMIDS MAN\Documents\Samuel Works\3D works>`, folder)).toBe(true);
+    expect(isShellPromptLine('samuel@box:~/3D works$', folder)).toBe(true);
+    // A command typed at the prompt, or a CLI status line, is not the bare prompt.
+    expect(isShellPromptLine(String.raw`C:\Users\SMIDS MAN\Documents\Samuel Works\3D works>/exit`, folder)).toBe(false);
+    expect(isShellPromptLine('  ctrl+c quit   100% context left', folder)).toBe(false);
+    expect(isShellPromptLine('gpt-6-luna medium · 100%', folder)).toBe(false);
+    expect(isShellPromptLine(String.raw`C:\Users\other>`, folder)).toBe(false);
   });
 });
