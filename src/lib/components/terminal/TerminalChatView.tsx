@@ -104,13 +104,11 @@ function toBlocks(items: TerminalChatItem[]): Block[] {
 export default function TerminalChatView({
   sessionId,
   agentPreset,
-  isExecuting,
   isRunning,
   worktree = null,
 }: {
   sessionId: number;
   agentPreset: string;
-  isExecuting: boolean;
   isRunning: boolean;
   worktree?: WorktreeInfo | null;
 }) {
@@ -248,7 +246,11 @@ export default function TerminalChatView({
   }, [userKeys, pending.length]);
 
   const blocks = useMemo(() => toBlocks(items), [items]);
-  const busy = isRunning && (isExecuting || transcriptBusy === true || pending.length > 0);
+  // Busy comes from the conversation itself (a turn started and has not ended)
+  // and from sends not yet in it, never from terminal output: TUIs repaint on
+  // focus, resize and clicks, and the pane's output-based `isExecuting` blinked
+  // "Working" on with every one of them. Orca reads the same turn records.
+  const busy = isRunning && (transcriptBusy === true || pending.length > 0);
 
   // Follow the conversation while the reader is at the bottom.
   useLayoutEffect(() => {
@@ -397,19 +399,16 @@ export default function TerminalChatView({
       onMouseDown={(e) => { if (e.button === 1) e.stopPropagation(); }}
       onMouseUp={(e) => e.stopPropagation()}
     >
-      {!empty && (
-        <div className="terminal-chat-watermark" aria-hidden="true">
-          <AgentBrandMark command={agentPreset} name={agentLabel} className="terminal-chat-watermark-mark" />
-        </div>
-      )}
+      {/* The agent's mark lives only here, large and faint behind the thread. */}
+      <div className="terminal-chat-watermark" aria-hidden="true">
+        <AgentBrandMark command={agentPreset} name={agentLabel} className="terminal-chat-watermark-mark" />
+      </div>
       <div className="terminal-chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="terminal-chat-thread">
           {truncated && <div className="terminal-chat-notice">Earlier messages are in the terminal history</div>}
           {!loaded && <div className="terminal-chat-loading"><Dots /></div>}
           {empty && (
             <div className="terminal-chat-empty">
-              <AgentBrandMark command={agentPreset} name={agentLabel} className="terminal-chat-empty-mark" />
-              <div className="terminal-chat-empty-title">{agentLabel}</div>
               <div className="terminal-chat-empty-hint">
                 Same session as the terminal. Send a message to start, or switch back any time.
               </div>
@@ -421,14 +420,12 @@ export default function TerminalChatView({
             if (block.type === 'assistant') {
               return (
                 <div key={block.item.id} className="terminal-chat-agent">
-                  {block.leads && <AgentHeader preset={agentPreset} label={agentLabel} />}
                   <Markdown text={block.item.text} />
                 </div>
               );
             }
             return (
               <div key={block.id} className="terminal-chat-agent">
-                {block.leads && <AgentHeader preset={agentPreset} label={agentLabel} />}
                 <Activity items={block.items} live={busy && block === lastBlock} />
               </div>
             );
@@ -925,15 +922,6 @@ function ContextRing({ usage }: { usage: ContextUsage }) {
 
 function Dots() {
   return <span className="terminal-chat-dots" aria-hidden="true"><i /><i /><i /></span>;
-}
-
-function AgentHeader({ preset, label }: { preset: string; label: string }) {
-  return (
-    <div className="terminal-chat-agent-header">
-      <AgentBrandMark command={preset} name={label} className="terminal-chat-agent-mark" />
-      <span>{label}</span>
-    </div>
-  );
 }
 
 function UserTurn({ text, pending = false }: { text: string; pending?: boolean }) {

@@ -2022,7 +2022,6 @@ function TerminalPane({
           <TerminalChatView
             sessionId={sessionId}
             agentPreset={sessionInfo.agentPreset}
-            isExecuting={Boolean(sessionInfo.isExecuting)}
             isRunning={Boolean(sessionInfo.isRunning)}
             worktree={sessionInfo.worktree ?? null}
           />

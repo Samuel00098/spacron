@@ -528,20 +528,28 @@ fn parse_claude(path: &Path) -> Parsed {
                 Value::String(s) => {
                     if let Some(text) = claude_user_text(s) {
                         parsed.push_text("user", uuid, text, time);
+                        parsed.busy = Some(true);
+                    } else if s.contains("[Request interrupted") {
+                        parsed.busy = Some(false);
                     }
                 }
                 Value::Array(blocks) => {
                     let mut words = Vec::new();
                     let mut images = 0;
+                    let mut interrupted = false;
+                    let mut tool_results = false;
                     for block in blocks {
                         match block.get("type").and_then(Value::as_str) {
                             Some("text") => {
-                                if let Some(text) = block.get("text").and_then(Value::as_str).and_then(claude_user_text) {
+                                let raw = block.get("text").and_then(Value::as_str).unwrap_or("");
+                                interrupted |= raw.contains("[Request interrupted");
+                                if let Some(text) = claude_user_text(raw) {
                                     words.push(text);
                                 }
                             }
                             Some("image") => images += 1,
                             Some("tool_result") => {
+                                tool_results = true;
                                 let id = str_of(block, "tool_use_id").unwrap_or_default();
                                 let output = value_text(block.get("content").unwrap_or(&Value::Null));
                                 let error = block.get("is_error").and_then(Value::as_bool) == Some(true);
@@ -553,6 +561,13 @@ fn parse_claude(path: &Path) -> Parsed {
                     if images > 0 {
                         words.push(if images == 1 { "[image]".into() } else { format!("[{images} images]") });
                     }
+                    // A prompt or a tool result hands the turn to the model; an
+                    // interrupt ends it. Settings commands change neither.
+                    if interrupted {
+                        parsed.busy = Some(false);
+                    } else if tool_results || !words.is_empty() {
+                        parsed.busy = Some(true);
+                    }
                     if !words.is_empty() {
                         parsed.push_text("user", uuid, words.join("\n"), time);
                     }
@@ -561,7 +576,12 @@ fn parse_claude(path: &Path) -> Parsed {
             }
             continue;
         }
-        // assistant
+        // assistant: Claude Code writes `tool_use` on every line of a turn that
+        // continues (thinking and tool calls) and `end_turn` on its final reply.
+        parsed.busy = Some(!matches!(
+            message.get("stop_reason").and_then(Value::as_str),
+            Some("end_turn" | "stop_sequence" | "max_tokens" | "refusal")
+        ));
         if let Some(model) = message.get("model").and_then(Value::as_str).filter(|m| !m.starts_with('<')) {
             parsed.model = Some(model.to_string());
         }
@@ -875,6 +895,7 @@ fn parse_grok(path: &Path) -> Parsed {
                 let raw = value_text(line.get("content").unwrap_or(&Value::Null));
                 let text = tag_body(&raw, "user_query").map(|q| strip_leading_tag_blocks(&q)).unwrap_or(raw);
                 parsed.push_text("user", id, text, None);
+                parsed.busy = Some(true);
             }
             Some("assistant") => {
                 if let Some(model) = str_of(&line, "model_id") {
@@ -884,6 +905,8 @@ fn parse_grok(path: &Path) -> Parsed {
                     parsed.effort = Some(effort);
                 }
                 parsed.push_text("assistant", id.clone(), value_text(line.get("content").unwrap_or(&Value::Null)), None);
+                // A reply that calls tools continues the turn; one without ends it.
+                parsed.busy = Some(line.get("tool_calls").and_then(Value::as_array).is_some_and(|c| !c.is_empty()));
                 if let Some(calls) = line.get("tool_calls").and_then(Value::as_array) {
                     for (ci, call) in calls.iter().enumerate() {
                         let call_id = str_of(call, "id").unwrap_or_else(|| format!("{id}:{ci}"));
@@ -902,6 +925,7 @@ fn parse_grok(path: &Path) -> Parsed {
                 parsed.push_text("reasoning", id, text, None);
             }
             Some("tool_result") => {
+                parsed.busy = Some(true);
                 let call = str_of(&line, "tool_call_id").unwrap_or_default();
                 parsed.finish_tool(&call, value_text(line.get("content").unwrap_or(&Value::Null)), false);
             }

@@ -103,22 +103,6 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   min-width: 0;
 }
 
-.terminal-chat-agent-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-  letter-spacing: 0.01em;
-}
-
-.terminal-chat-view .agent-brand-mark.terminal-chat-agent-mark {
-  /* `.app-shell .agent-brand-mark` stretches marks to fill their box; these
-     selectors outrank it so each mark keeps its own size. */
-  width: 18px;
-  height: 18px;
-  flex: none;
-}
-
 .terminal-chat-notice {
   align-self: center;
   padding: 3px 10px;
@@ -144,14 +128,6 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   text-align: center;
 }
 
-.terminal-chat-view .agent-brand-mark.terminal-chat-empty-mark {
-  width: 36px;
-  height: 36px;
-  margin-bottom: 6px;
-  opacity: 0.9;
-}
-
-.terminal-chat-empty-title { color: var(--text-primary); }
 .terminal-chat-empty-hint { color: var(--text-muted); }
 
 .terminal-chat-working {
