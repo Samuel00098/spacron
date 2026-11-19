@@ -52,4 +52,4 @@ src/lib/services/     # Frontend services (voice, keychain, etc.)
 
 ## License
 
-Spacron is **proprietary software** (see [LICENSE](LICENSE)). By contributing, you assign all right, title, and interest in your contribution to Samuel Solesi, who may use, modify, and distribute it under any terms.
+Spacron is licensed under the [MIT License](LICENSE). By contributing, you agree that your contributions are licensed under the same terms.

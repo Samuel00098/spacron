@@ -61,11 +61,8 @@ allow = [
 # the binary that embeds it.
 confidence-threshold = 0.8
 
-# Our own workspace crates carry `license-file = "../LICENSE"` pointing at a
-# proprietary licence, which cargo-deny cannot match against any SPDX id (it
-# scores 0.51 and gives up). They are `publish = false`, so skip them rather
-# than inventing an SPDX expression for a licence that has none — this check
-# exists to police *dependencies*, not us.
+# Our own workspace crates are MIT (`license = "MIT"`) and `publish = false`.
+# Skip them: this check exists to police *dependencies*, not us.
 private = { ignore = true }
 
 [bans]

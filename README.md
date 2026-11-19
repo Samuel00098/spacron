@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Proprietary-red" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License"></a>
   <img src="https://img.shields.io/badge/Tauri-2-blue?logo=tauri" alt="Tauri">
   <img src="https://img.shields.io/badge/Rust-2021-orange?logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/React-19-blue?logo=react" alt="React">
@@ -175,6 +175,6 @@ Below are Spacron's default keyboard shortcuts. You can customize them in the se
 
 ## 📄 License
 
-Spacron is **proprietary software**. All rights reserved — see the [LICENSE](LICENSE) file for the full terms. The source code may not be copied, modified, or redistributed without written permission.
+Spacron is open source under the [MIT License](LICENSE). You are free to use, copy, modify, and distribute it, provided the copyright notice and license text are kept with it.
 
 Copyright © 2026 Samuel Solesi
