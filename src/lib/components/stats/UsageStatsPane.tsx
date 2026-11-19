@@ -69,6 +69,8 @@ import {
   type ChartMetric,
   type ChartSeries,
   type RankedRow,
+  usd,
+  withShares,
 } from './UsageCharts';
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import LiveTicker from '$lib/components/shared/LiveTicker';
@@ -353,57 +355,71 @@ function entryTokens(e: BreakdownEntry): number {
 
 /** A model's brand, from the bundled table only — a model name must never be
  *  sent off to the logo fetcher. */
-function modelRows(entries: BreakdownEntry[], total: number): RankedRow[] {
+function modelRows(entries: BreakdownEntry[], totalTokens: number, totalCost: number): RankedRow[] {
   const colors = distinctColors(entries.map((e) => modelColor(e.label)));
-  return entries.map((e, i) => {
-    const brand = lookupAgentBrand(e.label, e.label);
-    return {
+  return withShares(
+    entries.map((e, i) => {
+      const brand = lookupAgentBrand(e.label, e.label);
+      return {
+        key: e.key,
+        label: e.label,
+        mark: brand ? (
+          <span
+            className="agent-brand-mark"
+            style={{ color: brand.color === 'mono' ? 'var(--text-primary)' : brand.color }}
+            aria-hidden="true"
+          >
+            {brand.mark}
+          </span>
+        ) : undefined,
+        color: colors[i],
+        tokens: entryTokens(e),
+        cost: e.estimatedCostUsd,
+        estimate: e.costIsEstimate === true,
+      };
+    }),
+    totalTokens,
+    totalCost,
+  );
+}
+
+function projectRows(entries: BreakdownEntry[], totalTokens: number, totalCost: number): RankedRow[] {
+  const colors = distinctColors(entries.map(() => undefined));
+  return withShares(
+    entries.map((e, i) => ({
       key: e.key,
       label: e.label,
-      mark: brand ? (
-        <span
-          className="agent-brand-mark"
-          style={{ color: brand.color === 'mono' ? 'var(--text-primary)' : brand.color }}
-          aria-hidden="true"
-        >
-          {brand.mark}
-        </span>
-      ) : undefined,
       color: colors[i],
       tokens: entryTokens(e),
-      share: total > 0 ? entryTokens(e) / total : 0,
       cost: e.estimatedCostUsd,
-    };
-  });
+      estimate: e.costIsEstimate === true,
+    })),
+    totalTokens,
+    totalCost,
+  );
 }
 
-function projectRows(entries: BreakdownEntry[], total: number): RankedRow[] {
-  const colors = distinctColors(entries.map(() => undefined));
-  return entries.map((e, i) => ({
-    key: e.key,
-    label: e.label,
-    color: colors[i],
-    tokens: entryTokens(e),
-    share: total > 0 ? entryTokens(e) / total : 0,
-    cost: e.estimatedCostUsd,
-  }));
+function dayRows(daily: DailyPoint[], totalTokens: number, totalCost: number): RankedRow[] {
+  return withShares(
+    [...daily]
+      .filter((d) => dayTotal(d) > 0)
+      .sort((a, b) => b.day.localeCompare(a.day))
+      .map((d) => ({
+        key: d.day,
+        label: shortDayLabel(d.day),
+        color: 'var(--text-secondary)',
+        tokens: dayTotal(d),
+        cost: d.estimatedCostUsd ?? null,
+      })),
+    totalTokens,
+    totalCost,
+  );
 }
 
-function dayRows(daily: DailyPoint[], total: number): RankedRow[] {
-  return [...daily]
-    .filter((d) => dayTotal(d) > 0)
-    .sort((a, b) => b.day.localeCompare(a.day))
-    .map((d) => ({
-      key: d.day,
-      label: shortDayLabel(d.day),
-      color: 'var(--text-secondary)',
-      tokens: dayTotal(d),
-      share: total > 0 ? dayTotal(d) / total : 0,
-      cost: d.estimatedCostUsd ?? null,
-    }));
-}
-
-/** The hero, chart, totals, token types and breakdown — shared by both panes. */
+/** The hero, chart, totals, token types and breakdown — shared by both panes.
+ *  `metric` switches the whole layout between tokens and cost, as T3 Code's
+ *  Cost / Tokens toggle does: the headline, the list, the totals, the type
+ *  split and the breakdown's sort all follow it, not just the chart. */
 function AnalyticsLayout({
   total,
   sessions,
@@ -429,33 +445,38 @@ function AnalyticsLayout({
 }) {
   const [mode, setMode] = useState<BreakdownMode>('model');
   const days = chartDays(range, series);
+  const totalCost = summary.estimatedCostUsd ?? 0;
   const rows =
     mode === 'model'
-      ? modelRows(modelBreakdown, total)
+      ? modelRows(modelBreakdown, total, totalCost)
       : mode === 'project'
-        ? projectRows(projectBreakdown, total)
-        : dayRows(daily, total);
+        ? projectRows(projectBreakdown, total, totalCost)
+        : dayRows(daily, total, totalCost);
+  const cost = metric === 'cost';
+  const sessionText = `${sessions} ${sessions === 1 ? 'session' : 'sessions'}`;
 
   return (
     <>
       <div className="stats-hero">
         <div className="stats-hero-left">
-          <div className="stats-hero-total">{compactTokens(total)}</div>
-          <div className="stats-hero-sub">
-            {sessions} {sessions === 1 ? 'session' : 'sessions'}
+          <div className="stats-hero-total">
+            {cost ? usd(summary.estimatedCostUsd) : compactTokens(total)}
           </div>
-          <SeriesList rows={seriesRows} />
+          <div className="stats-hero-sub">
+            {cost ? `${sessionText} · ${compactTokens(total)} tokens` : sessionText}
+          </div>
+          <SeriesList rows={seriesRows} metric={metric} />
         </div>
         <DailyChart
-          title={metric === 'cost' ? 'Daily estimated cost' : 'Daily processed tokens'}
+          title={cost ? 'Daily estimated cost' : 'Daily processed tokens'}
           days={days}
           series={series}
           metric={metric}
         />
       </div>
 
-      <TotalsRow summary={summary} total={total} />
-      <TokensByType summary={summary} />
+      <TotalsRow summary={summary} total={total} metric={metric} />
+      <TokensByType summary={summary} metric={metric} />
 
       <section className="stats-block">
         <div className="stats-block-head">
@@ -466,9 +487,14 @@ function AnalyticsLayout({
           rows={rows}
           nameHeader={mode === 'model' ? 'Model' : mode === 'project' ? 'Project' : 'Day'}
           emptyHint="Nothing recorded in this range."
+          metric={metric}
+          keepOrder={mode === 'day'}
         />
-        {mode !== 'day' && rows.length > 0 && (
-          <p className="stats-panel-sub stats-btable-note">Top {rows.length} shown.</p>
+        {(summary.hasEstimatedCost || summary.hasPartialCost) && rows.length > 0 && (
+          <p className="stats-panel-sub stats-btable-note">
+            {summary.hasEstimatedCost && '≈ marks a rough estimate priced from the closest listed model. '}
+            {summary.hasPartialCost && 'Unpriced models have no published rate and are left out of the total.'}
+          </p>
         )}
       </section>
     </>
@@ -485,32 +511,42 @@ function OverviewPane({
   metric: ChartMetric;
 }) {
   const activity = useStore(activityState);
+  const cost = metric === 'cost';
   const withData = overview.providers
     .filter((p) => p.hasData)
-    .sort((a, b) => b.totalTokens - a.totalTokens);
-  // Counted once per session by the backend; a sum over providers would be
-  // the same here, but the summary is the one figure that is right by design.
+    .sort((a, b) =>
+      cost
+        ? (b.estimatedCostUsd ?? -1) - (a.estimatedCostUsd ?? -1) || b.totalTokens - a.totalTokens
+        : b.totalTokens - a.totalTokens,
+    );
+  // Counted once per session by the backend.
   const sessions = overview.summary.sessions;
-  const colors = distinctColors(withData.map((card) => agentColor(card.id)));
-  const colorOf = (_card: ProviderCard, i: number) => colors[i];
+  // Colours follow the agent, not the rank, so switching the metric never
+  // swaps two agents' colours.
+  const byId = [...withData].sort((a, b) => a.id.localeCompare(b.id));
+  const palette = distinctColors(byId.map((card) => agentColor(card.id)));
+  const colorOf = (card: ProviderCard) => palette[byId.indexOf(card)];
 
-  const series: ChartSeries[] = withData.map((card, i) => ({
+  const series: ChartSeries[] = withData.map((card) => ({
     key: card.id,
     label: card.label,
-    color: colorOf(card, i),
+    color: colorOf(card),
     daily: card.daily ?? [],
   }));
-  const seriesRows: RankedRow[] = withData.map((card, i) => ({
-    key: card.id,
-    label: card.label,
-    mark: <AgentBrandMark command={card.id} name={card.label} />,
-    color: colorOf(card, i),
-    aside: `${card.sessions} ${card.sessions === 1 ? 'session' : 'sessions'}`,
-    tokens: card.totalTokens,
-    share: card.share,
-    cost: card.estimatedCostUsd,
-    partialCost: card.hasPartialCost,
-  }));
+  const seriesRows: RankedRow[] = withShares(
+    withData.map((card) => ({
+      key: card.id,
+      label: card.label,
+      mark: <AgentBrandMark command={card.id} name={card.label} />,
+      color: colorOf(card),
+      aside: `${card.sessions} ${card.sessions === 1 ? 'session' : 'sessions'}`,
+      tokens: card.totalTokens,
+      cost: card.estimatedCostUsd,
+      partialCost: card.hasPartialCost,
+    })),
+    overview.totalTokens,
+    overview.summary.estimatedCostUsd ?? 0,
+  );
 
   return (
     <>
@@ -571,7 +607,10 @@ function ProviderPane({
   const series: ChartSeries[] = [{ key: snapshot.provider, label, color, daily: snapshot.daily }];
   // The left column lists this provider's models: the chart already is the
   // provider, so repeating it as the only row would say nothing.
-  const seriesRows = modelRows(snapshot.modelBreakdown, total);
+  const totalCost = summary.estimatedCostUsd ?? 0;
+  const seriesRows = [...modelRows(snapshot.modelBreakdown, total, totalCost)].sort((a, b) =>
+    metric === 'cost' ? (b.cost ?? -1) - (a.cost ?? -1) || b.tokens - a.tokens : b.tokens - a.tokens,
+  );
 
   return (
     <>

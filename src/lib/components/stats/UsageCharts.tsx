@@ -400,21 +400,51 @@ export function DailyChart({
 // Totals and token types
 // ---------------------------------------------------------------------------
 
-export function TotalsRow({ summary, total }: { summary: StatsSummary; total: number }) {
-  const cells: { label: string; value: string; title?: string }[] = [
-    { label: 'Processed tokens', value: compactTokens(total) },
-    { label: 'Cached input', value: compactTokens(summary.cacheReadTokens), title: 'Input read back from the prompt cache' },
-    { label: 'Uncached input', value: compactTokens(summary.inputTokens), title: 'Input billed at the full rate' },
-    { label: 'Output', value: compactTokens(summary.outputTokens) },
-    {
-      label: 'Cache savings',
-      value:
-        summary.cacheSavingsUsd == null
-          ? 'n/a'
-          : `$${summary.cacheSavingsUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      title: 'What cache reads saved against paying full input price, on priced models',
-    },
-  ];
+/** "$1,972.71"; `null` reads "n/a". An estimate is prefixed with "≈". */
+export function usd(value: number | null | undefined, estimate = false): string {
+  if (value == null || !Number.isFinite(value)) return 'n/a';
+  const text = `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return estimate ? `≈${text}` : text;
+}
+
+export function TotalsRow({
+  summary,
+  total,
+  metric,
+}: {
+  summary: StatsSummary;
+  total: number;
+  metric: ChartMetric;
+}) {
+  // Totals are not marked "≈" even when one model was estimated: the mark
+  // belongs on that model's row, and the note under the breakdown says so.
+  const est = false;
+  const savings = {
+    label: 'Cache savings',
+    value: usd(summary.cacheSavingsUsd),
+    title: 'What cache reads saved against paying full input price, on priced models',
+  };
+  const cells: { label: string; value: string; title?: string }[] =
+    metric === 'cost'
+      ? [
+          {
+            label: 'Estimated cost',
+            value: usd(summary.estimatedCostUsd, est),
+            title: `${compactTokens(total)} tokens processed`,
+          },
+          { label: 'Cached input', value: usd(summary.cacheReadCostUsd, est), title: `${compactTokens(summary.cacheReadTokens)} tokens` },
+          { label: 'Uncached input', value: usd(summary.inputCostUsd, est), title: `${compactTokens(summary.inputTokens)} tokens` },
+          { label: 'Cache write', value: usd(summary.cacheWriteCostUsd, est), title: `${compactTokens(summary.cacheWriteTokens)} tokens` },
+          { label: 'Output', value: usd(summary.outputCostUsd, est), title: `${compactTokens(summary.outputTokens)} tokens` },
+          savings,
+        ]
+      : [
+          { label: 'Processed tokens', value: compactTokens(total) },
+          { label: 'Cached input', value: compactTokens(summary.cacheReadTokens), title: 'Input read back from the prompt cache' },
+          { label: 'Uncached input', value: compactTokens(summary.inputTokens), title: 'Input billed at the full rate' },
+          { label: 'Output', value: compactTokens(summary.outputTokens) },
+          savings,
+        ];
   return (
     <section className="stats-block">
       <h4 className="stats-block-title">Totals</h4>
@@ -430,17 +460,18 @@ export function TotalsRow({ summary, total }: { summary: StatsSummary; total: nu
   );
 }
 
-export function TokensByType({ summary }: { summary: StatsSummary }) {
+export function TokensByType({ summary, metric }: { summary: StatsSummary; metric: ChartMetric }) {
+  const cost = metric === 'cost';
   const parts = [
-    { key: 'input', label: 'Input', value: summary.inputTokens },
-    { key: 'cache-read', label: 'Cache read', value: summary.cacheReadTokens },
-    { key: 'cache-write', label: 'Cache write', value: summary.cacheWriteTokens },
-    { key: 'output', label: 'Output', value: summary.outputTokens },
-  ];
+    { key: 'input', label: 'Input', tokens: summary.inputTokens, usd: summary.inputCostUsd ?? 0 },
+    { key: 'cache-read', label: 'Cache read', tokens: summary.cacheReadTokens, usd: summary.cacheReadCostUsd ?? 0 },
+    { key: 'cache-write', label: 'Cache write', tokens: summary.cacheWriteTokens, usd: summary.cacheWriteCostUsd ?? 0 },
+    { key: 'output', label: 'Output', tokens: summary.outputTokens, usd: summary.outputCostUsd ?? 0 },
+  ].map((p) => ({ ...p, value: cost ? p.usd : p.tokens }));
   const total = parts.reduce((a, p) => a + p.value, 0);
   return (
     <section className="stats-block">
-      <h4 className="stats-block-title">Tokens by type</h4>
+      <h4 className="stats-block-title">{cost ? 'Cost by type' : 'Tokens by type'}</h4>
       <div className="stats-typebar" aria-hidden="true">
         {total > 0 &&
           parts.map((p) =>
@@ -455,9 +486,9 @@ export function TokensByType({ summary }: { summary: StatsSummary }) {
       </div>
       <ul className="stats-typelegend">
         {parts.map((p) => (
-          <li key={p.key}>
+          <li key={p.key} title={cost ? `${compactTokens(p.tokens)} tokens` : usd(p.usd)}>
             <i className={`type-${p.key}`} />
-            {p.label} <b>{compactTokens(p.value)}</b>
+            {p.label} <b>{cost ? usd(p.usd) : compactTokens(p.tokens)}</b>
           </li>
         ))}
       </ul>
@@ -477,12 +508,35 @@ export type RankedRow = {
   /** Small text right of the name, e.g. "25 sessions". */
   aside?: string;
   tokens: number;
+  /** Share of all tokens, 0..1. */
   share: number;
   cost: number | null;
+  /** Share of all cost, 0..1. */
+  costShare: number;
   partialCost?: boolean;
+  /** The cost is a rough estimate from a related model's rate. */
+  estimate?: boolean;
 };
 
-export function SeriesList({ rows }: { rows: RankedRow[] }) {
+/** Cost and token shares for a set of rows, given the grand totals. */
+export function withShares<T extends Omit<RankedRow, 'share' | 'costShare'>>(
+  rows: T[],
+  totalTokens: number,
+  totalCost: number,
+): (T & { share: number; costShare: number })[] {
+  return rows.map((r) => ({
+    ...r,
+    share: totalTokens > 0 ? r.tokens / totalTokens : 0,
+    costShare: totalCost > 0 && r.cost != null ? r.cost / totalCost : 0,
+  }));
+}
+
+function rowCost(r: RankedRow): string {
+  return r.cost == null ? 'Unpriced' : `${usd(r.cost, r.estimate)}${r.partialCost ? '+' : ''}`;
+}
+
+export function SeriesList({ rows, metric }: { rows: RankedRow[]; metric: ChartMetric }) {
+  const cost = metric === 'cost';
   return (
     <ul className="stats-series">
       {rows.map((r) => (
@@ -494,11 +548,12 @@ export function SeriesList({ rows }: { rows: RankedRow[] }) {
               {r.label}
             </span>
             {r.aside && <span className="stats-series-aside">{r.aside}</span>}
-            <span className="stats-series-tokens">{compactTokens(r.tokens)}</span>
+            <span className="stats-series-tokens">{cost ? rowCost(r) : compactTokens(r.tokens)}</span>
           </div>
           <div className="stats-series-sub">
-            {sharePercent(r.share)} of tokens · {formatUsd(r.cost)}
-            {r.partialCost && r.cost != null ? '+' : ''}
+            {cost
+              ? `${sharePercent(r.costShare)} of cost · ${compactTokens(r.tokens)} tokens`
+              : `${sharePercent(r.share)} of tokens · ${rowCost(r)}`}
           </div>
         </li>
       ))}
@@ -510,13 +565,33 @@ export function BreakdownTable({
   rows,
   nameHeader,
   emptyHint,
+  metric,
+  keepOrder = false,
 }: {
   rows: RankedRow[];
   nameHeader: string;
   emptyHint: string;
+  metric: ChartMetric;
+  /** Keep the given order (the Day view is chronological). */
+  keepOrder?: boolean;
 }) {
   if (rows.length === 0) return <p className="shell-hint stats-empty-hint">{emptyHint}</p>;
-  const top = Math.max(...rows.map((r) => r.share), 0) || 1;
+  const cost = metric === 'cost';
+  const shareOf = (r: RankedRow) => (cost ? r.costShare : r.share);
+  const ordered = keepOrder
+    ? rows
+    : [...rows].sort((a, b) =>
+        cost ? (b.cost ?? -1) - (a.cost ?? -1) || b.tokens - a.tokens : b.tokens - a.tokens,
+      );
+  const top = Math.max(...ordered.map(shareOf), 0) || 1;
+  const costCell = (r: RankedRow) => (
+    <td className={`stats-num${r.cost == null ? ' muted' : cost ? ' strong' : ''}`} title={r.estimate ? 'Rough estimate from a related model' : undefined}>
+      {rowCost(r)}
+    </td>
+  );
+  const tokenCell = (r: RankedRow) => (
+    <td className={`stats-num${cost ? ' muted' : ' strong'}`}>{compactTokens(r.tokens)}</td>
+  );
   return (
     <div className="stats-btable-scroll">
       <table className="stats-btable">
@@ -524,13 +599,13 @@ export function BreakdownTable({
           <tr>
             <th className="stats-btable-rank">#</th>
             <th>{nameHeader}</th>
-            <th className="stats-num">Cost</th>
+            <th className="stats-num">{cost ? 'Tokens' : 'Cost'}</th>
             <th className="stats-num">Share</th>
-            <th className="stats-num">Tokens</th>
+            <th className="stats-num">{cost ? 'Cost' : 'Tokens'}</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
+          {ordered.map((r, i) => (
             <tr key={r.key}>
               <td className="stats-btable-rank">{i + 1}</td>
               <td className="stats-btable-name">
@@ -543,16 +618,14 @@ export function BreakdownTable({
                   // Every row scales against the same track (220px, or the cell
                   // when narrower), so bar lengths compare across rows.
                   style={{
-                    width: `max(4px, calc(min(220px, 100%) * ${(r.share / top).toFixed(4)}))`,
+                    width: `max(4px, calc(min(220px, 100%) * ${(shareOf(r) / top).toFixed(4)}))`,
                     background: r.color,
                   }}
                 />
               </td>
-              <td className={`stats-num${r.cost == null ? ' muted' : ' strong'}`}>
-                {r.cost == null ? 'Unpriced' : formatUsd(r.cost)}
-              </td>
-              <td className="stats-num muted">{sharePercent(r.share)}</td>
-              <td className="stats-num">{compactTokens(r.tokens)}</td>
+              {cost ? tokenCell(r) : costCell(r)}
+              <td className="stats-num muted">{sharePercent(shareOf(r))}</td>
+              {cost ? costCell(r) : tokenCell(r)}
             </tr>
           ))}
         </tbody>

@@ -116,6 +116,8 @@ pub struct BreakdownRow {
     pub cache_write_tokens: u64,
     /// `None` when the model has no price in the table — see rule 3.
     pub estimated_cost_usd: Option<f64>,
+    /// Part of the cost is a rough estimate from a related model's rate.
+    pub cost_is_estimate: bool,
 }
 
 /// One row of the recent-sessions table.
@@ -168,6 +170,14 @@ pub struct Summary {
     /// What the cache reads saved against paying full input price for them,
     /// over the priced models. `None` when nothing was priced.
     pub cache_savings_usd: Option<f64>,
+    /// The estimated cost split by token type (`None` when nothing priced).
+    pub input_cost_usd: Option<f64>,
+    pub output_cost_usd: Option<f64>,
+    pub cache_read_cost_usd: Option<f64>,
+    pub cache_write_cost_usd: Option<f64>,
+    /// Some cost is a rough estimate from a related model's rate.
+    #[serde(default)]
+    pub has_estimated_cost: bool,
     pub top_model: Option<String>,
     pub top_project: Option<String>,
 }
@@ -791,8 +801,15 @@ fn parse_rate_table(document: &Value) -> HashMap<String, Price> {
             continue;
         };
         let cache_read = num("cache_read_input_token_cost").unwrap_or(input);
-        let cache_write = num("cache_creation_input_token_cost").unwrap_or(input);
         let key = name.trim().to_lowercase();
+        // Claude Code writes its prompt cache with a one-hour lifetime (every
+        // cache write in this machine's logs is `ephemeral_1h`), which bills
+        // at the one-hour rate: twice the input price.
+        let cache_write = if key.contains("claude") {
+            num("cache_creation_input_token_cost_above_1hr").unwrap_or(input * 2.0)
+        } else {
+            num("cache_creation_input_token_cost").unwrap_or(input)
+        };
         if !key.is_empty() {
             table.insert(key, (input * 1e6, output * 1e6, cache_read * 1e6, cache_write * 1e6));
         }
@@ -932,16 +949,48 @@ fn rate_for(model: &str) -> Option<Price> {
         }
     }
     if let Some(name) = normalize_model_for_pricing(model) {
-        return MODEL_PRICING.iter().find(|(k, _)| *k == name).map(|(_, p)| *p);
+        // The built-in table lists five-minute cache writes; Claude Code's are
+        // one-hour (see `parse_rate_table`), billed at twice the input price.
+        return MODEL_PRICING
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, (i, o, r, _))| (*i, *o, *r, i * 2.0));
     }
-    let table = live.as_ref().map(|t| &t.rates)?;
+    None
+}
+
+/// Models that cost nothing: OpenCode's free tier (`big-pickle`, any `*-free`).
+fn is_free_model(bare: &str) -> bool {
+    bare == "big-pickle" || bare.ends_with("-free")
+}
+
+/// A model's rate, and whether it is a **rough estimate** rather than the
+/// model's own listing.
+///
+/// Exact first ([`rate_for`]), then free models at $0, then the nearest listed
+/// relative: trailing name segments are dropped one at a time
+/// (`gemini-3.8-flash-n` → `gemini-3.8-flash`), keeping at least a family and
+/// a version, so a preview or tier variant prices as its base model the way T3
+/// Code and the other trackers estimate unlisted models.
+fn rate_lookup(model: &str) -> Option<(Price, bool)> {
+    if let Some(price) = rate_for(model) {
+        return Some((price, false));
+    }
+    let lower = model.trim().to_lowercase();
+    let bare = lower.rsplit('/').next().unwrap_or(&lower).to_string();
+    if is_free_model(&bare) {
+        return Some(((0.0, 0.0, 0.0, 0.0), false));
+    }
+    if UNPRICEABLE_MODELS.contains(&bare.as_str()) {
+        return None;
+    }
     let mut candidate = bare.as_str();
-    while let Some((rest, last)) = candidate.rsplit_once('-') {
-        if !last.chars().all(|c| c.is_ascii_digit()) {
+    while let Some((rest, _)) = candidate.rsplit_once('-') {
+        if !rest.contains('-') || !rest.chars().any(|c| c.is_ascii_digit()) {
             break;
         }
-        if let Some(price) = table.get(rest) {
-            return Some(*price);
+        if let Some(price) = rate_for(rest) {
+            return Some((price, true));
         }
         candidate = rest;
     }
@@ -951,7 +1000,7 @@ fn rate_for(model: &str) -> Option<Price> {
 /// USD saved by reading `cache_read` tokens from cache instead of paying the
 /// full input price for them, or `None` when the model is unpriced.
 fn cache_savings(model: &str, cache_read: u64) -> Option<f64> {
-    let (in_p, _, cr_p, _) = rate_for(model)?;
+    let ((in_p, _, cr_p, _), _) = rate_lookup(model)?;
     Some(cache_read as f64 * (in_p - cr_p).max(0.0) / 1_000_000.0)
 }
 
@@ -964,11 +1013,49 @@ fn estimated_cost(
     cache_read: u64,
     cache_write: u64,
 ) -> Option<f64> {
-    let (in_p, out_p, cr_p, cw_p) = rate_for(model)?;
-    Some(
-        (input as f64 * in_p + output as f64 * out_p + cache_read as f64 * cr_p + cache_write as f64 * cw_p)
-            / 1_000_000.0,
-    )
+    let c = category_costs(model, (input, output, cache_read, cache_write))?;
+    Some(c.input + c.output + c.cache_read + c.cache_write)
+}
+
+/// One model group's cost split by token type.
+#[derive(Default, Clone, Copy)]
+struct CategoryCost {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_write: f64,
+}
+
+fn category_costs(model: &str, t: (u64, u64, u64, u64)) -> Option<CategoryCost> {
+    let ((in_p, out_p, cr_p, cw_p), _) = rate_lookup(model)?;
+    Some(CategoryCost {
+        input: t.0 as f64 * in_p / 1e6,
+        output: t.1 as f64 * out_p / 1e6,
+        cache_read: t.2 as f64 * cr_p / 1e6,
+        cache_write: t.3 as f64 * cw_p / 1e6,
+    })
+}
+
+/// A group's split, scaled so it adds up to the agent's own reported cost when
+/// there is one (T3 Code does the same). `None` when there is no rate to split
+/// by — a reported cost then counts in the total but in no category.
+fn group_categories(model: &str, totals: (u64, u64, u64, u64), reported: f64) -> Option<CategoryCost> {
+    let c = category_costs(model, totals)?;
+    let list = c.input + c.output + c.cache_read + c.cache_write;
+    if reported > 0.0 && list > 0.0 {
+        let k = reported / list;
+        return Some(CategoryCost {
+            input: c.input * k,
+            output: c.output * k,
+            cache_read: c.cache_read * k,
+            cache_write: c.cache_write * k,
+        });
+    }
+    Some(c)
+}
+
+fn model_is_estimated(model: &str) -> bool {
+    matches!(rate_lookup(model), Some((_, true)))
 }
 
 /// A model group's cost: what the agent itself billed when it reported that
@@ -979,6 +1066,9 @@ fn group_cost(model: &str, totals: (u64, u64, u64, u64), reported: f64) -> Optio
     }
     estimated_cost(model, totals.0, totals.1, totals.2, totals.3)
 }
+
+/// Rows in a by-model / by-project breakdown.
+const BREAKDOWN_ROWS: usize = 12;
 
 fn round_cents(usd: f64) -> f64 {
     (usd * 100.0).round() / 100.0
@@ -3831,12 +3921,23 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
     let mut total_savings = 0.0;
     let mut unpriced = false;
     let mut any_priced = false;
+    let mut by_type = CategoryCost::default();
     for (model, totals) in &per_model {
-        match group_cost(model, *totals, reported.get(model).copied().unwrap_or(0.0)) {
+        let model_reported = reported.get(model).copied().unwrap_or(0.0);
+        match group_cost(model, *totals, model_reported) {
             Some(cost) => {
                 any_priced = true;
                 total_cost += cost;
                 total_savings += cache_savings(model, totals.2).unwrap_or(0.0);
+                if let Some(c) = group_categories(model, *totals, model_reported) {
+                    by_type.input += c.input;
+                    by_type.output += c.output;
+                    by_type.cache_read += c.cache_read;
+                    by_type.cache_write += c.cache_write;
+                }
+                if model_reported <= 0.0 && model_is_estimated(model) {
+                    summary.has_estimated_cost = true;
+                }
             }
             None => unpriced = true,
         }
@@ -3847,6 +3948,10 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
     if any_priced {
         summary.cache_savings_usd = Some(round_cents(total_savings));
         summary.estimated_cost_usd = Some(round_cents(total_cost));
+        summary.input_cost_usd = Some(round_cents(by_type.input));
+        summary.output_cost_usd = Some(round_cents(by_type.output));
+        summary.cache_read_cost_usd = Some(round_cents(by_type.cache_read));
+        summary.cache_write_cost_usd = Some(round_cents(by_type.cache_write));
     }
 
     let billable_input = summary.input_tokens + summary.cache_read_tokens;
@@ -3927,6 +4032,7 @@ fn build_breakdown(
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 estimated_cost_usd: None,
+                cost_is_estimate: false,
             });
         entry.sessions += row.sessions;
         entry.turns += row.turns;
@@ -3955,6 +4061,9 @@ fn build_breakdown(
             if let Some(cost) = group_cost(model, (*input, *output, *cache_read, *cache_write), *reported) {
                 any_priced = true;
                 total += cost;
+                if *reported <= 0.0 && model_is_estimated(model) {
+                    entry.cost_is_estimate = true;
+                }
             }
         }
         entry.estimated_cost_usd = any_priced.then(|| round_cents(total));
@@ -4187,8 +4296,8 @@ pub async fn stats_get_snapshot(
         scan_state: scan_state_of(&store, false),
         summary,
         daily: build_daily(&rows),
-        model_breakdown: build_breakdown(&rows, |r| r.model.clone(), 5),
-        project_breakdown: build_breakdown(&rows, |r| r.project_key.clone(), 5),
+        model_breakdown: build_breakdown(&rows, |r| r.model.clone(), BREAKDOWN_ROWS),
+        project_breakdown: build_breakdown(&rows, |r| r.project_key.clone(), BREAKDOWN_ROWS),
         recent_sessions: build_recent_sessions(&store, &provider, &scope, &sources, limit),
         provider,
         scope,
@@ -4260,8 +4369,8 @@ pub async fn stats_get_overview(
         heatmap: build_heatmap(&daily),
         daily,
         providers,
-        model_breakdown: build_breakdown(&all_rows, |r| r.model.clone(), 5),
-        project_breakdown: build_breakdown(&all_rows, |r| r.project_key.clone(), 5),
+        model_breakdown: build_breakdown(&all_rows, |r| r.model.clone(), BREAKDOWN_ROWS),
+        project_breakdown: build_breakdown(&all_rows, |r| r.project_key.clone(), BREAKDOWN_ROWS),
         summary,
         total_tokens,
         scope,
@@ -5107,8 +5216,29 @@ mod tests {
         let table = parse_rate_table(&doc);
         assert_eq!(table.get("grok-4").map(|p| p.0), Some(3.0), "xai's own listing wins the bare name");
         assert_eq!(table.get("claude-opus-4-5").map(|p| p.2), Some(0.5));
-        assert_eq!(table.get("claude-opus-4-5").map(|p| p.3), Some(5.0), "no cache-write rate falls back to input");
+        assert_eq!(
+            table.get("claude-opus-4-5").map(|p| p.3),
+            Some(10.0),
+            "Claude cache writes are one-hour: without a listed rate, twice the input price"
+        );
         assert!(!table.contains_key("sample_spec"), "entries without both rates are dropped");
+    }
+
+    #[test]
+    fn unlisted_variants_estimate_from_their_base_model_and_free_models_cost_nothing() {
+        let doc = serde_json::json!({
+            "gemini-3.8-flash": { "input_cost_per_token": 0.75e-6, "output_cost_per_token": 3.75e-6 },
+            "claude-sonnet-5-5": { "input_cost_per_token": 2e-6, "output_cost_per_token": 10e-6,
+                                   "cache_creation_input_token_cost": 2.5e-6,
+                                   "cache_creation_input_token_cost_above_1hr": 4e-6 }
+        });
+        assert!(install_rates(now_ms(), &doc));
+        assert_eq!(rate_lookup("gemini-3.8-flash-n").map(|(p, est)| (p.0, est)), Some((0.75, true)));
+        assert_eq!(rate_lookup("claude-sonnet-5-5").map(|(p, est)| (p.3, est)), Some((4.0, false)), "one-hour writes");
+        assert_eq!(rate_lookup("big-pickle").map(|(p, _)| p), Some((0.0, 0.0, 0.0, 0.0)));
+        assert_eq!(rate_lookup("opencode/glm-4.7-free").map(|(p, _)| p.1), Some(0.0));
+        assert_eq!(rate_lookup("totally-unknown"), None, "no digit-bearing family to fall back to");
+        *LIVE_RATES.lock().unwrap() = None;
     }
 
     #[test]

@@ -84,6 +84,13 @@ export type StatsSummary = {
   hasPartialCost: boolean;
   /** Saved by cache reads against full input price, over priced models. */
   cacheSavingsUsd?: number | null;
+  /** The estimated cost split by token type. */
+  inputCostUsd?: number | null;
+  outputCostUsd?: number | null;
+  cacheReadCostUsd?: number | null;
+  cacheWriteCostUsd?: number | null;
+  /** Some cost is a rough estimate from a related model's rate. */
+  hasEstimatedCost?: boolean;
   topModel: string | null;
   topProject: string | null;
 };
@@ -113,6 +120,8 @@ export type BreakdownEntry = {
   cacheWriteTokens: number;
   /** `null` when the model has no price in the table. */
   estimatedCostUsd: number | null;
+  /** Part of the cost is a rough estimate from a related model's rate. */
+  costIsEstimate?: boolean;
 };
 
 /** One row of the recent-sessions table. */
