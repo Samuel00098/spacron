@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-import { claudeModeFromScreen, normalizeName, parsePickerRows } from './terminal-chat-inplace';
+import { bottomOf, claudeModeFromScreen, normalizeName, parsePickerRows } from './terminal-chat-inplace';
 
 // Screens captured from Codex 0.170 and Claude Code 2.1 running in a ConPTY.
 const CODEX_MODEL_PICKER = `  >_ OpenAI Codex (v0.170.0)
@@ -57,5 +57,20 @@ describe('in-place session changes', () => {
     expect(claudeModeFromScreen('… \n  ⏵⏵ bypass permissions on (shift+tab to cycle)')).toBe('full-access');
     expect(claudeModeFromScreen('… \n  ⏸ plan mode on (shift+tab to cycle)')).toBe('plan');
     expect(claudeModeFromScreen('no footer here')).toBeNull();
+  });
+
+  it('reads only the newest picker when an older one is still in scrollback', () => {
+    const screen = [
+      CODEX_EFFORT_PICKER,
+      '• Model changed to gpt-6-luna medium for this session only',
+      '› hello',
+      ...Array.from({ length: 30 }, (_, i) => `  reply line ${i}`),
+      CODEX_MODEL_PICKER.replace('› 1. GPT-6-Luna (current)', '  1. GPT-6-Luna (current)').replace('  2. GPT-5.6-Terra', '› 2. GPT-5.6-Terra'),
+    ].join('\n');
+    const rows = parsePickerRows(screen, 'Select Model and Effort');
+    expect(rows.find((r) => r.highlighted)?.label).toBe('GPT-5.6-Terra');
+    // The earlier confirmation is above the bottom of the screen, so it can't pass for a new one.
+    expect(bottomOf(screen)).not.toMatch(/Model changed to/);
+    expect(bottomOf(screen)).toMatch(/Select Model and Effort/);
   });
 });

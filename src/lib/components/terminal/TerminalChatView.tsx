@@ -42,13 +42,43 @@ import type { ChatReasoningEffort } from '$lib/types/chat';
 import { useStore } from '$lib/react/useStore';
 import { toggleTerminalTranscription, transcriptionActive } from '$lib/services/transcription-hotkey';
 import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
+import { requestTerminalInput, terminalInputRequest } from '$lib/stores/terminal';
+import { get } from '$lib/stores/storeCompat';
 import './TerminalChatView.css';
 
 const POLL_MS = 900;
 const POLL_HIDDEN_MS = 4000;
 const READ_TIMEOUT_MS = 8000;
 
-type PendingSend = { id: number; text: string; key: string; seenBefore: number; at: number };
+type PendingSend = { id: number; text: string; key: string; seenBefore: number; at: number; images: string[] };
+
+/** An image waiting in the composer: saved to disk (the CLI gets the path) with a preview to show. */
+type Attachment = { id: number; path: string; name: string; preview: string | null; revoke?: string };
+
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp)$/i;
+
+/** Quote a path only when it has spaces, with forward slashes, as a terminal drop does. */
+function terminalPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  return normalized.includes(' ') ? `"${normalized}"` : normalized;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Paste a path into the pane through xterm (bracketed, no Enter) and wait until it has gone in. */
+async function pasteIntoPane(sessionId: number, text: string): Promise<void> {
+  requestTerminalInput(sessionId, text);
+  const started = Date.now();
+  while (Date.now() - started < 3000) {
+    const pending = get(terminalInputRequest);
+    if (!pending || pending.sessionId !== sessionId) break;
+    await sleep(50);
+  }
+  await sleep(250);
+}
 
 /** A send whose row never lands (no transcript found, CLI rejected it) stops counting as busy. */
 const PENDING_EXPIRY_MS = 90_000;
@@ -124,6 +154,9 @@ export default function TerminalChatView({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null);
+  const attachmentIdRef = useRef(0);
   const picks = useSessionPicks(sessionId);
   const [relaunching, setRelaunching] = useState(false);
   const dictationOn = useStore(transcriptionActive);
@@ -266,16 +299,28 @@ export default function TerminalChatView({
 
   async function send() {
     const text = draft.trim();
-    if (!text || sending || !isRunning) return;
+    const images = attachments;
+    if ((!text && !images.length) || sending || !isRunning) return;
     const key = sendMatchKey(text);
     const seenBefore = userKeys.filter((k) => k === key || k.startsWith(key.slice(0, 60))).length;
     const id = ++pendingIdRef.current;
-    setPending((list) => [...list, { id, text, key, seenBefore, at: Date.now() }]);
+    setPending((list) => [...list, { id, text, key, seenBefore, at: Date.now(), images: images.map((a) => a.preview).filter((u): u is string => Boolean(u)) }]);
     setDraft('');
+    setAttachments([]);
     stickToBottomRef.current = true;
     setSending(true);
     try {
-      const ok = await sendAgentPromptDirect(sessionId, text);
+      // Images first, each pasted as a path the way a terminal drop delivers
+      // it, so the CLI attaches it ("[Image #1]") to the prompt that follows.
+      for (const image of images) await pasteIntoPane(sessionId, `${terminalPath(image.path)} `);
+      for (const image of images) if (image.revoke) URL.revokeObjectURL(image.revoke);
+      let ok: boolean;
+      if (text) {
+        ok = await sendAgentPromptDirect(sessionId, text);
+      } else {
+        writeToSession(sessionId, '\r');
+        ok = true;
+      }
       revisionRef.current = null;
       if (!ok) {
         // Not re-filled into the composer: the text may still have reached the
@@ -377,8 +422,16 @@ export default function TerminalChatView({
       const picked = await open({ multiple: true, directory: false });
       const paths = (Array.isArray(picked) ? picked : picked ? [picked] : []).map(String);
       if (!paths.length) return;
-      const quoted = paths.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ');
-      setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, '')} ${quoted} ` : `${quoted} `));
+      const images = paths.filter((p) => IMAGE_EXTENSIONS.test(p));
+      const others = paths.filter((p) => !IMAGE_EXTENSIONS.test(p));
+      for (const path of images) {
+        const preview = await invoke<string>('chat_image_preview', { path }).catch(() => null);
+        addAttachment({ path, name: path.split(/[\\/]/).pop() ?? path, preview });
+      }
+      if (others.length) {
+        const quoted = others.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ');
+        setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, '')} ${quoted} ` : `${quoted} `));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -386,9 +439,60 @@ export default function TerminalChatView({
     }
   }
 
+  function addAttachment(attachment: Omit<Attachment, 'id'>) {
+    const id = ++attachmentIdRef.current;
+    setAttachments((list) => [...list, { ...attachment, id }]);
+  }
+
+  function removeAttachment(id: number) {
+    setAttachments((list) => {
+      const gone = list.find((a) => a.id === id);
+      if (gone?.revoke) URL.revokeObjectURL(gone.revoke);
+      return list.filter((a) => a.id !== id);
+    });
+  }
+
+  // A pasted image is saved to disk (the CLI gets its path) and shown as a chip;
+  // text pastes are left to the textarea.
+  async function onPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
+    const fromItems = files.length
+      ? []
+      : Array.from(event.clipboardData?.items ?? [])
+        .filter((item) => item.type.startsWith('image/'))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => Boolean(f));
+    const images = files.length ? files : fromItems;
+    if (!images.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    for (const file of images) {
+      try {
+        const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+        const name = file.name && IMAGE_EXTENSIONS.test(file.name) ? file.name : `pasted-image-${Date.now()}.${ext}`;
+        const path = await invoke<string>('save_pasted_image', { name, data: Array.from(new Uint8Array(await file.arrayBuffer())) });
+        const url = URL.createObjectURL(file);
+        addAttachment({ path, name, preview: url, revoke: url });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
+  // Previews are blob: URLs; release them when the view goes away.
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  useEffect(() => () => {
+    for (const a of attachmentsRef.current) if (a.revoke) URL.revokeObjectURL(a.revoke);
+  }, []);
+
+  function openViewer(images: string[], index: number) {
+    setViewer({ images: images.map((src, i) => ({ src, name: `Image ${i + 1}` })), index });
+  }
+
   const folderName = root ? root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? null : null;
   const empty = loaded && items.length === 0 && pending.length === 0;
-  const canSend = Boolean(draft.trim()) && !sending && isRunning;
+  const canSend = (Boolean(draft.trim()) || attachments.length > 0) && !sending && isRunning;
   const lastBlock = blocks[blocks.length - 1];
 
   return (
@@ -407,15 +511,10 @@ export default function TerminalChatView({
         <div className="terminal-chat-thread">
           {truncated && <div className="terminal-chat-notice">Earlier messages are in the terminal history</div>}
           {!loaded && <div className="terminal-chat-loading"><Dots /></div>}
-          {empty && (
-            <div className="terminal-chat-empty">
-              <div className="terminal-chat-empty-hint">
-                Same session as the terminal. Send a message to start, or switch back any time.
-              </div>
-            </div>
-          )}
           {blocks.map((block) => {
-            if (block.type === 'user') return <UserTurn key={block.item.id} text={block.item.text} />;
+            if (block.type === 'user') {
+              return <UserTurn key={block.item.id} text={block.item.text} images={block.item.images ?? []} onOpenImage={openViewer} />;
+            }
             if (block.type === 'notice') return <div key={block.item.id} className="terminal-chat-notice">{block.item.text}</div>;
             if (block.type === 'assistant') {
               return (
@@ -430,7 +529,7 @@ export default function TerminalChatView({
               </div>
             );
           })}
-          {pending.map((p) => <UserTurn key={`pending-${p.id}`} text={p.text} pending />)}
+          {pending.map((p) => <UserTurn key={`pending-${p.id}`} text={p.text} images={p.images} onOpenImage={openViewer} pending />)}
           {relaunching && (
             <div className="terminal-chat-working">
               <Dots />
@@ -466,9 +565,33 @@ export default function TerminalChatView({
               </div>
             </div>
           )}
+          {attachments.length > 0 && (
+            <div className="terminal-chat-attachments">
+              {attachments.map((a, index) => (
+                <div key={a.id} className="terminal-chat-attachment" title={a.name}>
+                  <button
+                    type="button"
+                    className="terminal-chat-attachment-thumb"
+                    aria-label={`Preview ${a.name}`}
+                    onClick={() => {
+                      const previews = attachments.map((x) => x.preview).filter((u): u is string => Boolean(u));
+                      if (a.preview) openViewer(previews, Math.max(0, previews.indexOf(a.preview)));
+                    }}
+                  >
+                    {a.preview ? <img src={a.preview} alt="" /> : <span className="terminal-chat-attachment-icon">IMG</span>}
+                  </button>
+                  <button type="button" className="terminal-chat-attachment-remove" aria-label={`Remove ${a.name}`} onClick={() => removeAttachment(a.id)}>
+                    <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><path d="M1 1l6 6M7 1 1 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                  </button>
+                  {index === 0 && attachments.length > 1 && <span className="terminal-chat-attachment-count">{attachments.length}</span>}
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={draft}
+            onPaste={(e) => void onPaste(e)}
             rows={1}
             placeholder={isRunning ? `Message ${agentLabel}` : `${agentLabel} has exited`}
             disabled={!isRunning}
@@ -558,6 +681,9 @@ export default function TerminalChatView({
             )}
           </div>
         </div>
+        {viewer && (
+          <ImageViewer images={viewer.images} startIndex={viewer.index} projectRoot={root} onClose={() => setViewer(null)} />
+        )}
         <div className="terminal-chat-context-line">
           {folderName && (
             <span title={root ?? undefined}>
@@ -732,8 +858,6 @@ function AccessMenu({
   );
 }
 
-/** How many models show before "More models (n)". */
-const FEATURED_MODELS = 3;
 
 /**
  * The composer's model pill: search, the leading models, "More models (n)",
@@ -764,26 +888,27 @@ function ModelMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [showAll, setShowAll] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   useDismiss(open, setOpen, rootRef);
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   useEffect(() => {
     if (!open) return;
     setQuery('');
-    setShowAll(false);
-    requestAnimationFrame(() => searchRef.current?.focus());
+    requestAnimationFrame(() => {
+      searchRef.current?.focus();
+      // Bring the current model into view without moving anything else.
+      listRef.current?.querySelector<HTMLElement>('.terminal-chat-menu-item.selected')?.scrollIntoView({ block: 'nearest' });
+    });
   }, [open]);
 
   const needle = query.trim().toLowerCase();
   const matches = needle
     ? models.filter((m) => `${m.label} ${m.value} ${m.hint ?? ''}`.toLowerCase().includes(needle))
     : models;
-  // The current model always leads the short list.
-  const ordered = needle ? matches : [...matches].sort((a, b) => Number(b.value === model) - Number(a.value === model));
-  const visible = needle || showAll ? ordered : ordered.slice(0, FEATURED_MODELS);
-  const hidden = needle || showAll ? 0 : Math.max(0, ordered.length - FEATURED_MODELS);
+  // Firm: the list keeps the CLI's order and a fixed height, and only scrolls.
+  const visible = matches;
   const hasMenu = models.length > 0 || efforts.length > 0;
 
   return (
@@ -823,7 +948,12 @@ function ModelMenu({
                   }}
                 />
               </label>
-              <div className="terminal-chat-model-list">
+              <div
+                className="terminal-chat-model-list"
+                ref={listRef}
+                // Sized from the whole list, not the search results, so typing never resizes the menu.
+                style={{ height: `${Math.min(models.length, 5) * 54 + 4}px` }}
+              >
                 {visible.map((option) => (
                   <MenuItem key={option.value} option={option} selected={option.value === model} onPick={() => {
                     setOpen(false);
@@ -831,12 +961,6 @@ function ModelMenu({
                   }} />
                 ))}
                 {!visible.length && <div className="terminal-chat-menu-empty">No models match</div>}
-                {hidden > 0 && (
-                  <button type="button" className="terminal-chat-more-models" onClick={() => setShowAll(true)}>
-                    <span>More models ({hidden})</span>
-                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2 6.5 5l-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                  </button>
-                )}
               </div>
             </>
           )}
@@ -924,10 +1048,32 @@ function Dots() {
   return <span className="terminal-chat-dots" aria-hidden="true"><i /><i /><i /></span>;
 }
 
-function UserTurn({ text, pending = false }: { text: string; pending?: boolean }) {
+function UserTurn({
+  text,
+  images,
+  onOpenImage,
+  pending = false,
+}: {
+  text: string;
+  images: string[];
+  onOpenImage: (images: string[], index: number) => void;
+  pending?: boolean;
+}) {
+  // Codex and Claude write an "[Image #1]" marker for each attachment; the
+  // thumbnails stand in for it.
+  const words = images.length ? text.replace(/\[Image #\d+\]\s*/g, '').trim() : text;
   return (
     <div className={`terminal-chat-user${pending ? ' pending' : ''}`}>
-      <div className="terminal-chat-user-bubble">{text}</div>
+      {images.length > 0 && (
+        <div className="terminal-chat-user-images">
+          {images.map((src, index) => (
+            <button key={index} type="button" className="terminal-chat-user-image" aria-label={`Open image ${index + 1}`} onClick={() => onOpenImage(images, index)}>
+              <img src={src} alt="" loading="lazy" />
+            </button>
+          ))}
+        </div>
+      )}
+      {words && <div className="terminal-chat-user-bubble">{words}</div>}
     </div>
   );
 }

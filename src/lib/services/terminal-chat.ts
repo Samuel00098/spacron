@@ -51,6 +51,8 @@ export interface TerminalChatItem {
   toolOutput?: string | null;
   toolStatus?: 'running' | 'done' | 'error' | null;
   time?: string | null;
+  /** Images attached to a user turn, as data: URLs. */
+  images?: string[];
 }
 
 export interface TranscriptResult {

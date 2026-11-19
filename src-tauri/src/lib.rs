@@ -510,6 +510,7 @@ pub fn run() {
             commands::agent_signals::agent_signal_channel_open,
             commands::agent_signals::agent_signal_channel_close,
             commands::agent_transcript::agent_transcript_read,
+            commands::agent_transcript::chat_image_preview,
             commands::workspace::workspace_git_stage_paths,
             commands::workspace::workspace_git_unstage_paths,
             commands::workspace::workspace_git_apply_patch,

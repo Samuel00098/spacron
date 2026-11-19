@@ -36,10 +36,28 @@ function screenOf(sessionId: number): string {
   return readTerminalScreen(sessionId, { maxLines: 60 }) ?? '';
 }
 
+/**
+ * The bottom of the screen, where a picker or confirmation is drawn now.
+ * Codex renders inline, so its scrollback keeps every earlier "Select Model…"
+ * and "Model changed to…" line; matching the whole screen made a second switch
+ * see the first one's confirmation, stop early and leave the effort picker
+ * open on top of the next message.
+ */
+export function bottomOf(screen: string, rows = 24): string {
+  const lines = screen.split('\n');
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return lines.slice(-rows).join('\n');
+}
+
+function countOf(text: string, pattern: RegExp): number {
+  return (text.match(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)) ?? []).length;
+}
+
+/** Wait for `test` to pass on the bottom of the screen; returns that bottom. */
 async function waitForScreen(sessionId: number, test: (text: string) => boolean, timeoutMs = 4000): Promise<string | null> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const text = screenOf(sessionId);
+    const text = bottomOf(screenOf(sessionId));
     if (test(text)) return text;
     await sleep(120);
   }
@@ -72,7 +90,14 @@ export interface PickerRow {
  */
 export function parsePickerRows(screen: string, header: string): PickerRow[] {
   const lines = screen.split('\n');
-  const start = lines.findIndex((line) => line.includes(header));
+  // The newest copy of the header: older pickers can still sit in scrollback.
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].includes(header)) {
+      start = i;
+      break;
+    }
+  }
   if (start < 0) return [];
   const rows: PickerRow[] = [];
   for (const line of lines.slice(start + 1)) {
@@ -129,8 +154,11 @@ export async function codexSetModelInPlace(
   sessionId: number,
   target: { model: string | null; modelLabel: string | null; effort: string | null },
 ): Promise<string | null> {
+  const CHANGED = /Model changed to/;
+  const changedBefore = countOf(screenOf(sessionId), CHANGED);
+  const changedSince = () => countOf(screenOf(sessionId), CHANGED) > changedBefore;
   await typeCommand(sessionId, '/model');
-  const modelScreen = await waitForScreen(sessionId, (t) => t.includes('Select Model and Effort'));
+  const modelScreen = await waitForScreen(sessionId, (t) => t.includes('Select Model and Effort') && /enter select|esc back/i.test(t));
   if (!modelScreen) {
     await backOut(sessionId);
     return "Codex didn't open its model picker. Check the terminal view.";
@@ -147,7 +175,7 @@ export async function codexSetModelInPlace(
   await moveHighlight(sessionId, modelRows, modelRow);
   writeToSession(sessionId, KEY.enter);
 
-  const effortScreen = await waitForScreen(sessionId, (t) => t.includes('Select Reasoning Level') || /Model changed to/i.test(t));
+  const effortScreen = await waitForScreen(sessionId, (t) => t.includes('Select Reasoning Level') || changedSince());
   if (!effortScreen) {
     await backOut(sessionId);
     return "Codex didn't show its reasoning levels. Check the terminal view.";
@@ -181,8 +209,11 @@ export async function codexSetModelInPlace(
   await moveHighlight(sessionId, rows, effortRow);
   // `s`: this session only, so the user's Codex default is left alone.
   writeToSession(sessionId, 's');
-  const done = await waitForScreen(sessionId, (t) => /Model changed to/i.test(t), 4000);
-  return done ? null : "Codex didn't confirm the change. Check the terminal view.";
+  const done = await waitForScreen(sessionId, () => changedSince(), 4000);
+  if (done) return null;
+  // Never leave a picker open under the next message.
+  if (/Select Reasoning Level|Advanced Reasoning|Select Model and Effort/.test(bottomOf(screenOf(sessionId)))) await backOut(sessionId);
+  return "Codex didn't confirm the change. Check the terminal view.";
 }
 
 const CODEX_PERMISSION_LABEL: Record<string, string> = {

@@ -54,6 +54,9 @@ pub struct ChatItem {
     pub tool_status: Option<String>,
     /// ISO-8601 or epoch-ms string, as the CLI wrote it.
     pub time: Option<String>,
+    /// Images attached to a user turn, as `data:` URLs (the CLIs store them inline).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -83,6 +86,37 @@ pub async fn agent_transcript_read(query: TranscriptQuery) -> Result<TranscriptR
     tauri::async_runtime::spawn_blocking(move || read_transcript(&query))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Largest image file the chat composer previews.
+const MAX_PREVIEW_BYTES: u64 = 15 * 1024 * 1024;
+
+/// A `data:` URL preview of an image the user attached in the chat composer
+/// (the app's asset protocol is scoped to wallpapers, so a file path cannot be
+/// shown directly). Images only, size-capped; anything else is refused.
+#[tauri::command]
+pub async fn chat_image_preview(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine;
+        let p = PathBuf::from(&path);
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let mime = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" => "image/bmp",
+            _ => return Err("Not an image".to_string()),
+        };
+        let size = fs::metadata(&p).map_err(|e| e.to_string())?.len();
+        if size > MAX_PREVIEW_BYTES {
+            return Err("Image too large to preview".to_string());
+        }
+        let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+        Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn read_transcript(q: &TranscriptQuery) -> Result<TranscriptResult, String> {
@@ -247,6 +281,22 @@ impl Parsed {
         self.items.push(ChatItem { id, kind: kind.into(), text: clip(&text, MAX_TEXT_CHARS), time, ..Default::default() });
     }
 
+    /// A user turn: its words and any images, shown even when it has only images.
+    fn push_user(&mut self, id: String, text: String, images: Vec<String>, time: Option<String>) {
+        let text = text.trim().to_string();
+        if text.is_empty() && images.is_empty() {
+            return;
+        }
+        self.items.push(ChatItem {
+            id,
+            kind: "user".into(),
+            text: clip(&text, MAX_TEXT_CHARS),
+            time,
+            images,
+            ..Default::default()
+        });
+    }
+
     fn push_tool(&mut self, id: String, name: String, input: String, time: Option<String>) {
         self.items.push(ChatItem {
             id,
@@ -292,6 +342,23 @@ fn u64_at(v: &Value, pointer: &str) -> u64 {
 
 fn str_of(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+/// Largest inline image passed to the chat; bigger ones show as "[image]".
+const MAX_IMAGE_URL_CHARS: usize = 12_000_000;
+
+/// A `data:` URL for an image block (`{type: base64, media_type, data}`) or a URL source.
+fn image_source_url(source: &Value) -> Option<String> {
+    let url = match source.get("type").and_then(Value::as_str) {
+        Some("base64") => {
+            let media = source.get("media_type").and_then(Value::as_str).unwrap_or("image/png");
+            let data = source.get("data").and_then(Value::as_str)?;
+            format!("data:{media};base64,{data}")
+        }
+        Some("url") => str_of(source, "url")?,
+        _ => return None,
+    };
+    (url.len() <= MAX_IMAGE_URL_CHARS).then_some(url)
 }
 
 /// A one-line-ish summary of a tool's input: the field people care about
@@ -538,6 +605,7 @@ fn parse_claude(path: &Path) -> Parsed {
                     let mut images = 0;
                     let mut interrupted = false;
                     let mut tool_results = false;
+                    let mut image_urls: Vec<String> = Vec::new();
                     for block in blocks {
                         match block.get("type").and_then(Value::as_str) {
                             Some("text") => {
@@ -547,7 +615,10 @@ fn parse_claude(path: &Path) -> Parsed {
                                     words.push(text);
                                 }
                             }
-                            Some("image") => images += 1,
+                            Some("image") => match block.get("source").and_then(image_source_url) {
+                                Some(url) => image_urls.push(url),
+                                None => images += 1,
+                            },
                             Some("tool_result") => {
                                 tool_results = true;
                                 let id = str_of(block, "tool_use_id").unwrap_or_default();
@@ -565,12 +636,10 @@ fn parse_claude(path: &Path) -> Parsed {
                     // interrupt ends it. Settings commands change neither.
                     if interrupted {
                         parsed.busy = Some(false);
-                    } else if tool_results || !words.is_empty() {
+                    } else if tool_results || !words.is_empty() || !image_urls.is_empty() {
                         parsed.busy = Some(true);
                     }
-                    if !words.is_empty() {
-                        parsed.push_text("user", uuid, words.join("\n"), time);
-                    }
+                    parsed.push_user(uuid, words.join("\n"), image_urls, time);
                 }
                 _ => {}
             }
@@ -758,25 +827,28 @@ fn parse_codex(path: &Path) -> Parsed {
                         let blocks = p.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
                         if role == "user" {
                             let mut words = Vec::new();
-                            let mut images = 0;
+                            let mut image_urls: Vec<String> = Vec::new();
+                            let mut unreadable = 0;
                             for b in &blocks {
                                 match b.get("type").and_then(Value::as_str) {
                                     Some("input_text") => {
                                         let t = str_of(b, "text").unwrap_or_default();
-                                        if t.trim_start().starts_with("<image") {
-                                            images += 1;
-                                        } else if !codex_injected(&t) {
+                                        // `<image name=… path=…>` / `</image>` wrap each input_image.
+                                        if !t.trim_start().starts_with("<image") && !codex_injected(&t) {
                                             words.push(t);
                                         }
                                     }
-                                    Some("input_image") if images == 0 => images += 1,
+                                    Some("input_image") => match str_of(b, "image_url").filter(|u| u.len() <= MAX_IMAGE_URL_CHARS) {
+                                        Some(url) => image_urls.push(url),
+                                        None => unreadable += 1,
+                                    },
                                     _ => {}
                                 }
                             }
-                            if images > 0 {
-                                words.push(if images == 1 { "[image]".into() } else { format!("[{images} images]") });
+                            if unreadable > 0 {
+                                words.push(if unreadable == 1 { "[image]".into() } else { format!("[{unreadable} images]") });
                             }
-                            parsed.push_text("user", id, words.join("\n"), time);
+                            parsed.push_user(id, words.join("\n"), image_urls, time);
                         } else if role == "assistant" {
                             let text = blocks
                                 .iter()

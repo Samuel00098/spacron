@@ -118,17 +118,6 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   color: var(--text-muted);
 }
 
-.terminal-chat-empty {
-  margin: 12vh auto 0;
-  max-width: 340px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  text-align: center;
-}
-
-.terminal-chat-empty-hint { color: var(--text-muted); }
 
 .terminal-chat-working {
   display: flex;
@@ -943,7 +932,7 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 }
 
 .terminal-chat-model-list {
-  max-height: 260px;
+  max-height: 274px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1018,4 +1007,119 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 
 :root.light-theme .terminal-chat-md pre {
   background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+/* ── Images: in user turns and waiting in the composer ──────────────────── */
+
+.terminal-chat-user {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.terminal-chat-user-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: min(82%, 600px);
+}
+
+.terminal-chat-user-image {
+  width: 132px;
+  height: 96px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--tc-surface);
+  box-shadow: inset 0 0 0 1px var(--tc-line) !important;
+  cursor: zoom-in;
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.terminal-chat-user-image:hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+
+.terminal-chat-user-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.terminal-chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0 4px;
+}
+
+.terminal-chat-attachment {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex: none;
+}
+
+.terminal-chat-attachment-thumb {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--tc-surface-strong);
+  box-shadow: inset 0 0 0 1px var(--tc-line) !important;
+  cursor: zoom-in;
+}
+
+.terminal-chat-attachment-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.terminal-chat-attachment-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+
+.terminal-chat-attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--text-primary);
+  color: var(--bg-primary, #111);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3) !important;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.terminal-chat-attachment:hover .terminal-chat-attachment-remove,
+.terminal-chat-attachment-remove:focus-visible { opacity: 1; }
+
+.terminal-chat-attachment-count { display: none; }
+
+/* The model list keeps one height while the menu is open and only scrolls. */
+.terminal-chat-menu.model .terminal-chat-model-list {
+  overflow-y: auto;
+  overscroll-behavior: none;
+  scrollbar-gutter: stable;
 }
