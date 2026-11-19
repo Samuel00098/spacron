@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { type Writable } from '$lib/stores/storeCompat';
 import { jumpToLine, openFile } from '$lib/stores/editor';
 import {
@@ -44,7 +44,12 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-export default function SearchPanel() {
+/**
+ * Project-wide text search. With `idle`, the panel doubles as the Files
+ * surface: the search box sits on top, `idle` (the file tree) shows while the
+ * box is empty, and results replace it as soon as there is a query.
+ */
+export default function SearchPanel({ idle, autoFocus = true }: { idle?: ReactNode; autoFocus?: boolean } = {}) {
   const projectId = useStore(activeProjectId);
   const query = useStore(searchQuery);
   const caseSensitive = useStore(searchCaseSensitive);
@@ -97,8 +102,10 @@ export default function SearchPanel() {
   }, [projectId]);
 
   useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
+    if (autoFocus) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
@@ -106,9 +113,10 @@ export default function SearchPanel() {
 
   const totalMatches = results?.total_matches ?? 0;
   const fileCount = results?.files.length ?? 0;
+  const showIdle = idle !== undefined && query.trim() === '';
 
   return (
-    <div className="search-panel">
+    <div className={`search-panel${idle !== undefined ? ' search-panel-files' : ''}`}>
       <div className="search-header">
         <div className="search-input-wrap">
           <SearchIcon />
@@ -116,7 +124,7 @@ export default function SearchPanel() {
             ref={inputRef}
             className="search-input"
             type="text"
-            placeholder="Search"
+            placeholder={idle !== undefined ? 'Search files' : 'Search'}
             value={query}
             onChange={(event) => {
               searchQuery.set(event.target.value);
@@ -138,7 +146,7 @@ export default function SearchPanel() {
             </button>
           </div>
         </div>
-        <input
+        {!showIdle && <input
           className="search-include"
           type="text"
           placeholder="files to include, e.g. *.ts, src/**"
@@ -150,8 +158,10 @@ export default function SearchPanel() {
           onKeyDown={handleKeyDown}
           spellCheck={false}
           autoComplete="off"
-        />
+        />}
       </div>
+
+      {showIdle ? <div className="search-panel-idle">{idle}</div> : <>
 
       <div className="search-status">
         {loading ? (
@@ -201,6 +211,7 @@ export default function SearchPanel() {
           </div>
         ))}
       </div>
+      </>}
     </div>
   );
 }

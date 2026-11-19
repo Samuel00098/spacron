@@ -1,8 +1,43 @@
-/* Extras for the "+" agent menu; the menu itself uses Dropdown's .dd-menu. */
-.agent-quick-add-menu {
-  min-width: 180px;
-  max-width: 280px;
-  max-height: 320px;
+/* The "+" agent launcher: the agents pane, and beside it (once an agent is
+   picked) the launch pane. Both reuse Dropdown's .dd-menu / .dd-item look. */
+.aqa-root {
+  z-index: 10000;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.aqa-root .aqa-pane {
+  position: static;
+  max-height: min(440px, calc(100vh - 24px));
+  overflow: hidden;
+}
+
+.aqa-root .aqa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
+/* Agents pane */
+.aqa-agents {
+  width: 230px;
+}
+
+.aqa-agents .aqa-list {
+  flex: 1 1 auto;
+}
+
+.aqa-agent .aqa-chevron {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.aqa-agent.active .aqa-chevron {
+  color: var(--text-primary);
 }
 
 .agent-quick-add-brand {
@@ -12,12 +47,21 @@
   height: 14px;
 }
 
-.agent-quick-add-brand svg {
+.agent-quick-add-brand svg,
+.agent-quick-add-brand img {
   width: 14px;
   height: 14px;
+  max-width: 14px;
+  max-height: 14px;
+  object-fit: contain;
+}
+
+.agent-quick-add-brand {
+  overflow: hidden;
 }
 
 .agent-quick-add-divider {
+  flex: 0 0 auto;
   height: 1px;
   margin: 3px 4px;
   background: var(--border);
@@ -27,4 +71,157 @@
   padding: 7px 9px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* Launch pane */
+.aqa-config {
+  width: 380px;
+  padding: 0;
+  gap: 0;
+}
+
+.aqa-model-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  height: 38px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.aqa-model-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-primary);
+}
+
+.aqa-config .aqa-models {
+  flex: 1 1 auto;
+  max-height: 220px;
+  padding: 5px;
+}
+
+.aqa-model .aqa-check {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.aqa-efforts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 7px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.aqa-effort {
+  height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.aqa-effort:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.aqa-effort.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.aqa-prompt {
+  flex: 0 0 auto;
+  margin: 0 8px;
+  padding: 8px 10px;
+  min-height: 40px;
+  max-height: 120px;
+  resize: none;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
+  color: var(--text-primary);
+  font-family: inherit;
+  outline: none;
+}
+
+.aqa-prompt:focus {
+  border-color: color-mix(in srgb, var(--text-primary) 30%, var(--border));
+}
+
+.aqa-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 8px;
+}
+
+.aqa-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: none;
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border) !important;
+  color: var(--text-primary);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.aqa-launch span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.aqa-launch kbd {
+  flex: 0 0 auto;
+  font-family: var(--font-sans) !important;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.aqa-launch:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.aqa-launch.primary {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  box-shadow: none !important;
+}
+
+.aqa-launch.primary kbd {
+  color: color-mix(in srgb, var(--bg-primary) 60%, transparent);
+}
+
+.aqa-launch.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 88%, transparent);
+}
+
+.aqa-launch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

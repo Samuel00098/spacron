@@ -75,7 +75,6 @@ import {
   toggleContainersVisible,
   toggleToolboxVisible,
   RIGHT_DRAWER_TOOLS,
-  RIGHT_SIDEBAR_NAVIGATOR_TABS,
   rightSidebarVisible,
   rightSidebarTab as rightSidebarTabStore,
   openAgentSpawn,
@@ -374,7 +373,8 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
 
 // The first group in the right sidebar is the workspace navigator. The
 // existing utility tools follow it in the same sidebar.
-const RIGHT_NAVIGATOR_TOOLS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
+// Search lives inside Files (its search box), so it is not a surface of its own.
+const RIGHT_NAVIGATOR_TOOLS = ['files', 'git', 'problems', 'snapshots', 'snippets'] as const;
 type RightNavigatorTool = (typeof RIGHT_NAVIGATOR_TOOLS)[number];
 
 // The RIGHT drawer hosts the layout-backed tools (including Code Review).
@@ -493,7 +493,8 @@ function SidebarContent({ tab }: { tab: SidebarTab }) {
   if (tab === 'snippets') return <TerminalSnippetsPanel />;
 
   if (tab === 'problems') return <ProblemsPanel />;
-  return <FileExplorer />;
+  // Files and Search are one surface: a search box over the file tree.
+  return <SearchPanel idle={<FileExplorer />} autoFocus={false} />;
 }
 
 import { useGlobalTooltips } from '$lib/react/useGlobalTooltips.ts';
@@ -1732,7 +1733,7 @@ export default function AppShell() {
   const leftActiveTool: LeftDrawerTool | null = leftDrawerOpen ? 'projects' : null;
   const leftDrawerTools: readonly LeftDrawerTool[] = ['projects'];
   const rightSidebarTab = useStore(rightSidebarTabStore);
-  const rightNavigatorTool: RightNavigatorTool = (RIGHT_SIDEBAR_NAVIGATOR_TABS as readonly string[]).includes(rightSidebarTab)
+  const rightNavigatorTool: RightNavigatorTool = (RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(rightSidebarTab)
     ? rightSidebarTab as RightNavigatorTool
     : 'files';
   const rightNavigatorTools: readonly RightNavigatorTool[] = RIGHT_NAVIGATOR_TOOLS.filter(
@@ -1874,23 +1875,6 @@ export default function AppShell() {
             <Icon><path d="m15 18-6-6 6-6" /></Icon>
           </button>
         </header>
-
-        <div className="left-sidebar-quick-actions">
-          <button
-            type="button"
-            className={`left-sidebar-new-agent${layoutState.agentSpawnOpen ? ' active' : ''}`}
-            onClick={() => {
-              if (layoutState.agentSpawnOpen) closeAgentSpawn();
-              else openAgentSpawn();
-            }}
-            disabled={currentInteractionMode === 'chat'}
-            title={currentInteractionMode === 'chat' ? 'Switch to Code mode to start a new agent' : 'Start a new agent'}
-            aria-pressed={layoutState.agentSpawnOpen}
-          >
-            <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
-            <span>New Agent</span>
-          </button>
-        </div>
 
         <nav className="left-sidebar-nav" aria-label="Project actions and global views">
           {renderActionNavItem(
@@ -2130,7 +2114,7 @@ export default function AppShell() {
   };
   const browserIcon = <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>;
   const NAVIGATOR_SHORTCUTS: Record<RightNavigatorTool, string> = {
-    files: 'F', search: 'S', git: 'G', problems: 'P', snapshots: 'N', snippets: 'I',
+    files: 'F', git: 'G', problems: 'P', snapshots: 'N', snippets: 'I',
   };
   const TOOL_SHORTCUTS: Record<RightTool, string> = {
     review: 'D', fleet: 'A', toolbox: 'T', http: 'H', db: 'Q', containers: 'C', env: 'E', mobile: 'M',
@@ -2987,9 +2971,9 @@ export default function AppShell() {
   ];
 
 
-  // Reachable three ways: the command palette, the sidebar's New Agent button,
-  // and the prompt bar in code mode — where it is the only one of the three
-  // that stays in reach with the left sidebar closed.
+  // The full Spawn Agents picker. Reachable from the command palette, the
+  // prompt bar in code mode, and "More options…" in the "+" agent launcher
+  // (agent and terminal room headers, and the empty stage).
   const spawnAgentItem: ActivityItem = {
     id: 'spawnAgent',
     title: 'Spawn Agents',
@@ -3563,7 +3547,9 @@ export default function AppShell() {
           <div className="room-actions">
             {/* DeepSeek Harness is an agent too, but its room is a web panel
                 with no agent session behind it. */}
-            {(agentSession || id === 'deepseek') && <AgentQuickAdd className="room-action" />}
+            {(agentSession || id === 'deepseek' || id === 'terminal' || id === 'dev-terminal') && (
+              <AgentQuickAdd className="room-action" title={agentSession || id === 'deepseek' ? 'Add another agent' : 'Add an agent'} />
+            )}
             {isThisForcedFullscreen ? null : isThisExpanded ? (
               <button
                 className="room-action"
@@ -3982,24 +3968,24 @@ export default function AppShell() {
                   ? 'Choose the agents you want to work with in this project.'
                   : 'Open a project folder or select one from the left sidebar to start working.'}
               </span>
-              <button
-                type="button"
-                className="stage-empty-agent-btn"
-                onClick={() => (project ? openAgentSpawn() : void openProject())}
-                aria-label={project ? 'Choose agents' : 'Open project'}
-              >
-                {project ? (
-                  <>
-                    <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>
-                    <span>Choose Agents</span>
-                  </>
-                ) : (
-                  <>
-                    <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon>
-                    <span>Open Project</span>
-                  </>
-                )}
-              </button>
+              {project ? (
+                <AgentQuickAdd
+                  className="stage-empty-agent-btn"
+                  label="New agent"
+                  title="Add an agent"
+                  icon={<Icon><path d="M12 5v14M5 12h14" /></Icon>}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="stage-empty-agent-btn"
+                  onClick={() => void openProject()}
+                  aria-label="Open project"
+                >
+                  <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon>
+                  <span>Open Project</span>
+                </button>
+              )}
             </div>
           )}
           {persistentStageRooms.map((room) => {

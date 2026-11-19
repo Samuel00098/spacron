@@ -3421,60 +3421,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   color: var(--text-primary);
 }
 
-.app-shell .left-sidebar-quick-actions {
-  display: flex;
-  gap: 6px;
-  padding: 0 8px 6px;
-  flex: 0 0 auto;
-}
-
-.app-shell .left-sidebar-new-agent {
-  min-width: 0;
-  height: 30px;
-  padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  flex: 1 1 auto;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
-}
-
-.app-shell .left-sidebar-new-agent:hover,
-.app-shell .left-sidebar-new-agent.active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 17%, transparent);
-}
-
-.app-shell .left-sidebar-new-agent:disabled {
-  border-color: color-mix(in srgb, var(--border) 80%, transparent);
-  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
-  color: var(--text-muted);
-  cursor: not-allowed;
-  opacity: 0.48;
-  filter: saturate(0.35);
-}
-
-.app-shell .left-sidebar-new-agent:disabled:hover,
-.app-shell .left-sidebar-new-agent:disabled.active {
-  border-color: color-mix(in srgb, var(--border) 80%, transparent);
-  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
-}
-
-.app-shell .left-sidebar-new-agent svg {
-  width: 14px;
-  height: 14px;
-}
-
 .app-shell .left-sidebar-nav {
   display: flex;
   flex-direction: column;
@@ -3678,10 +3624,6 @@ html.is-webkitgtk .app-shell .composer-strip {
     padding-top: 5px;
   }
 
-  .app-shell .left-sidebar-quick-actions {
-    padding-bottom: 6px;
-  }
-
   .app-shell .left-sidebar-nav-item {
     height: 23px;
   }
@@ -3740,19 +3682,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   background: var(--text-primary);
   -webkit-mask: url('/icon.png') center / contain no-repeat;
   mask: url('/icon.png') center / contain no-repeat;
-}
-
-.app-shell .left-sidebar-quick-actions {
-  padding: 3px 10px 11px;
-}
-
-.app-shell .left-sidebar-new-agent {
-  height: 34px;
-  padding: 0 10px;
-  border-radius: 10px;
-  gap: 9px;
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .app-shell .left-sidebar-nav {
@@ -4079,10 +4008,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   .app-shell .left-sidebar-header {
     min-height: 52px;
     padding-top: 8px;
-  }
-
-  .app-shell .left-sidebar-quick-actions {
-    padding-bottom: 8px;
   }
 
   .app-shell .left-sidebar-nav-item {

@@ -249,3 +249,22 @@
 .search-panel .scrollable::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--accent) 40%, transparent);
 }
+
+/* Files surface: the file tree fills the space under the search box while
+   there is no query; results replace it once there is one. */
+.search-panel .search-panel-idle {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.search-panel .search-panel-idle > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.search-panel.search-panel-files .search-header {
+  padding: 8px 10px;
+}
