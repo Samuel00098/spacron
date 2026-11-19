@@ -64,7 +64,7 @@ import PinIcon from '$lib/components/shared/PinIcon';
 import StandaloneChatsSidebar from './StandaloneChatsSidebar';
 import ProjectWorktreeList from './ProjectWorktreeList';
 import CreateWorktreeModal from './CreateWorktreeModal';
-import { createWorktreeRequest, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
+import { createWorktreeRequest, mainWorktreeRow, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
 import { worktreeForPath } from '$lib/services/project-worktrees';
 import AgentQuickAdd from '$lib/components/shared/AgentQuickAdd';
 import { showProjectChat } from '$lib/stores/chatNavigation';
@@ -968,7 +968,12 @@ export default function ProjectHUD() {
     type ThreadList = ReturnType<typeof buildThreadList>;
     // Worktree grouping: every agent, terminal and thread is listed under the
     // worktree it works in; tools (editor, preview…) stay at the project level.
-    const projectWorktreeRows = projectId ? allWorktreeLists[projectId] ?? [] : [];
+    // Every project has its master row, even before git has answered (or when
+    // it is not a git repo), so its agents and terminals always list under it.
+    const loadedWorktreeRows = projectId ? allWorktreeLists[projectId] ?? [] : [];
+    const projectWorktreeRows = loadedWorktreeRows.length > 0
+      ? loadedWorktreeRows
+      : projectId && p.path ? [mainWorktreeRow(p.path)] : [];
     const groupByWorktree = projectWorktreeRows.length > 0;
     const ownerPath = (path: string | null | undefined) =>
       worktreeForPath(projectWorktreeRows, path)?.path ?? projectWorktreeRows[0]?.path ?? '';
@@ -1520,6 +1525,7 @@ export default function ProjectHUD() {
             {projectId && groupByWorktree && (
               <ProjectWorktreeList
                 projectId={projectId}
+                rootPath={p.path}
                 sessions={projectSessions}
                 threads={storedThreads}
                 newItemLabel="New chat thread here"

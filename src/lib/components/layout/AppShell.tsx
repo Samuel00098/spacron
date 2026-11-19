@@ -3999,33 +3999,23 @@ export default function AppShell() {
               {switchingPhase ?? 'Opening project…'}
             </div>
           )}
-          {stageIsVacant && (
+          {/* A project's stage is simply empty once everything is closed (it
+              opens on a terminal); only with no project is there a prompt. */}
+          {stageIsVacant && !project && (
             <div className="stage-empty-cta">
-              <strong className="stage-empty-title">{project ? 'Start with agents' : 'Spacron'}</strong>
+              <strong className="stage-empty-title">Spacron</strong>
               <span className="stage-empty-copy">
-                {project
-                  ? 'Choose the agents you want to work with in this project.'
-                  : 'Open a project folder or select one from the left sidebar to start working.'}
+                Open a project folder or select one from the left sidebar to start working.
               </span>
-              {project ? (
-                <AgentQuickAdd
-                  className="stage-empty-agent-btn"
-                  label="New agent"
-                  title="Add an agent"
-                  icon={<Icon><path d="M12 5v14M5 12h14" /></Icon>}
-                  items={launcherItems}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="stage-empty-agent-btn"
-                  onClick={() => void openProject()}
-                  aria-label="Open project"
-                >
-                  <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon>
-                  <span>Open Project</span>
-                </button>
-              )}
+              <button
+                type="button"
+                className="stage-empty-agent-btn"
+                onClick={() => void openProject()}
+                aria-label="Open project"
+              >
+                <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon>
+                <span>Open Project</span>
+              </button>
             </div>
           )}
           {persistentStageRooms.map((room) => {

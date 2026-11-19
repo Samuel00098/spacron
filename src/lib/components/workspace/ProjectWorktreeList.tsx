@@ -5,6 +5,7 @@ import { createTerminalSession, type TerminalSessionInfo } from '$lib/stores/ter
 import type { ChatThread } from '$lib/types/chat';
 import {
   activeWorktreeByProject,
+  mainWorktreeRow,
   openCreateWorktree,
   refreshProjectWorktrees,
   setActiveWorktree,
@@ -42,6 +43,7 @@ function relativeAge(ms: number | null): string | null {
 
 export default function ProjectWorktreeList({
   projectId,
+  rootPath,
   sessions,
   threads,
   renderChildren,
@@ -50,6 +52,8 @@ export default function ProjectWorktreeList({
   renderNewItem,
 }: {
   projectId: string;
+  /** The project root: a project git cannot list still shows its master row. */
+  rootPath?: string | null;
   sessions: TerminalSessionInfo[];
   threads: ChatThread[];
   /** What is working inside each worktree (agents, terminals, threads),
@@ -64,7 +68,13 @@ export default function ProjectWorktreeList({
 }) {
   const all = useStore(worktreesByProject);
   const active = useStore(activeWorktreeByProject);
-  const worktrees = all[projectId];
+  // Master is there from the start: before git answers, and for a project git
+  // cannot list at all.
+  const loaded = all[projectId];
+  const worktrees = useMemo(
+    () => (loaded && loaded.length > 0 ? loaded : rootPath ? [mainWorktreeRow(rootPath)] : loaded),
+    [loaded, rootPath],
+  );
   const [menuPath, setMenuPath] = useState<string | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -73,13 +83,13 @@ export default function ProjectWorktreeList({
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    void refreshProjectWorktrees(projectId);
+    void refreshProjectWorktrees(projectId, rootPath);
     // Worktrees can be added or removed from a terminal; re-read when the
     // window regains focus rather than polling.
-    const onFocus = () => void refreshProjectWorktrees(projectId);
+    const onFocus = () => void refreshProjectWorktrees(projectId, rootPath);
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [projectId]);
+  }, [projectId, rootPath]);
 
   useEffect(() => {
     if (!menuPath) return;
@@ -219,7 +229,7 @@ export default function ProjectWorktreeList({
           const age = worktree.is_main ? null : relativeAge(worktree.created_at);
           const title = [
             worktree.is_main ? 'Primary worktree (original clone directory)' : worktree.name,
-            worktree.branch ? `Branch: ${worktree.branch}` : 'Detached HEAD',
+            worktree.branch ? `Branch: ${worktree.branch}` : worktree.head ? 'Detached HEAD' : null,
             worktree.base_ref ? `From: ${worktree.base_ref}` : null,
             worktree.note,
             worktree.missing ? 'The folder is missing.' : null,

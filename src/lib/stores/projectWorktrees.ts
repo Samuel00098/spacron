@@ -60,16 +60,40 @@ export function closeCreateWorktree() {
 }
 
 const inFlight = new Map<string, Promise<ProjectWorktree[]>>();
+/** Each project's root, remembered from the first refresh that knew it, so a
+ *  later refresh without it still falls back to the master row. */
+const rootByProject = new Map<string, string>();
 
-/** Reload a project's worktrees from git. Never throws: a project that is not a
- *  git repo (or a remote backend without the command) just has no rows. */
-export function refreshProjectWorktrees(projectId: string): Promise<ProjectWorktree[]> {
+/** The master row for a project git cannot list (not a repo, or a remote
+ *  backend without the command): every project has one, so its agents and
+ *  terminals always have a home in the sidebar. */
+export function mainWorktreeRow(rootPath: string): ProjectWorktree {
+  return {
+    path: rootPath,
+    branch: null,
+    head: '',
+    is_main: true,
+    name: 'master',
+    note: null,
+    parent: null,
+    base_ref: null,
+    created_at: null,
+    missing: false,
+  };
+}
+
+/** Reload a project's worktrees from git. Never throws. With a known root, a
+ *  project git cannot list still gets its master row. */
+export function refreshProjectWorktrees(projectId: string, rootPath?: string | null): Promise<ProjectWorktree[]> {
+  if (rootPath) rootByProject.set(projectId, rootPath);
   const pending = inFlight.get(projectId);
   if (pending) return pending;
   const run = listProjectWorktrees(projectId)
     .catch(() => [] as ProjectWorktree[])
     .then((list) => {
-      const safe = Array.isArray(list) ? list : [];
+      const root = rootByProject.get(projectId);
+      const listed = Array.isArray(list) ? list : [];
+      const safe = listed.length === 0 && root ? [mainWorktreeRow(root)] : listed;
       worktreesByProject.update((all) => ({ ...all, [projectId]: safe }));
       // Forget a selection whose worktree is gone, so new work does not try to
       // start in a deleted folder.

@@ -136,6 +136,15 @@ describe('active worktree', () => {
     expect(store.launchWorktreeFor('unknown', ROOT)).toBeUndefined();
   });
 
+  it('gives a project git cannot list its master row', async () => {
+    backendMock.mockRejectedValueOnce('not a git repository');
+    const rows = await store.refreshProjectWorktrees('plain', 'C:\\plain');
+    expect(rows.map((r) => [r.name, r.is_main, r.path])).toEqual([['master', true, 'C:\\plain']]);
+    // A later refresh that does not know the root still keeps master.
+    backendMock.mockResolvedValueOnce([]);
+    expect((await store.refreshProjectWorktrees('plain')).map((r) => r.name)).toEqual(['master']);
+  });
+
   it('treats a failed list as no worktrees rather than throwing', async () => {
     backendMock.mockRejectedValueOnce(new Error('unsupported remote command'));
     await expect(store.refreshProjectWorktrees('p')).resolves.toEqual([]);
