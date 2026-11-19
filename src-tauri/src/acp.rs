@@ -87,7 +87,7 @@ impl AcpManager {
         thread::Builder::new()
             .name(format!("spacron-acp-stderr-{id}"))
             .spawn(move || {
-                for line in BufReader::new(stderr).lines().flatten() {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                     if !line.trim().is_empty() {
                         let _ = tauri::Emitter::emit(
                             &stderr_app,
