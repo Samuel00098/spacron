@@ -28,6 +28,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# `build.rs` hands tauri-build a config with `externalBin` emptied so it stops
+# copying the sidecars into cargo's build directory; merging that into the CLI's
+# `TAURI_CONFIG` (when one is set) is JSON work. Already in the tree via
+# tauri-build, so this adds no crate to the lockfile.
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "image-png"] }
