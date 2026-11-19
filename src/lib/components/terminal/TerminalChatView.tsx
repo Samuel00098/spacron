@@ -296,7 +296,10 @@ export default function TerminalChatView({
   const modelApply: SessionOptionApply = agent ? modelApplyFor(agent) : { kind: 'none' };
   const effortApply: SessionOptionApply = agent ? effortApplyFor(agent) : { kind: 'none' };
   const currentModelId = picked.model ?? reported.model;
-  const currentModel = models.find((m) => currentModelId && sameModel(currentModelId, m.id)) ?? null;
+  // Until the CLI answers with its own list (or if it can't), Claude Code still
+  // takes its aliases, so a model can be picked before any conversation.
+  const menuModels: AgentProviderModel[] = models.length ? models : agent === 'claude' ? CLAUDE_ALIAS_MODELS : [];
+  const currentModel = menuModels.find((m) => currentModelId && sameModel(currentModelId, m.id)) ?? null;
   const modelLabel = currentModel?.label ?? (currentModelId ? prettyModel(currentModelId) : 'Default model');
   const efforts = (currentModel?.reasoningEfforts ?? (agent === 'claude' ? CLAUDE_EFFORTS : []))
     .filter((e) => e !== 'default');
@@ -494,7 +497,7 @@ export default function TerminalChatView({
                 ? `${agentLabel} can't switch models mid-session`
                 : optionsLocked ? 'Change the model between turns' : 'Model and reasoning'}
               disabled={modelApply.kind === 'none' || optionsLocked}
-              models={models.filter((m) => m.supported !== false).map((m) => ({ value: m.id, label: m.label, hint: m.description }))}
+              models={menuModels.filter((m) => m.supported !== false).map((m) => ({ value: m.id, label: m.label, hint: m.description }))}
               model={currentModel?.id ?? null}
               onModel={(value) => void applyOption(modelApply, value, 'model')}
               efforts={effortApply.kind !== 'none' ? efforts.map((e) => ({ value: e, label: shortEffort(e) })) : []}
@@ -557,6 +560,13 @@ export default function TerminalChatView({
 
 const CLAUDE_EFFORTS: ChatReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+/** Claude Code's model aliases (always the latest of each family), for when no live list is available. */
+const CLAUDE_ALIAS_MODELS: AgentProviderModel[] = [
+  { id: 'opus', label: 'Opus', description: 'Most capable, for complex work' },
+  { id: 'sonnet', label: 'Sonnet', description: 'Fast and capable for everyday tasks' },
+  { id: 'haiku', label: 'Haiku', description: 'Fastest, for quick answers' },
+];
+
 function effortLabel(value: string): string {
   return REASONING_LABELS[value as ChatReasoningEffort] ?? value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -566,7 +576,10 @@ function sameModel(a: string, b: string): boolean {
   const norm = (v: string) => v.toLowerCase().replace(/\[1m\]$/, '').replace(/^.*\//, '');
   const x = norm(a);
   const y = norm(b);
-  return x === y || x.startsWith(`${y}-`) || y.startsWith(`${x}-`);
+  if (x === y || x.startsWith(`${y}-`) || y.startsWith(`${x}-`)) return true;
+  // A Claude family alias ("opus") names the latest model of that family.
+  const family = (alias: string, id: string) => /^(opus|sonnet|haiku)$/.test(alias) && new RegExp(`(^|-)${alias}(-|$)`).test(id);
+  return family(x, y) || family(y, x);
 }
 
 /** "claude-opus-5-5" → "Opus 5.5", "gpt-6-luna" → "Gpt 6 Luna". */

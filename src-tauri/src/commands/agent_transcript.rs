@@ -84,13 +84,63 @@ pub async fn agent_transcript_read(query: TranscriptQuery) -> Result<TranscriptR
 }
 
 fn read_transcript(q: &TranscriptQuery) -> Result<TranscriptResult, String> {
-    match q.agent.as_str() {
+    let mut result = match q.agent.as_str() {
         "claude" => read_file_agent(q, claude_candidates(&q.cwd), parse_claude),
         "codex" => read_file_agent(q, codex_candidates(&q.cwd, q.since_ms), parse_codex),
         "grok" => read_file_agent(q, grok_candidates(&q.cwd), parse_grok),
         "opencode" => read_opencode(q),
         other => Err(format!("Chat view does not support {other}")),
+    }?;
+    // Before the first turn there is no transcript to say what the session runs
+    // on, so the composer would read "Default model". The CLI's own configured
+    // default is what it will use, so report that instead.
+    if !result.unchanged && result.model.is_none() {
+        let (model, effort) = configured_defaults(&q.agent);
+        result.model = model;
+        if result.effort.is_none() {
+            result.effort = effort;
+        }
     }
+    Ok(result)
+}
+
+/// The model (and effort) a CLI starts with when none is passed: Claude Code's
+/// `settings.json` `model`, Codex's `config.toml` `model` / `model_reasoning_effort`.
+fn configured_defaults(agent: &str) -> (Option<String>, Option<String>) {
+    match agent {
+        "claude" => {
+            let base = env_dir("CLAUDE_CONFIG_DIR").or_else(|| home().map(|h| h.join(".claude")));
+            let model = base
+                .and_then(|b| fs::read_to_string(b.join("settings.json")).ok())
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .and_then(|v| str_of(&v, "model"));
+            (model, None)
+        }
+        "codex" => {
+            let base = env_dir("CODEX_HOME").or_else(|| home().map(|h| h.join(".codex")));
+            let Some(text) = base.and_then(|b| fs::read_to_string(b.join("config.toml")).ok()) else {
+                return (None, None);
+            };
+            (toml_top_level_string(&text, "model"), toml_top_level_string(&text, "model_reasoning_effort"))
+        }
+        _ => (None, None),
+    }
+}
+
+/// A top-level `key = "value"` from a TOML file, ignoring anything under a table header.
+fn toml_top_level_string(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            break;
+        }
+        let Some((k, v)) = line.split_once('=') else { continue };
+        if k.trim() == key {
+            let v = v.split('#').next().unwrap_or("").trim().trim_matches('"').trim_matches('\'');
+            return Some(v.to_string()).filter(|s| !s.is_empty());
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +386,9 @@ fn claude_candidates(cwd: &str) -> Vec<Candidate> {
         .collect()
 }
 
+/// Slash commands that only change session settings; never shown as messages.
+const SETTINGS_COMMANDS: &[&str] = &["/model", "/effort", "/fast", "/permissions", "/approvals"];
+
 /// Wrappers Claude Code writes into user turns that are not the user's words.
 fn claude_user_text(raw: &str) -> Option<String> {
     let text = strip_tag_blocks(raw, "system-reminder");
@@ -359,6 +412,12 @@ fn claude_user_text(raw: &str) -> Option<String> {
     }
     if trimmed.starts_with("<command-name>") || trimmed.starts_with("<command-message>") {
         let name = tag_body(trimmed, "command-name").unwrap_or_default();
+        // Session settings the chat view applies itself (its model, effort and
+        // permission pickers type these). Like Orca, the change happens quietly
+        // instead of as a turn in the conversation.
+        if SETTINGS_COMMANDS.contains(&name.trim()) {
+            return None;
+        }
         let args = tag_body(trimmed, "command-args").unwrap_or_default();
         let line = format!("{} {}", name.trim(), args.trim());
         return Some(line.trim().to_string()).filter(|s| !s.is_empty());
@@ -967,7 +1026,25 @@ mod tests {
         );
         assert_eq!(claude_user_text("hi<system-reminder>secret</system-reminder>").as_deref(), Some("hi"));
         assert_eq!(claude_user_text("<task-notification><task-id>x</task-id></task-notification>"), None);
+        assert_eq!(
+            claude_user_text("<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>claude-opus-5-5</command-args>"),
+            None
+        );
+        assert_eq!(claude_user_text("<command-name>/effort</command-name>\n<command-args>high</command-args>"), None);
+        assert_eq!(claude_user_text("<local-command-stdout>Set model to `Opus 5.5`</local-command-stdout>"), None);
+        assert_eq!(
+            claude_user_text("<command-name>/review</command-name>\n<command-args></command-args>").as_deref(),
+            Some("/review")
+        );
         assert_eq!(claude_user_text("<bash-input>git status</bash-input>").as_deref(), Some("! git status"));
+    }
+
+    #[test]
+    fn reads_top_level_toml_strings_only() {
+        let text = "model = \"gpt-6-luna\" # comment\nmodel_reasoning_effort = 'medium'\n[profiles.x]\nmodel = \"other\"\n";
+        assert_eq!(toml_top_level_string(text, "model").as_deref(), Some("gpt-6-luna"));
+        assert_eq!(toml_top_level_string(text, "model_reasoning_effort").as_deref(), Some("medium"));
+        assert_eq!(toml_top_level_string("[a]\nmodel = \"x\"\n", "model"), None);
     }
 
     #[test]
