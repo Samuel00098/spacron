@@ -156,8 +156,88 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
+
+const phoneIcon = (
+  <Ico size={16}>
+    <rect x="6" y="2" width="12" height="20" rx="2.5" />
+    <line x1="10.5" y1="18.5" x2="13.5" y2="18.5" />
+  </Ico>
+);
+
+const openIcon = (
+  <Ico size={13}>
+    <path d="M7 17 17 7" />
+    <path d="M8 7h9v9" />
+  </Ico>
+);
+
+function DeviceCard({
+  name,
+  detail,
+  action,
+  actionLabel,
+  disabled,
+}: {
+  name: string;
+  detail: string;
+  action: () => void;
+  actionLabel: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="mobile-device-card">
+      <span className="mobile-device-card-icon" aria-hidden="true">{phoneIcon}</span>
+      <span className="mobile-device-card-text">
+        <span className="mobile-device-card-name">{name}</span>
+        <span className="mobile-device-card-detail">{detail}</span>
+      </span>
+      <button type="button" className="mobile-device-card-open" onClick={action} disabled={disabled}>
+        {openIcon}
+        <span>{actionLabel}</span>
+      </button>
+    </div>
+  );
+}
+
+/** One button on the device's floating side toolbar. */
+function SideBtn({
+  title,
+  onClick,
+  active,
+  disabled,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={`mobile-side-btn${active ? ' active' : ''}`}
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      aria-pressed={active}
+      disabled={disabled}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function MobilePanel() {
   const [tab, setTab] = useProjectPanelState<MobileTab>('mobile.tab', 'android');
+  // The panel opens on the device list; "Open" on a device shows its screen.
+  const [view, setView] = useState<'list' | 'device'>('list');
+  // The platform whose screen is being mirrored, or null on the device list —
+  // every stream / screenshot loop keys off this, so the list never streams.
+  const mirrorTab: MobileTab | null = view === 'device' ? tab : null;
+  const [showText, setShowText] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [bootingName, setBootingName] = useState<string | null>(null);
   const [platform, setPlatform] = useState('');
 
   // ── Android ────────────────────────────────────────────────────────────
@@ -167,7 +247,6 @@ export default function MobilePanel() {
   const [selectedSerial, setSelectedSerial] = useState(
     () => localStorage.getItem('spacron.mobile.serial') ?? '',
   );
-  const [avdName, setAvdName] = useProjectPanelState('mobile.avdName', '');
   const [frame, setFrame] = useState<AndroidFrame | null>(null);
   const [frameError, setFrameError] = useState<string | null>(null);
   const [booting, setBooting] = useState(false);
@@ -321,8 +400,8 @@ export default function MobilePanel() {
   }, []);
 
   useEffect(() => {
-    if (tab === 'android') void refreshAndroid();
-  }, [tab, refreshAndroid]);
+    if (view === 'list' || tab === 'android') void refreshAndroid();
+  }, [view, tab, refreshAndroid]);
 
   // Keep watching for devices while nothing is streaming, so an emulator that
   // boots (or finishes booting) after the pane opened is picked up on its own
@@ -334,7 +413,7 @@ export default function MobilePanel() {
   // `devicesLoading`, which would flicker the Refresh button disabled every two
   // seconds. This is the one call that can actually report something new.
   useEffect(() => {
-    if (tab !== 'android' || androidStreaming) return;
+    if ((view === 'device' && tab !== 'android') || androidStreaming) return;
     let cancelled = false;
     let inFlight = false;
     const scan = async () => {
@@ -357,7 +436,7 @@ export default function MobilePanel() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [tab, androidStreaming]);
+  }, [view, tab, androidStreaming]);
 
   // ── Android: live H.264 stream (scrcpy) when supported + enabled ─────
   useEffect(() => {
@@ -365,7 +444,7 @@ export default function MobilePanel() {
     // host-side gRPC endpoint and needs no video decoder at all. If the backend
     // does pick H.264 and this webview cannot decode it, the stream reports a
     // fatal error on the first frame and the panel falls back to snapshots.
-    if (tab !== 'android' || !selectedSerial || streamMode !== 'stream' || streamFallback) {
+    if (mirrorTab !== 'android' || !selectedSerial || streamMode !== 'stream' || streamFallback) {
       stopStream();
       return;
     }
@@ -388,7 +467,7 @@ export default function MobilePanel() {
     );
     void startStream(selectedSerial, maxSide);
   }, [
-    tab,
+    mirrorTab,
     selectedSerial,
     streamMode,
     streamSide,
@@ -424,7 +503,7 @@ export default function MobilePanel() {
   // emulator was not quite ready" from a dead end into a couple of seconds:
   // the panel keeps showing snapshots meanwhile, then upgrades itself to live.
   useEffect(() => {
-    if (!streamFallback || streamMode !== 'stream' || tab !== 'android') return;
+    if (!streamFallback || streamMode !== 'stream' || mirrorTab !== 'android') return;
     if (!selectedSerial || !deviceOnline || streamFatalRef.current) return;
     if (streamRetryRef.current >= STREAM_RETRY_LIMIT) return;
     const attempt = streamRetryRef.current;
@@ -436,7 +515,7 @@ export default function MobilePanel() {
       STREAM_RETRY_BASE_MS * 2 ** attempt,
     );
     return () => window.clearTimeout(id);
-  }, [streamFallback, streamMode, tab, selectedSerial, deviceOnline]);
+  }, [streamFallback, streamMode, mirrorTab, selectedSerial, deviceOnline]);
 
   // ── Android: live mirror — poll screencap while a device is selected ───
   //
@@ -446,7 +525,7 @@ export default function MobilePanel() {
   // was competing with the stream and with every injected tap for the same adb
   // connection — the single worst thing for how responsive the panel feels.
   useEffect(() => {
-    if (tab !== 'android' || !selectedSerial || androidStreaming) return;
+    if (mirrorTab !== 'android' || !selectedSerial || androidStreaming) return;
     let cancelled = false;
     let inFlight = false;
     const tick = async () => {
@@ -470,11 +549,11 @@ export default function MobilePanel() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [tab, selectedSerial, refreshKey, androidStreaming]);
+  }, [mirrorTab, selectedSerial, refreshKey, androidStreaming]);
 
   // ── iOS: list simulators on tab open / after boot actions ─────────────
   useEffect(() => {
-    if (tab !== 'ios') return;
+    if (!(view === 'list' ? platform === 'macos' : tab === 'ios')) return;
     void (async () => {
       try {
         const list = await invoke<IosSimulator[]>('ios_list_simulators');
@@ -488,11 +567,11 @@ export default function MobilePanel() {
         setIosError(String(e));
       }
     })();
-  }, [tab, iosActionKey]);
+  }, [view, tab, platform, iosActionKey]);
 
   // ── iOS: serve-sim live stream when enabled + booted ─────────────────
   useEffect(() => {
-    if (tab !== 'ios' || !iosUdid || iosStreamMode !== 'stream') {
+    if (mirrorTab !== 'ios' || !iosUdid || iosStreamMode !== 'stream') {
       stopMjpeg();
       return;
     }
@@ -502,7 +581,7 @@ export default function MobilePanel() {
       return;
     }
     void startMjpeg(iosUdid);
-  }, [tab, iosUdid, iosStreamMode, sims, startMjpeg, stopMjpeg]);
+  }, [mirrorTab, iosUdid, iosStreamMode, sims, startMjpeg, stopMjpeg]);
 
   // A serve-sim stream failure falls back to screenshot polling.
   useEffect(() => {
@@ -514,7 +593,7 @@ export default function MobilePanel() {
 
   // ── iOS: screenshot mirror of the selected booted sim (polling) ───────
   useEffect(() => {
-    if (tab !== 'ios' || !iosUdid || iosStreaming) return;
+    if (mirrorTab !== 'ios' || !iosUdid || iosStreaming) return;
     const sim = sims.find((s) => s.udid === iosUdid);
     if (!sim || !isBooted(sim.state)) {
       setIosShot(null);
@@ -549,7 +628,7 @@ export default function MobilePanel() {
     };
     // `iosStreaming` for the same reason as the Android poll above: without it
     // the screenshot loop outlives the stream that replaced it.
-  }, [tab, iosUdid, sims, iosStreaming]);
+  }, [mirrorTab, iosUdid, sims, iosStreaming]);
 
   // ── Input injection helpers ────────────────────────────────────────────
 
@@ -736,11 +815,11 @@ export default function MobilePanel() {
   // phone would scroll the drawer behind it as well. Hence a native listener.
   useEffect(() => {
     const stage = stageRef.current;
-    if (tab !== 'android' || !stage) return;
+    if (mirrorTab !== 'android' || !stage) return;
     const listener = (e: WheelEvent) => wheelHandlerRef.current(e);
     stage.addEventListener('wheel', listener, { passive: false });
     return () => stage.removeEventListener('wheel', listener);
-  }, [tab]);
+  }, [mirrorTab]);
 
   // Never leave a finger down — or a queued swipe — on a device the panel is no
   // longer driving.
@@ -754,7 +833,7 @@ export default function MobilePanel() {
     // Deliberately not listing the helpers: this effect exists only for its
     // cleanup, and re-running it on every render would lift the finger between
     // two wheel notches of the same scroll.
-  }, [selectedSerial, androidStreaming, tab]);
+  }, [selectedSerial, androidStreaming, mirrorTab]);
 
   function onPointerDown(e: React.PointerEvent) {
     if (!selectedSerial) return;
@@ -985,6 +1064,7 @@ export default function MobilePanel() {
       setFrameError(String(e));
     } finally {
       setBooting(false);
+      setBootingName(null);
     }
   }
 
@@ -1012,175 +1092,244 @@ export default function MobilePanel() {
     !streamFatalRef.current &&
     streamRetryRef.current < STREAM_RETRY_LIMIT;
 
-  return (
-    <div className="mobile-panel">
-      <div className="mobile-tabs">
-        <div className="mobile-tabs-track" role="tablist" aria-label="Platform">
-          <button
-            className={`mobile-tab${tab === 'android' ? ' active' : ''}`}
-            onClick={() => setTab('android')}
-            role="tab"
-            aria-selected={tab === 'android'}
-          >
-            Android
-          </button>
-          <button
-            className={`mobile-tab${tab === 'ios' ? ' active' : ''}`}
-            onClick={() => setTab('ios')}
-            role="tab"
-            aria-selected={tab === 'ios'}
-          >
-            iOS {platform && platform !== 'macos' ? <span className="mobile-tab-note">macOS only</span> : null}
-          </button>
-        </div>
-      </div>
+  // ── Device list rows ───────────────────────────────────────────────────
+  // Running devices first (an emulator's label is its AVD name), then every
+  // AVD that is not running, so the list shows each phone exactly once.
+  const runningAvdNames = new Set(devices.filter((d) => d.serial.startsWith('emulator-')).map((d) => d.label));
+  const stoppedAvds = avds.filter((name) => !runningAvdNames.has(name));
+  const emulatorDevices = devices.filter((d) => d.serial.startsWith('emulator-'));
+  const usbDevices = devices.filter((d) => !d.serial.startsWith('emulator-'));
+  const showIos = platform === 'macos';
 
-      {tab === 'android' ? (
-        <>
-          <div className="mobile-toolbar">
-            <span className="mobile-tool-label">Device</span>
-            <Dropdown
-              // The leading empty option preserves the native select's ability
-              // to clear the pick: it prompts while nothing is chosen and
-              // reads "No device" once a device is selected.
-              options={[
-                {
-                  value: '',
-                  label: devices.length === 0 ? 'No devices found' : selectedSerial ? 'No device' : 'Select a device…',
-                },
-                ...devices.map((d) => ({ value: d.serial, label: d.label, sublabel: d.state })),
-              ]}
-              value={selectedSerial}
-              onChange={(serial) => {
-                setSelectedSerial(serial);
-                // Drop the previous device's frame so a stale screen never
-                // lingers (and stale dimensions never skew tap mapping).
-                setFrame(null);
-                setFrameError(null);
-              }}
-              disabled={devices.length === 0}
-              ariaLabel="Select a device"
-            />
-            <button
-              className="mobile-icon-btn"
-              onClick={() => void refreshAndroid()}
-              title="Refresh devices"
-              disabled={devicesLoading}
-            >
-              <Ico>
-                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                <polyline points="21 3 21 9 15 9" />
-              </Ico>
-            </button>
-            <button
-              className="mobile-icon-btn"
-              onClick={cycleRotation}
-              disabled={!selectedSerial}
-              title="Rotate 90° clockwise"
-            >
-              <Ico>
-                <path d="M23 4v6h-6" />
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-              </Ico>
-            </button>
+  function androidStateText(state: string) {
+    if (state === 'device') return 'Running';
+    if (state === 'unauthorized') return 'Waiting for USB authorization';
+    return state.charAt(0).toUpperCase() + state.slice(1);
+  }
 
-            {tools?.emulator && avds.length > 0 && (
-              <span className="mobile-avd">
-                <span className="mobile-tool-label">AVD</span>
-                <Dropdown
-                  options={[{ value: '', label: avdName ? 'No AVD' : 'Select AVD…' }, ...avds.map((a) => ({ value: a, label: a }))]}
-                  value={avdName}
-                  onChange={setAvdName}
-                  ariaLabel="Select an Android Virtual Device"
-                />
-                <button
-                  className="mobile-launch-btn"
-                  onClick={() => void launchAvd(avdName)}
-                  disabled={!avdName || booting}
-                >
-                  {booting ? 'Booting…' : 'Launch'}
-                </button>
-              </span>
-            )}
+  function openAndroidDevice(serial: string) {
+    setTab('android');
+    if (serial !== selectedSerial) {
+      setSelectedSerial(serial);
+      setFrame(null);
+    }
+    setFrameError(null);
+    setView('device');
+  }
 
-            <span className="mobile-stream-group">
-              {/* Resolution. Only meaningful for the live stream — the snapshot
-                  mirror's size is whatever `android_screencap` returns — so it is
-                  disabled (with the reason) rather than hidden in Snapshot mode,
-                  which would make the toolbar jump on every mode toggle. */}
-              <span
-                className="mobile-quality"
-                title={
-                  streamMode !== 'stream'
-                    ? 'Resolution applies to the live stream. Switch back from Snapshot to change it.'
-                    : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
-                }
-              >
-                <span className="mobile-tool-label">Size</span>
-                <Dropdown
-                  options={[
-                    { value: 'auto', label: 'Auto', sublabel: 'Fits the panel' },
-                    ...STREAM_SIDE_CHOICES.map((c) => ({
-                      value: String(c.side),
-                      label: `${c.side}p`,
-                      sublabel: c.sublabel,
-                    })),
-                  ]}
-                  value={formatStreamSideChoice(streamSide)}
-                  onChange={(value) => setStreamSide(parseStreamSideChoice(value))}
-                  disabled={!selectedSerial || streamMode !== 'stream'}
-                  ariaLabel="Stream resolution"
-                />
-              </span>
+  function openAvd(name: string) {
+    setTab('android');
+    setSelectedSerial('');
+    setFrame(null);
+    setBootingName(name);
+    setView('device');
+    void launchAvd(name);
+  }
 
-              <button
-                className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
-                onClick={toggleStreamMode}
-                disabled={!selectedSerial}
-                title={
-                  streamMode === 'stream'
-                    ? 'Live streaming is on. Click to switch to snapshot polling.'
-                    : 'Live streaming is off. Click to switch to the live stream.'
-                }
-              >
-                {streamMode === 'stream' ? 'Live' : 'Snapshot'}
-              </button>
-            </span>
-          </div>
+  function openSim(udid: string) {
+    setTab('ios');
+    if (udid !== iosUdid) {
+      setIosUdid(udid);
+      setIosShot(null);
+      setIosShotDims(null);
+    }
+    setIosError(null);
+    setView('device');
+    const sim = sims.find((s) => s.udid === udid);
+    if (sim && !isBooted(sim.state)) void iosAction(udid, 'boot');
+  }
 
-          {/* Which AVD to launch. The pane is developed and tested against
-              Android Studio's default phone, so say so where the picker is
-              rather than letting someone find out from a tablet AVD that the
-              stream and tap mapping were never tuned for. Only shown when there
-              is an AVD picker to act on, and dropped on short viewports along
-              with the rest of the toolbar's optional chrome. */}
-          {tools?.emulator && avds.length > 0 && (
-            <p className="mobile-hint">
-              For the best experience, use the <strong>Medium Phone</strong> AVD, which is Android Studio's
-              default device.
+  function refreshAll() {
+    void refreshAndroid();
+    if (showIos) setIosActionKey((k) => k + 1);
+  }
+
+
+
+  function renderDeviceList() {
+    const androidUnavailable = tools && !tools.adb;
+    return (
+      <div className="mobile-devices">
+        <section className="mobile-devices-section">
+          <h3 className="mobile-devices-heading">
+            {phoneIcon}
+            <span>Android Emulators</span>
+          </h3>
+          {!tools ? (
+            <p className="mobile-devices-note">{frameError ?? 'Looking for adb and the emulator…'}</p>
+          ) : androidUnavailable ? (
+            <p className="mobile-devices-note">
+              Android SDK not found. Install Android Studio (or platform-tools) so adb is on PATH, then restart Spacron.
             </p>
+          ) : emulatorDevices.length === 0 && stoppedAvds.length === 0 ? (
+            <p className="mobile-devices-note">No emulators yet. Create one in Android Studio's Device Manager.</p>
+          ) : (
+            <div className="mobile-devices-cards">
+              {emulatorDevices.map((d) => (
+                <DeviceCard
+                  key={d.serial}
+                  name={d.label}
+                  detail={`This machine · ${androidStateText(d.state)}`}
+                  actionLabel="Open"
+                  action={() => openAndroidDevice(d.serial)}
+                />
+              ))}
+              {stoppedAvds.map((name) => (
+                <DeviceCard
+                  key={`avd:${name}`}
+                  name={name}
+                  detail={bootingName === name && booting ? 'This machine · Starting…' : 'This machine · Stopped'}
+                  actionLabel="Open"
+                  action={() => openAvd(name)}
+                  disabled={booting || !tools.emulator}
+                />
+              ))}
+            </div>
           )}
+        </section>
 
+        {usbDevices.length > 0 && (
+          <section className="mobile-devices-section">
+            <h3 className="mobile-devices-heading">
+              {phoneIcon}
+              <span>Android Devices</span>
+            </h3>
+            <div className="mobile-devices-cards">
+              {usbDevices.map((d) => (
+                <DeviceCard
+                  key={d.serial}
+                  name={d.label}
+                  detail={`USB · ${androidStateText(d.state)}`}
+                  actionLabel="Open"
+                  action={() => openAndroidDevice(d.serial)}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {showIos && (
+          <section className="mobile-devices-section">
+            <h3 className="mobile-devices-heading">
+              {phoneIcon}
+              <span>iOS Simulators</span>
+            </h3>
+            {sims.length === 0 ? (
+              <p className="mobile-devices-note">
+                {iosError ?? 'No simulators installed. Add a runtime in Xcode → Settings → Components.'}
+              </p>
+            ) : (
+              <div className="mobile-devices-cards">
+                {sims.map((s) => (
+                  <DeviceCard
+                    key={s.udid}
+                    name={s.name}
+                    detail={`This machine · ${s.runtime} · ${isBooted(s.state) ? 'Running' : 'Stopped'}`}
+                    actionLabel="Open"
+                    action={() => openSim(s.udid)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        <button type="button" className="mobile-devices-refresh" onClick={refreshAll} disabled={devicesLoading}>
+          {devicesLoading ? 'Refreshing…' : 'Refresh devices'}
+        </button>
+      </div>
+    );
+  }
+
+
+  const icoHome = <Ico><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Ico>;
+  const icoBack = <Ico><path d="m15 18-6-6 6-6" /></Ico>;
+  const icoRecents = <Ico><rect x="5" y="5" width="14" height="14" rx="2" /></Ico>;
+  const icoRotate = <Ico><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></Ico>;
+  const icoPower = <Ico><path d="M12 2v10" /><path d="M18.4 6.6a9 9 0 1 1-12.77.04" /></Ico>;
+  const icoVolUp = <Ico><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="15.5" y1="9" x2="15.5" y2="15" /><line x1="18.5" y1="7" x2="18.5" y2="17" /></Ico>;
+  const icoVolDown = <Ico><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="15.5" y1="12" x2="18.5" y2="12" /></Ico>;
+  const icoText = <Ico><polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" /></Ico>;
+  const icoSettings = <Ico><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></Ico>;
+  const icoMenu = <Ico><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></Ico>;
+
+  const deviceName = tab === 'android'
+    ? selectedDevice?.label ?? (booting && bootingName ? bootingName : 'Android device')
+    : iosSelectedSim?.name ?? 'iOS Simulator';
+
+  function renderDeviceHeader() {
+    const live = tab === 'android' ? androidStreaming : iosStreaming;
+    return (
+      <div className="mobile-device-header">
+        <button
+          type="button"
+          className="mobile-device-back"
+          onClick={() => {
+            setView('list');
+            setShowText(false);
+            setShowSettings(false);
+          }}
+          title="All devices"
+        >
+          <Ico size={14}><path d="m15 18-6-6 6-6" /></Ico>
+          <span>Devices</span>
+        </button>
+        <span className="mobile-device-title">{deviceName}</span>
+        {live && <span className="mobile-live-dot" title="Live stream" />}
+      </div>
+    );
+  }
+
+  function renderAndroidDevice() {
+    return (
+      <>
+        {showSettings && (
+          <div className="mobile-toolbar mobile-device-settings">
+            <span
+              className="mobile-quality"
+              title={
+                streamMode !== 'stream'
+                  ? 'Resolution applies to the live stream. Switch back from Snapshot to change it.'
+                  : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
+              }
+            >
+              <span className="mobile-tool-label">Size</span>
+              <Dropdown
+                options={[
+                  { value: 'auto', label: 'Auto', sublabel: 'Fits the panel' },
+                  ...STREAM_SIDE_CHOICES.map((c) => ({
+                    value: String(c.side),
+                    label: `${c.side}p`,
+                    sublabel: c.sublabel,
+                  })),
+                ]}
+                value={formatStreamSideChoice(streamSide)}
+                onChange={(value) => setStreamSide(parseStreamSideChoice(value))}
+                disabled={!selectedSerial || streamMode !== 'stream'}
+                ariaLabel="Stream resolution"
+              />
+            </span>
+            <button
+              className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
+              onClick={toggleStreamMode}
+              disabled={!selectedSerial}
+              title={
+                streamMode === 'stream'
+                  ? 'Live streaming is on. Click to switch to snapshot polling.'
+                  : 'Live streaming is off. Click to switch to the live stream.'
+              }
+            >
+              {streamMode === 'stream' ? 'Live' : 'Snapshot'}
+            </button>
+          </div>
+        )}
+
+        <div className="mobile-device-body">
           <div className="mobile-stage" ref={stageRef}>
-            {!tools ? (
-              <EmptyState
-                title={frameError ? 'Could not reach the Android tooling' : 'Checking for Android SDK…'}
-                body={frameError ?? 'Looking for adb and the emulator on PATH.'}
-              />
-            ) : !tools.adb ? (
-              <EmptyState
-                title="Android SDK not found"
-                body="Install Android Studio (or the platform-tools package) so adb is on PATH, then restart Spacron."
-              />
-            ) : devices.length === 0 ? (
-              <EmptyState
-                title="No devices connected"
-                body={
-                  tools.emulator && avds.length > 0
-                    ? 'Start an emulator from the AVD picker above, or plug in a device with USB debugging enabled.'
-                    : 'Plug in a device with USB debugging enabled, or install an emulator image so one can be launched here.'
-                }
-              />
+            {booting && !selectedSerial ? (
+              <EmptyState title={`Starting ${bootingName ?? 'emulator'}…`} body="Emulators take a little while to boot. The screen appears as soon as it is up." />
+            ) : !selectedSerial ? (
+              <EmptyState title={frameError ? 'Could not start the device' : 'No device selected'} body={frameError ?? 'Go back to Devices and open one.'} />
             ) : androidStreaming ? (
               <div
                 className={`mobile-device-shell${dragging ? ' dragging' : ''}`}
@@ -1191,13 +1340,14 @@ export default function MobilePanel() {
                 onPointerCancel={onPointerUp}
                 onContextMenu={(e) => e.preventDefault()}
                 aria-label="Live mobile stream"
+                title={GESTURE_HINT}
               >
                 <canvas ref={streamCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
               </div>
             ) : !frame ? (
               <EmptyState
                 title={frameError ? 'Cannot reach device' : 'Waiting for screen…'}
-                body={frameError ?? 'Select a device above to start the live mirror.'}
+                body={frameError ?? 'Connecting to the device.'}
               />
             ) : (
               <div
@@ -1209,6 +1359,7 @@ export default function MobilePanel() {
                 onPointerCancel={onPointerUp}
                 onContextMenu={(e) => e.preventDefault()}
                 aria-label="Device screen"
+                title={GESTURE_HINT}
               >
                 <img
                   ref={screenRef}
@@ -1221,49 +1372,41 @@ export default function MobilePanel() {
             )}
           </div>
 
-          {selectedSerial && (
-            <>
-              <div className="mobile-controls">
-                <button className="mobile-key-btn" onClick={() => sendKey(KEY_POWER)} title="Power">
-                  <Ico><path d="M12 2v10" /><path d="M18.4 6.6a9 9 0 1 1-12.77.04" /></Ico>
-                </button>
-                <button className="mobile-key-btn" onClick={() => sendKey(KEY_VOL_UP)} title="Volume up">
-                  <Ico><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="15.5" y1="9" x2="15.5" y2="15" /><line x1="18.5" y1="7" x2="18.5" y2="17" /></Ico>
-                </button>
-                <button className="mobile-key-btn" onClick={() => sendKey(KEY_VOL_DOWN)} title="Volume down">
-                  <Ico><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="15.5" y1="12" x2="18.5" y2="12" /></Ico>
-                </button>
-                <span className="mobile-controls-sep" />
-                <button className="mobile-key-btn" onClick={() => sendKey(KEY_BACK)} title="Back">
-                  <Ico><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></Ico>
-                </button>
-                <button className="mobile-key-btn" onClick={() => sendKey(KEY_HOME)} title="Home">
-                  <Ico><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Ico>
-                </button>
-                <button className="mobile-key-btn" onClick={() => sendKey(KEY_RECENTS)} title="Recents">
-                  <Ico><rect x="8" y="8" width="8" height="8" rx="1.5" /><line x1="3.5" y1="12" x2="5.5" y2="12" /><line x1="18.5" y1="12" x2="20.5" y2="12" /></Ico>
-                </button>
-                <button className="mobile-key-btn" onClick={() => sendKey(KEY_MENU)} title="Menu">
-                  <Ico><line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="17" x2="20" y2="17" /></Ico>
-                </button>
-              </div>
-              <div className="mobile-input-row">
-                <input
-                  className="mobile-text-input"
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void sendText();
-                  }}
-                  placeholder="Type into the focused field on the device…"
-                />
-                <button className="mobile-send-btn" onClick={() => void sendText()} disabled={!text.trim()}>
-                  Send text
-                </button>
-              </div>
-            </>
-          )}
+          <div className="mobile-side-toolbar" role="toolbar" aria-label="Device controls" aria-orientation="vertical">
+            <SideBtn title="Home" onClick={() => sendKey(KEY_HOME)} disabled={!selectedSerial}>{icoHome}</SideBtn>
+            <SideBtn title="Back" onClick={() => sendKey(KEY_BACK)} disabled={!selectedSerial}>{icoBack}</SideBtn>
+            <SideBtn title="Recents" onClick={() => sendKey(KEY_RECENTS)} disabled={!selectedSerial}>{icoRecents}</SideBtn>
+            <SideBtn title="Rotate 90° clockwise" onClick={cycleRotation} disabled={!selectedSerial}>{icoRotate}</SideBtn>
+            <span className="mobile-side-sep" />
+            <SideBtn title="Power" onClick={() => sendKey(KEY_POWER)} disabled={!selectedSerial}>{icoPower}</SideBtn>
+            <SideBtn title="Volume up" onClick={() => sendKey(KEY_VOL_UP)} disabled={!selectedSerial}>{icoVolUp}</SideBtn>
+            <SideBtn title="Volume down" onClick={() => sendKey(KEY_VOL_DOWN)} disabled={!selectedSerial}>{icoVolDown}</SideBtn>
+            <span className="mobile-side-sep" />
+            <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!selectedSerial}>{icoText}</SideBtn>
+            <SideBtn title="Stream settings" onClick={() => setShowSettings((v) => !v)} active={showSettings}>{icoSettings}</SideBtn>
+            <SideBtn title="Menu" onClick={() => sendKey(KEY_MENU)} disabled={!selectedSerial}>{icoMenu}</SideBtn>
+          </div>
+        </div>
 
+        {showText && selectedSerial && (
+          <div className="mobile-input-row">
+            <input
+              className="mobile-text-input"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void sendText();
+              }}
+              placeholder="Type into the focused field on the device…"
+              autoFocus
+            />
+            <button className="mobile-send-btn" onClick={() => void sendText()} disabled={!text.trim()}>
+              Send
+            </button>
+          </div>
+        )}
+
+        {(frameError || deviceOffline || (streamMode === 'stream' && streamState.phase === 'starting')) && (
           <div className={`mobile-status${frameError ? ' error' : ''}`}>
             <span className="mobile-status-text">
               {frameError
@@ -1272,171 +1415,130 @@ export default function MobilePanel() {
                   : frameError
                 : deviceOffline
                   ? `${selectedDevice?.label} is ${selectedDevice?.state}. Unlock the device and authorize USB debugging.`
-                  : streamMode === 'stream' && streamState.phase === 'starting'
-                    ? `${selectedDevice?.label ?? 'Device'} · ${streamState.message ?? 'starting stream…'}`
-                    : androidStreaming
-                      ? `${selectedDevice?.label ?? 'Device'}${
-                          streamState.dims ? ` · ${streamState.dims.width}×${streamState.dims.height}px` : ''
-                        } · live stream`
-                      : selectedDevice
-                        ? `${selectedDevice.label}${frame ? ` · ${frame.width}×${frame.height}px` : ' · connecting…'}`
-                        : 'No device selected.'}
+                  : `${selectedDevice?.label ?? 'Device'} · ${streamState.message ?? 'starting stream…'}`}
             </span>
-            {(frame || androidStreaming) && !frameError && (
-              <span className="mobile-live-dot" title={androidStreaming ? 'Live stream' : 'Live mirror'} />
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function renderIosDevice() {
+    const booted = isBooted(iosSelectedSim?.state);
+    return (
+      <>
+        {showSettings && booted && (
+          <div className="mobile-toolbar mobile-device-settings">
+            <button
+              className={`mobile-stream-toggle${iosStreamMode === 'stream' ? ' active' : ''}`}
+              onClick={toggleIosStreamMode}
+              title={
+                iosStreamMode === 'stream'
+                  ? 'Live streaming is on. Click to switch to snapshot polling.'
+                  : 'Live streaming is off. Click to switch to the live stream.'
+              }
+            >
+              {iosStreamMode === 'stream' ? 'Live' : 'Snapshot'}
+            </button>
+          </div>
+        )}
+
+        <div className="mobile-device-body">
+          <div className="mobile-stage">
+            {booted ? (
+              iosStreaming ? (
+                <div
+                  className="mobile-ios-shell mobile-ios-shell--stream"
+                  style={aspectStyle(mjpegState.dims)}
+                  onPointerUp={iosTap}
+                  aria-label="iOS Simulator live stream"
+                >
+                  <canvas ref={mjpegCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
+                </div>
+              ) : iosShot ? (
+                <div
+                  className="mobile-ios-shell"
+                  style={aspectStyle(iosShotDims)}
+                  onPointerUp={iosTap}
+                  aria-label="iOS Simulator screen"
+                >
+                  <img
+                    ref={iosImgRef}
+                    className="mobile-device-screen"
+                    src={`data:image/png;base64,${iosShot}`}
+                    alt="Simulator screen"
+                    draggable={false}
+                    onLoad={(e) => {
+                      const el = e.currentTarget;
+                      if (el.naturalWidth && el.naturalHeight) {
+                        setIosShotDims({ width: el.naturalWidth, height: el.naturalHeight });
+                      }
+                    }}
+                  />
+                </div>
+              ) : (
+                <EmptyState title="Capturing screen…" body="Waiting for the first screenshot from the simulator." />
+              )
+            ) : (
+              <EmptyState
+                title={iosError ? 'Could not start the simulator' : 'Starting simulator…'}
+                body={iosError ?? 'The screen appears as soon as the simulator has booted.'}
+              />
             )}
           </div>
-        </>
+
+          <div className="mobile-side-toolbar" role="toolbar" aria-label="Simulator controls" aria-orientation="vertical">
+            <SideBtn title="Home" onClick={() => iosButton('home')} disabled={!booted}>{icoHome}</SideBtn>
+            <SideBtn title="Rotate" onClick={cycleIosOrientation} disabled={!booted}>{icoRotate}</SideBtn>
+            <span className="mobile-side-sep" />
+            <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!booted}>{icoText}</SideBtn>
+            <SideBtn title="Stream settings" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!booted}>{icoSettings}</SideBtn>
+            <span className="mobile-side-sep" />
+            <SideBtn
+              title={booted ? 'Shut down simulator' : 'Boot simulator'}
+              onClick={() => void iosAction(iosUdid, booted ? 'shutdown' : 'boot')}
+              disabled={!iosUdid}
+            >
+              {icoPower}
+            </SideBtn>
+          </div>
+        </div>
+
+        {showText && booted && (
+          <div className="mobile-input-row">
+            <input
+              className="mobile-text-input"
+              value={iosText}
+              onChange={(e) => setIosText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void iosSendText();
+              }}
+              placeholder="Type into the focused field on the simulator…"
+              autoFocus
+            />
+            <button className="mobile-send-btn" onClick={() => void iosSendText()} disabled={!iosText.trim()}>
+              Send
+            </button>
+          </div>
+        )}
+
+        {iosError && booted && (
+          <div className="mobile-status error">
+            <span className="mobile-status-text">{iosError}</span>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <div className="mobile-panel">
+      {view === 'list' ? (
+        renderDeviceList()
       ) : (
-        <div className="mobile-ios">
-          {!platform ? (
-            <div className="mobile-stage">
-              <EmptyState
-                title="Checking platform…"
-                body="Detecting whether iOS simulator tooling can run on this machine."
-              />
-            </div>
-          ) : platform !== 'macos' ? (
-            <div className="mobile-stage">
-              <EmptyState
-                title="iOS Simulator requires macOS"
-                body="Apple's simctl tooling only runs on a Mac. The interactive Android mirror works on every platform."
-              />
-            </div>
-          ) : sims.length === 0 ? (
-            <div className="mobile-stage">
-              <EmptyState
-                title={iosError ? 'iOS unavailable' : 'No simulators installed'}
-                body={iosError ?? 'Install an iOS simulator runtime from Xcode → Settings → Components, then return here.'}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="mobile-toolbar">
-                <span className="mobile-tool-label">Simulator</span>
-                <Dropdown
-                  options={sims.map((s) => ({ value: s.udid, label: s.name, sublabel: s.runtime }))}
-                  value={iosUdid}
-                  onChange={(udid) => {
-                    setIosUdid(udid);
-                    setIosShot(null);
-                    setIosShotDims(null);
-                    setIosError(null);
-                  }}
-                  placeholder="Select a simulator…"
-                  ariaLabel="Select an iOS simulator"
-                />
-                <button
-                  className="mobile-launch-btn"
-                  onClick={() => void iosAction(iosUdid, isBooted(iosSelectedSim?.state) ? 'shutdown' : 'boot')}
-                  disabled={!iosUdid}
-                >
-                  {isBooted(iosSelectedSim?.state) ? 'Shutdown' : 'Boot'}
-                </button>
-                {/* Same place as Android's: stream settings live in the
-                    toolbar, the bottom row is only the device's own keys. */}
-                {isBooted(iosSelectedSim?.state) && (
-                  <span className="mobile-stream-group">
-                    <button
-                      className={`mobile-stream-toggle${iosStreamMode === 'stream' ? ' active' : ''}`}
-                      onClick={toggleIosStreamMode}
-                      title={
-                        iosStreamMode === 'stream'
-                          ? 'Live streaming is on. Click to switch to snapshot polling.'
-                          : 'Live streaming is off. Click to switch to the live stream.'
-                      }
-                    >
-                      {iosStreamMode === 'stream' ? 'Live' : 'Snapshot'}
-                    </button>
-                  </span>
-                )}
-              </div>
-
-              <div className="mobile-stage">
-                {isBooted(iosSelectedSim?.state) ? (
-                  iosStreaming ? (
-                    <div
-                      className="mobile-ios-shell mobile-ios-shell--stream"
-                      style={aspectStyle(mjpegState.dims)}
-                      onPointerUp={iosTap}
-                      aria-label="iOS Simulator live stream"
-                    >
-                      <canvas ref={mjpegCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
-                    </div>
-                  ) : iosShot ? (
-                    <div
-                      className="mobile-ios-shell"
-                      style={aspectStyle(iosShotDims)}
-                      onPointerUp={iosTap}
-                      aria-label="iOS Simulator screen"
-                    >
-                      <img
-                        ref={iosImgRef}
-                        className="mobile-device-screen"
-                        src={`data:image/png;base64,${iosShot}`}
-                        alt="Simulator screen"
-                        draggable={false}
-                        onLoad={(e) => {
-                          const el = e.currentTarget;
-                          if (el.naturalWidth && el.naturalHeight) {
-                            setIosShotDims({ width: el.naturalWidth, height: el.naturalHeight });
-                          }
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <EmptyState title="Capturing screen…" body="Waiting for the first screenshot from the simulator." />
-                  )
-                ) : (
-                  <EmptyState
-                    title="Simulator not booted"
-                    body="Press Boot to start this simulator. The screen and touch input need a booted device."
-                  />
-                )}
-              </div>
-
-              {isBooted(iosSelectedSim?.state) && (
-                <>
-                  <div className="mobile-controls">
-                    <button className="mobile-key-btn" onClick={() => iosButton('home')} title="Home">
-                      <Ico><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Ico>
-                    </button>
-                    <button className="mobile-key-btn" onClick={cycleIosOrientation} title="Rotate">
-                      <Ico><path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></Ico>
-                    </button>
-                  </div>
-                  <div className="mobile-input-row">
-                    <input
-                      className="mobile-text-input"
-                      value={iosText}
-                      onChange={(e) => setIosText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void iosSendText();
-                      }}
-                      placeholder="Type into the focused field on the simulator…"
-                    />
-                    <button className="mobile-send-btn" onClick={() => void iosSendText()} disabled={!iosText.trim()}>
-                      Send
-                    </button>
-                  </div>
-                </>
-              )}
-
-              <div className={`mobile-status${iosError ? ' error' : ''}`}>
-                <span className="mobile-status-text">
-                  {iosError ??
-                    (isBooted(iosSelectedSim?.state)
-                      ? iosStreaming
-                        ? `${iosSelectedSim?.name} · live stream`
-                        : `${iosSelectedSim?.name} · ${iosShot ? 'mirror' : 'connecting…'}`
-                      : 'Simulator is powered off.')}
-                </span>
-                {(iosShot || iosStreaming) && !iosError && (
-                  <span className="mobile-live-dot" title={iosStreaming ? 'Live stream' : 'View-only mirror'} />
-                )}
-              </div>
-            </>
-          )}
+        <div className="mobile-device-view">
+          {renderDeviceHeader()}
+          {tab === 'android' ? renderAndroidDevice() : renderIosDevice()}
         </div>
       )}
     </div>

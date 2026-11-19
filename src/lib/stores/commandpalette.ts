@@ -142,7 +142,7 @@ export function initDefaultCommands() {
     },
     {
       id: 'view.mobile',
-      name: 'Go to Mobile Emulator',
+      name: 'Go to Device',
       category: 'View',
       action: () => setActiveView('mobile'),
     },

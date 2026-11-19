@@ -346,7 +346,7 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
     icon: <Icon><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></Icon>,
   },
   mobile: {
-    title: 'Mobile Emulator',
+    title: 'Device',
     icon: <Icon><rect x="6" y="2" width="12" height="20" rx="2.5" /><path d="M10.5 18.5h3" /></Icon>,
   },
   review: {
