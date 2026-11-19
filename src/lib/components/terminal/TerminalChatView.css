@@ -24,6 +24,14 @@
   visibility: hidden;
 }
 
+/* In chat view the terminal's dark well (light mode) would sit under the
+   chat's dark ink, so the chat gets the plain panel surface in every mode.
+   Repeated classes outrank the light-mode and custom-image scrims, which are
+   `!important` up to (0,5,1). */
+html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
+  background: transparent !important;
+}
+
 .terminal-chat-view {
   --tc-col: 760px;
   --tc-surface: color-mix(in srgb, var(--text-primary) 5%, transparent);
@@ -1020,4 +1028,18 @@
 .terminal-chat-effort-segments button.selected {
   color: var(--text-primary);
   background: var(--tc-surface-strong);
+}
+
+/* Light mode: the dark-theme lift reads as a smudge on a pale panel. */
+:root.light-theme .terminal-chat-composer {
+  background: color-mix(in srgb, var(--bg-primary, #fff) 92%, transparent);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+:root.light-theme .terminal-chat-composer:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 6px 18px rgba(15, 23, 42, 0.07);
+}
+
+:root.light-theme .terminal-chat-md pre {
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }

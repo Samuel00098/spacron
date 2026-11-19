@@ -2093,14 +2093,11 @@ html:root.has-bg-media .settings-modal.settings-page :is(.settings-sidebar, .set
   -webkit-backdrop-filter: var(--wallpaper-glass-filter) !important;
 }
 
-/* The terminal is a dark well in both modes — its ANSI palette is light ink
-   (see buildTerminalTheme) — so it keeps a dark scrim of its own over the
-   glass. Dark mode needs only a touch; light mode needs a real well because the
-   panel around it is pale. WebGL terminals paint opaque regardless. */
-html:root.has-bg-media .terminal-pane .xterm-container {
-  background: rgba(var(--terminal-surface-rgb, 0, 0, 0), 0.28) !important;
-}
-
+/* The terminal's ANSI palette is light ink (see buildTerminalTheme). In dark
+   mode the glass panel is already a dark field, so the terminal takes no scrim
+   of its own and the pane stays one colour (TerminalPane.css). Light mode needs
+   a real dark well because the panel around it is pale. WebGL terminals paint
+   opaque regardless. */
 html:root.has-bg-media.light-theme .terminal-pane .xterm-container {
   background: rgba(0, 0, 0, 0.82) !important;
 }

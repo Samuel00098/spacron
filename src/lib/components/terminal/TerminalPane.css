@@ -252,21 +252,14 @@
   background: rgba(var(--terminal-surface-rgb, 0, 0, 0), var(--terminal-scrim-light, 0.88)) !important;
 }
 
-/* Liquid glass sheen overlay — specular diagonal reflection + vignette */
-:root:not(.solid-theme) .terminal-pane .xterm-container::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background:
-    /* Specular diagonal reflection across the top-left corner */
-    linear-gradient(145deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 18%, transparent 42%),
-    /* Subtle ambient bloom from accent color */
-    radial-gradient(160% 140% at -5% -8%, color-mix(in srgb, var(--accent) 5%, transparent) 0%, transparent 55%),
-    /* Bottom-right vignette for depth */
-    radial-gradient(120% 100% at 100% 100%, rgba(0, 0, 0, 0.12) 0%, transparent 60%);
-  mix-blend-mode: screen;
+/* One colour. In dark mode the terminal IS the panel: no scrim of its own and
+   no sheen, so a pane reads as a single flat surface, whatever the theme,
+   wallpaper or renderer (xterm draws its own background transparent). The
+   scrims above stay for light mode only, where the terminal needs a dark well
+   because every agent CLI draws light ink (see buildTerminalTheme). Doubled
+   `:root` to outrank the custom-image rule in global.css. */
+html:root:root:not(.light-theme) .terminal-pane .xterm-container {
+  background: transparent !important;
 }
 
 .terminal-pane:not(.active):not(.dead):not(.agent-pane) .xterm-container {
