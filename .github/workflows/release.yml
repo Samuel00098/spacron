@@ -66,7 +66,7 @@ jobs:
         include:
           - platform: windows-latest  # GitHub hosted — free for public repos
             os: windows
-            args: ''
+            args: '--bundles nsis'
             rust-targets: ''
 
           # Windows on ARM (Snapdragon etc.), cross-compiled on the x64 runner.
