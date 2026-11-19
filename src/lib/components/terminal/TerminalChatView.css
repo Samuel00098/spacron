@@ -1123,3 +1123,105 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   overscroll-behavior: none;
   scrollbar-gutter: stable;
 }
+
+/* ── Images in replies ──────────────────────────────────────────────────── */
+
+.terminal-chat-md img.terminal-chat-md-image {
+  display: block;
+  max-width: min(100%, 520px);
+  max-height: 360px;
+  margin: 6px 0;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--tc-line);
+  cursor: zoom-in;
+}
+
+/* ── Inline interactive visuals (::spacron-visual) ──────────────────────── */
+
+.chat-visual {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-secondary, #16161a) 70%, transparent);
+  box-shadow: inset 0 0 0 1px var(--tc-line-strong, rgba(255, 255, 255, 0.12));
+}
+
+.chat-visual-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--tc-line, rgba(255, 255, 255, 0.08));
+  color: var(--text-secondary);
+}
+
+.chat-visual-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-visual-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.chat-visual-btn:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 8%, transparent); }
+
+.chat-visual-frame {
+  display: block;
+  width: 100%;
+  height: 320px;
+  border: 0;
+  background: transparent;
+  color-scheme: normal;
+  transition: height 160ms var(--ease-out, ease-out);
+}
+
+.chat-visual.missing {
+  padding: 12px 14px;
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+.chat-visual.missing em { font-style: normal; color: var(--text-muted); }
+
+.chat-visual-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.chat-visual-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 100%);
+  height: min(860px, 100%);
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--surface-menu, var(--bg-secondary, #16161a));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 30px 80px rgba(0, 0, 0, 0.5);
+}
+
+.chat-visual-frame.full { flex: 1; height: auto; }

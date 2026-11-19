@@ -8,6 +8,7 @@ pub mod antigravity;
 pub mod agent_binary;
 pub mod agent_signals;
 pub mod agent_transcript;
+pub mod chat_visuals;
 pub mod app_flags;
 pub mod audio;
 pub mod background;

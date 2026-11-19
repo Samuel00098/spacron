@@ -682,6 +682,6 @@ describe('the standing brief tells agents how to be heard', () => {
     const numbers = [...buildStandingBriefBody().matchAll(/^(\d+)\. \*\*/gm)].map((m) =>
       Number(m[1]),
     );
-    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 });

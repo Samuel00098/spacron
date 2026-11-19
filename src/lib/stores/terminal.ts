@@ -1,4 +1,6 @@
 import { writable, get } from '$lib/stores/storeCompat';
+import { invoke } from '@tauri-apps/api/core';
+import { remoteTarget } from '$lib/stores/remoteWorkspace';
 import {
   attachPty,
   openPty,
@@ -2628,6 +2630,20 @@ export function registerMosaicClose(fn: ((paneIndex: number) => void) | null, is
  * `command` is the launch command, so a user's custom agent (`aider --no-x`)
  * works exactly like a built-in preset.
  */
+export type ChatVisualsSpot = { dir: string; baseUrl: string };
+
+/** Each agent session's chat-visuals folder and the URL its pages are served under. */
+const sessionVisuals = new Map<number, ChatVisualsSpot>();
+
+export function getSessionVisuals(id: number): ChatVisualsSpot | null {
+  return sessionVisuals.get(id) ?? null;
+}
+
+export function setSessionVisuals(id: number, spot: ChatVisualsSpot | null): void {
+  if (spot) sessionVisuals.set(id, spot);
+  else sessionVisuals.delete(id);
+}
+
 export async function spawnAgentPreset(
   command: string,
   cwd?: string,
@@ -2709,7 +2725,19 @@ export async function spawnAgentPreset(
     const { getMcpHttpUrl } = await import('./mcpBridge');
     deepSeekEnv = deepSeek.deepSeekWorkerEnv(await getMcpHttpUrl());
   }
-  const effectiveEnv = { ...accountEnv, ...launchEnv, ...deepSeekEnv };
+  // A scratch folder for inline chat visuals (`::spacron-visual{…}`): the agent
+  // writes HTML pages there and the chat view shows them. Local only: on a
+  // remote box the folder would not exist where the agent runs.
+  let visuals: ChatVisualsSpot | null = null;
+  if (!get(remoteTarget)) {
+    try {
+      visuals = await invoke<ChatVisualsSpot>('chat_visuals_prepare', { key: crypto.randomUUID() });
+    } catch (err) {
+      console.warn('Chat visuals folder unavailable:', err);
+    }
+  }
+  const visualsEnv: Record<string, string> = visuals ? { SPACRON_CHAT_VISUALS_DIR: visuals.dir } : {};
+  const effectiveEnv = { ...accountEnv, ...launchEnv, ...deepSeekEnv, ...visualsEnv };
 
   const sessionId = await createTerminalSession(cwd, undefined, opts?.projectId, {
     assignPane: false,
@@ -2718,6 +2746,7 @@ export async function spawnAgentPreset(
     extraEnv: effectiveEnv,
   });
   if (sessionId === null || sessionId === undefined) return null;
+  if (visuals) sessionVisuals.set(sessionId, visuals);
 
   opts?.onSessionCreated?.(sessionId);
 

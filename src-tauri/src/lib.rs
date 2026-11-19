@@ -511,6 +511,7 @@ pub fn run() {
             commands::agent_signals::agent_signal_channel_close,
             commands::agent_transcript::agent_transcript_read,
             commands::agent_transcript::chat_image_preview,
+            commands::chat_visuals::chat_visuals_prepare,
             commands::workspace::workspace_git_stage_paths,
             commands::workspace::workspace_git_unstage_paths,
             commands::workspace::workspace_git_apply_patch,

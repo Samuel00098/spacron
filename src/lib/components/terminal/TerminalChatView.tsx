@@ -43,7 +43,8 @@ import { useStore } from '$lib/react/useStore';
 import { toggleTerminalTranscription, transcriptionActive } from '$lib/services/transcription-hotkey';
 import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
-import { requestTerminalInput, terminalInputRequest } from '$lib/stores/terminal';
+import { getSessionVisuals, requestTerminalInput, terminalInputRequest } from '$lib/stores/terminal';
+import { ChatVisual, splitReply } from './ChatVisual';
 import { get } from '$lib/stores/storeCompat';
 import './TerminalChatView.css';
 
@@ -490,6 +491,7 @@ export default function TerminalChatView({
     setViewer({ images: images.map((src, i) => ({ src, name: `Image ${i + 1}` })), index });
   }
 
+  const visualsSpot = getSessionVisuals(sessionId);
   const folderName = root ? root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? null : null;
   const empty = loaded && items.length === 0 && pending.length === 0;
   const canSend = (Boolean(draft.trim()) || attachments.length > 0) && !sending && isRunning;
@@ -519,7 +521,9 @@ export default function TerminalChatView({
             if (block.type === 'assistant') {
               return (
                 <div key={block.item.id} className="terminal-chat-agent">
-                  <Markdown text={block.item.text} />
+                  {splitReply(block.item.text).map((segment, index) => (segment.type === 'visual'
+                    ? <ChatVisual key={`v-${index}`} visual={segment.visual} spot={visualsSpot} />
+                    : <Markdown key={`t-${index}`} text={segment.text} onOpenImage={openViewer} />))}
                 </div>
               );
             }
@@ -1160,7 +1164,7 @@ function ToolRow({ item }: { item: TerminalChatItem }) {
 }
 
 /** An agent reply as Markdown. Links never navigate the app window. */
-function Markdown({ text }: { text: string }) {
+function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (images: string[], index: number) => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => {
     try {
@@ -1191,6 +1195,18 @@ function Markdown({ text }: { text: string }) {
       });
       pre.appendChild(copy);
     });
+    // Images in a reply: a local path can't load directly (the asset protocol
+    // is scoped to wallpapers), so it is read through the preview command.
+    root.querySelectorAll<HTMLImageElement>('img').forEach((img) => {
+      if (img.dataset.enhanced) return;
+      img.dataset.enhanced = 'true';
+      img.classList.add('terminal-chat-md-image');
+      const src = img.getAttribute('src') ?? '';
+      if (src && !/^(data:|blob:|https?:)/i.test(src)) {
+        const path = decodeURI(src.replace(/^file:\/\/\/?/i, ''));
+        void invoke<string>('chat_image_preview', { path }).then((url) => { img.src = url; }).catch(() => {});
+      }
+    });
     root.querySelectorAll('table').forEach((table) => {
       if (table.parentElement?.classList.contains('terminal-chat-table')) return;
       const wrap = document.createElement('div');
@@ -1205,7 +1221,13 @@ function Markdown({ text }: { text: string }) {
       ref={ref}
       className="terminal-chat-md"
       onClick={(event) => {
-        const anchor = (event.target as HTMLElement).closest('a');
+        const target = event.target as HTMLElement;
+        if (target instanceof HTMLImageElement) {
+          const images = Array.from(ref.current?.querySelectorAll<HTMLImageElement>('img') ?? []).map((i) => i.src);
+          onOpenImage(images, Math.max(0, images.indexOf(target.src)));
+          return;
+        }
+        const anchor = target.closest('a');
         if (!anchor) return;
         event.preventDefault();
         const href = anchor.getAttribute('href') ?? '';
