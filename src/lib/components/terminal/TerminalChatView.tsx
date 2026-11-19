@@ -22,6 +22,12 @@ import {
   setTerminalChatView,
   transcriptAgentFor,
   typeSlashCommand,
+  permissionDescription,
+  permissionModesFor,
+  relaunchTerminalAgent,
+  useSessionPermissionMode,
+  PERMISSION_MODE_COPY,
+  type ChatPermissionMode,
   type ContextUsage,
   type SessionOptionApply,
   type TerminalChatItem,
@@ -31,13 +37,13 @@ import type { AgentProviderModel } from '$lib/services/chat-provider-adapters';
 import { REASONING_LABELS } from '$lib/services/orchestrator/reasoning-levels';
 import type { ChatReasoningEffort } from '$lib/types/chat';
 import { useStore } from '$lib/react/useStore';
-import { agentPermissionMode } from '$lib/stores/settings';
 import { toggleTerminalTranscription, transcriptionActive } from '$lib/services/transcription-hotkey';
 import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import './TerminalChatView.css';
 
 const POLL_MS = 900;
 const POLL_HIDDEN_MS = 4000;
+const READ_TIMEOUT_MS = 8000;
 
 type PendingSend = { id: number; text: string; key: string; seenBefore: number; at: number };
 
@@ -117,7 +123,8 @@ export default function TerminalChatView({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
-  const permissionMode = useStore(agentPermissionMode);
+  const permissionMode = useSessionPermissionMode(sessionId);
+  const [relaunching, setRelaunching] = useState(false);
   const dictationOn = useStore(transcriptionActive);
   // Dictation is app-wide; only show it as recording here when it aims at this composer.
   const dictating = dictationOn && document.activeElement === textareaRefEarly.current;
@@ -152,14 +159,18 @@ export default function TerminalChatView({
         setLoaded(true);
       } else {
         try {
-          const result = await readTerminalTranscript({
-            sessionId,
-            agent,
-            cwd,
-            sinceMs,
-            boundSessionId: boundRef.current,
-            knownRevision: revisionRef.current,
-          });
+          // Bounded: a call that never settles must not stop the polling for good.
+          const result = await Promise.race([
+            readTerminalTranscript({
+              sessionId,
+              agent,
+              cwd,
+              sinceMs,
+              boundSessionId: boundRef.current,
+              knownRevision: revisionRef.current,
+            }),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Reading the conversation timed out.')), READ_TIMEOUT_MS)),
+          ]);
           if (cancelled) return;
           setError(null);
           if (result.sessionId !== boundRef.current) {
@@ -254,6 +265,7 @@ export default function TerminalChatView({
     setSending(true);
     try {
       const ok = await sendAgentPromptDirect(sessionId, text);
+      revisionRef.current = null;
       if (!ok) {
         // Not re-filled into the composer: the text may still have reached the
         // CLI, and a blind retry would send it twice.
@@ -292,19 +304,34 @@ export default function TerminalChatView({
   const context = agent ? contextUsageFor(agent, currentModelId, reported.used, reported.window) : null;
   // A slash command typed mid-turn would queue as prompt text, so options
   // change between turns.
-  const optionsLocked = busy || !isRunning;
+  const optionsLocked = busy || !isRunning || relaunching;
 
   async function applyOption(apply: SessionOptionApply, value: string | null, which: 'model' | 'effort') {
-    if (apply.kind === 'none' || optionsLocked) return;
-    if (apply.kind === 'picker') {
-      // The CLI only offers its own picker: open it and show the terminal to pick in.
-      await typeSlashCommand(sessionId, apply.command);
-      setTerminalChatView(sessionId, false);
+    if (apply.kind === 'none' || optionsLocked || !value) return;
+    setPicked((current) => ({ ...current, [which]: value }));
+    if (apply.kind === 'command') {
+      await typeSlashCommand(sessionId, apply.build(value));
       return;
     }
-    if (!value) return;
-    setPicked((current) => ({ ...current, [which]: value }));
-    await typeSlashCommand(sessionId, apply.build(value));
+    // Launch-time only (Codex): restart and resume the same conversation with it.
+    await relaunch({ [which]: value });
+  }
+
+  async function relaunch(patch: Parameters<typeof relaunchTerminalAgent>[3]) {
+    if (optionsLocked || relaunching) return;
+    setRelaunching(true);
+    setError(null);
+    try {
+      const problem = await relaunchTerminalAgent(sessionId, agentPreset, boundRef.current, patch);
+      if (problem) {
+        setError(problem);
+        setPicked({ model: null, effort: null });
+      }
+      // The resumed CLI may write a fresh file; let discovery pick it again.
+      revisionRef.current = null;
+    } finally {
+      setRelaunching(false);
+    }
   }
 
   // The F9 dictation, aimed at this composer: focus it first so the capture's
@@ -381,7 +408,13 @@ export default function TerminalChatView({
             );
           })}
           {pending.map((p) => <UserTurn key={`pending-${p.id}`} text={p.text} pending />)}
-          {busy && (
+          {relaunching && (
+            <div className="terminal-chat-working">
+              <Dots />
+              <span>Restarting {agentLabel} with the new settings</span>
+            </div>
+          )}
+          {busy && !relaunching && (
             <div className="terminal-chat-working">
               <Dots />
               <span>Working</span>
@@ -430,18 +463,15 @@ export default function TerminalChatView({
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             </button>
-            <span
-              className={`terminal-chat-access${permissionMode === 'yolo' ? ' full' : ''}`}
-              title={permissionMode === 'yolo'
-                ? 'Full access: this agent was launched without permission prompts. Change it in Settings → Agents for new agents.'
-                : 'Ask first: this agent asks before acting. Answer its prompts with the keys button.'}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 3 5 6v5c0 4.5 3 8.2 7 10 4-1.8 7-5.5 7-10V6l-7-3z" />
-                {permissionMode === 'yolo' ? <path d="M12 8v4M12 16h.01" /> : <path d="m9 12 2 2 4-4" />}
-              </svg>
-              <span>{permissionMode === 'yolo' ? 'Full access' : 'Ask first'}</span>
-            </span>
+            {agent && (
+              <AccessMenu
+                agent={agent}
+                mode={permissionMode}
+                disabled={optionsLocked}
+                title={optionsLocked ? 'Change permissions between turns' : 'Permissions'}
+                onPick={(mode) => void relaunch({ permission: mode })}
+              />
+            )}
             <button
               type="button"
               className={`terminal-chat-icon-btn${showKeys ? ' active' : ''}`}
@@ -464,11 +494,10 @@ export default function TerminalChatView({
                 ? `${agentLabel} can't switch models mid-session`
                 : optionsLocked ? 'Change the model between turns' : 'Model and reasoning'}
               disabled={modelApply.kind === 'none' || optionsLocked}
-              direct={modelApply.kind === 'picker' ? () => void applyOption(modelApply, null, 'model') : undefined}
               models={models.filter((m) => m.supported !== false).map((m) => ({ value: m.id, label: m.label, hint: m.description }))}
               model={currentModel?.id ?? null}
               onModel={(value) => void applyOption(modelApply, value, 'model')}
-              efforts={effortApply.kind === 'command' ? efforts.map((e) => ({ value: e, label: effortLabel(e) })) : []}
+              efforts={effortApply.kind !== 'none' ? efforts.map((e) => ({ value: e, label: shortEffort(e) })) : []}
               effort={currentEffort}
               onEffort={(value) => void applyOption(effortApply, value, 'effort')}
             />
@@ -563,39 +592,8 @@ function shortEffort(value: string): string {
 
 type MenuOption = { value: string; label: string; hint?: string };
 
-/**
- * The composer's "Model Effort ▾" pill (T3 Code style): one menu with the
- * model list and, below it, the reasoning levels. With `direct` it just runs
- * that (Codex opens its own picker).
- */
-function ModelMenu({
-  modelLabel,
-  effortLabel: effortText,
-  title,
-  disabled,
-  direct,
-  models,
-  model,
-  onModel,
-  efforts,
-  effort,
-  onEffort,
-}: {
-  modelLabel: string;
-  effortLabel: string | null;
-  title: string;
-  disabled?: boolean;
-  direct?: () => void;
-  models: MenuOption[];
-  model: string | null;
-  onModel: (value: string) => void;
-  efforts: MenuOption[];
-  effort: string | null;
-  onEffort: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
+/** Close a popover on outside click or Escape. */
+function useDismiss(open: boolean, setOpen: (v: boolean) => void, rootRef: React.RefObject<HTMLDivElement | null>) {
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent) => {
@@ -613,10 +611,142 @@ function ModelMenu({
       document.removeEventListener('mousedown', onDown, true);
       document.removeEventListener('keydown', onKey, true);
     };
+  }, [open, setOpen, rootRef]);
+}
+
+function PermissionIcon({ mode }: { mode: ChatPermissionMode }) {
+  const common = { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.9, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true };
+  if (mode === 'ask') {
+    return <svg {...common}><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5V4a1.5 1.5 0 0 1 3 0v8M14 11.5V5.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-.5a6 6 0 0 1-4.6-2.2L3 16.5a1.6 1.6 0 0 1 2.4-2.1L8 17" /></svg>;
+  }
+  if (mode === 'accept-edits') {
+    return <svg {...common}><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>;
+  }
+  if (mode === 'auto') {
+    return <svg {...common}><path d="M12 3 5 6v5c0 4.5 3 8.2 7 10 4-1.8 7-5.5 7-10V6l-7-3z" /><path d="m9 12 2 2 4-4" /></svg>;
+  }
+  return <svg {...common}><path d="M12 3 5 6v5c0 4.5 3 8.2 7 10 4-1.8 7-5.5 7-10V6l-7-3z" /><path d="M12 8v4M12 16h.01" /></svg>;
+}
+
+/**
+ * The permission pill and its menu (Orca's modes and copy). A pick restarts the
+ * CLI in its terminal with the new flags and resumes the same conversation.
+ */
+function AccessMenu({
+  agent,
+  mode,
+  disabled,
+  title,
+  onPick,
+}: {
+  agent: NonNullable<ReturnType<typeof transcriptAgentFor>>;
+  mode: ChatPermissionMode;
+  disabled: boolean;
+  title: string;
+  onPick: (mode: ChatPermissionMode) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useDismiss(open, setOpen, rootRef);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  const modes = permissionModesFor(agent);
+  return (
+    <div className="terminal-chat-option" ref={rootRef}>
+      <button
+        type="button"
+        className={`terminal-chat-pill access${mode === 'full-access' ? ' full' : ''}${open ? ' open' : ''}`}
+        title={title}
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <PermissionIcon mode={mode} />
+        <span className="terminal-chat-pill-label">{PERMISSION_MODE_COPY[mode].label}</span>
+        <svg className="terminal-chat-pill-caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M2.5 3.8 5 6.3l2.5-2.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="terminal-chat-menu access" role="menu">
+          {modes.map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={value === mode}
+              className={`terminal-chat-access-item${value === mode ? ' selected' : ''}${value === 'full-access' ? ' full' : ''}`}
+              onClick={() => {
+                setOpen(false);
+                if (value !== mode) onPick(value);
+              }}
+            >
+              <span className="terminal-chat-access-bullet" aria-hidden="true" />
+              <span className="terminal-chat-access-icon"><PermissionIcon mode={value} /></span>
+              <span className="terminal-chat-menu-text">
+                <span className="terminal-chat-menu-label">{PERMISSION_MODE_COPY[value].label}</span>
+                <span className="terminal-chat-access-desc">{permissionDescription(agent, value)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** How many models show before "More models (n)". */
+const FEATURED_MODELS = 3;
+
+/**
+ * The composer's model pill: search, the leading models, "More models (n)",
+ * and the effort levels along the bottom, as Orca and T3 Code draw it.
+ */
+function ModelMenu({
+  modelLabel,
+  effortLabel: effortText,
+  title,
+  disabled,
+  models,
+  model,
+  onModel,
+  efforts,
+  effort,
+  onEffort,
+}: {
+  modelLabel: string;
+  effortLabel: string | null;
+  title: string;
+  disabled?: boolean;
+  models: MenuOption[];
+  model: string | null;
+  onModel: (value: string) => void;
+  efforts: MenuOption[];
+  effort: string | null;
+  onEffort: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [showAll, setShowAll] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  useDismiss(open, setOpen, rootRef);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  useEffect(() => {
+    if (!open) return;
+    setQuery('');
+    setShowAll(false);
+    requestAnimationFrame(() => searchRef.current?.focus());
   }, [open]);
 
-  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
-
+  const needle = query.trim().toLowerCase();
+  const matches = needle
+    ? models.filter((m) => `${m.label} ${m.value} ${m.hint ?? ''}`.toLowerCase().includes(needle))
+    : models;
+  // The current model always leads the short list.
+  const ordered = needle ? matches : [...matches].sort((a, b) => Number(b.value === model) - Number(a.value === model));
+  const visible = needle || showAll ? ordered : ordered.slice(0, FEATURED_MODELS);
+  const hidden = needle || showAll ? 0 : Math.max(0, ordered.length - FEATURED_MODELS);
   const hasMenu = models.length > 0 || efforts.length > 0;
 
   return (
@@ -626,9 +756,9 @@ function ModelMenu({
         className={`terminal-chat-pill model${open ? ' open' : ''}`}
         title={title}
         disabled={disabled}
-        aria-haspopup={direct ? undefined : 'menu'}
-        aria-expanded={direct ? undefined : open}
-        onClick={() => (direct ? direct() : hasMenu && setOpen((v) => !v))}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => hasMenu && setOpen((v) => !v)}
       >
         <span className="terminal-chat-pill-label">{modelLabel}</span>
         {effortText && <span className="terminal-chat-pill-effort">{effortText}</span>}
@@ -637,32 +767,62 @@ function ModelMenu({
         </svg>
       </button>
       {open && (
-        <div className="terminal-chat-menu right" role="menu">
-          {models.length > 0 && <div className="terminal-chat-menu-section">Model</div>}
-          {models.map((option) => (
-            <MenuItem key={option.value} option={option} selected={option.value === model} onPick={() => {
-              setOpen(false);
-              if (option.value !== model) onModel(option.value);
-            }} />
-          ))}
-          {efforts.length > 0 && <div className="terminal-chat-menu-section">Reasoning</div>}
-          {efforts.length > 0 && (
-            <div className="terminal-chat-effort-row" role="group" aria-label="Reasoning level">
-              {efforts.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={option.value === effort}
-                  className={option.value === effort ? 'selected' : ''}
-                  onClick={() => {
-                    setOpen(false);
-                    if (option.value !== effort) onEffort(option.value);
+        <div className="terminal-chat-menu right model" role="menu">
+          {models.length > 0 && (
+            <>
+              <label className="terminal-chat-model-search">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+                <input
+                  ref={searchRef}
+                  value={query}
+                  placeholder="Search models..."
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter' && visible[0]) {
+                      setOpen(false);
+                      if (visible[0].value !== model) onModel(visible[0].value);
+                    }
                   }}
-                >
-                  {option.label}
-                </button>
-              ))}
+                />
+              </label>
+              <div className="terminal-chat-model-list">
+                {visible.map((option) => (
+                  <MenuItem key={option.value} option={option} selected={option.value === model} onPick={() => {
+                    setOpen(false);
+                    if (option.value !== model) onModel(option.value);
+                  }} />
+                ))}
+                {!visible.length && <div className="terminal-chat-menu-empty">No models match</div>}
+                {hidden > 0 && (
+                  <button type="button" className="terminal-chat-more-models" onClick={() => setShowAll(true)}>
+                    <span>More models ({hidden})</span>
+                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2 6.5 5l-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+          {efforts.length > 0 && (
+            <div className="terminal-chat-effort-bar" role="group" aria-label="Reasoning effort">
+              <span>Effort</span>
+              <div className="terminal-chat-effort-segments">
+                {efforts.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={option.value === effort}
+                    className={option.value === effort ? 'selected' : ''}
+                    onClick={() => {
+                      setOpen(false);
+                      if (option.value !== effort) onEffort(option.value);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

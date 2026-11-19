@@ -1939,6 +1939,32 @@ export async function relaunchRestoredAgentSession(
   return true;
 }
 
+/**
+ * Start `agentPreset` again in a session whose CLI has already exited back to
+ * the shell, with `args` in place of the default permission args. The chat
+ * view uses it to apply a permission, model or effort change the CLI can only
+ * take at launch, resuming the same conversation (`args` carries the resume
+ * flag). Same command, MCP and platform flags as any other launch.
+ */
+export async function relaunchAgentInSession(id: number, agentPreset: string, args: string): Promise<boolean> {
+  if (!ptyInstances.get(id) || !agentPreset.trim()) return false;
+  const mcpFlags = await mcpLaunchFlags(agentPreset, resolveSessionRoot(id) ?? undefined, id);
+  const launchCommand = resolveAgentLaunchCommand(agentPreset, {
+    agentCmdOverrides: get(agentCmdOverrides),
+    agentDefaultArgs: get(agentDefaultArgs),
+  });
+  const launchLine = `${launchCommand}${args.trim() ? ` ${args.trim()}` : ''}${platformLaunchFlags(agentPreset)}${mcpFlags}`;
+  agentLaunchStartLengths.set(id, getSessionOutputLength(id));
+  suppressAgentDetection.add(id);
+  try {
+    writeToSession(id, `${launchLine}\r`);
+  } finally {
+    suppressAgentDetection.delete(id);
+  }
+  markSessionAgentPreset(id, agentPreset, true);
+  return true;
+}
+
 export function markSessionBriefed(id: number, briefed: boolean) {
   const isDev = devSessionIds.has(id);
   const projectId = terminalSessionProjects.get(id);

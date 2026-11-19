@@ -15,7 +15,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { get, writable } from '$lib/stores/storeCompat';
 import { remoteTarget } from '$lib/stores/remoteWorkspace';
-import { activeSessionId, sessions, writeToSession } from '$lib/stores/terminal';
+import { activeSessionId, getSessionOutputLength, relaunchAgentInSession, sessions, writeToSession } from '$lib/stores/terminal';
+import { agentPermissionMode } from '$lib/stores/settings';
+import { readTerminalScreen } from '$lib/services/terminal-screen';
 
 /** Agent presets whose transcripts the chat view can read, mapped to their reader. */
 const TRANSCRIPT_AGENTS: Record<string, TranscriptAgent> = {
@@ -191,16 +193,23 @@ export function sendMatchKey(text: string): string {
  */
 export type SessionOptionApply =
   | { kind: 'command'; build: (value: string) => string }
-  | { kind: 'picker'; command: string }
+  | { kind: 'relaunch' }
   | { kind: 'none' };
 
+/**
+ * How each CLI takes a model or effort change. Claude Code and Grok accept
+ * `/model <id>` and `/effort <level>` mid-session (Orca's table). Codex only
+ * has its own picker, so Spacron applies the pick at launch instead: exit and
+ * resume the same session with `-m` / `model_reasoning_effort`. OpenCode's
+ * model shows read-only.
+ */
 export function modelApplyFor(agent: TranscriptAgent): SessionOptionApply {
   switch (agent) {
     case 'claude':
     case 'grok':
       return { kind: 'command', build: (value) => `/model ${value}` };
     case 'codex':
-      return { kind: 'picker', command: '/model' };
+      return { kind: 'relaunch' };
     default:
       return { kind: 'none' };
   }
@@ -212,10 +221,160 @@ export function effortApplyFor(agent: TranscriptAgent): SessionOptionApply {
     case 'grok':
       return { kind: 'command', build: (value) => `/effort ${value}` };
     case 'codex':
-      return { kind: 'picker', command: '/model' };
+      return { kind: 'relaunch' };
     default:
       return { kind: 'none' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Permission modes (Orca's per-agent table and copy)
+// ---------------------------------------------------------------------------
+
+export type ChatPermissionMode = 'ask' | 'accept-edits' | 'auto' | 'full-access';
+
+export const PERMISSION_MODE_COPY: Record<ChatPermissionMode, { label: string; description: string }> = {
+  ask: { label: 'Ask for approval', description: "Asks before edits or commands it isn't already allowed to make" },
+  'accept-edits': { label: 'Accept edits', description: 'Approves file edits and file commands; asks for the rest' },
+  auto: { label: 'Approve for me', description: 'Reviews approval requests for you' },
+  'full-access': { label: 'Full access', description: 'Never asks before edits or commands' },
+};
+
+export function permissionDescription(agent: TranscriptAgent, mode: ChatPermissionMode): string {
+  if (agent === 'claude' && mode === 'ask') return "Asks before edits and commands your settings don't allow";
+  if (agent === 'codex' && mode === 'full-access') return 'Never asks; can edit any file and use the network';
+  return PERMISSION_MODE_COPY[mode].description;
+}
+
+export function permissionModesFor(agent: TranscriptAgent): ChatPermissionMode[] {
+  switch (agent) {
+    case 'claude': return ['ask', 'accept-edits', 'auto', 'full-access'];
+    case 'codex':
+    case 'grok': return ['ask', 'auto', 'full-access'];
+    default: return ['ask', 'full-access'];
+  }
+}
+
+/** The CLI flags for a permission mode, checked against each CLI's --help. */
+export function permissionArgs(agent: TranscriptAgent, mode: ChatPermissionMode): string {
+  switch (agent) {
+    case 'claude':
+      if (mode === 'full-access') return '--dangerously-skip-permissions';
+      if (mode === 'auto') return '--permission-mode auto';
+      if (mode === 'accept-edits') return '--permission-mode acceptEdits';
+      return '--permission-mode manual';
+    case 'codex':
+      // Every field stated, so the user's config.toml cannot turn Ask into no prompts (Orca's rule).
+      if (mode === 'full-access') return '--dangerously-bypass-approvals-and-sandbox';
+      if (mode === 'auto') return '--approve-for-me';
+      return '-a on-request -s read-only -c approvals_reviewer="user"';
+    case 'grok':
+      if (mode === 'full-access') return '--permission-mode bypassPermissions';
+      if (mode === 'auto') return '--permission-mode auto';
+      return '--permission-mode default';
+    case 'opencode':
+      return mode === 'full-access' ? '--auto' : '';
+  }
+}
+
+export function resumeArgs(agent: TranscriptAgent, providerSessionId: string): string {
+  switch (agent) {
+    case 'claude': return `--resume ${providerSessionId}`;
+    case 'codex': return `resume ${providerSessionId}`;
+    case 'grok': return `-r ${providerSessionId}`;
+    case 'opencode': return `--session ${providerSessionId}`;
+  }
+}
+
+function modelArgs(agent: TranscriptAgent, model: string | null, effort: string | null): string {
+  const parts: string[] = [];
+  if (agent === 'codex') {
+    if (model) parts.push(`-m ${model}`);
+    if (effort) parts.push(`-c model_reasoning_effort="${effort}"`);
+  } else if (agent === 'claude') {
+    if (model) parts.push(`--model ${model}`);
+    if (effort) parts.push(`--effort ${effort}`);
+  } else if (agent === 'grok') {
+    if (model) parts.push(`-m ${model}`);
+    if (effort) parts.push(`--reasoning-effort ${effort}`);
+  }
+  return parts.join(' ');
+}
+
+type LaunchState = { permission: ChatPermissionMode; model: string | null; effort: string | null };
+
+/** What each pane's CLI was last launched with from the chat view. */
+const launchState = new Map<number, LaunchState>();
+const launchStateStore = writable(0);
+
+/** The permission mode a pane runs under: its last chat-view relaunch, else the app setting it was spawned with. */
+export function sessionPermissionMode(sessionId: number): ChatPermissionMode {
+  return launchState.get(sessionId)?.permission ?? (get(agentPermissionMode) === 'yolo' ? 'full-access' : 'ask');
+}
+
+export function useSessionPermissionMode(sessionId: number): ChatPermissionMode {
+  useStore(launchStateStore);
+  useStore(agentPermissionMode);
+  return sessionPermissionMode(sessionId);
+}
+
+/** PowerShell, cmd and POSIX prompts, i.e. the CLI has handed the shell back. */
+const SHELL_PROMPT = /(^PS [^>]*>\s*$)|(^[A-Za-z]:\\[^>]*>\s*$)|([$#%]\s*$)/;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Wait until the pane shows a shell prompt again after output has gone quiet. */
+async function waitForShellPrompt(sessionId: number, timeoutMs: number): Promise<boolean> {
+  const started = Date.now();
+  let lastLen = getSessionOutputLength(sessionId);
+  let quietSince = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await sleep(200);
+    const len = getSessionOutputLength(sessionId);
+    if (len !== lastLen) {
+      lastLen = len;
+      quietSince = Date.now();
+      continue;
+    }
+    if (Date.now() - quietSince < 500) continue;
+    const screen = readTerminalScreen(sessionId, { maxLines: 6 }) ?? '';
+    const lastLine = screen.split('\n').map((l) => l.trimEnd()).filter(Boolean).pop() ?? '';
+    if (SHELL_PROMPT.test(lastLine)) return true;
+  }
+  return false;
+}
+
+/**
+ * Apply a launch-time option by restarting the CLI in its own terminal and
+ * resuming the same conversation; Orca applies Claude permission picks the same
+ * way. Callers only offer this between turns. Returns an error, or null.
+ */
+export async function relaunchTerminalAgent(
+  sessionId: number,
+  preset: string,
+  providerSessionId: string | null,
+  patch: Partial<LaunchState>,
+): Promise<string | null> {
+  const agent = transcriptAgentFor(preset);
+  if (!agent) return 'This agent has no chat view.';
+  if (!providerSessionId) return 'Send a first message so there is a conversation to resume.';
+  const current = launchState.get(sessionId) ?? { permission: sessionPermissionMode(sessionId), model: null, effort: null };
+  const next = { ...current, ...patch };
+  await typeSlashCommand(sessionId, '/exit');
+  if (!(await waitForShellPrompt(sessionId, 8000))) {
+    return "The agent didn't exit, so nothing changed. Check the terminal view.";
+  }
+  const args = [
+    resumeArgs(agent, providerSessionId),
+    permissionArgs(agent, next.permission),
+    modelArgs(agent, next.model, next.effort),
+  ].filter(Boolean).join(' ');
+  if (!(await relaunchAgentInSession(sessionId, preset, args))) return "Couldn't restart the agent in this terminal.";
+  launchState.set(sessionId, next);
+  launchStateStore.update((n) => n + 1);
+  return null;
 }
 
 /**

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-import { canShowTerminalChat, contextUsageFor, formatTokens, modelApplyFor, sendMatchKey, transcriptAgentFor } from './terminal-chat';
+import { canShowTerminalChat, contextUsageFor, formatTokens, modelApplyFor, permissionArgs, permissionModesFor, resumeArgs, sendMatchKey, transcriptAgentFor } from './terminal-chat';
 
 describe('terminal chat view', () => {
   it('offers chat only for agents whose transcripts it can read', () => {
@@ -37,7 +37,18 @@ describe('terminal chat view', () => {
   it('changes models the way each CLI accepts mid-session', () => {
     const claude = modelApplyFor('claude');
     expect(claude.kind === 'command' && claude.build('opus')).toBe('/model opus');
-    expect(modelApplyFor('codex')).toEqual({ kind: 'picker', command: '/model' });
+    expect(modelApplyFor('codex')).toEqual({ kind: 'relaunch' });
     expect(modelApplyFor('opencode').kind).toBe('none');
+  });
+
+  it('offers Orca’s permission modes per agent with each CLI’s own flags', () => {
+    expect(permissionModesFor('claude')).toEqual(['ask', 'accept-edits', 'auto', 'full-access']);
+    expect(permissionModesFor('codex')).toEqual(['ask', 'auto', 'full-access']);
+    expect(permissionModesFor('opencode')).toEqual(['ask', 'full-access']);
+    expect(permissionArgs('claude', 'accept-edits')).toBe('--permission-mode acceptEdits');
+    expect(permissionArgs('codex', 'auto')).toBe('--approve-for-me');
+    expect(permissionArgs('codex', 'ask')).toBe('-a on-request -s read-only -c approvals_reviewer="user"');
+    expect(resumeArgs('codex', 'abc')).toBe('resume abc');
+    expect(resumeArgs('claude', 'abc')).toBe('--resume abc');
   });
 });

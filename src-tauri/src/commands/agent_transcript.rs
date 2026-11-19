@@ -346,8 +346,16 @@ fn claude_user_text(raw: &str) -> Option<String> {
         || trimmed.starts_with("<local-command-caveat>")
         || trimmed.starts_with("Caveat:")
         || trimmed.starts_with("[Request interrupted")
+        // Harness-injected turns: background task results and hook output.
+        || trimmed.starts_with("<task-notification>")
+        || trimmed.starts_with("<user-prompt-submit-hook>")
+        || trimmed.starts_with("<bash-stdout>")
+        || trimmed.starts_with("<bash-stderr>")
     {
         return None;
+    }
+    if let Some(command) = tag_body(trimmed, "bash-input") {
+        return Some(format!("! {}", command.trim()));
     }
     if trimmed.starts_with("<command-name>") || trimmed.starts_with("<command-message>") {
         let name = tag_body(trimmed, "command-name").unwrap_or_default();
@@ -958,6 +966,8 @@ mod tests {
             Some("/clear")
         );
         assert_eq!(claude_user_text("hi<system-reminder>secret</system-reminder>").as_deref(), Some("hi"));
+        assert_eq!(claude_user_text("<task-notification><task-id>x</task-id></task-notification>"), None);
+        assert_eq!(claude_user_text("<bash-input>git status</bash-input>").as_deref(), Some("! git status"));
     }
 
     #[test]

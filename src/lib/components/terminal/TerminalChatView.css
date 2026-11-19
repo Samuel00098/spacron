@@ -826,7 +826,7 @@
 /* Narrow panes: keep the composer on one row by dropping the token counts. */
 @container (max-width: 520px) {
   .terminal-chat-context span { display: none; }
-  .terminal-chat-access span { display: none; }
+  .terminal-chat-pill.access .terminal-chat-pill-label { display: none; }
   .terminal-chat-pill-effort { display: none; }
 }
 
@@ -863,4 +863,161 @@
 .terminal-pane .pane-view-switch button.active {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+/* ── Permission pill + menu (Orca's modes) ──────────────────────────────── */
+
+.terminal-chat-pill.access { color: var(--text-secondary); }
+.terminal-chat-pill.access.full { color: #e2a336; }
+.terminal-chat-pill.access.full:hover:not(:disabled),
+.terminal-chat-pill.access.full.open { color: #f0b54a; }
+
+.terminal-chat-menu.access {
+  min-width: 270px;
+  max-width: 300px;
+  padding: 6px;
+}
+
+.terminal-chat-access-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px 8px 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.terminal-chat-access-item:hover { background: var(--tc-surface-strong); }
+.terminal-chat-access-item.full .terminal-chat-menu-label,
+.terminal-chat-access-item.full .terminal-chat-access-icon { color: #e2a336; }
+
+.terminal-chat-access-bullet {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.terminal-chat-access-item.selected .terminal-chat-access-bullet { background: var(--text-primary); }
+
+.terminal-chat-access-icon {
+  flex: none;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--text-primary);
+}
+
+.terminal-chat-access-desc {
+  color: var(--text-muted);
+  white-space: normal;
+  line-height: 1.4;
+}
+
+/* ── Model menu: search, list, more, effort bar ─────────────────────────── */
+
+.terminal-chat-menu.model {
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  max-height: none;
+  overflow: visible;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-chat-model-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 2px 6px;
+  padding: 0 10px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 1px var(--tc-line);
+}
+
+.terminal-chat-model-search:focus-within { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--tc-line)); }
+
+.terminal-chat-model-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0 !important;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  box-shadow: none !important;
+}
+
+.terminal-chat-model-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.terminal-chat-menu.model .terminal-chat-menu-item { align-items: flex-start; padding: 8px 10px; }
+.terminal-chat-menu.model .terminal-chat-menu-item.selected { background: var(--tc-surface-strong); box-shadow: inset 0 0 0 1px var(--tc-line) !important; }
+.terminal-chat-menu.model .terminal-chat-menu-check { margin-top: 3px; color: var(--text-secondary); }
+.terminal-chat-menu.model .terminal-chat-menu-hint { white-space: normal; }
+
+.terminal-chat-menu-empty { padding: 10px; color: var(--text-muted); }
+
+.terminal-chat-more-models {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.terminal-chat-more-models:hover { background: var(--tc-surface); }
+.terminal-chat-more-models svg { color: var(--text-muted); }
+
+.terminal-chat-effort-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 6px 2px 10px;
+  border-top: 1px solid var(--tc-line);
+  color: var(--text-muted);
+}
+
+.terminal-chat-effort-bar > span { flex: 1; }
+
+.terminal-chat-effort-segments { display: flex; gap: 2px; }
+
+.terminal-chat-effort-segments button {
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.terminal-chat-effort-segments button:hover { color: var(--text-primary); background: var(--tc-surface); }
+
+.terminal-chat-effort-segments button.selected {
+  color: var(--text-primary);
+  background: var(--tc-surface-strong);
 }
