@@ -989,3 +989,249 @@
   margin: 4px 0;
   background: var(--border);
 }
+
+/* ── Tools panel: slides over the phone, left of the side toolbar ───────── */
+.mobile-panel .mobile-device-body {
+  position: relative;
+}
+
+.mobile-panel .device-tools {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Clear the side toolbar (≈42px) and its gap. */
+  right: 64px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  width: min(300px, calc(100% - 76px));
+  border-radius: 14px;
+  background: var(--surface-menu, var(--bg-secondary));
+  box-shadow: inset 0 0 0 1px var(--border), 0 16px 40px rgba(0, 0, 0, 0.35) !important;
+  overflow: hidden;
+}
+
+.mobile-panel .device-tools-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.mobile-panel .device-tools-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mobile-panel .device-tools-close:hover {
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 8%, transparent));
+  color: var(--text-primary);
+}
+
+.mobile-panel .device-tools-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+}
+
+.mobile-panel .device-tools-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mobile-panel .device-tools-section:last-child {
+  border-bottom: none;
+}
+
+.mobile-panel .device-tools-section h4 {
+  margin: 0 0 2px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.mobile-panel .device-tools-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.mobile-panel .device-tools-label {
+  flex: 0 0 auto;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.mobile-panel .device-tools-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.mobile-panel .device-tools-control {
+  display: inline-flex;
+  flex: 0 1 160px;
+  min-width: 0;
+}
+
+.mobile-panel .device-tools-control.grow {
+  flex: 1 1 auto;
+}
+
+.mobile-panel .device-tools-control .dropdown,
+.mobile-panel .device-tools-control .dd-trigger {
+  width: 100%;
+  max-width: none;
+}
+
+.mobile-panel .device-tools-inline,
+.mobile-panel .device-tools-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mobile-panel .device-tools-inline .device-tools-input {
+  flex: 1 1 0;
+}
+
+.mobile-panel .device-tools-input {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.mobile-panel .device-tools-input.mono {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+.mobile-panel .device-tools-input:focus {
+  border-color: color-mix(in srgb, var(--text-primary) 30%, var(--border));
+}
+
+.mobile-panel .device-tools-btn {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border) !important;
+  color: var(--text-primary);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mobile-panel .device-tools-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.mobile-panel .device-tools-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mobile-panel .device-tools-segment {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+
+.mobile-panel .device-tools-segment button {
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mobile-panel .device-tools-segment button.active {
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.mobile-panel .device-tools-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  box-shadow: none !important;
+  cursor: pointer;
+  transition: background var(--dur-fast, 0.12s) ease;
+}
+
+.mobile-panel .device-tools-switch.on {
+  background: #3b82f6;
+}
+
+.mobile-panel .device-tools-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--dur-fast, 0.12s) ease;
+}
+
+.mobile-panel .device-tools-switch.on .device-tools-switch-knob {
+  transform: translateX(14px);
+}
+
+.mobile-panel .device-tools-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mobile-panel .device-tools-note {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.mobile-panel .device-tools-stream {
+  padding: 0;
+  border: none;
+  background: transparent;
+  flex-wrap: wrap;
+}

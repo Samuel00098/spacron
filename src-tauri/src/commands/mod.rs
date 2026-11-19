@@ -39,6 +39,7 @@ pub mod plugins;
 pub mod pi;
 pub mod emulator_grpc;
 pub mod mobile;
+pub mod device_tools;
 pub mod mobile_stream;
 pub mod ios_sim;
 pub mod notification;

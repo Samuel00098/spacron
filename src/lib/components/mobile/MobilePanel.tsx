@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import './MobilePanel.css';
 import { nextSelectedSerial } from './deviceSelection';
+import DeviceToolsPanel from './DeviceToolsPanel';
+import { showToast } from '$lib/stores/notification';
 import { useMjpegStream } from './useMjpegStream';
 import { useScrcpyStream } from './useScrcpyStream';
 import {
@@ -236,7 +238,10 @@ export default function MobilePanel() {
   // every stream / screenshot loop keys off this, so the list never streams.
   const mirrorTab: MobileTab | null = view === 'device' ? tab : null;
   const [showText, setShowText] = useState(false);
+  // The Tools panel (app, appearance, location, permissions, stream).
   const [showSettings, setShowSettings] = useState(false);
+  // Bumped after the toolbar's sun button so an open Tools panel re-reads.
+  const [toolsKey, setToolsKey] = useState(0);
   const [bootingName, setBootingName] = useState<string | null>(null);
   const [platform, setPlatform] = useState('');
 
@@ -1251,6 +1256,64 @@ export default function MobilePanel() {
   const icoVolDown = <Ico><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="15.5" y1="12" x2="18.5" y2="12" /></Ico>;
   const icoText = <Ico><polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" /></Ico>;
   const icoSettings = <Ico><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></Ico>;
+  const icoSun = <Ico><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></Ico>;
+  const icoCamera = <Ico><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" /><circle cx="12" cy="13" r="3" /></Ico>;
+
+  /** The device on screen, as the tools commands address it. */
+  function toolsTarget(): { platform: 'android' | 'ios'; target: string } | null {
+    if (tab === 'android') return selectedSerial ? { platform: 'android', target: selectedSerial } : null;
+    return iosUdid ? { platform: 'ios', target: iosUdid } : null;
+  }
+
+  function reportError(message: string) {
+    if (tab === 'android') setFrameError(message);
+    else setIosError(message);
+  }
+
+  /** Sun button: flip the device between light and dark appearance. */
+  async function toggleAppearance() {
+    const t = toolsTarget();
+    if (!t) return;
+    try {
+      const state = await invoke<{ appearance: string | null }>('device_tools_state', t);
+      const dark = state.appearance !== 'dark';
+      await invoke('device_set_appearance', { ...t, dark });
+      showToast(dark ? 'Dark appearance' : 'Light appearance', 'success');
+      setToolsKey((k) => k + 1);
+    } catch (e) {
+      reportError(String(e));
+    }
+  }
+
+  /** Camera button: save a full-resolution PNG of the device screen. */
+  async function saveScreenshot() {
+    const t = toolsTarget();
+    if (!t) return;
+    try {
+      const path = await invoke<string>('device_save_screenshot', { ...t, name: deviceName });
+      showToast(`Screenshot saved to ${path}`, 'success');
+    } catch (e) {
+      reportError(String(e));
+    }
+  }
+
+  function rotateAndroidTo(index: number) {
+    if (!selectedSerial) return;
+    setRotation(index);
+    void inject(() => invoke('android_rotate', { serial: selectedSerial, rotation: index }));
+  }
+
+  function rotateIosTo(index: number) {
+    if (!iosUdid) return;
+    setIosOrientation(index);
+    void (async () => {
+      try {
+        await invoke('ios_sim_rotate', { udid: iosUdid, orientation: IOS_ORIENTATIONS[index] });
+      } catch (err) {
+        setIosError(String(err));
+      }
+    })();
+  }
   const icoMenu = <Ico><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></Ico>;
 
   const deviceName = tab === 'android'
@@ -1283,47 +1346,6 @@ export default function MobilePanel() {
   function renderAndroidDevice() {
     return (
       <>
-        {showSettings && (
-          <div className="mobile-toolbar mobile-device-settings">
-            <span
-              className="mobile-quality"
-              title={
-                streamMode !== 'stream'
-                  ? 'Resolution applies to the live stream. Switch back from Snapshot to change it.'
-                  : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
-              }
-            >
-              <span className="mobile-tool-label">Size</span>
-              <Dropdown
-                options={[
-                  { value: 'auto', label: 'Auto', sublabel: 'Fits the panel' },
-                  ...STREAM_SIDE_CHOICES.map((c) => ({
-                    value: String(c.side),
-                    label: `${c.side}p`,
-                    sublabel: c.sublabel,
-                  })),
-                ]}
-                value={formatStreamSideChoice(streamSide)}
-                onChange={(value) => setStreamSide(parseStreamSideChoice(value))}
-                disabled={!selectedSerial || streamMode !== 'stream'}
-                ariaLabel="Stream resolution"
-              />
-            </span>
-            <button
-              className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
-              onClick={toggleStreamMode}
-              disabled={!selectedSerial}
-              title={
-                streamMode === 'stream'
-                  ? 'Live streaming is on. Click to switch to snapshot polling.'
-                  : 'Live streaming is off. Click to switch to the live stream.'
-              }
-            >
-              {streamMode === 'stream' ? 'Live' : 'Snapshot'}
-            </button>
-          </div>
-        )}
-
         <div className="mobile-device-body">
           <div className="mobile-stage" ref={stageRef}>
             {booting && !selectedSerial ? (
@@ -1378,14 +1400,70 @@ export default function MobilePanel() {
             <SideBtn title="Recents" onClick={() => sendKey(KEY_RECENTS)} disabled={!selectedSerial}>{icoRecents}</SideBtn>
             <SideBtn title="Rotate 90° clockwise" onClick={cycleRotation} disabled={!selectedSerial}>{icoRotate}</SideBtn>
             <span className="mobile-side-sep" />
+            <SideBtn title="Switch light / dark appearance" onClick={() => void toggleAppearance()} disabled={!selectedSerial}>{icoSun}</SideBtn>
+            <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!selectedSerial}>{icoText}</SideBtn>
+            <SideBtn title="Tools" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!selectedSerial}>{icoSettings}</SideBtn>
+            <SideBtn title="Save screenshot" onClick={() => void saveScreenshot()} disabled={!selectedSerial}>{icoCamera}</SideBtn>
+            <SideBtn title="Menu" onClick={() => sendKey(KEY_MENU)} disabled={!selectedSerial}>{icoMenu}</SideBtn>
+            <span className="mobile-side-sep" />
             <SideBtn title="Power" onClick={() => sendKey(KEY_POWER)} disabled={!selectedSerial}>{icoPower}</SideBtn>
             <SideBtn title="Volume up" onClick={() => sendKey(KEY_VOL_UP)} disabled={!selectedSerial}>{icoVolUp}</SideBtn>
             <SideBtn title="Volume down" onClick={() => sendKey(KEY_VOL_DOWN)} disabled={!selectedSerial}>{icoVolDown}</SideBtn>
-            <span className="mobile-side-sep" />
-            <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!selectedSerial}>{icoText}</SideBtn>
-            <SideBtn title="Stream settings" onClick={() => setShowSettings((v) => !v)} active={showSettings}>{icoSettings}</SideBtn>
-            <SideBtn title="Menu" onClick={() => sendKey(KEY_MENU)} disabled={!selectedSerial}>{icoMenu}</SideBtn>
           </div>
+
+          {showSettings && selectedSerial && (
+            <DeviceToolsPanel
+              key={`android:${selectedSerial}:${toolsKey}`}
+              platform="android"
+              target={selectedSerial}
+              isEmulator={selectedSerial.startsWith('emulator-')}
+              orientation={rotation}
+              onRotateTo={rotateAndroidTo}
+              onClose={() => setShowSettings(false)}
+              onError={setFrameError}
+              onNotice={(message) => showToast(message, 'success')}
+              streamSettings={
+                <div className="mobile-toolbar device-tools-stream">
+            <span
+              className="mobile-quality"
+              title={
+                streamMode !== 'stream'
+                  ? 'Resolution applies to the live stream. Switch back from Snapshot to change it.'
+                  : 'Stream resolution. Smaller is smoother, larger is sharper; changing it restarts the stream.'
+              }
+            >
+              <span className="mobile-tool-label">Size</span>
+              <Dropdown
+                options={[
+                  { value: 'auto', label: 'Auto', sublabel: 'Fits the panel' },
+                  ...STREAM_SIDE_CHOICES.map((c) => ({
+                    value: String(c.side),
+                    label: `${c.side}p`,
+                    sublabel: c.sublabel,
+                  })),
+                ]}
+                value={formatStreamSideChoice(streamSide)}
+                onChange={(value) => setStreamSide(parseStreamSideChoice(value))}
+                disabled={!selectedSerial || streamMode !== 'stream'}
+                ariaLabel="Stream resolution"
+              />
+            </span>
+            <button
+              className={`mobile-stream-toggle${streamMode === 'stream' ? ' active' : ''}`}
+              onClick={toggleStreamMode}
+              disabled={!selectedSerial}
+              title={
+                streamMode === 'stream'
+                  ? 'Live streaming is on. Click to switch to snapshot polling.'
+                  : 'Live streaming is off. Click to switch to the live stream.'
+              }
+            >
+              {streamMode === 'stream' ? 'Live' : 'Snapshot'}
+            </button>
+                </div>
+              }
+            />
+          )}
         </div>
 
         {showText && selectedSerial && (
@@ -1427,22 +1505,6 @@ export default function MobilePanel() {
     const booted = isBooted(iosSelectedSim?.state);
     return (
       <>
-        {showSettings && booted && (
-          <div className="mobile-toolbar mobile-device-settings">
-            <button
-              className={`mobile-stream-toggle${iosStreamMode === 'stream' ? ' active' : ''}`}
-              onClick={toggleIosStreamMode}
-              title={
-                iosStreamMode === 'stream'
-                  ? 'Live streaming is on. Click to switch to snapshot polling.'
-                  : 'Live streaming is off. Click to switch to the live stream.'
-              }
-            >
-              {iosStreamMode === 'stream' ? 'Live' : 'Snapshot'}
-            </button>
-          </div>
-        )}
-
         <div className="mobile-device-body">
           <div className="mobile-stage">
             {booted ? (
@@ -1491,8 +1553,10 @@ export default function MobilePanel() {
             <SideBtn title="Home" onClick={() => iosButton('home')} disabled={!booted}>{icoHome}</SideBtn>
             <SideBtn title="Rotate" onClick={cycleIosOrientation} disabled={!booted}>{icoRotate}</SideBtn>
             <span className="mobile-side-sep" />
+            <SideBtn title="Switch light / dark appearance" onClick={() => void toggleAppearance()} disabled={!booted}>{icoSun}</SideBtn>
             <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!booted}>{icoText}</SideBtn>
-            <SideBtn title="Stream settings" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!booted}>{icoSettings}</SideBtn>
+            <SideBtn title="Tools" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!booted}>{icoSettings}</SideBtn>
+            <SideBtn title="Save screenshot" onClick={() => void saveScreenshot()} disabled={!booted}>{icoCamera}</SideBtn>
             <span className="mobile-side-sep" />
             <SideBtn
               title={booted ? 'Shut down simulator' : 'Boot simulator'}
@@ -1502,6 +1566,35 @@ export default function MobilePanel() {
               {icoPower}
             </SideBtn>
           </div>
+
+          {showSettings && booted && (
+            <DeviceToolsPanel
+              key={`ios:${iosUdid}:${toolsKey}`}
+              platform="ios"
+              target={iosUdid}
+              isEmulator
+              orientation={iosOrientation}
+              onRotateTo={rotateIosTo}
+              onClose={() => setShowSettings(false)}
+              onError={setIosError}
+              onNotice={(message) => showToast(message, 'success')}
+              streamSettings={
+                <div className="mobile-toolbar device-tools-stream">
+            <button
+              className={`mobile-stream-toggle${iosStreamMode === 'stream' ? ' active' : ''}`}
+              onClick={toggleIosStreamMode}
+              title={
+                iosStreamMode === 'stream'
+                  ? 'Live streaming is on. Click to switch to snapshot polling.'
+                  : 'Live streaming is off. Click to switch to the live stream.'
+              }
+            >
+              {iosStreamMode === 'stream' ? 'Live' : 'Snapshot'}
+            </button>
+                </div>
+              }
+            />
+          )}
         </div>
 
         {showText && booted && (
