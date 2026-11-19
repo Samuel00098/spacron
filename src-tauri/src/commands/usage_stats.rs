@@ -309,6 +309,8 @@ enum SourceFormat {
     Aider,
     /// Antigravity's SQLite conversation databases (`gen_metadata` rows).
     Antigravity,
+    /// Grok CLI `sessions/**/updates.jsonl` (`turn_completed` usage).
+    Grok,
 }
 
 impl Default for SourceFormat {
@@ -433,6 +435,13 @@ fn builtin_provider_sources() -> Vec<ProviderSource> {
                 ".gemini/antigravity-acp/conversations".into(),
                 ".config/antigravity/conversations".into(),
             ],
+        },
+        // `GROK_HOME` replaces this root at scan time.
+        ProviderSource {
+            provider: "grok".to_string(),
+            label: "Grok".to_string(),
+            format: SourceFormat::Grok,
+            paths: vec![".grok/sessions".into()],
         },
     ]
 }
@@ -719,10 +728,24 @@ fn normalize_model_for_pricing(model: &str) -> Option<&'static str> {
     if full.starts_with("claude-opus-4-") && !MODEL_PRICING.iter().any(|(k, _)| *k == full) {
         return Some("claude-opus-4-8");
     }
-    MODEL_PRICING
-        .iter()
-        .find(|(k, _)| *k == full)
-        .map(|(k, _)| *k)
+    // Point releases and dated snapshots bill as their family: try the exact id,
+    // then drop trailing numeric segments (`claude-opus-5-5` → `claude-opus-5`,
+    // `claude-sonnet-4-5-20250929` → `claude-sonnet-4-5`) while a numeric
+    // version segment still remains, so `claude-opus` alone never matches.
+    let mut candidate = full.as_str();
+    loop {
+        if let Some((k, _)) = MODEL_PRICING.iter().find(|(k, _)| *k == candidate) {
+            return Some(k);
+        }
+        let (rest, last) = candidate.rsplit_once('-')?;
+        let rest_has_version = rest
+            .rsplit_once('-')
+            .is_some_and(|(_, seg)| seg.chars().all(|c| c.is_ascii_digit()));
+        if !last.chars().all(|c| c.is_ascii_digit()) || !rest_has_version {
+            return None;
+        }
+        candidate = rest;
+    }
 }
 
 /// The $/MTok price tuple a model bills at, or `None` when unpriced.
@@ -2369,6 +2392,460 @@ fn read_gen_metadata(path: &Path) -> Vec<Value> {
 }
 
 fn parse_antigravity_db(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
+    let session_id = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let file_ms = fs::metadata(path)
+        .map(|m| mtime_ms_of(&m))
+        .unwrap_or_else(|_| now_ms());
+    // Current Antigravity builds store protobuf blobs; the JSON reader below
+    // only covers the older layout, so it is the fallback.
+    let turns = antigravity_pb::parse_db(path, &session_id, file_ms);
+    if !turns.is_empty() {
+        return (FileMeta::default(), turns);
+    }
+    parse_antigravity_db_json(path)
+}
+
+/// Decoder for the protobuf blobs Antigravity writes into its conversation
+/// databases (`gen_metadata.data` and `steps.metadata`).
+///
+/// There is no published schema; the field numbers are the ones T3 Code's
+/// `antigravityUsageReader` reads, cross-checked against real databases:
+///
+/// | message | field | meaning |
+/// |---|---|---|
+/// | generation root | 1 | the generation (`G`) |
+/// | `G` | 3 / 19 / 21 | model id / model name / display name |
+/// | `G` | 4 | usage (`U`) — retries add more under 17 → 2 |
+/// | `G` | 9 → 4 | timestamp |
+/// | step | 24 | model (1 id, 12 name, 8 display name) |
+/// | step | 9 | usage — retries under 28 → 2 |
+/// | step | 8, else 1 | timestamp |
+/// | `U` | 1 | model id |
+/// | `U` | 2 / 5 / 4 | uncached input / cache read / cache write |
+/// | `U` | 3, or 9 + 10 | output (9 is reasoning) |
+/// | `U` | 11, 12, 7 | ids — the same call appears as a step *and* a
+///   generation, and these are what join the two copies |
+mod antigravity_pb {
+    use super::{utc_date_str, ParsedTurn};
+    use regex::Regex;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::OnceLock;
+
+    #[derive(Clone, Copy)]
+    pub(super) enum Field<'a> {
+        Int(u64),
+        Bytes(&'a [u8]),
+    }
+
+    type Msg<'a> = HashMap<u64, Vec<Field<'a>>>;
+
+    fn varint(bytes: &[u8], i: &mut usize) -> Option<u64> {
+        let mut value: u64 = 0;
+        for shift in (0..64).step_by(7) {
+            let byte = *bytes.get(*i)?;
+            *i += 1;
+            if shift == 63 && byte > 1 {
+                return None;
+            }
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte < 0x80 {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    /// One level of a protobuf message. `None` on anything malformed — a blob
+    /// that is not protobuf (the older JSON rows) decodes to nothing.
+    pub(super) fn fields(bytes: &[u8]) -> Option<Msg<'_>> {
+        let mut out: Msg = HashMap::new();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let tag = varint(bytes, &mut i)?;
+            let (number, wire) = (tag >> 3, tag & 7);
+            if number == 0 {
+                return None;
+            }
+            match wire {
+                0 => out.entry(number).or_default().push(Field::Int(varint(bytes, &mut i)?)),
+                1 | 5 => {
+                    let len = if wire == 1 { 8 } else { 4 };
+                    if bytes.len() - i < len {
+                        return None;
+                    }
+                    i += len;
+                }
+                2 => {
+                    let len = usize::try_from(varint(bytes, &mut i)?).ok()?;
+                    if len > bytes.len() - i {
+                        return None;
+                    }
+                    out.entry(number).or_default().push(Field::Bytes(&bytes[i..i + len]));
+                    i += len;
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    fn num(m: &Msg, key: u64) -> u64 {
+        match m.get(&key).and_then(|v| v.first()) {
+            Some(Field::Int(n)) => *n,
+            _ => 0,
+        }
+    }
+
+    fn bytes<'a>(m: &Msg<'a>, key: u64) -> Option<&'a [u8]> {
+        match m.get(&key).and_then(|v| v.first()) {
+            Some(Field::Bytes(b)) => Some(b),
+            _ => None,
+        }
+    }
+
+    fn nested<'a>(m: &Msg<'a>, key: u64) -> Msg<'a> {
+        bytes(m, key).and_then(fields).unwrap_or_default()
+    }
+
+    fn text(m: &Msg, key: u64) -> String {
+        bytes(m, key)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    fn timestamp(m: &Msg) -> Option<i64> {
+        let secs = num(m, 1);
+        (secs > 0).then(|| (secs as i64) * 1000 + (num(m, 2) / 1_000_000) as i64)
+    }
+
+    /// Antigravity's numeric model ids, for calls whose blob names no model.
+    /// Taken from T3 Code's reader; a name learned from the same database wins.
+    fn model_for_id(id: u64) -> Option<&'static str> {
+        Some(match id {
+            246 => "gemini-2.5-pro",
+            312 => "gemini-2.5-flash",
+            313 | 329 => "gemini-2.5-flash-thinking",
+            330 => "gemini-2.5-flash-lite",
+            281 | 282 => "claude-sonnet-4",
+            290 | 291 => "claude-opus-4",
+            333 | 334 => "claude-sonnet-4-5",
+            340 | 341 => "claude-haiku-4-5",
+            342 => "gpt-oss-120b-medium",
+            1026 => "claude-opus-4-6",
+            1035 => "claude-sonnet-4-6",
+            1016 | 1036 | 1037 => "gemini-3.1-pro",
+            1018 | 1084 | 1047 => "gemini-3-flash-preview",
+            1020 => "gemini-3.5-flash-medium",
+            1021 => "gemini-3.1-flash-image",
+            1050 => "gemini-3.1-flash-lite",
+            1071 => "gemini-3.6-flash-high",
+            1072 => "gemini-3.6-flash-medium",
+            1073 => "gemini-3.6-flash-low",
+            1132 | 1133 => "gemini-3.5-flash-high",
+            1187 => "gemini-3.5-flash-extra-low",
+            1196 | 1266 => "gemini-3.6-flash",
+            1298 => "gemini-3.7-flash-high",
+            1299 => "gemini-3.7-flash-medium",
+            1300 => "gemini-3.7-flash-low",
+            1301 => "gemini-3.7-flash-tiered",
+            1318 => "gemini-3.8-flash-high",
+            1319 => "gemini-3.8-flash-medium",
+            1320 => "gemini-3.8-flash-low",
+            1322 => "gemini-3.8-flash-tiered",
+            1402 => "claude-opus-5-5",
+            1417..=1419 => "gemini-4-argon",
+            _ => return None,
+        })
+    }
+
+    struct Patterns {
+        paren: Regex,
+        space: Regex,
+        claude: Regex,
+        concrete: Regex,
+        alias: Regex,
+    }
+
+    fn patterns() -> &'static Patterns {
+        static P: OnceLock<Patterns> = OnceLock::new();
+        P.get_or_init(|| Patterns {
+            paren: Regex::new(r"\s*\(([^)]*)\)\s*$").unwrap(),
+            space: Regex::new(r"\s+").unwrap(),
+            claude: Regex::new(r"^claude-(\d+(?:\.\d+)?)-(sonnet|opus|haiku)").unwrap(),
+            concrete: Regex::new(r"^(?:gemini-\d|claude-(?:sonnet|opus|haiku)-\d|gpt-)").unwrap(),
+            alias: Regex::new(r"^gemini-3-flash-(?:agent(?:-[ab])?|[ab])$").unwrap(),
+        })
+    }
+
+    /// "Claude 4.5 Sonnet (Thinking)" → "claude-sonnet-4-5-thinking".
+    pub(super) fn model_name(name: &str) -> String {
+        if name.is_empty() {
+            return String::new();
+        }
+        let p = patterns();
+        let lower = name.to_lowercase();
+        let n = p.paren.replace(&lower, "-$1");
+        let n = p.space.replace_all(&n, "-").to_string();
+        if n.starts_with("claude-") {
+            return p.claude.replace(&n, "claude-$2-$1").replace('.', "-");
+        }
+        n
+    }
+
+    pub(super) fn is_concrete(model: &str) -> bool {
+        let p = patterns();
+        p.concrete.is_match(model) && !p.alias.is_match(model)
+    }
+
+    struct Usage {
+        model_id: u64,
+        uncached: u64,
+        cached: u64,
+        cache_write: u64,
+        output: u64,
+        keys: Vec<String>,
+    }
+
+    struct Entry {
+        model: String,
+        model_id: u64,
+        ts: Option<i64>,
+        usages: Vec<Usage>,
+    }
+
+    fn usage_of(u: &Msg) -> Usage {
+        Usage {
+            model_id: num(u, 1),
+            uncached: num(u, 2),
+            cached: num(u, 5),
+            cache_write: num(u, 4),
+            output: num(u, 3).max(num(u, 9) + num(u, 10)),
+            keys: [11u64, 12, 7]
+                .iter()
+                .filter_map(|k| {
+                    let id = text(u, *k);
+                    (!id.is_empty()).then(|| format!("antigravity:{k}:{id}"))
+                })
+                .collect(),
+        }
+    }
+
+    /// One `gen_metadata` row (`step == false`) or `steps` row (`step == true`).
+    fn entry(blob: &[u8], step: bool) -> Option<Entry> {
+        let root = fields(blob)?;
+        if !step && bytes(&root, 1).is_none() {
+            return None;
+        }
+        let data = if step { root } else { nested(&root, 1) };
+        let model = if step { nested(&data, 24) } else { data.clone() };
+        let primary = bytes(&data, if step { 9 } else { 4 }).and_then(fields);
+        let mut usages: Vec<Usage> = primary.iter().map(usage_of).collect();
+        for retry in data.get(&(if step { 28 } else { 17 })).into_iter().flatten() {
+            if let Field::Bytes(b) = retry {
+                if let Some(u) = fields(b).and_then(|r| bytes(&r, 2).and_then(fields)) {
+                    usages.push(usage_of(&u));
+                }
+            }
+        }
+        let names = [
+            model_name(&text(&model, if step { 12 } else { 19 })),
+            model_name(&text(&model, if step { 8 } else { 21 })),
+        ];
+        let name = names
+            .iter()
+            .find(|n| is_concrete(n))
+            .or_else(|| names.iter().find(|n| !n.is_empty() && !n.starts_with("model_") && !n.starts_with("model-")))
+            .cloned()
+            .unwrap_or_default();
+        let model_id = match num(&model, if step { 1 } else { 3 }) {
+            0 => primary.as_ref().map(|u| num(u, 1)).unwrap_or(0),
+            id => id,
+        };
+        let ts = if step {
+            timestamp(&nested(&data, 8)).or_else(|| timestamp(&nested(&data, 1)))
+        } else {
+            timestamp(&nested(&nested(&data, 9), 4))
+        };
+        Some(Entry { model: name, model_id, ts, usages })
+    }
+
+    fn read_blobs(conn: &rusqlite::Connection, sql: &str) -> Vec<(i64, Vec<u8>)> {
+        let Ok(mut stmt) = conn.prepare(sql) else { return Vec::new() };
+        let Ok(rows) = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<Vec<u8>>>(1)?))
+        }) else {
+            return Vec::new();
+        };
+        rows.flatten().filter_map(|(idx, blob)| blob.map(|b| (idx, b))).collect()
+    }
+
+    /// One merged model call.
+    struct Call {
+        model: String,
+        quality: u8,
+        ts: i64,
+        ts_quality: u8,
+        key: String,
+        uncached: u64,
+        cached: u64,
+        cache_write: u64,
+        output: u64,
+    }
+
+    pub(super) fn parse_db(path: &Path, session_id: &str, file_ms: i64) -> Vec<ParsedTurn> {
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
+            return Vec::new();
+        };
+        let _ = conn.busy_timeout(std::time::Duration::from_millis(200));
+
+        let decode = |rows: Vec<(i64, Vec<u8>)>, step: bool| -> Vec<(i64, Entry)> {
+            let mut out: Vec<(i64, Entry)> =
+                rows.iter().filter_map(|(idx, b)| entry(b, step).map(|e| (*idx, e))).collect();
+            out.sort_by_key(|(idx, _)| *idx);
+            out
+        };
+        let generations = decode(read_blobs(&conn, "SELECT idx, data FROM gen_metadata"), false);
+        let steps = decode(read_blobs(&conn, "SELECT idx, metadata FROM steps"), true);
+        let trajectory_ts = read_blobs(&conn, "SELECT 0, data FROM trajectory_metadata_blob")
+            .iter()
+            .find_map(|(_, b)| fields(b).and_then(|m| timestamp(&nested(&m, 2))));
+
+        // Names the database itself attaches to a numeric id. An id seen with
+        // two different names is ambiguous and teaches nothing.
+        let mut learned: HashMap<u64, Option<String>> = HashMap::new();
+        for (_, e) in generations.iter().chain(steps.iter()) {
+            if e.model_id > 0 && is_concrete(&e.model) {
+                learned
+                    .entry(e.model_id)
+                    .and_modify(|prev| {
+                        if prev.as_deref() != Some(e.model.as_str()) {
+                            *prev = None;
+                        }
+                    })
+                    .or_insert_with(|| Some(e.model.clone()));
+            }
+        }
+        let gen_by_idx: HashMap<i64, &Entry> = generations.iter().map(|(i, e)| (*i, e)).collect();
+
+        let mut calls: Vec<Call> = Vec::new();
+        let mut by_key: HashMap<String, usize> = HashMap::new();
+        for (source, entries) in [("step", &steps), ("generation", &generations)] {
+            for (index, (idx, e)) in entries.iter().enumerate() {
+                for (usage_index, u) in e.usages.iter().enumerate() {
+                    if u.uncached + u.cached + u.cache_write + u.output == 0 {
+                        continue;
+                    }
+                    let id = if u.model_id != 0 { u.model_id } else { e.model_id };
+                    let matches = |other: u64| id == 0 || other == id;
+                    let generation = if source == "step" { gen_by_idx.get(idx) } else { None };
+                    let own = if matches(e.model_id) && !e.model.is_empty() {
+                        e.model.clone()
+                    } else if let Some(g) = generation.filter(|g| matches(g.model_id)) {
+                        g.model.clone()
+                    } else {
+                        String::new()
+                    };
+                    let (model, quality) = if is_concrete(&own) {
+                        (own, 4)
+                    } else {
+                        let learned_name = learned.get(&id);
+                        match (learned_name, model_for_id(id)) {
+                            (Some(Some(name)), _) => (name.clone(), 3),
+                            (Some(None), _) | (None, None) => {
+                                let q = u8::from(!own.is_empty());
+                                let fallback = if !own.is_empty() {
+                                    own
+                                } else if id > 0 {
+                                    format!("antigravity-model-{id}")
+                                } else {
+                                    "antigravity-unknown".to_string()
+                                };
+                                (fallback, q)
+                            }
+                            (None, Some(name)) => (name.to_string(), 2),
+                        }
+                    };
+                    let (ts, ts_quality) = match (e.ts, trajectory_ts) {
+                        (Some(t), _) => (t, 2),
+                        (None, Some(t)) => (t, 1),
+                        (None, None) => (file_ms, 0),
+                    };
+                    let key = u
+                        .keys
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| format!("antigravity:{session_id}:{source}:{index}:{usage_index}"));
+                    let call = Call {
+                        model,
+                        quality,
+                        ts,
+                        ts_quality,
+                        key,
+                        uncached: u.uncached,
+                        cached: u.cached,
+                        cache_write: u.cache_write,
+                        output: u.output,
+                    };
+                    // The step and generation copies of one call share an id:
+                    // keep the larger reading of each counter, the best model
+                    // name and the most trustworthy timestamp.
+                    match u.keys.iter().find_map(|k| by_key.get(k).copied()) {
+                        Some(i) => {
+                            let target = &mut calls[i];
+                            target.uncached = target.uncached.max(call.uncached);
+                            target.cached = target.cached.max(call.cached);
+                            target.cache_write = target.cache_write.max(call.cache_write);
+                            target.output = target.output.max(call.output);
+                            if call.quality > target.quality {
+                                target.model = call.model;
+                                target.quality = call.quality;
+                            }
+                            if call.ts_quality > target.ts_quality
+                                || (call.ts_quality == target.ts_quality && call.ts < target.ts)
+                            {
+                                target.ts = call.ts;
+                                target.ts_quality = call.ts_quality;
+                            }
+                            for k in &u.keys {
+                                by_key.insert(k.clone(), i);
+                            }
+                        }
+                        None => {
+                            for k in &u.keys {
+                                by_key.insert(k.clone(), calls.len());
+                            }
+                            calls.push(call);
+                        }
+                    }
+                }
+            }
+        }
+
+        calls
+            .into_iter()
+            .map(|c| ParsedTurn {
+                dedupe_key: Some(c.key),
+                session_id: session_id.to_string(),
+                ts_ms: c.ts,
+                day: utc_date_str(c.ts.div_euclid(1000)),
+                model: Some(c.model),
+                input_tokens: c.uncached,
+                output_tokens: c.output,
+                cache_read_tokens: c.cached,
+                cache_write_tokens: c.cache_write,
+            })
+            .collect()
+    }
+}
+
+/// The older JSON `gen_metadata` layout.
+fn parse_antigravity_db_json(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
     let meta = FileMeta::default();
     let mut turns: Vec<ParsedTurn> = Vec::new();
     let session_id = path
@@ -2408,10 +2885,322 @@ fn scan_antigravity(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) ->
     }
     files.sort();
     files.dedup();
-    let units: Vec<ScanUnit> = files.iter().filter_map(|p| unit_from_file(p)).collect();
+    // New rows land in the `-wal` file first and the database's own mtime and
+    // size can stay put until a checkpoint, so the change check folds the WAL in.
+    let units: Vec<ScanUnit> = files
+        .iter()
+        .filter_map(|p| {
+            let mut unit = unit_from_file(p)?;
+            let mut wal = p.as_os_str().to_owned();
+            wal.push("-wal");
+            if let Ok(meta) = fs::metadata(PathBuf::from(wal)) {
+                unit.mtime_ms = unit.mtime_ms.max(mtime_ms_of(&meta));
+                unit.size = unit.size.saturating_add(meta.len());
+            }
+            Some(unit)
+        })
+        .collect();
     // A database is the unit: a conversation is one file, so a changed one
     // replaces its own contribution exactly like a session log.
     scan_simple(store, provider, units, parse_antigravity_db)
+}
+
+// ---------------------------------------------------------------------------
+// Grok
+// ---------------------------------------------------------------------------
+
+/// Grok CLI sessions: `~/.grok/sessions/<url-encoded cwd>/<session id>/updates.jsonl`
+/// (`GROK_HOME` moves the root). Each file is the session's ACP notification
+/// stream; only `turn_completed` updates carry usage, and their counts are the
+/// turn's own (not cumulative):
+///
+/// | `params.update.usage` field | maps to |
+/// |---|---|
+/// | `inputTokens` | input *including* cache — cache is subtracted out |
+/// | `cachedReadTokens` / `cacheCreationTokens` | cache read / write |
+/// | `outputTokens` | output |
+/// | `modelUsage.<model>` | the same fields per model, when present |
+///
+/// Timestamp: `params._meta.agentTimestampMs`, else the line's `timestamp`
+/// (seconds or ms). The layout matches what T3 Code's Grok reader expects.
+fn parse_grok_updates(path: &Path) -> (FileMeta, Vec<ParsedTurn>) {
+    let session_dir = path.parent();
+    let fallback_session = session_dir
+        .and_then(|d| d.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let cwd = session_dir
+        .and_then(|d| d.parent())
+        .and_then(|d| d.file_name())
+        .map(|n| percent_encoding::percent_decode_str(&n.to_string_lossy()).decode_utf8_lossy().to_string())
+        .filter(|s| !s.is_empty());
+    let meta = FileMeta { cwd, branch: None };
+
+    let Ok(text) = fs::read_to_string(path) else {
+        return (meta, Vec::new());
+    };
+    let mut turns = Vec::new();
+    for line in text.lines() {
+        if !line.contains("\"turn_completed\"") {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Value>(line) else { continue };
+        turns.extend(grok_turns(&row, &fallback_session));
+    }
+    (meta, turns)
+}
+
+fn grok_turns(row: &Value, fallback_session: &str) -> Vec<ParsedTurn> {
+    let params = &row["params"];
+    let update = &params["update"];
+    if update["sessionUpdate"].as_str() != Some("turn_completed") || !update["usage"].is_object() {
+        return Vec::new();
+    }
+    let ts_ms = params["_meta"]["agentTimestampMs"]
+        .as_f64()
+        .or_else(|| {
+            row["timestamp"]
+                .as_f64()
+                .map(|t| if t > 1e12 { t } else { t * 1000.0 })
+        });
+    let Some(ts_ms) = ts_ms.map(|t| t as i64) else { return Vec::new() };
+    let session_id = params["sessionId"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback_session)
+        .to_string();
+    let prompt_id = update["prompt_id"].as_str();
+    let usage = &update["usage"];
+
+    let make = |model: &str, totals: &Value| -> Option<ParsedTurn> {
+        let n = |key: &str| totals[key].as_u64().unwrap_or(0);
+        let cached = n("cachedReadTokens");
+        let created = n("cacheCreationTokens");
+        let input = n("inputTokens").saturating_sub(cached).saturating_sub(created);
+        let output = n("outputTokens");
+        if input + cached + created + output == 0 {
+            return None;
+        }
+        Some(ParsedTurn {
+            dedupe_key: prompt_id.map(|p| format!("{session_id}:{p}:{ts_ms}:{model}")),
+            session_id: session_id.clone(),
+            ts_ms,
+            day: utc_date_str(ts_ms.div_euclid(1000)),
+            model: Some(model.to_string()),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cached,
+            cache_write_tokens: created,
+        })
+    };
+
+    let per_model: Vec<ParsedTurn> = usage["modelUsage"]
+        .as_object()
+        .map(|models| {
+            models
+                .iter()
+                .filter(|(name, _)| !name.is_empty())
+                .filter_map(|(name, totals)| make(name, totals))
+                .collect()
+        })
+        .unwrap_or_default();
+    if per_model.is_empty() {
+        make("grok", usage).into_iter().collect()
+    } else {
+        per_model
+    }
+}
+
+fn scan_grok(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) -> (usize, usize) {
+    let roots: Vec<PathBuf> = match std::env::var("GROK_HOME") {
+        Ok(home) if !home.trim().is_empty() => vec![PathBuf::from(home.trim()).join("sessions")],
+        _ => roots.to_vec(),
+    };
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+        if depth > 4 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out, depth + 1);
+            } else if path.file_name().is_some_and(|n| n == "updates.jsonl") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for root in &roots {
+        walk(root, &mut files, 0);
+    }
+    files.sort();
+    files.dedup();
+    let units: Vec<ScanUnit> = files.iter().filter_map(|p| unit_from_file(p)).collect();
+    scan_simple(store, provider, units, parse_grok_updates)
+}
+
+#[cfg(test)]
+mod grok_usage_tests {
+    use super::*;
+
+    #[test]
+    fn a_turn_splits_per_model_and_takes_cache_out_of_input() {
+        let row: Value = serde_json::from_str(
+            r#"{"timestamp":1794856816,"params":{"sessionId":"s1","_meta":{"agentTimestampMs":1794856816058},
+            "update":{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{"inputTokens":1100,"outputTokens":20,
+            "cachedReadTokens":1000,"cacheCreationTokens":0,"modelUsage":{"grok-4.7":{"inputTokens":1100,
+            "outputTokens":20,"cachedReadTokens":1000,"cacheCreationTokens":0}}}}}}"#,
+        )
+        .unwrap();
+        let turns = grok_turns(&row, "dir");
+        assert_eq!(turns.len(), 1);
+        let t = &turns[0];
+        assert_eq!(t.model.as_deref(), Some("grok-4.7"));
+        assert_eq!((t.input_tokens, t.cache_read_tokens, t.output_tokens), (100, 1000, 20));
+        assert_eq!(t.ts_ms, 1794856816058);
+        assert_eq!(t.session_id, "s1");
+    }
+
+    #[test]
+    fn other_updates_and_empty_usage_are_ignored() {
+        let chunk: Value = serde_json::from_str(
+            r#"{"timestamp":1,"params":{"update":{"sessionUpdate":"agent_message_chunk"}}}"#,
+        )
+        .unwrap();
+        assert!(grok_turns(&chunk, "d").is_empty());
+        let empty: Value = serde_json::from_str(
+            r#"{"timestamp":1794856816,"params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":0}}}}"#,
+        )
+        .unwrap();
+        assert!(grok_turns(&empty, "d").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod antigravity_pb_tests {
+    use super::*;
+
+    fn varint(mut v: u64, out: &mut Vec<u8>) {
+        while v >= 0x80 {
+            out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+    fn int_field(n: u64, v: u64, out: &mut Vec<u8>) {
+        varint(n << 3, out);
+        varint(v, out);
+    }
+    fn bytes_field(n: u64, b: &[u8], out: &mut Vec<u8>) {
+        varint((n << 3) | 2, out);
+        varint(b.len() as u64, out);
+        out.extend_from_slice(b);
+    }
+
+    #[test]
+    fn decodes_nested_messages_and_rejects_json() {
+        let mut usage = Vec::new();
+        int_field(2, 120, &mut usage); // uncached input
+        int_field(5, 5000, &mut usage); // cache read
+        int_field(3, 40, &mut usage); // output
+        let mut gen = Vec::new();
+        int_field(3, 1402, &mut gen); // model id
+        bytes_field(4, &usage, &mut gen);
+        let mut root = Vec::new();
+        bytes_field(1, &gen, &mut root);
+
+        let m = antigravity_pb::fields(&root).expect("protobuf");
+        assert!(m.contains_key(&1));
+        assert!(antigravity_pb::fields(br#"{"usage":{"input":1}}"#).is_none());
+    }
+
+    #[test]
+    fn a_call_logged_as_step_and_generation_counts_once() {
+        let mut usage = Vec::new();
+        int_field(1, 1402, &mut usage); // model id → claude-opus-5-5
+        int_field(2, 120, &mut usage);
+        int_field(5, 5000, &mut usage);
+        int_field(3, 40, &mut usage);
+        bytes_field(11, b"call-1", &mut usage);
+        let mut ts = Vec::new();
+        int_field(1, 1_794_856_816, &mut ts);
+
+        let mut gen = Vec::new();
+        int_field(3, 1402, &mut gen);
+        bytes_field(4, &usage, &mut gen);
+        let mut gen_ts = Vec::new();
+        bytes_field(4, &ts, &mut gen_ts);
+        bytes_field(9, &gen_ts, &mut gen);
+        let mut gen_root = Vec::new();
+        bytes_field(1, &gen, &mut gen_root);
+
+        let mut step = Vec::new();
+        bytes_field(9, &usage, &mut step);
+        bytes_field(8, &ts, &mut step);
+
+        let dir = std::env::temp_dir().join(format!("spacron-ag-test-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let db = dir.join("conv.db");
+        let _ = fs::remove_file(&db);
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE gen_metadata (idx INTEGER, data BLOB);
+                 CREATE TABLE steps (idx INTEGER, metadata BLOB);",
+            )
+            .unwrap();
+            conn.execute("INSERT INTO gen_metadata VALUES (0, ?1)", [&gen_root]).unwrap();
+            conn.execute("INSERT INTO steps VALUES (0, ?1)", [&step]).unwrap();
+        }
+        let (_, turns) = parse_antigravity_db(&db);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(turns.len(), 1, "the step and generation copies merge");
+        let t = &turns[0];
+        assert_eq!(t.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!((t.input_tokens, t.cache_read_tokens, t.output_tokens), (120, 5000, 40));
+        assert_eq!(t.ts_ms, 1_794_856_816_000);
+    }
+
+    /// Manual check against this machine's real logs:
+    /// `cargo test --lib real_antigravity_and_grok_logs -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_antigravity_and_grok_logs() {
+        let home = dirs::home_dir().unwrap();
+        let mut dbs = Vec::new();
+        for flavour in ["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"] {
+            collect_antigravity_dbs(&home.join(".gemini").join(flavour), &mut dbs, 0);
+        }
+        let mut models: HashMap<String, u64> = HashMap::new();
+        let mut calls = 0;
+        for db in &dbs {
+            let (_, turns) = parse_antigravity_db(db);
+            calls += turns.len();
+            for t in turns {
+                *models.entry(t.model.unwrap_or_default()).or_default() +=
+                    t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_write_tokens;
+            }
+        }
+        println!("antigravity: {} dbs, {calls} calls, {models:?}", dbs.len());
+
+        let mut grok = Vec::new();
+        let mut store = StoreFile::default();
+        let (p, _) = scan_grok(&mut store, "grok", &[home.join(".grok").join("sessions")]);
+        for r in &store.days {
+            grok.push((r.day.clone(), r.model.clone(), r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens));
+        }
+        println!("grok: {p} files, rows {grok:?}");
+    }
+
+    #[test]
+    fn model_names_normalise_like_t3() {
+        assert_eq!(antigravity_pb::model_name("Claude 4.5 Sonnet (Thinking)"), "claude-sonnet-4-5-thinking");
+        assert_eq!(antigravity_pb::model_name("Gemini 3.1 Pro"), "gemini-3.1-pro");
+        assert!(antigravity_pb::is_concrete("gemini-3.1-pro"));
+        assert!(!antigravity_pb::is_concrete("gemini-3-flash-agent"));
+    }
 }
 
 #[cfg(test)]
@@ -2580,6 +3369,7 @@ fn run_scan(store: &mut StoreFile, config_dir: &Path, home: &Path) -> (usize, us
             SourceFormat::Session => scan_session_jsonl(store, &spec.provider, &roots),
             SourceFormat::Aider => scan_aider(store, &spec.provider, &roots),
             SourceFormat::Antigravity => scan_antigravity(store, &spec.provider, &roots),
+            SourceFormat::Grok => scan_grok(store, &spec.provider, &roots),
         };
         processed += p;
         skipped += s;
@@ -2952,6 +3742,7 @@ fn build_recent_sessions(
             SourceFormat::Aider => parse_aider_log(&path),
             SourceFormat::Claude => parse_session_turns(&path),
             SourceFormat::Antigravity => parse_antigravity_db(&path),
+            SourceFormat::Grok => parse_grok_updates(&path),
         };
         let parsed = aggregate_turns(&turns);
         if parsed.turns == 0 {
@@ -3367,6 +4158,14 @@ mod tests {
             "unknown opus-4 point releases fall back to the newest known price"
         );
         assert_eq!(normalize_model_for_pricing("claude-skynet-1"), None);
+        // Point releases and dated snapshots fall back to their family.
+        assert_eq!(normalize_model_for_pricing("claude-opus-5-5"), Some("claude-opus-5"));
+        assert_eq!(normalize_model_for_pricing("claude-sonnet-5-5"), Some("claude-sonnet-5"));
+        assert_eq!(
+            normalize_model_for_pricing("claude-sonnet-4-5-20250929"),
+            Some("claude-sonnet-4-5")
+        );
+        assert_eq!(normalize_model_for_pricing("claude-skynet-9-9"), None);
 
         // 100K input + 100K output of sonnet-4-5 = $0.30 + $1.50.
         assert_eq!(estimated_cost("claude-sonnet-4-5", 100_000, 100_000, 0, 0), Some(1.8));
@@ -4079,7 +4878,8 @@ mod tests {
         let sources = builtin_provider_sources();
         let find = |id: &str| sources.iter().find(|s| s.provider == id).expect(id);
 
-        assert_eq!(sources.len(), 9, "six original providers + Kilo + Aider + Antigravity");
+        assert_eq!(sources.len(), 10, "six original providers + Kilo + Aider + Antigravity + Grok");
+        assert_eq!(find("grok").format, SourceFormat::Grok);
         assert_eq!(find(PROVIDER_CLAUDE).format, SourceFormat::Claude);
         assert_eq!(find(PROVIDER_CODEX).format, SourceFormat::Codex);
         assert_eq!(find(PROVIDER_PI).format, SourceFormat::Session);
@@ -4139,7 +4939,7 @@ mod tests {
 
         // A bad file falls back to the built-ins untouched, like the ledger store.
         fs::write(registry.join("providers.json"), "{not json").unwrap();
-        assert_eq!(load_provider_sources(&config).len(), 9);
+        assert_eq!(load_provider_sources(&config).len(), 10);
 
         let _ = fs::remove_dir_all(&dir);
     }

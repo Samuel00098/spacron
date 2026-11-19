@@ -730,7 +730,7 @@ body {
    actual editor/terminal output and authored document content keep their own
    typography controls. The exclusions are descendants as well as roots so a
    nested span cannot accidentally pick the application size back up. */
-:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading, .settings-header h2, .launch-splash-word, .launch-splash-word *):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.chat-file-viewer-doc, .chat-file-viewer-doc *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
+:is(#app :where(*), body > :where(*):not(#app), body > :where(*):not(#app) :where(*)):not(.left-sidebar-app-name, .chat-mode-empty-heading, .settings-header h2, .stats-hero-total, .launch-splash-word, .launch-splash-word *):not(.code-editor-container, .code-editor-container *):not(.cm-tooltip, .cm-tooltip *):not(.xterm-container, .xterm-container *):not(.markdown-preview, .markdown-preview *):not(.chat-file-viewer-doc, .chat-file-viewer-doc *):not(.floating-text, .floating-text *):not(.shape-text-container, .shape-text-container *):not(.shape-textarea, .shape-textarea *):not(pre, pre *, code, code *, kbd, samp) {
   font-family: var(--font-sans) !important;
   font-size: inherit !important;
   font-weight: var(--ui-font-weight) !important;

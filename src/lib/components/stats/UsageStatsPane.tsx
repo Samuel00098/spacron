@@ -532,9 +532,8 @@ function OverviewPane({
           token counts to disk at all — it is a property of their logs, not a
           setting — so their capacity is only ever a live reading. */}
       <p className="stats-panel-sub stats-provider-note">
-        Grok, Gemini, Copilot, Cursor, Antigravity and Droid aren't listed:
-        their logs record no token counts, so nothing here can be tallied for
-        them. Their remaining capacity shows in the usage meter in the corner of
+        Gemini, Copilot, Cursor and Droid aren't listed: their logs record no
+        token counts, so nothing here can be tallied for them. Their remaining capacity shows in the usage meter in the corner of
         the workspace instead.
       </p>
 

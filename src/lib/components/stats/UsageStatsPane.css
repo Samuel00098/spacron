@@ -1022,13 +1022,24 @@
   font-weight: 600;
 }
 
-/* Hero: the total and the ranked list on the left, the chart on the right. */
+/* Hero: the total and the ranked list on the left, the chart on the right.
+   The card body has no padding of its own — every block insets itself, like
+   the older stats sections do. */
 .stats-hero {
   display: grid;
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
   gap: 28px;
   align-items: start;
-  margin-bottom: 26px;
+  margin: 18px 22px 26px;
+}
+
+.stats-block {
+  margin-left: 22px;
+  margin-right: 22px;
+}
+
+.settings-card-body > .stats-block:last-child {
+  padding-bottom: 22px;
 }
 
 @media (max-width: 760px) {
@@ -1037,6 +1048,8 @@
   }
 }
 
+/* Size and weight only apply because global.css excludes this class from its
+   inherit-everything type rules (see the two `:not(...)` lists there). */
 .stats-hero-total {
   color: var(--text-primary);
   font-size: 40px;
