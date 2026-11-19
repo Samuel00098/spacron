@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { isWebkitGtk, viewTransitionsReliable } from '$lib/utils/tauri';
 import TitleBar from './TitleBar.tsx';
@@ -785,7 +785,6 @@ export default function AppShell() {
   const sidebarResizeRef = useRef({ startX: 0, startWidth: 0 });
   const leftPanelResizeRef = useRef({ startX: 0, startWidth: 0 });
   const rightDrawerResizeRef = useRef({ startX: 0, startWidth: 0, active: false });
-  const rightToolTabsRef = useRef<HTMLDivElement | null>(null);
   const auxResizeRef = useRef({ startX: 0, startWidth: 0 });
   const auxRowResizeRef = useRef({ startY: 0, startHeight: 0 });
   const layoutSwitchTimerRef = useRef<number | null>(null);
@@ -1751,6 +1750,7 @@ export default function AppShell() {
   const rightSidebarWidth = showingDockedPreview ? layoutState.previewDrawerWidth : layoutState.rightDrawerWidth;
 
   function showDockedPreview() {
+    chooseRightSurface();
     rightSidebarVisible.set(true);
     rightSidebarTabStore.set('preview');
     // `apply…`, not `setRightDrawerTool`: closing a utility to make room for
@@ -1975,12 +1975,14 @@ export default function AppShell() {
   }, [rightActiveTool]);
 
   function selectRightNavigatorTool(tool: RightNavigatorTool) {
+    chooseRightSurface();
     rightSidebarVisible.set(true);
     rightSidebarTabStore.set(tool);
     useLayoutStore.getState().setRightDrawerTool(null);
   }
 
   function selectRightTool(tool: RightTool) {
+    chooseRightSurface();
     rightSidebarVisible.set(true);
     rightSidebarTabStore.set(tool);
     useLayoutStore.getState().setRightDrawerTool(tool);
@@ -2000,38 +2002,134 @@ export default function AppShell() {
     else selectRightTool(tool);
   }
 
-  /** The selected right-sidebar tab names itself beside its icon. */
-  function rightTabLabel(active: boolean, title: string) {
-    return active ? <span className="drawer-tab-label">{title}</span> : null;
+  // --- "Open a surface" picker -------------------------------------------
+  // Opening the sidebar by hand lands on a centred list of every surface it can
+  // show; choosing one replaces the list, and the header's back button returns
+  // to it. Paths that open a specific tool (shortcuts, agents, a project
+  // restore) change the tab, which skips the picker.
+  const [rightSurfacePicker, setRightSurfacePicker] = useState(false);
+  // Set when something opens a specific surface, so the open that follows it
+  // does not land on the picker instead.
+  const rightSurfaceChosenRef = useRef(false);
+  const focusSurfacePicker = useCallback((node: HTMLDivElement | null) => node?.focus({ preventScroll: true }), []);
+  const prevRightSidebarOpenRef = useRef(rightSidebarOpen);
+  useEffect(() => {
+    const was = prevRightSidebarOpenRef.current;
+    prevRightSidebarOpenRef.current = rightSidebarOpen;
+    const chosen = rightSurfaceChosenRef.current;
+    rightSurfaceChosenRef.current = false;
+    if (rightSidebarOpen && !was && !projectSwitching && !chosen) setRightSurfacePicker(true);
+  }, [rightSidebarOpen, projectSwitching]);
+  const rightSurfaceKeyRef = useRef({ tab: rightSidebarTab, tool: rightActiveTool, preview: showingDockedPreview });
+  useEffect(() => {
+    const prev = rightSurfaceKeyRef.current;
+    rightSurfaceKeyRef.current = { tab: rightSidebarTab, tool: rightActiveTool, preview: showingDockedPreview };
+    if (prev.tab !== rightSidebarTab || prev.tool !== rightActiveTool || prev.preview !== showingDockedPreview) {
+      setRightSurfacePicker(false);
+    }
+  }, [rightSidebarTab, rightActiveTool, showingDockedPreview]);
+
+  type RightSurface = {
+    id: string;
+    title: string;
+    icon: React.ReactNode;
+    shortcut: string;
+    needsProject: boolean;
+    open: () => void;
+  };
+  const browserIcon = <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>;
+  const NAVIGATOR_SHORTCUTS: Record<RightNavigatorTool, string> = {
+    files: 'F', search: 'S', git: 'G', problems: 'P', snapshots: 'N', snippets: 'I',
+  };
+  const TOOL_SHORTCUTS: Record<RightTool, string> = {
+    review: 'R', fleet: 'A', toolbox: 'T', http: 'H', db: 'D', containers: 'C', env: 'E', mobile: 'M',
+  };
+  const PROJECT_FREE_TOOLS: readonly RightTool[] = ['toolbox', 'http', 'db', 'mobile'];
+  const rightSurfaces: RightSurface[] = [
+    {
+      id: 'preview',
+      title: 'Browser',
+      icon: browserIcon,
+      shortcut: 'B',
+      needsProject: false,
+      open: () => {
+        chooseRightSurface();
+        if (previewDockedOpen) showDockedPreview();
+        else setPreviewDocked(true);
+      },
+    },
+    ...rightNavigatorTools.map((tool): RightSurface => ({
+      id: tool,
+      title: LEFT_TOOL_META[tool].title,
+      icon: LEFT_TOOL_META[tool].icon,
+      shortcut: NAVIGATOR_SHORTCUTS[tool],
+      needsProject: true,
+      open: () => selectRightNavigatorTool(tool),
+    })),
+    ...RIGHT_TOOLS_ALL.map((tool): RightSurface => ({
+      id: tool,
+      title: RIGHT_TOOL_META[tool].title,
+      icon: RIGHT_TOOL_META[tool].icon,
+      shortcut: TOOL_SHORTCUTS[tool],
+      needsProject: !PROJECT_FREE_TOOLS.includes(tool),
+      open: () => selectRightTool(tool),
+    })),
+  ];
+  const surfaceAvailable = (surface: RightSurface) => !surface.needsProject || activeProjectIdValue != null;
+
+  const currentRightSurface: { title: string; icon: React.ReactNode } = showingDockedPreview
+    ? { title: 'Browser', icon: browserIcon }
+    : rightActiveTool
+    ? RIGHT_TOOL_META[rightActiveTool]
+    : LEFT_TOOL_META[rightNavigatorTool];
+
+  function chooseRightSurface() {
+    rightSurfaceChosenRef.current = true;
+    setRightSurfacePicker(false);
   }
 
-  const revealSelectedRightToolTab = useCallback(() => {
-    const strip = rightToolTabsRef.current;
-    const selected = strip?.querySelector<HTMLElement>('.drawer-tab-btn.active');
-    if (!strip || !selected) return;
-    const stripBounds = strip.getBoundingClientRect();
-    const tabBounds = selected.getBoundingClientRect();
-    const scale = strip.offsetWidth > 0 ? stripBounds.width / strip.offsetWidth : 1;
-    // Scroll this strip only, after the selected label has expanded. Rects
-    // include UI zoom, while scrollLeft uses the strip's own CSS pixels.
-    if (tabBounds.left < stripBounds.left) {
-      strip.scrollLeft += (tabBounds.left - stripBounds.left) / scale;
-    } else if (tabBounds.right > stripBounds.right) {
-      strip.scrollLeft += (tabBounds.right - stripBounds.right) / scale;
-    }
-  }, []);
+  function handleSurfacePickerKey(event: React.KeyboardEvent) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return;
+    const surface = rightSurfaces.find((s) => s.shortcut === event.key.toUpperCase());
+    if (!surface || !surfaceAvailable(surface)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    surface.open();
+  }
 
-  useLayoutEffect(() => {
-    if (!rightSidebarOpen) return;
-    const strip = rightToolTabsRef.current;
-    const selected = strip?.querySelector<HTMLElement>('.drawer-tab-btn.active');
-    if (!strip || !selected) return;
-    revealSelectedRightToolTab();
-    const observer = new ResizeObserver(revealSelectedRightToolTab);
-    observer.observe(strip);
-    observer.observe(selected);
-    return () => observer.disconnect();
-  }, [rightSidebarOpen, rightSidebarTab, rightActiveTool, showingDockedPreview, rightDrawerWidthFit, showSnapshotsTab, revealSelectedRightToolTab]);
+  function renderRightSurfacePicker() {
+    return (
+      <div
+        className="right-surface-picker"
+        tabIndex={-1}
+        ref={focusSurfacePicker}
+        onKeyDown={handleSurfacePickerKey}
+      >
+        <div className="right-surface-picker-title" id="right-surface-picker-title">Open a surface</div>
+        <ul className="right-surface-list" aria-labelledby="right-surface-picker-title">
+          {rightSurfaces.map((surface) => {
+            const available = surfaceAvailable(surface);
+            return (
+              <li key={surface.id}>
+                <button
+                  type="button"
+                  className="right-surface-item"
+                  onClick={surface.open}
+                  disabled={!available}
+                  title={available ? `${surface.title} (${surface.shortcut})` : `${surface.title} — open a project first`}
+                  aria-keyshortcuts={surface.shortcut}
+                >
+                  <span className="right-surface-icon" aria-hidden="true">{surface.icon}</span>
+                  <span className="right-surface-label">{surface.title}</span>
+                  <kbd className="right-surface-key" aria-hidden="true">{surface.shortcut}</kbd>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
 
   function renderRightUtilityPanel() {
     if (!rightSidebarOpen) return null;
@@ -2051,47 +2149,24 @@ export default function AppShell() {
           role="separator"
           aria-orientation="vertical"
         />
-        <header className="drawer-header right-sidebar-header">
-          <div className="right-sidebar-tool-tabs" ref={rightToolTabsRef} onClick={() => requestAnimationFrame(revealSelectedRightToolTab)}>
-            <div className="drawer-tabs" aria-label="Project navigation tools">
-              {rightNavigatorTools.map((tool) => (
-                <button
-                  key={tool}
-                  className={`drawer-tab-btn${!rightDrawerOpen && !showingDockedPreview && rightNavigatorTool === tool ? ' active' : ''}`}
-                  onClick={() => selectRightNavigatorTool(tool)}
-                  title={LEFT_TOOL_META[tool].title}
-                  aria-label={LEFT_TOOL_META[tool].title}
-                >
-                  {LEFT_TOOL_META[tool].icon}
-                  {rightTabLabel(!rightDrawerOpen && !showingDockedPreview && rightNavigatorTool === tool, LEFT_TOOL_META[tool].title)}
-                </button>
-              ))}
-            </div>
-            <div className="right-sidebar-tool-divider" aria-hidden="true" />
-            <div className="drawer-tabs" aria-label="Utility tools">
+        <header className={`drawer-header right-sidebar-header${rightSurfacePicker ? ' is-picker' : ''}`}>
+          {rightSurfacePicker ? (
+            <span className="right-sidebar-header-spacer" />
+          ) : (
+            <div className="right-sidebar-current">
               <button
-                className={`drawer-tab-btn${showingDockedPreview ? ' active' : ''}`}
-                onClick={() => (previewDockedOpen ? showDockedPreview() : setPreviewDocked(true))}
-                title="Preview"
-                aria-label="Preview"
+                type="button"
+                className="drawer-close-btn right-sidebar-back-btn"
+                onClick={() => setRightSurfacePicker(true)}
+                title="All surfaces"
+                aria-label="All surfaces"
               >
-                <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>
-                {rightTabLabel(showingDockedPreview, 'Preview')}
+                <Icon><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></Icon>
               </button>
-              {RIGHT_TOOLS_ALL.map((tool) => (
-                <button
-                  key={tool}
-                  className={`drawer-tab-btn${rightActiveTool === tool ? ' active' : ''}`}
-                  onClick={() => selectRightTool(tool)}
-                  title={RIGHT_TOOL_META[tool].title}
-                  aria-label={RIGHT_TOOL_META[tool].title}
-                >
-                  {RIGHT_TOOL_META[tool].icon}
-                  {rightTabLabel(rightActiveTool === tool, RIGHT_TOOL_META[tool].title)}
-                </button>
-              ))}
+              <span className="right-sidebar-current-icon" aria-hidden="true">{currentRightSurface.icon}</span>
+              <span className="right-sidebar-current-title">{currentRightSurface.title}</span>
             </div>
-          </div>
+          )}
           <button
             className="drawer-close-btn"
             onClick={() => closeRightSidebar()}
@@ -2103,11 +2178,13 @@ export default function AppShell() {
         </header>
         <div className="drawer-body">
           {previewDockedOpen && (
-            <div className="right-sidebar-preview" hidden={!showingDockedPreview}>
+            <div className="right-sidebar-preview" hidden={!showingDockedPreview || rightSurfacePicker}>
               <PreviewPanel />
             </div>
           )}
-          {showingDockedPreview
+          {rightSurfacePicker
+            ? renderRightSurfacePicker()
+            : showingDockedPreview
             ? null
             : projectSwitching
             ? <div role="status">Loading project tools…</div>
