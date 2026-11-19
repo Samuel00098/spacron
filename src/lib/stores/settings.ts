@@ -858,14 +858,6 @@ export const voiceInputModelByProvider = persistentWritable<Record<string, strin
 export const voiceAiProvider = persistentWritable<AiProviderId>('voiceAiProvider', 'groq');
 export const voiceAiModelByProvider = persistentWritable<Record<string, string>>('voiceAiModelByProvider', {});
 
-/**
- * Which engine powers the hands-free voice conversation.
- * The realtime speech-to-speech feature has been removed. Voice input now uses
- * single-shot dictation (F9 / Ctrl+Alt+M) and agent responses are read back via
- * text-to-speech (Settings → Voice → Read aloud).
- */
-export type VoiceConversationEngine = 'none';
-export const voiceConversationEngine = persistentWritable<VoiceConversationEngine>('none');
 export const announceAgentCompletions = persistentWritable<boolean>('announceAgentCompletions', true);
 /** Whether agent completion turns (done / failed / needs input) are read aloud
  * via text-to-speech in addition to the chime + inbox + toast. */
@@ -978,8 +970,9 @@ if (typeof localStorage !== 'undefined') {
     }
     localStorage.removeItem('forge_setting_voiceRefinementModel');
   }
+}
 
-  // The active model id, derived from the selected provider and its remembered
+// The active model id, derived from the selected provider and its remembered
 // choice (falling back to the provider's default). The remembered id is trusted
 // as-is: models are now loaded live from each provider, so a valid choice may
 // not appear in the static curated `models` list.

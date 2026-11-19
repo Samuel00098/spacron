@@ -261,7 +261,7 @@ export default function FloatingPromptBar({
       isListening ||
       isRefining ||
       isDragOver ||
-      (!draggedExplorerPath && isGlobalFileDrag) ||
+      (!draggedExplorerPath && isGlobalFileDrag)
     );
   }, [
     hasStagedContent,
@@ -1091,7 +1091,7 @@ export default function FloatingPromptBar({
                 Drop file to add as context
               </div>
             )}
-            /* --- NORMAL & TRANSCRIBING MODE --- */
+            {/* --- NORMAL & TRANSCRIBING MODE --- */}
               <>
                 <button
                   type="button"
@@ -1304,7 +1304,6 @@ export default function FloatingPromptBar({
                   )}
                 </div>
               </>
-            )}
 
             {/* Layout and Tools stay put in voice mode: they sit at the tail of
                 the bar either way, so switching modes never shuffles them. */}

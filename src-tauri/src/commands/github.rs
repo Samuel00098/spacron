@@ -1118,20 +1118,20 @@ fn classify_clone_error(stderr: &str, had_token: bool) -> String {
 /// providers. Each provider gets its own keychain entry (`{provider}_token` /
 /// `{provider}_token_meta`) so credentials are isolated per provider and removed
 /// together on sign-out. GitHub keeps using its own dedicated commands above.
-const fn sc_token_username(provider: &str) -> String {
+fn sc_token_username(provider: &str) -> String {
     format!("{provider}_token")
 }
-const fn sc_meta_username(provider: &str) -> String {
+fn sc_meta_username(provider: &str) -> String {
     format!("{provider}_token_meta")
 }
 
 fn sc_entry(provider: &str) -> Result<Entry, String> {
-    Entry::new(KEYCHAIN_SERVICE, sc_token_username(provider))
+    Entry::new(KEYCHAIN_SERVICE, &sc_token_username(provider))
         .map_err(|e| format!("Failed to access the system keychain: {e}"))
 }
 
 fn sc_meta_entry(provider: &str) -> Result<Entry, String> {
-    Entry::new(KEYCHAIN_SERVICE, sc_meta_username(provider))
+    Entry::new(KEYCHAIN_SERVICE, &sc_meta_username(provider))
         .map_err(|e| format!("Failed to access the system keychain: {e}"))
 }
 

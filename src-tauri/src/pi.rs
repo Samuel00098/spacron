@@ -94,15 +94,17 @@ impl PiManager {
         let process = self.processes.lock().map_err(|_| "Pi manager unavailable")?
             .get(&id).cloned().ok_or("Pi session not found")?;
         let line = serde_json::to_string(&record).map_err(|error| error.to_string())?;
-        process.stdin.lock().map_err(|_| "Pi stdin unavailable")?
+        let result = process.stdin.lock().map_err(|_| "Pi stdin unavailable")?
             .write_all(format!("{line}\n").as_bytes())
-            .map_err(|error| format!("Could not write Pi command: {error}"))
+            .map_err(|error| format!("Could not write Pi command: {error}"));
+        result
     }
 
     pub fn close(&self, id: u32) -> Result<(), String> {
         let process = self.processes.lock().map_err(|_| "Pi manager unavailable")?
             .remove(&id).ok_or("Pi session not found")?;
-        process.child.lock().map_err(|_| "Pi process unavailable")?
-            .kill().map_err(|error| error.to_string())
+        let result = process.child.lock().map_err(|_| "Pi process unavailable")?
+            .kill().map_err(|error| error.to_string());
+        result
     }
 }

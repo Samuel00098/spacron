@@ -2576,8 +2576,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     void loadRealtimeModels('openai');
     void loadRealtimeModels('xai');
     void loadRealtimeModels('vercel');
-    if (realtimeVia !== 'openai') void loadRealtimeModels(realtimeVia);
-  }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels, loadSttModels, realtimeVia]);
+  }, [activeTab, refinementProvider, voiceInput, loadLiveModels, loadRealtimeModels, loadSttModels]);
 
   useEffect(() => {
     setLocalUrlInput(getProviderBaseUrl(provider, baseUrls) || '');

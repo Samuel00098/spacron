@@ -348,6 +348,7 @@ const defaults: SettingsValues = {
   jevProvider: 'typesafe',
   jevAgentTool: false,
   announceAgentCompletions: true,
+  speakAgentCompletions: true,
   orchestratorDisabledSkills: [],
   orchestratorCustomSkills: [],
   uiZoom: 100,

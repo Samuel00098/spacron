@@ -162,7 +162,7 @@ async fn run_turn(
         }
     }
 
-    let mut stderr_reader = BufReader::new(stderr);
+    let mut stderr_reader = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = stderr_reader.next_line().await {
         if !line.trim().is_empty() {
             stderr_lines.push(line);

@@ -87,6 +87,16 @@ export default function EditorPanel() {
       <div className="editor-workspace-area">
         {file.kind === 'image' && file.imageSrc ? (
           <ImageViewer src={file.imageSrc} path={file.path} mimeType={file.mimeType} size={file.size} />
+        ) : file.kind === 'audio' || file.kind === 'video' || isVideoPath(file.path) || isAudioPath(file.path) ? (
+          // Decided by the file name too, so a media tab never lands in the text
+          // editor; the viewer finds its own source when the entry has none.
+          <MediaViewer
+            kind={file.kind === 'audio' || file.kind === 'video' ? file.kind : isVideoPath(file.path) ? 'video' : 'audio'}
+            src={file.imageSrc ?? null}
+            path={file.path}
+            mimeType={file.mimeType}
+            size={file.size}
+          />
         ) : file.language === 'markdown' && showMarkdownPreview ? (
           <RichMarkdownEditor key={file.path} filePath={file.path} content={file.content} />
         ) : (
@@ -101,13 +111,3 @@ export default function EditorPanel() {
     </div>
   );
 }
-        ) : file.kind === 'audio' || file.kind === 'video' || isVideoPath(file.path) || isAudioPath(file.path) ? (
-          // Decided by the file name too, so a media tab never lands in the text
-          // editor; the viewer finds its own source when the entry has none.
-          <MediaViewer
-            kind={file.kind === 'audio' || file.kind === 'video' ? file.kind : isVideoPath(file.path) ? 'video' : 'audio'}
-            src={file.imageSrc ?? null}
-            path={file.path}
-            mimeType={file.mimeType}
-            size={file.size}
-          />

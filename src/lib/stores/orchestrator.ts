@@ -4416,14 +4416,14 @@ async function runMediaGeneration(options: {
       attachments: [{ id: `generated-${requestId}`, name: result.name, type: mediaMimeType(result.name), size: result.size, path: result.path.replace(/\\/g, '/'), generated: true }],
     }, threadId);
     const noun = kind === 'video' ? 'video' : 'image';
-    await notifyChatCompletion(projectId, rootPath, 'Media Generation', 'done', `Generated ${noun}`);
+    await notifyChatCompletion(projectId, options.rootPath, 'Media Generation', 'done', `Generated ${noun}`);
     return `Generated ${noun} with ${result.provider}, saved at ${result.path} and shown to the user in chat.`
       + (notice ? ' The user was told which provider was used and why.' : '')
       + (result.revisedPrompt ? ` Prompt as drawn: ${result.revisedPrompt}` : '');
   } catch (error) {
     const message = String(error ?? 'generation failed');
     const notice = failureNotice(message, kind);
-    await notifyChatCompletion(projectId, rootPath, 'Media Generation', 'failed');
+    await notifyChatCompletion(projectId, options.rootPath, 'Media Generation', 'failed');
     if (notice) {
       appendChat(projectId, { id: msgId(), role: 'assistant', text: notice, ts: Date.now() }, threadId);
       return `error: ${message}\nThe user has already been shown this report; do not retry and do not repeat it.`;
