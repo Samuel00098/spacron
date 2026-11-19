@@ -15,6 +15,8 @@ import { isTauriRuntime } from '$lib/utils/tauri';
 export const SCOPE_SPACRON = 'spacron';
 export const SCOPE_ALL = 'all';
 
+/** The current UTC day — the ledger is per day, so this is its finest window. */
+export const RANGE_1D = '1d';
 export const RANGE_7D = '7d';
 export const RANGE_30D = '30d';
 export const RANGE_90D = '90d';
@@ -80,6 +82,8 @@ export type StatsSummary = {
   estimatedCostUsd: number | null;
   /** At least one model had no price — cost is a partial estimate. */
   hasPartialCost: boolean;
+  /** Saved by cache reads against full input price, over priced models. */
+  cacheSavingsUsd?: number | null;
   topModel: string | null;
   topProject: string | null;
 };
@@ -92,6 +96,9 @@ export type DailyPoint = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** That day's priced cost; `null` when no model that day had a price.
+   *  Absent from points filled in for quiet days. */
+  estimatedCostUsd?: number | null;
 };
 
 /** A top-N row in a by-model / by-project breakdown. */
@@ -158,6 +165,8 @@ export type ProviderCard = {
   hasPartialCost: boolean;
   topModel: string | null;
   topProject: string | null;
+  /** This provider's tokens per day over the range (one chart line). */
+  daily?: DailyPoint[];
 };
 
 /** One cell of the 42-day intensity grid. `level` is 0..4, computed backend-side
@@ -178,6 +187,8 @@ export type StatsOverview = {
   activeDays: number;
   cacheShare: number | null;
   heatmap: HeatmapDay[];
+  /** Every provider folded together, per day. */
+  daily?: DailyPoint[];
   providers: ProviderCard[];
   modelBreakdown: BreakdownEntry[];
   projectBreakdown: BreakdownEntry[];

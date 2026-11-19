@@ -97,6 +97,9 @@ pub struct DailyPoint {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// Priced from that day's per-model split. `None` when no model that day
+    /// had a price.
+    pub estimated_cost_usd: Option<f64>,
 }
 
 /// A top-N row in a by-model / by-project breakdown.
@@ -162,6 +165,9 @@ pub struct Summary {
     pub estimated_cost_usd: Option<f64>,
     /// `true` when at least one model had no price — drives the notice.
     pub has_partial_cost: bool,
+    /// What the cache reads saved against paying full input price for them,
+    /// over the priced models. `None` when nothing was priced.
+    pub cache_savings_usd: Option<f64>,
     pub top_model: Option<String>,
     pub top_project: Option<String>,
 }
@@ -199,6 +205,9 @@ pub struct ProviderCard {
     pub has_partial_cost: bool,
     pub top_model: Option<String>,
     pub top_project: Option<String>,
+    /// This provider's tokens per day over the range — one line of the
+    /// Overview's daily chart.
+    pub daily: Vec<DailyPoint>,
 }
 
 /// One cell of the 42-day intensity heatmap.
@@ -225,6 +234,8 @@ pub struct Overview {
     pub active_days: u64,
     pub cache_share: Option<f64>,
     pub heatmap: Vec<HeatmapDay>,
+    /// Every provider folded together, per day — the "Day" breakdown.
+    pub daily: Vec<DailyPoint>,
     pub providers: Vec<ProviderCard>,
     pub model_breakdown: Vec<BreakdownRow>,
     pub project_breakdown: Vec<BreakdownRow>,
@@ -534,6 +545,9 @@ fn surface_providers_with_discovery(store: &StoreFile, sources: &[ProviderSource
     }
     out
 }
+/// The current UTC day only — the ledger is kept per day, so this is the
+/// finest window it can answer.
+pub const RANGE_1D: &str = "1d";
 pub const RANGE_7D: &str = "7d";
 pub const RANGE_30D: &str = "30d";
 pub const RANGE_90D: &str = "90d";
@@ -542,6 +556,7 @@ pub const RANGE_ALL: &str = "all";
 /// How many days a range window covers (cutoff = today − N + 1).
 fn range_days(range: &str) -> Option<u64> {
     match range {
+        RANGE_1D => Some(1),
         RANGE_7D => Some(7),
         RANGE_30D => Some(30),
         RANGE_90D => Some(90),
@@ -708,6 +723,20 @@ fn normalize_model_for_pricing(model: &str) -> Option<&'static str> {
         .iter()
         .find(|(k, _)| *k == full)
         .map(|(k, _)| *k)
+}
+
+/// The $/MTok price tuple a model bills at, or `None` when unpriced.
+fn model_price(model: &str, input: u64) -> Option<Price> {
+    let key = normalize_model_for_pricing(model)?;
+    let price = MODEL_PRICING.iter().find(|(k, _)| *k == key).unwrap().1;
+    Some(if input > LONG_CONTEXT_THRESHOLD { LONG_CONTEXT_PRICE } else { price })
+}
+
+/// USD saved by reading `cache_read` tokens from cache instead of paying the
+/// full input price for them, or `None` when the model is unpriced.
+fn cache_savings(model: &str, input: u64, cache_read: u64) -> Option<f64> {
+    let (in_p, _, cr_p, _) = model_price(model, input)?;
+    Some(cache_read as f64 * (in_p - cr_p) / 1_000_000.0)
 }
 
 /// Estimated USD for a model's token totals, or `None` when unpriced.
@@ -2726,6 +2755,7 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
         .map(|(k, _)| (*k).to_string());
 
     let mut total_cost = 0.0;
+    let mut total_savings = 0.0;
     let mut unpriced = false;
     let mut any_priced = false;
     for (model, (input, output, cr, cw)) in &per_model {
@@ -2733,11 +2763,15 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
             Some(cost) => {
                 any_priced = true;
                 total_cost += cost;
+                total_savings += cache_savings(model, *input, *cr).unwrap_or(0.0);
             }
             None => unpriced = true,
         }
     }
     summary.has_partial_cost = unpriced;
+    if any_priced {
+        summary.cache_savings_usd = Some((total_savings * 100.0).round() / 100.0);
+    }
     // `null` when nothing was priced at all — mirrors Orca's
     // `hasAnyBillableCost ? estimatedCostUsd : null`.
     if any_priced {
@@ -2753,6 +2787,9 @@ fn build_summary(rows: &[&DayRow]) -> Summary {
 
 fn build_daily(rows: &[&DayRow]) -> Vec<DailyPoint> {
     let mut by_day: HashMap<&str, DailyPoint> = HashMap::new();
+    // Cost is priced per (day, model): only a model has a price, and the
+    // long-context tier has to see that model's real daily total.
+    let mut per_model: HashMap<(&str, &str), (u64, u64, u64, u64)> = HashMap::new();
     for row in rows {
         let point = by_day.entry(&row.day).or_insert_with(|| DailyPoint {
             day: row.day.clone(),
@@ -2760,11 +2797,25 @@ fn build_daily(rows: &[&DayRow]) -> Vec<DailyPoint> {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            estimated_cost_usd: None,
         });
         point.input_tokens += row.input_tokens;
         point.output_tokens += row.output_tokens;
         point.cache_read_tokens += row.cache_read_tokens;
         point.cache_write_tokens += row.cache_write_tokens;
+        let m = per_model.entry((&row.day, &row.model)).or_insert((0, 0, 0, 0));
+        m.0 += row.input_tokens;
+        m.1 += row.output_tokens;
+        m.2 += row.cache_read_tokens;
+        m.3 += row.cache_write_tokens;
+    }
+    for ((day, model), (input, output, cr, cw)) in &per_model {
+        if let Some(cost) = estimated_cost(model, *input, *output, *cr, *cw) {
+            if let Some(point) = by_day.get_mut(day) {
+                let total = point.estimated_cost_usd.unwrap_or(0.0) + cost;
+                point.estimated_cost_usd = Some((total * 100.0).round() / 100.0);
+            }
+        }
     }
     let mut daily: Vec<DailyPoint> = by_day.into_values().collect();
     daily.sort_by(|a, b| a.day.cmp(&b.day));
@@ -3038,7 +3089,7 @@ async fn store_after_first_scan(config_dir: PathBuf) -> Result<StoreFile, String
 
 /// Everything one provider's pane renders, in one call. Provider: any id from
 /// the source registry (see [`load_provider_sources`]), or `all`. Scope:
-/// `spacron` (managed worktrees only) or `all`. Range: `7d` / `30d` / `90d` /
+/// `spacron` (managed worktrees only) or `all`. Range: `1d` / `7d` / `30d` / `90d` /
 /// `all`.
 #[tauri::command(async)]
 pub async fn stats_get_snapshot(
@@ -3118,6 +3169,7 @@ pub async fn stats_get_overview(
                 has_partial_cost: s.has_partial_cost,
                 top_model: s.top_model,
                 top_project: s.top_project,
+                daily: build_daily(&rows),
             }
         })
         .collect();
@@ -3128,6 +3180,7 @@ pub async fn stats_get_overview(
         active_days: daily.len() as u64,
         cache_share: cache_share_of(&summary),
         heatmap: build_heatmap(&daily),
+        daily,
         providers,
         model_breakdown: build_breakdown(&all_rows, |r| r.model.clone(), 5),
         project_breakdown: build_breakdown(&all_rows, |r| r.project_key.clone(), 5),
@@ -3930,6 +3983,20 @@ mod tests {
     }
 
     #[test]
+    fn daily_points_and_summary_carry_cost_and_cache_savings() {
+        let mut store = StoreFile::default();
+        // 1M cache-read tokens of a $5 / $0.50 model: $0.50 cost, $4.50 saved.
+        upsert_day(&mut store, PROVIDER_CLAUDE, "2026-08-10", "claude-opus-4-8", "p", false, 1, 0, 1, 0, 0, 1_000_000, 0);
+        upsert_day(&mut store, PROVIDER_CLAUDE, "2026-08-11", "unpriced-model", "p", false, 1, 0, 1, 10, 0, 0, 0);
+        let rows: Vec<&DayRow> = store.days.iter().collect();
+        let daily = build_daily(&rows);
+        assert_eq!(daily[0].estimated_cost_usd, Some(0.5));
+        assert_eq!(daily[1].estimated_cost_usd, None, "an unpriced day is not a confident $0");
+        let summary = build_summary(&rows);
+        assert_eq!(summary.cache_savings_usd, Some(4.5));
+    }
+
+    #[test]
     fn heatmap_covers_42_days_and_scales_to_the_peak() {
         let today = utc_date_str(now_ms() / 1000);
         let daily = vec![
@@ -3939,6 +4006,7 @@ mod tests {
                 output_tokens: 0,
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
+                estimated_cost_usd: None,
             },
             DailyPoint {
                 day: utc_date_str(now_ms() / 1000 - 86_400),
@@ -3946,6 +4014,7 @@ mod tests {
                 output_tokens: 0,
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
+                estimated_cost_usd: None,
             },
         ];
         let grid = build_heatmap(&daily);

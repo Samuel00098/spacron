@@ -12,6 +12,7 @@ import {
   currentScanState,
   SCOPE_ALL,
   SCOPE_SPACRON,
+  RANGE_1D,
   RANGE_7D,
   RANGE_30D,
   RANGE_90D,
@@ -22,19 +23,10 @@ import {
   formatUsd,
   formatPercent,
   totalTokens,
-  breakdownTokens,
-  breakdownShare,
   sessionTokens,
-  zeroCacheReadShare,
   shortDayLabel,
-  lastDailyPoints,
-  calendarDailyPoints,
-  heatmapRows,
-  busiestDay,
-  tokenMix,
   type BreakdownEntry,
   type DailyPoint,
-  type HeatmapDay,
   type ProviderCard,
   type SessionRow,
   type StatsOverview,
@@ -60,6 +52,22 @@ import {
   type ShareCardData,
 } from '$lib/services/share-usage-card';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
+import { lookupAgentBrand } from '$lib/components/shared/agentBrands';
+import {
+  BreakdownTable,
+  chartDays,
+  compactTokens,
+  DailyChart,
+  dayTotal,
+  Segmented,
+  SeriesList,
+  seriesColor,
+  TokensByType,
+  TotalsRow,
+  type ChartMetric,
+  type ChartSeries,
+  type RankedRow,
+} from './UsageCharts';
 import { getAgentDisplayName } from '$lib/stores/terminal';
 import LiveTicker from '$lib/components/shared/LiveTicker';
 import './UsageStatsPane.css';
@@ -88,11 +96,28 @@ const SCOPE_OPTIONS: DropdownOption[] = [
   { value: SCOPE_SPACRON, label: 'Managed worktrees only' },
 ];
 
+/** Long labels — the share card reads these. */
 const RANGE_OPTIONS: DropdownOption[] = [
   { value: RANGE_ALL, label: 'All time' },
+  { value: RANGE_1D, label: 'Today' },
   { value: RANGE_90D, label: 'Last 90 days' },
   { value: RANGE_30D, label: 'Last 30 days' },
   { value: RANGE_7D, label: 'Last 7 days' },
+];
+
+/** The range switch in the toolbar. The ledger is kept per UTC day, so the
+ *  shortest window is the current day rather than a rolling 24 hours. */
+const RANGE_CHIPS: { value: string; label: string; title?: string }[] = [
+  { value: RANGE_1D, label: 'Today', title: 'Since midnight UTC' },
+  { value: RANGE_7D, label: '7 days' },
+  { value: RANGE_30D, label: '30 days' },
+  { value: RANGE_90D, label: '90 days' },
+  { value: RANGE_ALL, label: 'All time' },
+];
+
+const METRIC_CHIPS: { value: ChartMetric; label: string }[] = [
+  { value: 'cost', label: 'Cost' },
+  { value: 'tokens', label: 'Tokens' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -117,13 +142,6 @@ function Icon({ path, size = 15 }: { path: string; size?: number }) {
   );
 }
 
-const ICON_TOKENS =
-  'M12 3l1.9 4.7L18.6 9l-4.7 1.9L12 15.6l-1.9-4.7L5.4 9l4.7-1.3z M18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z';
-const ICON_COST = 'M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6';
-const ICON_DAYS =
-  'M8 2v4 M16 2v4 M3 10h18 M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z';
-const ICON_CACHE =
-  'M21 5c0 1.7-4 3-9 3S3 6.7 3 5s4-3 9-3 9 1.3 9 3z M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5 M3 12c0 1.7 4 3 9 3s9-1.3 9-3';
 const ICON_PULSE = 'M22 12h-4l-3 9L9 3l-3 9H2';
 
 /** A labelled figure with an icon tile — the Overview's four headline cards. */
@@ -193,197 +211,6 @@ function formatRelative(ms: number, now = Date.now()): string {
   if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
   return shortDayLabel(new Date(ms).toISOString().slice(0, 10));
-}
-
-function dayTokens(d: DailyPoint): number {
-  return (
-    d.inputTokens + d.outputTokens + d.cacheReadTokens + d.cacheWriteTokens
-  );
-}
-
-/** The fixed ranges are calendar windows, including days with no activity. */
-function rangePoints(daily: DailyPoint[], range: string): DailyPoint[] {
-  if (range === RANGE_7D) return calendarDailyPoints(daily, 7);
-  if (range === RANGE_30D) return calendarDailyPoints(daily, 30);
-  if (range === RANGE_90D) return calendarDailyPoints(daily, 90);
-  return daily;
-}
-
-/** Merge a long daily series down to at most `maxCols` columns by summing
- *  consecutive points, so an all-time view traces the whole lifetime as a
- *  density strip instead of overflowing the pane. A merged column keeps its
- *  first day as its label anchor. */
-function dailyColumns(daily: DailyPoint[], maxCols: number): DailyPoint[] {
-  if (daily.length <= maxCols) return daily;
-  const stride = Math.ceil(daily.length / maxCols);
-  const out: DailyPoint[] = [];
-  for (let i = 0; i < daily.length; i += stride) {
-    const slice = daily.slice(i, i + stride);
-    const acc: DailyPoint = {
-      day: slice[0].day,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    };
-    for (const p of slice) {
-      acc.inputTokens += p.inputTokens;
-      acc.outputTokens += p.outputTokens;
-      acc.cacheReadTokens += p.cacheReadTokens;
-      acc.cacheWriteTokens += p.cacheWriteTokens;
-    }
-    out.push(acc);
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Overview
-// ---------------------------------------------------------------------------
-
-/** GitHub-style 42-day intensity grid. Levels come from the backend so the
- *  cells and the Less/More legend cannot drift apart. */
-function IntensityGrid({ days }: { days: HeatmapDay[] }) {
-  const rows = heatmapRows(days);
-  const best = busiestDay(days);
-  const first = days[0];
-  const last = days[days.length - 1];
-  return (
-    <div className="stats-panel">
-      <div className="stats-panel-head">
-        <div>
-          <h4>Daily intensity</h4>
-          <p className="stats-panel-sub">
-            Recent combined token activity across every provider.
-          </p>
-        </div>
-        {best && (
-          <span className="stats-badge">Best: {shortDayLabel(best.day)}</span>
-        )}
-      </div>
-      <div
-        className="stats-heatmap"
-        role="img"
-        aria-label="Token activity over the last 42 days"
-      >
-        {rows.map((row, i) => (
-          <div className="stats-heatmap-row" key={i}>
-            {row.map((d) => (
-              <span
-                key={d.day}
-                className={`stats-heat-cell level-${d.level}`}
-                title={`${shortDayLabel(d.day)}: ${formatTokens(d.totalTokens)} tokens`}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
-      <div className="stats-heatmap-legend">
-        <span>{first ? shortDayLabel(first.day) : ''}</span>
-        <span className="stats-legend-scale">
-          Less
-          {[0, 1, 2, 3, 4].map((l) => (
-            <i key={l} className={`stats-heat-cell level-${l}`} />
-          ))}
-          More
-        </span>
-        <span>{last ? shortDayLabel(last.day) : ''}</span>
-      </div>
-    </div>
-  );
-}
-
-function TokenMixPanel({ summary }: { summary: StatsSummary }) {
-  const mix = tokenMix(summary);
-  return (
-    <div className="stats-panel">
-      <div className="stats-panel-head">
-        <div>
-          <h4>Token mix</h4>
-          <p className="stats-panel-sub">
-            Combined input, output and cache tokens across enabled providers.
-          </p>
-        </div>
-      </div>
-      {mix == null ? (
-        <p className="shell-hint stats-empty-hint">
-          Nothing recorded in this range.
-        </p>
-      ) : (
-        <>
-          <div className="stats-mixbar" aria-hidden="true">
-            <span
-              className="stats-mix-seg seg-input"
-              style={{ width: `${mix.input * 100}%` }}
-            />
-            <span
-              className="stats-mix-seg seg-output"
-              style={{ width: `${mix.output * 100}%` }}
-            />
-            <span
-              className="stats-mix-seg seg-cache"
-              style={{ width: `${mix.cache * 100}%` }}
-            />
-          </div>
-          <ul className="stats-mix-legend">
-            <li>
-              <i className="stats-dot seg-input" />
-              New input: {formatTokens(summary.inputTokens)}
-            </li>
-            <li>
-              <i className="stats-dot seg-output" />
-              Output: {formatTokens(summary.outputTokens)}
-            </li>
-            <li>
-              <i className="stats-dot seg-cache" />
-              Cache:{' '}
-              {formatTokens(summary.cacheReadTokens + summary.cacheWriteTokens)}
-            </li>
-          </ul>
-        </>
-      )}
-    </div>
-  );
-}
-
-function ProviderCardView({ card }: { card: ProviderCard }) {
-  return (
-    <div className={`stats-provider-card${card.hasData ? '' : ' is-empty'}`}>
-      <div className="stats-provider-head">
-        <span className="stats-provider-name">{card.label}</span>
-        <span className={`stats-pill${card.hasData ? ' is-on' : ''}`}>
-          {card.hasData ? 'Tracked' : 'No data'}
-        </span>
-      </div>
-      <p className="stats-provider-sub">
-        {card.hasData
-          ? `${card.topModel ?? 'unknown model'} · ${card.topProject ?? 'unknown project'}`
-          : 'No usage found in this range.'}
-      </p>
-      <div className="stats-provider-figures">
-        <span>{formatTokens(card.totalTokens)} tokens</span>
-        <span>
-          {card.sessions} sessions · {card.turns} turns
-        </span>
-        <span
-          title={
-            card.hasPartialCost
-              ? 'Some models have no price in the table'
-              : undefined
-          }
-        >
-          {formatUsd(card.estimatedCostUsd)}
-          {card.hasPartialCost && card.estimatedCostUsd != null ? '+' : ''}
-        </span>
-      </div>
-      <div className="stats-provider-track" aria-hidden="true">
-        <div
-          className="stats-provider-fill"
-          style={{ width: `${Math.round(card.share * 100)}%` }}
-        />
-      </div>
-    </div>
-  );
 }
 
 const ICON_AGENTS =
@@ -506,72 +333,200 @@ function ActivitySection({ summary }: { summary: ActivitySummary | null }) {
   );
 }
 
-function OverviewPane({ overview }: { overview: StatsOverview }) {
-  const { summary } = overview;
-  const activity = useStore(activityState);
-  const withData = overview.providers.filter((p) => p.hasData).length;
-  const sessions = overview.providers.reduce((n, p) => n + p.sessions, 0);
+// ---------------------------------------------------------------------------
+// Analytics layout (Overview and per-provider)
+// ---------------------------------------------------------------------------
+
+type BreakdownMode = 'model' | 'project' | 'day';
+
+const BREAKDOWN_MODES: { value: BreakdownMode; label: string }[] = [
+  { value: 'model', label: 'Model' },
+  { value: 'project', label: 'Project' },
+  { value: 'day', label: 'Day' },
+];
+
+function entryTokens(e: BreakdownEntry): number {
+  return e.inputTokens + e.outputTokens + e.cacheReadTokens + e.cacheWriteTokens;
+}
+
+/** A model's brand, from the bundled table only — a model name must never be
+ *  sent off to the logo fetcher. */
+function modelRows(entries: BreakdownEntry[], total: number): RankedRow[] {
+  return entries.map((e, i) => {
+    const brand = lookupAgentBrand(e.label, e.label);
+    return {
+      key: e.key,
+      label: e.label,
+      mark: brand ? (
+        <span
+          className="agent-brand-mark"
+          style={{ color: brand.color === 'mono' ? 'var(--text-primary)' : brand.color }}
+          aria-hidden="true"
+        >
+          {brand.mark}
+        </span>
+      ) : undefined,
+      color: seriesColor(brand?.color, i),
+      tokens: entryTokens(e),
+      share: total > 0 ? entryTokens(e) / total : 0,
+      cost: e.estimatedCostUsd,
+    };
+  });
+}
+
+function projectRows(entries: BreakdownEntry[], total: number): RankedRow[] {
+  return entries.map((e, i) => ({
+    key: e.key,
+    label: e.label,
+    color: seriesColor(null, i),
+    tokens: entryTokens(e),
+    share: total > 0 ? entryTokens(e) / total : 0,
+    cost: e.estimatedCostUsd,
+  }));
+}
+
+function dayRows(daily: DailyPoint[], total: number): RankedRow[] {
+  return [...daily]
+    .filter((d) => dayTotal(d) > 0)
+    .sort((a, b) => b.day.localeCompare(a.day))
+    .map((d) => ({
+      key: d.day,
+      label: shortDayLabel(d.day),
+      color: 'var(--text-secondary)',
+      tokens: dayTotal(d),
+      share: total > 0 ? dayTotal(d) / total : 0,
+      cost: d.estimatedCostUsd ?? null,
+    }));
+}
+
+/** The hero, chart, totals, token types and breakdown — shared by both panes. */
+function AnalyticsLayout({
+  total,
+  sessions,
+  summary,
+  series,
+  seriesRows,
+  range,
+  metric,
+  modelBreakdown,
+  projectBreakdown,
+  daily,
+}: {
+  total: number;
+  sessions: number;
+  summary: StatsSummary;
+  series: ChartSeries[];
+  seriesRows: RankedRow[];
+  range: string;
+  metric: ChartMetric;
+  modelBreakdown: BreakdownEntry[];
+  projectBreakdown: BreakdownEntry[];
+  daily: DailyPoint[];
+}) {
+  const [mode, setMode] = useState<BreakdownMode>('model');
+  const days = chartDays(range, series);
+  const rows =
+    mode === 'model'
+      ? modelRows(modelBreakdown, total)
+      : mode === 'project'
+        ? projectRows(projectBreakdown, total)
+        : dayRows(daily, total);
 
   return (
     <>
-      <ActivitySection summary={activity.summary} />
-
-      <div className="stats-section-head">
-        <div>
-          <h4>Token usage</h4>
-          <p className="stats-panel-sub">Read back from each CLI's own logs</p>
+      <div className="stats-hero">
+        <div className="stats-hero-left">
+          <div className="stats-hero-total">{compactTokens(total)}</div>
+          <div className="stats-hero-sub">
+            {sessions} {sessions === 1 ? 'session' : 'sessions'}
+          </div>
+          <SeriesList rows={seriesRows} />
         </div>
-      </div>
-      <div className="stats-tiles">
-        <StatTile
-          icon={ICON_TOKENS}
-          value={formatTokens(overview.totalTokens)}
-          label="Total tokens"
-        />
-        <StatTile
-          icon={ICON_COST}
-          value={formatUsd(summary.estimatedCostUsd)}
-          label="Est. cost"
-          hint={
-            summary.hasPartialCost
-              ? 'Some models have no price in the table'
-              : undefined
-          }
-        />
-        <StatTile
-          icon={ICON_DAYS}
-          value={String(overview.activeDays)}
-          label="Active days"
-        />
-        <StatTile
-          icon={ICON_CACHE}
-          value={formatPercent(overview.cacheShare)}
-          label="Cache share"
+        <DailyChart
+          title={metric === 'cost' ? 'Daily estimated cost' : 'Daily processed tokens'}
+          days={days}
+          series={series}
+          metric={metric}
         />
       </div>
 
-      <div className="stats-panels">
-        <IntensityGrid days={overview.heatmap} />
-        <TokenMixPanel summary={summary} />
-      </div>
+      <TotalsRow summary={summary} total={total} />
+      <TokensByType summary={summary} />
 
-      <div className="stats-section-head">
-        <div>
-          <h4>Providers</h4>
-          <p className="stats-panel-sub">
-            {overview.providers.length} scanned · {withData} with data
-          </p>
+      <section className="stats-block">
+        <div className="stats-block-head">
+          <h4 className="stats-block-title">Breakdown</h4>
+          <Segmented options={BREAKDOWN_MODES} value={mode} onChange={setMode} ariaLabel="Break down by" />
         </div>
-        <span className="stats-badge">
-          <Icon path={ICON_PULSE} size={12} />
-          {sessions} sessions
-        </span>
-      </div>
-      <div className="stats-provider-grid">
-        {overview.providers.map((card) => (
-          <ProviderCardView key={card.id} card={card} />
-        ))}
-      </div>
+        <BreakdownTable
+          rows={rows}
+          nameHeader={mode === 'model' ? 'Model' : mode === 'project' ? 'Project' : 'Day'}
+          emptyHint="Nothing recorded in this range."
+        />
+        {mode !== 'day' && rows.length > 0 && (
+          <p className="stats-panel-sub stats-btable-note">Top {rows.length} shown.</p>
+        )}
+      </section>
+    </>
+  );
+}
+
+function OverviewPane({
+  overview,
+  range,
+  metric,
+}: {
+  overview: StatsOverview;
+  range: string;
+  metric: ChartMetric;
+}) {
+  const activity = useStore(activityState);
+  const withData = overview.providers
+    .filter((p) => p.hasData)
+    .sort((a, b) => b.totalTokens - a.totalTokens);
+  const sessions = overview.providers.reduce((n, p) => n + p.sessions, 0);
+  const colorOf = (card: ProviderCard, i: number) =>
+    seriesColor(lookupAgentBrand(card.id, card.label)?.color, i);
+
+  const series: ChartSeries[] = withData.map((card, i) => ({
+    key: card.id,
+    label: card.label,
+    color: colorOf(card, i),
+    daily: card.daily ?? [],
+  }));
+  const seriesRows: RankedRow[] = withData.map((card, i) => ({
+    key: card.id,
+    label: card.label,
+    mark: <AgentBrandMark command={card.id} name={card.label} />,
+    color: colorOf(card, i),
+    aside: `${card.sessions} ${card.sessions === 1 ? 'session' : 'sessions'}`,
+    tokens: card.totalTokens,
+    share: card.share,
+    cost: card.estimatedCostUsd,
+    partialCost: card.hasPartialCost,
+  }));
+
+  return (
+    <>
+      {withData.length === 0 ? (
+        <p className="shell-hint stats-empty-hint">
+          No usage found in this range. Widen the range, or come back after
+          running a session. This pane re-scans by itself.
+        </p>
+      ) : (
+        <AnalyticsLayout
+          total={overview.totalTokens}
+          sessions={sessions}
+          summary={overview.summary}
+          series={series}
+          seriesRows={seriesRows}
+          range={range}
+          metric={metric}
+          modelBreakdown={overview.modelBreakdown}
+          projectBreakdown={overview.projectBreakdown}
+          daily={overview.daily ?? []}
+        />
+      )}
       {/* Otherwise an agent you use daily is simply missing from this page and
           there is nothing on screen to say why. These CLIs write no usable
           token counts to disk at all — it is a property of their logs, not a
@@ -583,67 +538,55 @@ function OverviewPane({ overview }: { overview: StatsOverview }) {
         the workspace instead.
       </p>
 
-      <div className="stats-breakdowns">
-        <div className="stats-breakdown-col">
-          <h4>By model</h4>
-          <BreakdownList
-            entries={overview.modelBreakdown}
-            emptyHint="No model data in this range."
-          />
-        </div>
-        <div className="stats-breakdown-col">
-          <h4>By project</h4>
-          <BreakdownList
-            entries={overview.projectBreakdown}
-            emptyHint="No project data in this range."
-          />
-        </div>
-      </div>
+      <ActivitySection summary={activity.summary} />
     </>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Per-provider pane
-// ---------------------------------------------------------------------------
-
-function BreakdownList({
-  entries,
-  emptyHint,
+function ProviderPane({
+  snapshot,
+  label,
+  metric,
 }: {
-  entries: BreakdownEntry[];
-  emptyHint: string;
+  snapshot: StatsSnapshot;
+  label: string;
+  metric: ChartMetric;
 }) {
-  if (entries.length === 0) {
-    return <p className="shell-hint stats-empty-hint">{emptyHint}</p>;
+  const { summary } = snapshot;
+  const total = totalTokens(summary);
+  if (total <= 0) {
+    return (
+      <p className="shell-hint stats-empty-hint">
+        No usage found for this provider in this range. Widen the range, or
+        come back after running a session. This pane re-scans by itself.
+      </p>
+    );
   }
+  const color = seriesColor(lookupAgentBrand(snapshot.provider, label)?.color, 0);
+  const series: ChartSeries[] = [{ key: snapshot.provider, label, color, daily: snapshot.daily }];
+  // The left column lists this provider's models: the chart already is the
+  // provider, so repeating it as the only row would say nothing.
+  const seriesRows = modelRows(snapshot.modelBreakdown, total);
+
   return (
-    <ul className="stats-breakdown">
-      {entries.map((entry) => (
-        <li key={entry.key}>
-          <div className="stats-breakdown-row">
-            <span className="stats-breakdown-label" title={entry.label}>
-              {entry.label}
-            </span>
-            <span className="stats-breakdown-turns">{entry.turns} turns</span>
-            <span className="stats-breakdown-tokens">
-              {formatTokens(breakdownTokens(entry))}
-            </span>
-            <span className="stats-breakdown-cost">
-              {formatUsd(entry.estimatedCostUsd)}
-            </span>
-          </div>
-          <div className="stats-breakdown-track" aria-hidden="true">
-            <div
-              className="stats-breakdown-fill"
-              style={{
-                width: `${Math.round((breakdownShare(entry, entries) ?? 0) * 100)}%`,
-              }}
-            />
-          </div>
-        </li>
-      ))}
-    </ul>
+    <>
+      <AnalyticsLayout
+        total={total}
+        sessions={summary.sessions}
+        summary={summary}
+        series={series}
+        seriesRows={seriesRows}
+        range={snapshot.range}
+        metric={metric}
+        modelBreakdown={snapshot.modelBreakdown}
+        projectBreakdown={snapshot.projectBreakdown}
+        daily={snapshot.daily}
+      />
+      <section className="stats-block">
+        <h4 className="stats-block-title">Recent sessions</h4>
+        <SessionsTable rows={snapshot.recentSessions} emptyHint="No sessions in this range." />
+      </section>
+    </>
   );
 }
 
@@ -719,151 +662,6 @@ function SessionsTable({
   );
 }
 
-function ProviderPane({ snapshot }: { snapshot: StatsSnapshot }) {
-  const { summary } = snapshot;
-  // Fixed windows include quiet calendar days; all-time is bucketed to fit.
-  const points = dailyColumns(rangePoints(snapshot.daily, snapshot.range), 90);
-  const maxDay = Math.max(1, ...points.map(dayTokens));
-  const zeroCache = zeroCacheReadShare(summary);
-
-  const noUsage = totalTokens(summary) <= 0;
-
-  return (
-    <>
-      {noUsage && (
-        <p className="shell-hint stats-empty-hint">
-          No usage found for this provider in this range. Widen the range, or
-          come back after running a session. This pane re-scans by itself.
-        </p>
-      )}
-      {!noUsage && <>
-      <div className="stats-tiles">
-        <StatTile
-          icon={ICON_TOKENS}
-          value={formatTokens(totalTokens(summary))}
-          label="Total tokens"
-        />
-        <StatTile
-          icon={ICON_COST}
-          value={formatUsd(summary.estimatedCostUsd)}
-          label="Est. cost"
-        />
-        <StatTile
-          icon={ICON_CACHE}
-          value={formatPercent(summary.cacheReuseRate)}
-          label="Cache reuse"
-          hint={
-            zeroCache == null
-              ? undefined
-              : `${formatPercent(zeroCache)} of turns read no cache`
-          }
-        />
-        <StatTile
-          icon={ICON_DAYS}
-          value={String(summary.sessions)}
-          label="Sessions"
-        />
-      </div>
-
-      <div className="stats-figure-row">
-        <span>{formatTokens(summary.inputTokens)} new input</span>
-        <span>{formatTokens(summary.outputTokens)} output</span>
-        <span>{formatTokens(summary.cacheReadTokens)} cache read</span>
-        <span>{formatTokens(summary.cacheWriteTokens)} cache write</span>
-        <span>{summary.turns} turns</span>
-      </div>
-      </>}
-
-      {points.length > 0 && (
-        <div className="stats-chart-wrap">
-          <div
-            className="stats-chart"
-            role="img"
-            aria-label="Tokens per day, split into input, output and cache"
-          >
-            {points.map((d) => {
-              const total = dayTokens(d);
-              const inputH = total > 0 ? (d.inputTokens / maxDay) * 100 : 0;
-              const cacheH =
-                total > 0
-                  ? ((d.cacheReadTokens + d.cacheWriteTokens) / maxDay) * 100
-                  : 0;
-              const outputH = total > 0 ? (d.outputTokens / maxDay) * 100 : 0;
-              return (
-                <div className="stats-chart-col" key={d.day}>
-                  <div
-                    className="stats-chart-bar"
-                    title={`${shortDayLabel(d.day)}: in ${formatTokens(d.inputTokens)}, out ${formatTokens(d.outputTokens)}, cache ${formatTokens(d.cacheReadTokens + d.cacheWriteTokens)}`}
-                  >
-                    <div
-                      className="stats-chart-seg stats-chart-input"
-                      style={{ height: `${inputH}%` }}
-                    />
-                    <div
-                      className="stats-chart-seg stats-chart-cache"
-                      style={{ height: `${cacheH}%` }}
-                    />
-                    <div
-                      className="stats-chart-seg stats-chart-output"
-                      style={{ height: `${outputH}%` }}
-                    />
-                  </div>
-                  {points.length <= 12 && (
-                    <span className="stats-chart-label">
-                      {shortDayLabel(d.day)}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="stats-chart-legend">
-            <span>
-              <i className="stats-dot seg-input" />
-              Input
-            </span>
-            <span>
-              <i className="stats-dot seg-cache" />
-              Cache
-            </span>
-            <span>
-              <i className="stats-dot seg-output" />
-              Output
-            </span>
-          </div>
-        </div>
-      )}
-
-      {!noUsage && <>
-      <div className="stats-breakdowns">
-        <div className="stats-breakdown-col">
-          <h4>By model</h4>
-          <BreakdownList
-            entries={snapshot.modelBreakdown}
-            emptyHint="No model data in this range."
-          />
-        </div>
-        <div className="stats-breakdown-col">
-          <h4>By project</h4>
-          <BreakdownList
-            entries={snapshot.projectBreakdown}
-            emptyHint="No project data in this range."
-          />
-        </div>
-      </div>
-
-      <div className="stats-recent">
-        <h4>Recent sessions</h4>
-        <SessionsTable
-          rows={snapshot.recentSessions}
-          emptyHint="No sessions in this range."
-        />
-      </div>
-      </>}
-    </>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
@@ -914,6 +712,7 @@ export default function UsageStatsPane() {
   const $stats = useStore(usageStatsState);
   const activity = useStore(activityState);
   const [busy, setBusy] = useState(false);
+  const [metric, setMetric] = useState<ChartMetric>('tokens');
 
   // The pane refreshes itself — no Rescan button. One pass re-scans the
   // transcripts (only files whose fingerprint changed are re-parsed), reloads
@@ -1056,16 +855,15 @@ export default function UsageStatsPane() {
                 boundarySelector={SETTINGS_BOUNDARY}
               />
             </div>
-            <div className="stats-control-group">
-              <span className="stats-control-label">Range</span>
-              <Dropdown
-                options={RANGE_OPTIONS}
-                value={$stats.range}
-                onChange={selectStatsRange}
-                ariaLabel="Range"
-                boundarySelector={SETTINGS_BOUNDARY}
-              />
-            </div>
+          </div>
+          <div className="stats-switches">
+            <Segmented
+              options={RANGE_CHIPS}
+              value={$stats.range}
+              onChange={selectStatsRange}
+              ariaLabel="Range"
+            />
+            <Segmented options={METRIC_CHIPS} value={metric} onChange={setMetric} ariaLabel="Chart shows" />
           </div>
           <div className="stats-actions">
             <div className="stats-refresh-meta">
@@ -1116,9 +914,13 @@ export default function UsageStatsPane() {
               </p>
             )
           ) : isOverview ? (
-            <OverviewPane overview={loaded as StatsOverview} />
+            <OverviewPane overview={loaded as StatsOverview} range={$stats.range} metric={metric} />
           ) : (
-            <ProviderPane snapshot={loaded as StatsSnapshot} />
+            <ProviderPane
+              snapshot={loaded as StatsSnapshot}
+              label={providerOptions.find((option) => option.value === $stats.provider)?.label ?? $stats.provider}
+              metric={metric}
+            />
           )}
         </div>
       </section>
