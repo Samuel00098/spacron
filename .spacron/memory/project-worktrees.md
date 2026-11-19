@@ -16,9 +16,12 @@ next sweep with no agent in it. Never move them into that area.
 
 The selected row ("active worktree", `stores/projectWorktrees.ts`) is honoured
 only where new work starts *without* an explicit folder: `createTerminalSession`'s
-cwd fallback, `TerminalPanel.getStartingCwd`, `AgentSpawnModal` "main"
-placement, `quickSpawnAgent`, and `createChatThread` (attaches a `shared`
-worktree). Restores pass their own cwd and must stay unaffected. A new spawn
+cwd fallback, `TerminalPanel.getStartingCwd`, `quickSpawnAgent`, and
+`createChatThread` (attaches a `shared` worktree). The "+" launcher
+(`AgentQuickAdd`) on an agent's room overrides it: `launchFrom` is that
+agent's folder, so the new agent joins the *source agent's* worktree
+(`launchWorktreeFor`), not the selected one. The old Spawn Agents dialog is
+gone; its shortcut opens the first visible launcher. Restores pass their own cwd and must stay unaffected. A new spawn
 path that should follow the selection has to call `workingRootFor`.
 
 Sidebar grouping: when a project's worktree list loads, `ProjectHUD` lists
