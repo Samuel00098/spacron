@@ -122,7 +122,7 @@ export function getAppContextSnapshot(projectId: string, rootPath = '', includeP
   // assistant reasons about what the user is actually looking at.
   const activeEntry = active ? get(fileCache).get(active) : undefined;
   const editorFocused = l.activeView === 'editor' && l.editorVisible;
-  const rawContent = activeEntry && activeEntry.kind !== 'image' ? (activeEntry.content ?? '') : '';
+  const rawContent = activeEntry && activeEntry.kind === 'text' ? (activeEntry.content ?? '') : '';
   const truncatedContent = rawContent.length > MAX_FILE_CONTENT;
   const selectionText = includeProjectContent && editorFocused ? get(activeSelection).trim() : '';
 

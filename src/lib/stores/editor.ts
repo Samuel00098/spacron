@@ -3,6 +3,9 @@ import { writable, get } from '$lib/stores/storeCompat';
 // workspace when active (docs/remote-workspace.md). Local mode is a pass-through
 // to Tauri invoke — every call in this file is a workspace file op.
 import { backendInvoke as invoke } from '$lib/services/backend';
+// The asset protocol is this machine's webview: local projects only.
+import { convertFileSrc, invoke as localInvoke } from '@tauri-apps/api/core';
+import { remoteTarget } from './remoteWorkspace';
 import type { EditorFile } from '$lib/types/editor';
 import { showToast } from './notification';
 import { formatCode } from '$lib/utils/formatter';
@@ -98,13 +101,60 @@ export function getImageMimeType(path: string): string {
   }
 }
 
+const AUDIO_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg',
+  m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac', weba: 'audio/webm',
+};
+const VIDEO_MIME: Record<string, string> = {
+  mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg', mov: 'video/quicktime',
+  mkv: 'video/x-matroska', avi: 'video/x-msvideo',
+};
+
+function extOf(path: string): string {
+  return path.split('.').pop()?.toLowerCase() ?? '';
+}
+
+export function isAudioPath(path: string): boolean {
+  return extOf(path) in AUDIO_MIME;
+}
+
+export function isVideoPath(path: string): boolean {
+  return extOf(path) in VIDEO_MIME;
+}
+
+/** Files the editor shows in a viewer rather than as text. */
+export function isViewerPath(path: string): boolean {
+  return isImagePath(path) || isAudioPath(path) || isVideoPath(path);
+}
+
+/** Read an image, audio or video file into an editor entry. Audio and video
+ *  stream from disk over the asset protocol where possible (no size limit,
+ *  and seeking works); otherwise, and for images, the bytes become a blob. */
+async function loadViewerFile(path: string): Promise<EditorFile> {
+  const kind = isImagePath(path) ? 'image' : isVideoPath(path) ? 'video' : 'audio';
+  const mimeType = kind === 'image'
+    ? getImageMimeType(path)
+    : (kind === 'video' ? VIDEO_MIME : AUDIO_MIME)[extOf(path)] ?? 'application/octet-stream';
+  const base = { path, content: '', originalContent: '', isDirty: false, language: kind, kind, mimeType } as const;
+  if (kind !== 'image' && !get(remoteTarget)) {
+    try {
+      await localInvoke('fs_allow_media', { path });
+      return { ...base, imageSrc: convertFileSrc(path), size: null };
+    } catch {
+      // Fall back to reading the bytes below.
+    }
+  }
+  const bytes = await invoke<number[]>('fs_read_binary', { path });
+  return { ...base, imageSrc: createObjectUrl(bytes, mimeType), size: bytes.length };
+}
+
 function createObjectUrl(bytes: number[], mimeType: string): string {
   const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
   return URL.createObjectURL(blob);
 }
 
 function revokeEditorAsset(file: EditorFile | undefined) {
-  if (file?.kind === 'image' && file.imageSrc?.startsWith('blob:')) {
+  if (file && file.kind !== 'text' && file.imageSrc?.startsWith('blob:')) {
     URL.revokeObjectURL(file.imageSrc);
   }
 }
@@ -116,6 +166,8 @@ export function updateCursorPosition(line: number, col: number) {
 
 export function detectLanguage(path: string): string {
   if (isImagePath(path)) return 'image';
+  if (isVideoPath(path)) return 'video';
+  if (isAudioPath(path)) return 'audio';
   const filename = path.split(/[/\\]/).pop()?.toLowerCase() || '';
   const ext = filename.split('.').pop()?.toLowerCase();
   const name = filename.split('.').slice(0, -1).join('.');
@@ -174,15 +226,9 @@ export async function openFile(path: string) {
   try {
     let editorFile: EditorFile;
 
-    if (isImagePath(path)) {
-      const bytes = await invoke<number[]>('fs_read_binary', { path });
-      if (generation !== editorGeneration) return;
-      const mimeType = getImageMimeType(path);
-      editorFile = {
-        path, content: '', originalContent: '', isDirty: false,
-        language: 'image', kind: 'image',
-        imageSrc: createObjectUrl(bytes, mimeType), mimeType, size: bytes.length,
-      };
+    if (isViewerPath(path)) {
+      editorFile = await loadViewerFile(path);
+      if (generation !== editorGeneration) { revokeEditorAsset(editorFile); return; }
     } else {
       const content = await invoke<string>('fs_read_file', { path });
       if (generation !== editorGeneration) return;
@@ -344,15 +390,10 @@ export async function restoreEditorFiles(filePaths: string[], activeFilePath: st
     for (const path of filePaths) {
       if (generation !== editorGeneration) return;
       try {
-        if (isImagePath(path)) {
-          const bytes = await invoke<number[]>('fs_read_binary', { path });
-          if (generation !== editorGeneration) return;
-          const mimeType = getImageMimeType(path);
-          newCache.set(path, {
-            path, content: '', originalContent: '', isDirty: false,
-            language: 'image', kind: 'image',
-            imageSrc: createObjectUrl(bytes, mimeType), mimeType, size: bytes.length,
-          });
+        if (isViewerPath(path)) {
+          const viewerFile = await loadViewerFile(path);
+          if (generation !== editorGeneration) { revokeEditorAsset(viewerFile); return; }
+          newCache.set(path, viewerFile);
         } else {
           const content = await invoke<string>('fs_read_file', { path });
           if (generation !== editorGeneration) return;
@@ -384,7 +425,7 @@ export async function formatActiveFile() {
   const cache = get(fileCache);
   const file = cache.get(active);
   if (!file) return;
-  if (file.kind !== 'text') { showToast('Image files cannot be formatted', 'info'); return; }
+  if (file.kind !== 'text') { showToast('Only text files can be formatted', 'info'); return; }
 
   try {
     const formatted = await formatCode(file.content, active);

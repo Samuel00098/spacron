@@ -1,4 +1,4 @@
-export type EditorFileKind = 'text' | 'image';
+export type EditorFileKind = 'text' | 'image' | 'audio' | 'video';
 
 export interface EditorFile {
   path: string;
@@ -7,6 +7,8 @@ export interface EditorFile {
   isDirty: boolean;
   language: string;
   kind: EditorFileKind;
+  /** What the viewer shows for an image, audio or video file: a blob: URL,
+   *  or an asset-protocol URL streamed from disk. */
   imageSrc?: string | null;
   mimeType?: string | null;
   size?: number | null;

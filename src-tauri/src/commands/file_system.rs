@@ -599,6 +599,21 @@ pub fn read_binary(path: &str, roots: &[PathBuf]) -> Result<Vec<u8>, String> {
     std::fs::read(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
+/// Let the webview stream one project file over the asset protocol, so the
+/// editor can play audio and video without reading the whole file into
+/// memory (and with seeking, which needs range requests). Only files inside
+/// the open projects; the scope grows one file at a time.
+#[tauri::command(async)]
+pub fn fs_allow_media(path: String, app: tauri::AppHandle, state: State<AppState>) -> Result<(), String> {
+    use tauri::Manager;
+    let p = require_path(&path)?;
+    require_in_roots(&p, &project_roots(&state))?;
+    if !p.is_file() {
+        return Err("Not a file".to_string());
+    }
+    app.asset_protocol_scope().allow_file(&p).map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
 pub fn fs_write_file(path: String, content: String, state: State<AppState>) -> Result<(), String> {
     write_file(&path, &content, &project_roots(&state))

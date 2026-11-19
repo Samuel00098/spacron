@@ -3,6 +3,7 @@ import { get } from '$lib/stores/storeCompat';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
+  convertFileSrc: (path: string) => `asset://localhost/${encodeURIComponent(path)}`,
 }));
 
 vi.mock('./notification', () => ({
@@ -148,5 +149,32 @@ describe('project editor isolation', () => {
     finish();
     await pending;
     expect(get(fileCache).size).toBe(0);
+  });
+});
+
+describe('media files', () => {
+  beforeEach(() => {
+    resetEditorSession();
+    vi.mocked(invoke).mockReset();
+  });
+
+  it('streams a video from disk instead of reading it as text', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(undefined); // fs_allow_media
+    await openFile('C:\proj\clip.mp4');
+    expect(invoke).toHaveBeenCalledWith('fs_allow_media', { path: 'C:\proj\clip.mp4' });
+    const file = get(fileCache).get('C:\proj\clip.mp4');
+    expect(file?.kind).toBe('video');
+    expect(file?.mimeType).toBe('video/mp4');
+    expect(file?.imageSrc).toMatch(/^asset:/);
+  });
+
+  it('falls back to the bytes when the file cannot be streamed', async () => {
+    vi.mocked(invoke).mockRejectedValueOnce('no').mockResolvedValueOnce([1, 2, 3]);
+    globalThis.URL.createObjectURL ??= () => 'blob:x';
+    await openFile('C:\proj\song.mp3');
+    const file = get(fileCache).get('C:\proj\song.mp3');
+    expect(file?.kind).toBe('audio');
+    expect(file?.size).toBe(3);
+    expect(invoke).toHaveBeenLastCalledWith('fs_read_binary', { path: 'C:\proj\song.mp3' });
   });
 });

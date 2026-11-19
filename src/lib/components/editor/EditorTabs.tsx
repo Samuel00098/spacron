@@ -32,6 +32,7 @@ const LANG_COLORS: Record<string, string> = {
 
 function getLanguageColor(language: string | undefined, kind: string): string {
   if (kind === 'image') return LANG_COLORS.image;
+  if (kind === 'audio' || kind === 'video') return 'var(--accent, #7aa2f7)';
   return LANG_COLORS[language ?? ''] ?? 'var(--text-muted)';
 }
 
@@ -43,6 +44,23 @@ function TabIcon({ language, kind }: { language?: string; kind: string }) {
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
         <circle cx="8.5" cy="8.5" r="1.5" />
         <polyline points="21 15 16 10 5 21" />
+      </svg>
+    );
+  }
+  if (kind === 'video') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="tab-icon-svg" style={{ color }}>
+        <rect x="2" y="5" width="14" height="14" rx="2" />
+        <path d="m16 10 6-3v10l-6-3" />
+      </svg>
+    );
+  }
+  if (kind === 'audio') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="tab-icon-svg" style={{ color }}>
+        <path d="M9 18V5l12-2v13" />
+        <circle cx="6" cy="18" r="3" />
+        <circle cx="18" cy="16" r="3" />
       </svg>
     );
   }

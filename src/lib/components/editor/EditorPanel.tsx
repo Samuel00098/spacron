@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import EditorTabs from './EditorTabs.tsx';
 import ImageViewer from './ImageViewer.tsx';
+import MediaViewer from './MediaViewer.tsx';
 import RichMarkdownEditor from './RichMarkdownEditor.tsx';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import CodeEditor from './CodeEditor.tsx';
@@ -99,3 +100,5 @@ export default function EditorPanel() {
     </div>
   );
 }
+        ) : (file.kind === 'audio' || file.kind === 'video') && file.imageSrc ? (
+          <MediaViewer kind={file.kind} src={file.imageSrc} path={file.path} mimeType={file.mimeType} size={file.size} />
