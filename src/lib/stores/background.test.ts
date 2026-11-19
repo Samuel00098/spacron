@@ -275,7 +275,13 @@ describe('custom-image glass', () => {
     expect(dom.property('--wallpaper-glass-light')).toBe('0.70');
     background.applyWallpaperGlass(5);
     expect(dom.property('--wallpaper-glass-dark')).toBe('0.30');
+    // The top of the slider is a fully solid panel in both modes.
     background.applyWallpaperGlass(100);
-    expect(dom.property('--wallpaper-glass-light')).toBe('0.95');
+    expect(dom.property('--wallpaper-glass-dark')).toBe('1.00');
+    expect(dom.property('--wallpaper-glass-light')).toBe('1.00');
+    background.applyWallpaperGlass(95);
+    expect(dom.property('--wallpaper-glass-light')).toBe('1.00');
+    background.applyWallpaperGlass(140);
+    expect(dom.property('--wallpaper-glass-dark')).toBe('1.00');
   });
 });

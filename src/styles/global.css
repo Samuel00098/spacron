@@ -2026,8 +2026,8 @@ input[type='range']::-webkit-slider-thumb:active {
 
    Readability rests on three things together, so do not drop one:
    - the blur, which turns any image behind a panel into soft colour fields;
-   - the fill, `--app-surface` at the Settings "Panel opacity" (30–90%, light
-     10 points more solid — see `applyWallpaperGlass`);
+   - the fill, `--app-surface` at the Settings "Panel opacity" (30–100%, light
+     10 points more solid; 100 is fully solid — see `applyWallpaperGlass`);
    - the text palette, pinned per mode, never sampled from the image.
 
    Menus, popovers and dialogs are deliberately NOT glass: they open over busy

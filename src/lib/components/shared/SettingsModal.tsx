@@ -3312,7 +3312,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     <input type="range" min="0" max="24" step="1" value={bgBlur} onChange={(event) => backgroundImageBlur.set(Number(event.target.value))} disabled={!bgPresent} />
                   </SettingRow>
                   <SettingRow title="Panel opacity" detail={`${glassOpacity}%. Lower shows more of your image; raise it if text is hard to read.`}>
-                    <input type="range" min="30" max="90" step="5" value={glassOpacity} onChange={(event) => backgroundGlassOpacity.set(Number(event.target.value))} disabled={!bgPresent || !bgEnabled} aria-label="Panel opacity" />
+                    <input type="range" min="30" max="100" step="5" value={glassOpacity} onChange={(event) => backgroundGlassOpacity.set(Number(event.target.value))} disabled={!bgPresent || !bgEnabled} aria-label="Panel opacity" />
                   </SettingRow>
                 </Section>
               </>

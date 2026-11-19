@@ -268,17 +268,18 @@ export function applyInterfaceFrost(transparency: number): void {
 }
 
 /**
- * How solid the glass panels are over a custom image (30–90%). Light mode sits
- * 10 points more solid than dark: dark ink needs a brighter field under it than
+ * How solid the glass panels are over a custom image (30–100%; 100 is a fully
+ * solid panel, the image only showing between them). Light mode sits 10 points
+ * more solid than dark, up to solid: dark ink needs a brighter field under it than
  * light ink needs a dark one, because a dark wallpaper pocket costs dark text
  * more contrast than a bright pocket costs light text.
  */
 export function applyWallpaperGlass(percent: number): void {
   if (typeof document === 'undefined') return;
-  const p = Math.min(90, Math.max(30, Number.isFinite(percent) ? percent : 60)) / 100;
+  const p = Math.min(100, Math.max(30, Number.isFinite(percent) ? percent : 60)) / 100;
   const root = document.documentElement;
   root.style.setProperty('--wallpaper-glass-dark', p.toFixed(2));
-  root.style.setProperty('--wallpaper-glass-light', Math.min(0.95, p + 0.1).toFixed(2));
+  root.style.setProperty('--wallpaper-glass-light', Math.min(1, p + 0.1).toFixed(2));
 }
 
 let appearanceTimeout: any = null;
