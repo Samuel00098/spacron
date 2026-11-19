@@ -201,6 +201,64 @@ function DeviceCard({
   );
 }
 
+const DOCK_GAP = 14; // phone edge (incl. its painted rims) → toolbar
+const DOCK_WIDTH = 42; // .mobile-side-toolbar: 30px buttons + 2×6px padding
+const DOCK_EDGE = 8; // never closer than this to the panel's sides
+const TOOLS_WIDTH = 300;
+
+/**
+ * Docks the side toolbar against the phone's right edge instead of the panel's.
+ *
+ * The phone has to keep sizing itself against the full-width stage (its
+ * `max-width: 100%` and the stream-size measurement both read the stage), so the
+ * toolbar cannot sit in a shrink-wrapped row with it. Instead it is positioned
+ * absolutely, and this measures where the phone actually ends. Writes
+ * `--dock-left` (toolbar) and `--tools-right` (Tools panel, which overlays the
+ * toolbar and the phone) onto the device body.
+ *
+ * The phone element is swapped between branches (stream / snapshot / empty),
+ * so the observed node is re-picked on every DOM change in the body.
+ */
+function useDockedToolbar() {
+  const cleanup = useRef<(() => void) | null>(null);
+  return useCallback((body: HTMLDivElement | null) => {
+    cleanup.current?.();
+    cleanup.current = null;
+    if (!body) return;
+    let shell: Element | null = null;
+    const place = () => {
+      const next = body.querySelector('.mobile-device-shell, .mobile-ios-shell');
+      if (next !== shell) {
+        if (shell) ro.unobserve(shell);
+        shell = next;
+        if (next) ro.observe(next);
+      }
+      const box = body.getBoundingClientRect();
+      const phoneRight = next ? next.getBoundingClientRect().right - box.left : box.width;
+      const dockLeft = Math.max(
+        DOCK_EDGE,
+        Math.min(phoneRight + DOCK_GAP, box.width - DOCK_WIDTH - DOCK_EDGE),
+      );
+      const toolsWidth = Math.min(TOOLS_WIDTH, box.width - 2 * DOCK_EDGE);
+      const toolsRight = Math.max(
+        DOCK_EDGE,
+        Math.min(box.width - dockLeft - DOCK_WIDTH, box.width - DOCK_EDGE - toolsWidth),
+      );
+      body.style.setProperty('--dock-left', `${Math.round(dockLeft)}px`);
+      body.style.setProperty('--tools-right', `${Math.round(toolsRight)}px`);
+    };
+    const ro = new ResizeObserver(place);
+    ro.observe(body);
+    const mo = new MutationObserver(place);
+    mo.observe(body, { childList: true, subtree: true });
+    place();
+    cleanup.current = () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, []);
+}
+
 /** One button on the device's floating side toolbar. */
 function SideBtn({
   title,
@@ -297,6 +355,7 @@ export default function MobilePanel() {
   // until a frame gives it an aspect ratio) to decide what resolution to ask
   // the device for — see `streamResolution.ts`.
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const dockRef = useDockedToolbar();
   const screenRef = useRef<HTMLImageElement | null>(null);
   const iosImgRef = useRef<HTMLImageElement | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -1346,7 +1405,7 @@ export default function MobilePanel() {
   function renderAndroidDevice() {
     return (
       <>
-        <div className="mobile-device-body">
+        <div className="mobile-device-body" ref={dockRef}>
           <div className="mobile-stage" ref={stageRef}>
             {booting && !selectedSerial ? (
               <EmptyState title={`Starting ${bootingName ?? 'emulator'}…`} body="Emulators take a little while to boot. The screen appears as soon as it is up." />
@@ -1505,7 +1564,7 @@ export default function MobilePanel() {
     const booted = isBooted(iosSelectedSim?.state);
     return (
       <>
-        <div className="mobile-device-body">
+        <div className="mobile-device-body" ref={dockRef}>
           <div className="mobile-stage">
             {booted ? (
               iosStreaming ? (
