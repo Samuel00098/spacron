@@ -390,7 +390,7 @@ export default function ReviewPanel() {
             <path d="M13 6h3a2 2 0 0 1 2 2v7" />
             <path d="M11 18H8a2 2 0 0 1-2-2V9" />
           </svg>
-          <span className="sc-title rp-panel-title">Code Review</span>
+          <span className="sc-title rp-panel-title">Diff</span>
           {branch && (
             <span className="rp-branch" title="Branch being reviewed">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">

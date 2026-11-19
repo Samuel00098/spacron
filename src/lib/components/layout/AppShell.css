@@ -3830,42 +3830,142 @@ html.is-webkitgtk .app-shell .composer-strip {
   background: transparent;
 }
 
-.app-shell .right-sidebar-header-spacer {
-  flex: 1 1 auto;
-}
-
-.app-shell .right-sidebar-current {
+/* Surface tabs: one pill per open surface, a close cross on each, and "+"
+   to open another (the same surface may be open more than once). */
+.app-shell .right-sidebar-tabs {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: none;
+  scrollbar-width: none;
 }
 
-.app-shell .right-sidebar-current .right-sidebar-back-btn {
-  width: 29px;
-  height: 29px;
-  flex: 0 0 auto;
+.app-shell .right-sidebar-tabs::-webkit-scrollbar {
+  display: none;
 }
 
-.app-shell .right-sidebar-current-icon {
+.app-shell .right-sidebar-tab {
   display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 52px;
+  max-width: 180px;
+  height: 28px;
+  border-radius: 8px;
   color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.app-shell .right-sidebar-tab:hover {
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-primary);
+}
+
+.app-shell .right-sidebar-tab.active {
+  background: color-mix(in srgb, var(--text-primary) 11%, transparent);
+  color: var(--text-primary);
+}
+
+.app-shell .right-sidebar-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px 0 9px;
+  border: none;
+  background: transparent;
+  box-shadow: none !important;
+  color: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.app-shell .right-sidebar-tab-icon {
+  display: inline-flex;
   flex: 0 0 auto;
 }
 
-.app-shell .right-sidebar-current-icon svg {
-  width: 15px;
-  height: 15px;
+.app-shell .right-sidebar-tab-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
-.app-shell .right-sidebar-current-title {
+.app-shell .right-sidebar-tab-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-shell .right-sidebar-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none !important;
+  color: inherit;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.app-shell .right-sidebar-tab.active .right-sidebar-tab-close,
+.app-shell .right-sidebar-tab:hover .right-sidebar-tab-close,
+.app-shell .right-sidebar-tab-close:focus-visible {
+  opacity: 0.75;
+}
+
+.app-shell .right-sidebar-tab-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.app-shell .right-sidebar-add-tab {
+  display: inline-flex;
+  margin-right: auto;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.app-shell .right-sidebar-add-tab svg {
+  width: 15px;
+  height: 15px;
+}
+
+.app-shell .right-sidebar-add-tab:hover,
+.app-shell .right-sidebar-add-tab[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
   color: var(--text-primary);
-  font-weight: 500;
+}
+
+/* Every open tab stays mounted, so switching tabs keeps each one's state. */
+.app-shell .right-utility-panel .drawer-body > .right-sidebar-tab-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell .right-utility-panel .drawer-body > .right-sidebar-tab-pane[hidden] {
+  display: none;
 }
 
 /* "Open a surface": a centred, compact list — icon, name, single-key badge. */
@@ -3989,4 +4089,85 @@ html.is-webkitgtk .app-shell .composer-strip {
     height: 27px;
   }
 
+}
+
+/* "+" surface menu (portalled to <body>). */
+.right-surface-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}
+
+.right-surface-menu {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  border-radius: 10px;
+  background: var(--surface-menu, var(--bg-elevated, var(--bg-secondary)));
+  box-shadow: var(--surface-menu-shadow, inset 0 0 0 1px var(--border)), 0 12px 32px rgba(0, 0, 0, 0.35) !important;
+  outline: none;
+}
+
+.right-surface-menu .right-surface-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none !important;
+  color: var(--text-primary);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.right-surface-menu .right-surface-menu-item:hover:not(:disabled),
+.right-surface-menu .right-surface-menu-item:focus-visible {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  outline: none;
+}
+
+.right-surface-menu .right-surface-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.right-surface-menu .right-surface-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.right-surface-menu .right-surface-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.right-surface-menu .right-surface-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.right-surface-menu .right-surface-key {
+  flex: 0 0 auto;
+  min-width: 16px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-family: var(--font-sans) !important;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
 }

@@ -93,7 +93,7 @@ import {
 import { toggleCommandPalette, registerCommand } from '$lib/stores/commandpalette';
 import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
-import { startProxy, stopProxy } from '$lib/stores/preview';
+import { startProxy, stopProxy, previewTabs, activePreviewTabId, createBlankPreviewBrowserTab, selectPreviewBrowserTab, closePreviewBrowserTab } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { appearance, matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
@@ -351,7 +351,7 @@ const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.Rea
     icon: <Icon><rect x="6" y="2" width="12" height="20" rx="2.5" /><path d="M10.5 18.5h3" /></Icon>,
   },
   review: {
-    title: 'Code Review',
+    title: 'Diff',
     icon: <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M11 18H8a2 2 0 0 1-2-2V9" /></Icon>,
   },
 };
@@ -2002,69 +2002,148 @@ export default function AppShell() {
     else selectRightTool(tool);
   }
 
-  // --- "Open a surface" picker -------------------------------------------
-  // Opening the sidebar by hand lands on a centred list of every surface it can
-  // show; choosing one replaces the list, and the header's back button returns
-  // to it. Paths that open a specific tool (shortcuts, agents, a project
-  // restore) change the tab, which skips the picker.
-  const [rightSurfacePicker, setRightSurfacePicker] = useState(false);
-  // Set when something opens a specific surface, so the open that follows it
-  // does not land on the picker instead.
+  // --- Right sidebar tabs ----------------------------------------------------
+  // The sidebar holds a row of tabs, each one an instance of a surface; the
+  // same surface may be open in several tabs. "+" opens the surface menu, and
+  // with no tabs the body shows the centred "Open a surface" list instead.
+  // Tabs are the view; the layout stores still say which surface is showing,
+  // so shortcuts, agents and project restores keep working: when the stores
+  // move to a surface on their own, the matching tab is selected (or added).
+  type RightSurfaceId = 'preview' | RightNavigatorTool | RightTool;
+  type RightSidebarTabItem = { id: string; surface: RightSurfaceId; previewTabId?: string };
+  const [rightTabs, setRightTabs] = useState<RightSidebarTabItem[]>([]);
+  const [activeRightTabId, setActiveRightTabId] = useState<string | null>(null);
+  const activeRightTab = rightTabs.find((t) => t.id === activeRightTabId) ?? null;
+  const [surfaceMenuAnchor, setSurfaceMenuAnchor] = useState<DOMRect | null>(null);
+  const rightTabSeqRef = useRef(0);
+  // Set when something opens a specific surface while the sidebar is closed,
+  // so the open that follows shows that surface rather than the restored tab.
   const rightSurfaceChosenRef = useRef(false);
-  const focusSurfacePicker = useCallback((node: HTMLDivElement | null) => node?.focus({ preventScroll: true }), []);
-  const prevRightSidebarOpenRef = useRef(rightSidebarOpen);
+  const focusOnMount = useCallback((node: HTMLElement | null) => node?.focus({ preventScroll: true }), []);
+
+  const storeRightSurface: RightSurfaceId = showingDockedPreview
+    ? 'preview'
+    : rightActiveTool ?? rightNavigatorTool;
+
+  function chooseRightSurface() {
+    if (!rightSidebarOpen) rightSurfaceChosenRef.current = true;
+  }
+
+  function newRightTab(surface: RightSurfaceId, previewTabId?: string): RightSidebarTabItem {
+    rightTabSeqRef.current += 1;
+    return { id: `rtab-${rightTabSeqRef.current}`, surface, previewTabId };
+  }
+
+  /** Point the layout stores at a tab's surface. */
+  function applyRightTab(tab: RightSidebarTabItem) {
+    if (tab.surface === 'preview') {
+      if (tab.previewTabId && get(previewTabs).some((p) => p.id === tab.previewTabId)) {
+        selectPreviewBrowserTab(tab.previewTabId);
+      }
+      if (previewDockedOpen) showDockedPreview();
+      else setPreviewDocked(true);
+    } else if ((RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(tab.surface)) {
+      selectRightNavigatorTool(tab.surface as RightNavigatorTool);
+    } else {
+      selectRightTool(tab.surface as RightTool);
+    }
+  }
+
+  function activateRightTab(tab: RightSidebarTabItem) {
+    setActiveRightTabId(tab.id);
+    applyRightTab(tab);
+  }
+
+  /** "+" menu / picker: always opens a new tab, even for a surface already open. */
+  function openRightSurfaceTab(surface: RightSurfaceId) {
+    setSurfaceMenuAnchor(null);
+    let previewTabId: string | undefined;
+    if (surface === 'preview') {
+      // The first Browser tab shows the page already loaded; each further one
+      // gets its own blank page.
+      previewTabId = rightTabs.some((t) => t.surface === 'preview')
+        ? createBlankPreviewBrowserTab()
+        : get(activePreviewTabId);
+    }
+    const tab = newRightTab(surface, previewTabId);
+    setRightTabs((tabs) => [...tabs, tab]);
+    activateRightTab(tab);
+  }
+
+  function closeRightTab(tab: RightSidebarTabItem) {
+    const index = rightTabs.findIndex((t) => t.id === tab.id);
+    const remaining = rightTabs.filter((t) => t.id !== tab.id);
+    setRightTabs(remaining);
+    if (tab.surface === 'preview' && tab.previewTabId && remaining.some((t) => t.surface === 'preview')) {
+      closePreviewBrowserTab(tab.previewTabId);
+    }
+    if (activeRightTabId !== tab.id) return;
+    const next = remaining[Math.max(0, index - 1)] ?? null;
+    if (next) activateRightTab(next);
+    else {
+      setActiveRightTabId(null);
+      closeRightUtility();
+    }
+  }
+
+  /** The stores moved to `surface` on their own: select or add its tab. */
+  function followStoreSurface(surface: RightSurfaceId) {
+    if (activeRightTab?.surface === surface) return;
+    const previewId = surface === 'preview' ? get(activePreviewTabId) : undefined;
+    const existing =
+      (previewId ? rightTabs.find((t) => t.surface === 'preview' && t.previewTabId === previewId) : undefined)
+      ?? rightTabs.find((t) => t.surface === surface);
+    if (existing) {
+      setActiveRightTabId(existing.id);
+      return;
+    }
+    const tab = newRightTab(surface, previewId);
+    setRightTabs((tabs) => [...tabs, tab]);
+    setActiveRightTabId(tab.id);
+  }
+
+  const rightSyncRef = useRef({ open: rightSidebarOpen, surface: storeRightSurface });
   useEffect(() => {
-    const was = prevRightSidebarOpenRef.current;
-    prevRightSidebarOpenRef.current = rightSidebarOpen;
+    const prev = rightSyncRef.current;
+    rightSyncRef.current = { open: rightSidebarOpen, surface: storeRightSurface };
+    if (!rightSidebarOpen) {
+      rightSurfaceChosenRef.current = false;
+      return;
+    }
+    const opened = !prev.open;
     const chosen = rightSurfaceChosenRef.current;
     rightSurfaceChosenRef.current = false;
-    if (rightSidebarOpen && !was && !projectSwitching && !chosen) setRightSurfacePicker(true);
-  }, [rightSidebarOpen, projectSwitching]);
-  const rightSurfaceKeyRef = useRef({ tab: rightSidebarTab, tool: rightActiveTool, preview: showingDockedPreview });
-  useEffect(() => {
-    const prev = rightSurfaceKeyRef.current;
-    rightSurfaceKeyRef.current = { tab: rightSidebarTab, tool: rightActiveTool, preview: showingDockedPreview };
-    if (prev.tab !== rightSidebarTab || prev.tool !== rightActiveTool || prev.preview !== showingDockedPreview) {
-      setRightSurfacePicker(false);
+    if (opened && !chosen && !projectSwitching) {
+      // Opened by hand: bring back the tab that was showing (or the list).
+      if (activeRightTab) applyRightTab(activeRightTab);
+      return;
     }
-  }, [rightSidebarTab, rightActiveTool, showingDockedPreview]);
+    if (opened || prev.surface !== storeRightSurface) followStoreSurface(storeRightSurface);
+  }, [rightSidebarOpen, storeRightSurface]);
 
   type RightSurface = {
-    id: string;
+    id: RightSurfaceId;
     title: string;
     icon: React.ReactNode;
     shortcut: string;
     needsProject: boolean;
-    open: () => void;
   };
   const browserIcon = <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>;
   const NAVIGATOR_SHORTCUTS: Record<RightNavigatorTool, string> = {
     files: 'F', search: 'S', git: 'G', problems: 'P', snapshots: 'N', snippets: 'I',
   };
   const TOOL_SHORTCUTS: Record<RightTool, string> = {
-    review: 'R', fleet: 'A', toolbox: 'T', http: 'H', db: 'D', containers: 'C', env: 'E', mobile: 'M',
+    review: 'D', fleet: 'A', toolbox: 'T', http: 'H', db: 'Q', containers: 'C', env: 'E', mobile: 'M',
   };
   const PROJECT_FREE_TOOLS: readonly RightTool[] = ['toolbox', 'http', 'db', 'mobile'];
   const rightSurfaces: RightSurface[] = [
-    {
-      id: 'preview',
-      title: 'Browser',
-      icon: browserIcon,
-      shortcut: 'B',
-      needsProject: false,
-      open: () => {
-        chooseRightSurface();
-        if (previewDockedOpen) showDockedPreview();
-        else setPreviewDocked(true);
-      },
-    },
+    { id: 'preview', title: 'Browser', icon: browserIcon, shortcut: 'B', needsProject: false },
     ...rightNavigatorTools.map((tool): RightSurface => ({
       id: tool,
       title: LEFT_TOOL_META[tool].title,
       icon: LEFT_TOOL_META[tool].icon,
       shortcut: NAVIGATOR_SHORTCUTS[tool],
       needsProject: true,
-      open: () => selectRightNavigatorTool(tool),
     })),
     ...RIGHT_TOOLS_ALL.map((tool): RightSurface => ({
       id: tool,
@@ -2072,67 +2151,107 @@ export default function AppShell() {
       icon: RIGHT_TOOL_META[tool].icon,
       shortcut: TOOL_SHORTCUTS[tool],
       needsProject: !PROJECT_FREE_TOOLS.includes(tool),
-      open: () => selectRightTool(tool),
     })),
   ];
+  const surfaceMeta = (id: RightSurfaceId): { title: string; icon: React.ReactNode } =>
+    id === 'preview'
+      ? { title: 'Browser', icon: browserIcon }
+      : (RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(id)
+      ? LEFT_TOOL_META[id as RightNavigatorTool]
+      : RIGHT_TOOL_META[id as RightTool];
   const surfaceAvailable = (surface: RightSurface) => !surface.needsProject || activeProjectIdValue != null;
 
-  const currentRightSurface: { title: string; icon: React.ReactNode } = showingDockedPreview
-    ? { title: 'Browser', icon: browserIcon }
-    : rightActiveTool
-    ? RIGHT_TOOL_META[rightActiveTool]
-    : LEFT_TOOL_META[rightNavigatorTool];
-
-  function chooseRightSurface() {
-    rightSurfaceChosenRef.current = true;
-    setRightSurfacePicker(false);
-  }
-
-  function handleSurfacePickerKey(event: React.KeyboardEvent) {
+  function handleSurfaceKey(event: React.KeyboardEvent) {
+    if (event.key === 'Escape' && surfaceMenuAnchor) {
+      event.preventDefault();
+      event.stopPropagation();
+      setSurfaceMenuAnchor(null);
+      return;
+    }
     if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return;
     const surface = rightSurfaces.find((s) => s.shortcut === event.key.toUpperCase());
     if (!surface || !surfaceAvailable(surface)) return;
     event.preventDefault();
     event.stopPropagation();
-    surface.open();
+    openRightSurfaceTab(surface.id);
+  }
+
+  function renderSurfaceList(itemClass: string) {
+    return rightSurfaces.map((surface) => {
+      const available = surfaceAvailable(surface);
+      return (
+        <li key={surface.id} role="none">
+          <button
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => openRightSurfaceTab(surface.id)}
+            disabled={!available}
+            title={available ? `${surface.title} (${surface.shortcut})` : `${surface.title} — open a project first`}
+            aria-keyshortcuts={surface.shortcut}
+          >
+            <span className="right-surface-icon" aria-hidden="true">{surface.icon}</span>
+            <span className="right-surface-label">{surface.title}</span>
+            <kbd className="right-surface-key" aria-hidden="true">{surface.shortcut}</kbd>
+          </button>
+        </li>
+      );
+    });
   }
 
   function renderRightSurfacePicker() {
     return (
-      <div
-        className="right-surface-picker"
-        tabIndex={-1}
-        ref={focusSurfacePicker}
-        onKeyDown={handleSurfacePickerKey}
-      >
+      <div className="right-surface-picker" tabIndex={-1} ref={focusOnMount} onKeyDown={handleSurfaceKey}>
         <div className="right-surface-picker-title" id="right-surface-picker-title">Open a surface</div>
-        <ul className="right-surface-list" aria-labelledby="right-surface-picker-title">
-          {rightSurfaces.map((surface) => {
-            const available = surfaceAvailable(surface);
-            return (
-              <li key={surface.id}>
-                <button
-                  type="button"
-                  className="right-surface-item"
-                  onClick={surface.open}
-                  disabled={!available}
-                  title={available ? `${surface.title} (${surface.shortcut})` : `${surface.title} — open a project first`}
-                  aria-keyshortcuts={surface.shortcut}
-                >
-                  <span className="right-surface-icon" aria-hidden="true">{surface.icon}</span>
-                  <span className="right-surface-label">{surface.title}</span>
-                  <kbd className="right-surface-key" aria-hidden="true">{surface.shortcut}</kbd>
-                </button>
-              </li>
-            );
-          })}
+        <ul className="right-surface-list" role="menu" aria-labelledby="right-surface-picker-title">
+          {renderSurfaceList('right-surface-item')}
         </ul>
+      </div>
+    );
+  }
+
+  // The "+" menu portals to <body>: the sidebar is a backdrop-filtered card,
+  // which would otherwise become the containing block of a fixed element.
+  function renderSurfaceMenu() {
+    if (!surfaceMenuAnchor) return null;
+    const width = 240;
+    const left = Math.max(8, Math.min(surfaceMenuAnchor.left, window.innerWidth - width - 8));
+    return createPortal(
+      <>
+        <div className="right-surface-menu-scrim" onPointerDown={() => setSurfaceMenuAnchor(null)} />
+        <ul
+          className="right-surface-menu"
+          role="menu"
+          aria-label="Open a surface"
+          tabIndex={-1}
+          ref={focusOnMount}
+          onKeyDown={handleSurfaceKey}
+          style={{ top: surfaceMenuAnchor.bottom + 4, left, width, maxHeight: window.innerHeight - surfaceMenuAnchor.bottom - 16 }}
+        >
+          {renderSurfaceList('right-surface-item right-surface-menu-item')}
+        </ul>
+      </>,
+      document.body,
+    );
+  }
+
+  function renderRightTabPane(tab: RightSidebarTabItem) {
+    // The single docked PreviewPanel serves every Browser tab; each tab
+    // points it at its own preview page.
+    if (tab.surface === 'preview') return null;
+    const content = (RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(tab.surface)
+      ? <SidebarContent key={activeProjectIdValue ?? 'no-project'} tab={tab.surface as RightNavigatorTool} />
+      : <PanelHost id={tab.surface as RightTool} onClose={() => closeRightTab(tab)} />;
+    return (
+      <div key={tab.id} className="right-sidebar-tab-pane" hidden={tab.id !== activeRightTabId}>
+        {content}
       </div>
     );
   }
 
   function renderRightUtilityPanel() {
     if (!rightSidebarOpen) return null;
+    const showingBrowserTab = activeRightTab?.surface === 'preview';
     return (
       <aside
         className="right-utility-panel right-sidebar bento-card"
@@ -2149,23 +2268,56 @@ export default function AppShell() {
           role="separator"
           aria-orientation="vertical"
         />
-        <header className={`drawer-header right-sidebar-header${rightSurfacePicker ? ' is-picker' : ''}`}>
-          {rightSurfacePicker ? (
-            <span className="right-sidebar-header-spacer" />
-          ) : (
-            <div className="right-sidebar-current">
-              <button
-                type="button"
-                className="drawer-close-btn right-sidebar-back-btn"
-                onClick={() => setRightSurfacePicker(true)}
-                title="All surfaces"
-                aria-label="All surfaces"
-              >
-                <Icon><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></Icon>
-              </button>
-              <span className="right-sidebar-current-icon" aria-hidden="true">{currentRightSurface.icon}</span>
-              <span className="right-sidebar-current-title">{currentRightSurface.title}</span>
-            </div>
+        <header className={`drawer-header right-sidebar-header${rightTabs.length === 0 ? ' is-picker' : ''}`}>
+          <div className="right-sidebar-tabs" role="tablist" aria-label="Open surfaces">
+            {rightTabs.map((tab) => {
+              const meta = surfaceMeta(tab.surface);
+              const active = tab.id === activeRightTabId;
+              return (
+                <div
+                  key={tab.id}
+                  className={`right-sidebar-tab${active ? ' active' : ''}`}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    className="right-sidebar-tab-btn"
+                    onClick={() => activateRightTab(tab)}
+                    onAuxClick={(event) => { if (event.button === 1) closeRightTab(tab); }}
+                    title={meta.title}
+                  >
+                    <span className="right-sidebar-tab-icon" aria-hidden="true">{meta.icon}</span>
+                    <span className="right-sidebar-tab-title">{meta.title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="right-sidebar-tab-close"
+                    onClick={() => closeRightTab(tab)}
+                    title={`Close ${meta.title}`}
+                    aria-label={`Close ${meta.title}`}
+                  >
+                    <XIcon />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {rightTabs.length > 0 && (
+            <button
+              type="button"
+              className="right-sidebar-add-tab"
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setSurfaceMenuAnchor((current) => (current ? null : rect));
+              }}
+              title="Open a surface"
+              aria-label="Open a surface"
+              aria-haspopup="menu"
+              aria-expanded={surfaceMenuAnchor !== null}
+            >
+              <Icon><path d="M12 5v14M5 12h14" /></Icon>
+            </button>
           )}
           <button
             className="drawer-close-btn"
@@ -2176,21 +2328,18 @@ export default function AppShell() {
             <XIcon />
           </button>
         </header>
+        {renderSurfaceMenu()}
         <div className="drawer-body">
           {previewDockedOpen && (
-            <div className="right-sidebar-preview" hidden={!showingDockedPreview || rightSurfacePicker}>
+            <div className="right-sidebar-preview" hidden={!showingBrowserTab}>
               <PreviewPanel />
             </div>
           )}
-          {rightSurfacePicker
-            ? renderRightSurfacePicker()
-            : showingDockedPreview
-            ? null
-            : projectSwitching
+          {projectSwitching
             ? <div role="status">Loading project tools…</div>
-            : rightActiveTool
-            ? <PanelHost id={rightActiveTool} onClose={() => closeRoom(rightActiveTool)} />
-            : <SidebarContent key={activeProjectIdValue ?? 'no-project'} tab={rightNavigatorTool} />}
+            : rightTabs.length === 0
+            ? renderRightSurfacePicker()
+            : rightTabs.map(renderRightTabPane)}
         </div>
       </aside>
     );
