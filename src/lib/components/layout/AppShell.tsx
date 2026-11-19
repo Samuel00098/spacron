@@ -97,7 +97,7 @@ import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { appearance, matchShortcut } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { closeUsagePanel } from '$lib/stores/usage';
-import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
+import { interactionMode } from '$lib/stores/interactionMode';
 import {
   claimStartupShell,
   releaseStartupShellClaim,
@@ -124,6 +124,7 @@ import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import ConfirmDialog from '$lib/components/shared/ConfirmDialog.tsx';
 import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/types/layout';
 import type { TerminalSessionInfo } from '$lib/stores/terminal';
+import { toggleActiveTerminalChatView } from '$lib/services/terminal-chat';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import { hoveredStageRoom, layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
@@ -1523,7 +1524,9 @@ export default function AppShell() {
 
       switch (actionId) {
         case 'toggleInteractionMode':
-          if (!event.repeat) setInteractionMode(get(interactionMode) === 'chat' ? 'cli' : 'chat');
+          // Same id so saved key bindings carry over; it now flips the focused
+          // agent pane between Terminal and Chat instead of the whole window.
+          if (!event.repeat) toggleActiveTerminalChatView();
           break;
         case 'toggleProjectHUD':
           toggleProjectHUD();

@@ -57,6 +57,8 @@ import { requestRoomControl } from '$lib/stores/layoutControl';
 import { activeProject, projects } from '$lib/stores/workspace';
 import { clearProxyTarget, currentUrl, ensureProxyRunning, setPreferredLocalHost, setTargetPort } from '$lib/stores/preview';
 import { showToast } from '$lib/stores/notification';
+import TerminalChatView from './TerminalChatView';
+import { canShowTerminalChat, setTerminalChatView, useTerminalChatView } from '$lib/services/terminal-chat';
 import { appendRunOutput, finalizeRunEntry, activeRunIds } from '$lib/stores/runHistory';
 import { attentionReason, containsAttentionRequest } from '$lib/services/orchestrator/agent-signals';
 import { hasTurnSignalListener } from '$lib/services/orchestrator/agent-hook-signals';
@@ -1848,8 +1850,26 @@ function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThemeValue]);
 
+  const chatCapable = canShowTerminalChat(sessionInfo?.agentPreset);
+  const chatViewOn = useTerminalChatView(sessionId);
+  const showChat = chatCapable && chatViewOn && !!sessionInfo?.agentPreset;
+
+  // Leaving chat hands the keyboard back to the terminal.
+  const wasChatRef = useRef(showChat);
+  useEffect(() => {
+    if (wasChatRef.current && !showChat) {
+      requestAnimationFrame(() => {
+        scheduleFit();
+        termRef.current?.focus();
+      });
+    }
+    wasChatRef.current = showChat;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showChat]);
+
   const classNames = [
     'terminal-pane',
+    showChat && 'chat-view',
     isActive && 'active',
     isDead && 'dead',
     isMaximized && 'maximized',
@@ -1937,6 +1957,42 @@ function TerminalPane({
           </span>
         </span>
 
+        {chatCapable && (
+          <div
+            className="pane-view-switch"
+            role="group"
+            aria-label="Pane view"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className={showChat ? '' : 'active'}
+              aria-pressed={!showChat}
+              title="Show the agent's terminal"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate();
+                setTerminalChatView(sessionId, false);
+              }}
+            >
+              Terminal
+            </button>
+            <button
+              type="button"
+              className={showChat ? 'active' : ''}
+              aria-pressed={showChat}
+              title="Show this agent's conversation as chat (same session)"
+              onClick={(e) => {
+                e.stopPropagation();
+                onActivate();
+                setTerminalChatView(sessionId, true);
+              }}
+            >
+              Chat
+            </button>
+          </div>
+        )}
+
       </div>
 
       {/* Command history blocks above the live terminal */}
@@ -1949,6 +2005,14 @@ function TerminalPane({
           refocus loop that repainted every frame (the flicker). */}
       <div className="xterm-container" ref={containerRef}>
         <div className="xterm-fit-host" ref={fitHostRef}></div>
+        {showChat && sessionInfo?.agentPreset && (
+          <TerminalChatView
+            sessionId={sessionId}
+            agentPreset={sessionInfo.agentPreset}
+            isExecuting={Boolean(sessionInfo.isExecuting)}
+            isRunning={Boolean(sessionInfo.isRunning)}
+          />
+        )}
       </div>
     </div>
   );

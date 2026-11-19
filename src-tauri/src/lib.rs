@@ -509,6 +509,7 @@ pub fn run() {
             commands::keep_awake::keep_awake_status,
             commands::agent_signals::agent_signal_channel_open,
             commands::agent_signals::agent_signal_channel_close,
+            commands::agent_transcript::agent_transcript_read,
             commands::workspace::workspace_git_stage_paths,
             commands::workspace::workspace_git_unstage_paths,
             commands::workspace::workspace_git_apply_patch,

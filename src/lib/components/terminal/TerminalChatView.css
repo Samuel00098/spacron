@@ -1,0 +1,310 @@
+/* The chat face of an agent terminal. It covers the xterm container instead of
+   replacing it: the terminal underneath keeps its size and stays live, so a
+   pane never re-opens at 0x0 (see .spacron/memory/terminal-cell-measure-stuck.md). */
+
+.terminal-pane .xterm-container {
+  position: relative;
+}
+
+.terminal-pane.chat-view .xterm-container {
+  /* Keep layout (fit keeps measuring) but take the terminal out of view and focus. */
+  visibility: hidden;
+}
+
+.terminal-chat-view {
+  position: absolute;
+  inset: 0;
+  visibility: visible;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.terminal-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.terminal-chat-scroll::-webkit-scrollbar { width: 8px; }
+.terminal-chat-scroll::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 8px; }
+
+.terminal-chat-row { max-width: 100%; min-width: 0; }
+
+.terminal-chat-row.user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.terminal-chat-bubble {
+  max-width: min(80%, 640px);
+  padding: 7px 12px;
+  border-radius: 14px 14px 4px 14px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.terminal-chat-row.user.pending .terminal-chat-bubble { opacity: 0.6; }
+
+.terminal-chat-row.assistant { overflow-wrap: anywhere; }
+
+.terminal-chat-row.reasoning > summary,
+.terminal-chat-row.tool > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 2px 4px;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.terminal-chat-row.reasoning > summary::-webkit-details-marker,
+.terminal-chat-row.tool > summary::-webkit-details-marker { display: none; }
+
+.terminal-chat-row.reasoning > summary:hover,
+.terminal-chat-row.tool > summary:hover { background: var(--bg-hover); }
+
+.terminal-chat-row.reasoning > summary { font-style: italic; }
+
+.terminal-chat-reasoning-body {
+  margin: 4px 0 0 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.terminal-chat-tool-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.terminal-chat-tool-dot.running { background: var(--accent); animation: terminalChatPulse 1.2s ease-in-out infinite; }
+.terminal-chat-tool-dot.done { background: var(--success); }
+.terminal-chat-tool-dot.error { background: var(--error); }
+
+.terminal-chat-tool-name {
+  flex: none;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.terminal-chat-tool-input {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--terminal-font-family, monospace);
+}
+
+.terminal-chat-tool-block {
+  margin: 4px 0 2px 14px;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.55);
+  border: 1px solid var(--border);
+  font-family: var(--terminal-font-family, monospace);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.terminal-chat-tool-block.output { color: var(--text-muted); }
+
+.terminal-chat-notice {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.terminal-chat-empty {
+  margin: auto;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.terminal-chat-empty strong { color: var(--text-secondary); font-weight: 600; }
+
+.terminal-chat-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.terminal-chat-dots { display: inline-flex; gap: 3px; }
+.terminal-chat-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: terminalChatPulse 1.2s ease-in-out infinite;
+}
+.terminal-chat-dots i:nth-child(2) { animation-delay: 0.15s; }
+.terminal-chat-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes terminalChatPulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.terminal-chat-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 12px 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+.terminal-chat-error span { flex: 1; min-width: 0; }
+
+.terminal-chat-error button {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.terminal-chat-composer {
+  flex: none;
+  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.terminal-chat-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminal-chat-keys-hint { color: var(--text-muted); font-size: 11.5px; margin-right: 4px; }
+
+.terminal-chat-keys button {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+
+.terminal-chat-keys button:hover { color: var(--text-primary); border-color: var(--accent); }
+
+.terminal-chat-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 14px;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.7);
+  border: 1px solid var(--border);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.terminal-chat-input:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+
+.terminal-chat-input textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 22px;
+  max-height: 160px;
+  field-sizing: content;
+  resize: none;
+  padding: 3px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.terminal-chat-input textarea::placeholder { color: var(--text-muted); }
+
+.terminal-chat-keys-toggle,
+.terminal-chat-send {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.terminal-chat-keys-toggle:hover,
+.terminal-chat-keys-toggle.active { color: var(--text-primary); background: var(--bg-hover); }
+
+.terminal-chat-send {
+  color: var(--bg-primary);
+  background: var(--accent);
+}
+
+.terminal-chat-send:disabled { opacity: 0.35; cursor: default; }
+.terminal-chat-send.stop { background: var(--text-secondary); }
+
+/* Pane title-bar switch. */
+.terminal-pane .pane-view-switch {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 8px;
+  background: rgba(var(--bg-secondary-rgb, 18, 18, 22), 0.55);
+}
+
+.terminal-pane .pane-view-switch button {
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.terminal-pane .pane-view-switch button:hover { color: var(--text-primary); }
+
+.terminal-pane .pane-view-switch button.active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}

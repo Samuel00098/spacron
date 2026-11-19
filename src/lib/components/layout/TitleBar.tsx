@@ -10,10 +10,8 @@ import {
 } from '$lib/stores/layout';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
-import { interactionMode, setInteractionMode } from '$lib/stores/interactionMode';
 import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
-import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import InboxBell from '$lib/components/orchestrator/InboxBell';
 import { useAppIcon } from '$lib/react/useAppIcon';
@@ -28,8 +26,6 @@ export default function TitleBar() {
 
   // Reactive store reads — the React equivalent of `$store`.
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const currentInteractionMode = useStore(interactionMode);
-  const modeShortcut = useSettingsStore((s) => s.userShortcuts.find((shortcut) => shortcut.id === 'toggleInteractionMode')?.keys);
   const showWorkspaceTools = Boolean(workspaceId);
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
   const rightSidebarOpen = useStore(rightSidebarVisible);
@@ -136,35 +132,10 @@ export default function TitleBar() {
         )}
       </div>
 
-      {/* Centre: the Code / Chat switch. It affects the whole window,
-          so it sits in the window chrome rather than inside a collapsible
-          sidebar. It shows with no project open too; Chat then offers a
-          project to open. */}
-      <div
-        className="titlebar-center"
-        data-tauri-drag-region
-      >
-        <div className="titlebar-mode-switch" role="group" aria-label="Interaction mode">
-          <button
-            type="button"
-            className={`titlebar-mode-btn${currentInteractionMode === 'cli' ? ' active' : ''}`}
-            onClick={() => setInteractionMode('cli')}
-            aria-pressed={currentInteractionMode === 'cli'}
-            title={`Code mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
-          >
-            <span>Code</span>
-          </button>
-          <button
-            type="button"
-            className={`titlebar-mode-btn${currentInteractionMode === 'chat' ? ' active' : ''}`}
-            onClick={() => setInteractionMode('chat')}
-            aria-pressed={currentInteractionMode === 'chat'}
-            title={`Chat mode (${formatShortcutLabel(modeShortcut ?? 'Ctrl+Shift+J')})`}
-          >
-            <span>Chat</span>
-          </button>
-        </div>
-      </div>
+      {/* Centre: kept as an empty drag region so the left and right groups
+          keep their places. The Code / Chat switch that lived here is gone:
+          chat is now a per-terminal view (Terminal | Chat in each agent pane). */}
+      <div className="titlebar-center" data-tauri-drag-region />
 
       {/* Right side: Mode switcher + Settings + Window controls */}
       <div className="titlebar-right" data-tauri-drag-region>

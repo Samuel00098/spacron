@@ -1040,7 +1040,7 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'openSettings',    label: 'Open Settings',   category: 'View' },
   { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', category: 'View' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  category: 'View' },
-  { id: 'toggleInteractionMode', label: 'Switch Code / Chat Mode', category: 'View' },
+  { id: 'toggleInteractionMode', label: 'Toggle Terminal / Chat View', category: 'View' },
   // Id kept as-is so any saved custom binding keeps working; it opens the
   // new-project-folder prompt now that workspaces are gone.
   { id: 'newWorkspace',   label: 'Create Project', category: 'Project' },
@@ -1077,7 +1077,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'openSettings',    label: 'Open Settings',   keys: 'Ctrl+,' },
   { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
   { id: 'toggleSidebar',  label: 'Toggle Sidebar',  keys: 'Ctrl+B' },
-  { id: 'toggleInteractionMode', label: 'Switch Code / Chat Mode', keys: 'Ctrl+Shift+J' },
+  { id: 'toggleInteractionMode', label: 'Toggle Terminal / Chat View', keys: 'Ctrl+Shift+J' },
   { id: 'newWorkspace',   label: 'Create Project', keys: 'Ctrl+N' },
   { id: 'goToTerminal',   label: 'Go to Terminal',     keys: 'Ctrl+`' },
   { id: 'goToEditor',     label: 'Go to Editor',       keys: 'Ctrl+E' },

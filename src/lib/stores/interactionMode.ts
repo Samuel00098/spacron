@@ -5,12 +5,18 @@ export type InteractionMode = 'cli' | 'chat';
 const INTERACTION_MODE_KEY = 'spacron_interaction_mode';
 
 function loadInteractionMode(): InteractionMode {
-  if (typeof window === 'undefined') return 'cli';
-  try {
-    return window.localStorage.getItem(INTERACTION_MODE_KEY) === 'chat' ? 'chat' : 'cli';
-  } catch {
-    return 'cli';
+  // The app-wide Chat mode is retired: chat is now a per-terminal view
+  // (`services/terminal-chat.ts`), and the title-bar switch that led here is
+  // gone. A saved 'chat' would strand the user in a mode with no way out, so
+  // every launch starts in 'cli' and the stale key is cleared.
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(INTERACTION_MODE_KEY);
+    } catch {
+      // Restricted storage: nothing to clear.
+    }
   }
+  return 'cli';
 }
 
 /** The presentation mode for the main workspace. This is deliberately separate
@@ -18,17 +24,10 @@ function loadInteractionMode(): InteractionMode {
  * must not rewrite the user's pane arrangement. */
 export const interactionMode = writable<InteractionMode>(loadInteractionMode());
 
-interactionMode.subscribe((mode) => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(INTERACTION_MODE_KEY, mode);
-  } catch {
-    // Storage can be unavailable in a restricted WebView; the live toggle
-    // remains useful for the current session.
-  }
-});
-
 export function setInteractionMode(mode: InteractionMode): void {
+  // Retired: nothing may switch the workspace into the old Chat mode. Callers
+  // that still ask for it (sidebar actions written for that mode) are no-ops.
+  if (mode === 'chat') return;
   if (get(interactionMode) === mode) return;
   interactionMode.set(mode);
 }

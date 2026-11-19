@@ -2168,10 +2168,28 @@ async function autoBriefSession(id: number, preset: string) {
   }
 }
 
+/**
+ * When the agent now running in each session was started. The terminal chat
+ * view finds the CLI's own transcript by working directory and this time, so
+ * a session from an earlier run in the same folder is never shown here.
+ */
+const agentStartedAt = new Map<number, { preset: string; at: number }>();
+
+export function getSessionAgentStartedAt(id: number): number | null {
+  return agentStartedAt.get(id)?.at ?? null;
+}
+
+/** The directory the session's agent runs in: its own cwd, else its project root. */
+export function getSessionRoot(id: number): string | null {
+  return resolveSessionRoot(id);
+}
+
 export function markSessionAgentPreset(id: number, agentPreset: string | null, briefed?: boolean) {
   const isDev = devSessionIds.has(id);
   const projectId = terminalSessionProjects.get(id);
   if (!projectId) return;
+  if (!agentPreset) agentStartedAt.delete(id);
+  else if (agentStartedAt.get(id)?.preset !== agentPreset) agentStartedAt.set(id, { preset: agentPreset, at: Date.now() });
   // Activity stats: this is the one point every agent passes through, whether
   // spawned from the picker or adopted after the user typed `claude` into a
   // shell. The recorder dedupes by session id — this fires again on re-brief.

@@ -12,6 +12,7 @@ short enough that it says what the note is *about*, never what it says.
 ## Agents, delegation & review
 
 - [agent-history-persistence](agent-history-persistence.md) — spacron persists agent structure not content; Orca indexer model + two viable approaches
+- [orca-chat-view](orca-chat-view.md) — how Orca's per-terminal chat toggle reads transcripts and writes the PTY, vs our chat mode
 - [agent-background-poll-budget](agent-background-poll-budget.md) — what each running agent costs at rest, and the rules for anything that polls per agent
 - [agent-failover](agent-failover.md) — moving unfinished work off an agent that is running out of usage: the invariants it spans, and two traps
 - [project-worktrees](project-worktrees.md) — sidebar worktree rows vs agent worktrees, the sweep trap, and where the selected row applies
