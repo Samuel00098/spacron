@@ -1,6 +1,12 @@
 /* The "+" agent launcher: the agents pane, and beside it (once an agent is
    picked) the launch pane. Both reuse Dropdown's .dd-menu / .dd-item look. */
 .aqa-root {
+  /* Fixed and content-sized: before placement runs it must not stretch to
+     the window width, or the first measurement pins it to the left edge. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: max-content;
   z-index: 10000;
   display: flex;
   align-items: flex-start;

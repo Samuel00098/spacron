@@ -6,7 +6,6 @@ import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { getPresetRuns, filterInstalledAgents } from '$lib/stores/runs';
 import { usageState, installedAgentCommands, haveAgentDetection } from '$lib/stores/usage';
 import { agentUpdates } from '$lib/stores/agentUpdates';
-import { openAgentSpawn } from '$lib/stores/layout';
 import { quickSpawnAgent, quickStartAgentChat } from '$lib/services/quick-spawn';
 import { loadLiveAgentProviderModels, peekLiveAgentProviderModels, prewarmLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import { isChatAgentProvider } from '$lib/services/chat-provider-adapters';
@@ -18,17 +17,19 @@ import { AgentBrandMark } from './useAgentBrand';
 import './Dropdown.css';
 import './AgentQuickAdd.css';
 
-// The "+" agent launcher. A list of the installed agents; picking one opens a
-// second pane beside it with that CLI's models (searchable), a reasoning
-// level, an optional first prompt, and two ways to launch: a terminal agent
-// in the main repo, or a Chat-mode thread driven by that agent. "More
-// options…" opens the full Spawn Agents picker for counts and worktrees.
+// The "+" launcher: optional quick items (Editor, Terminal) on top, then every
+// installed agent. Picking an agent opens a second pane beside it with that
+// CLI's models (searchable), a reasoning level, an optional first prompt, and
+// two ways to launch: a terminal agent in the main repo, or a Chat-mode thread
+// driven by that agent.
 
 const GAP = 6;
 const EDGE_MARGIN = 8;
 const DEFAULT_MODEL = 'default';
 
 type Preset = { command: string; name: string };
+
+export type LauncherItem = { id: string; label: string; icon: ReactNode; onSelect: () => void };
 
 const SHORT_EFFORT: Partial<Record<ChatReasoningEffort, string>> = {
   medium: 'Med',
@@ -40,12 +41,15 @@ export default function AgentQuickAdd({
   label,
   icon,
   title = 'Add another agent',
+  items = [],
 }: {
   className?: string;
   /** Visible text beside the "+" (the empty-stage button uses one). */
   label?: string;
   icon?: ReactNode;
   title?: string;
+  /** Shown above the agents, e.g. "Editor" and "Terminal". */
+  items?: LauncherItem[];
 }) {
   const [open, setOpen] = useState(false);
   const [rootStyle, setRootStyle] = useState<CSSProperties>({ visibility: 'hidden' });
@@ -131,15 +135,22 @@ export default function AgentQuickAdd({
     function place() {
       const trigger = triggerEl.current?.getBoundingClientRect();
       const root = rootEl.current;
-      if (!trigger || !root) return;
-      const width = root.offsetWidth;
+      const agents = root?.querySelector<HTMLElement>('.aqa-agents');
+      if (!trigger || !root || !agents) return;
+      // The agents pane always hangs under the "+" (nudged inside the window).
+      // The launch pane goes to its right, or to its left when the right has
+      // no room.
+      const agentsWidth = agents.offsetWidth;
+      const total = root.offsetWidth;
       const height = root.offsetHeight;
-      const left = Math.max(EDGE_MARGIN, Math.min(trigger.left, window.innerWidth - width - EDGE_MARGIN));
+      const agentsLeft = Math.max(EDGE_MARGIN, Math.min(trigger.left, window.innerWidth - agentsWidth - EDGE_MARGIN));
+      const flip = total > agentsWidth && agentsLeft + total > window.innerWidth - EDGE_MARGIN;
+      const left = flip ? Math.max(EDGE_MARGIN, agentsLeft + agentsWidth - total) : agentsLeft;
       const below = trigger.bottom + GAP;
       const top = below + height > window.innerHeight - EDGE_MARGIN
         ? Math.max(EDGE_MARGIN, trigger.top - GAP - height)
         : below;
-      setRootStyle({ position: 'fixed', left: `${left}px`, top: `${top}px` });
+      setRootStyle({ left: `${left}px`, top: `${top}px`, flexDirection: flip ? 'row-reverse' : 'row' });
     }
     place();
     window.addEventListener('resize', place);
@@ -252,6 +263,22 @@ export default function AgentQuickAdd({
         <div ref={rootEl} className="aqa-root" style={rootStyle} onKeyDown={moveFocus}>
           <div className="dd-menu aqa-pane aqa-agents" role="menu" aria-label="Add an agent">
             <div className="aqa-list">
+              {items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="dd-item aqa-agent aqa-quick-item"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    item.onSelect();
+                  }}
+                >
+                  <span className="agent-quick-add-brand" aria-hidden="true">{item.icon}</span>
+                  <span className="dd-item-label">{item.label}</span>
+                </button>
+              ))}
+              {items.length > 0 && presets.length > 0 && <div className="agent-quick-add-divider" aria-hidden="true" />}
               {presets.length === 0 && (
                 <div className="agent-quick-add-empty">
                   {project ? 'No agents found on this computer.' : 'Open a project to add an agent.'}
@@ -287,19 +314,6 @@ export default function AgentQuickAdd({
                 );
               })}
             </div>
-            <div className="agent-quick-add-divider" aria-hidden="true" />
-            <button
-              type="button"
-              className="dd-item aqa-more"
-              role="menuitem"
-              onClick={() => {
-                close();
-                openAgentSpawn();
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-2.82-1.17l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.17 14H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.17-2.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 10 3.17V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 2.82 1.17l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 20.83 10H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
-              <span className="dd-item-label">More options…</span>
-            </button>
           </div>
 
           {selectedPreset && options && (

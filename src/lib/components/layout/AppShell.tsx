@@ -20,7 +20,7 @@ import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
 import FloatingPromptBar from '$lib/components/terminal/FloatingPromptBar.tsx';
 import { type ToolMenuGroup } from '$lib/components/layout/ToolsMenu.tsx';
-import AgentQuickAdd from '$lib/components/shared/AgentQuickAdd';
+import AgentQuickAdd, { type LauncherItem } from '$lib/components/shared/AgentQuickAdd';
 import {
   getSplitPaneStyle,
   getSplitStageStyle,
@@ -2971,19 +2971,34 @@ export default function AppShell() {
   ];
 
 
-  // The full Spawn Agents picker. Reachable from the command palette, the
-  // prompt bar in code mode, and "More options…" in the "+" agent launcher
-  // (agent and terminal room headers, and the empty stage).
-  const spawnAgentItem: ActivityItem = {
-    id: 'spawnAgent',
-    title: 'Spawn Agents',
-    active: layoutState.agentSpawnOpen,
-    onClick: () => {
-      if (layoutState.agentSpawnOpen) closeAgentSpawn();
-      else openAgentSpawn();
+  // The "+" launcher's quick items, above the agent list: open the Editor,
+  // or add a shell to the Terminal room. (The full Spawn Agents picker stays
+  // reachable from the command palette.)
+  const launcherItems: LauncherItem[] = [
+    {
+      id: 'editor',
+      label: 'Editor',
+      icon: <Icon><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></Icon>,
+      onSelect: () => {
+        if (layoutState.editorVisible) focusRoom('editor');
+        else setPanelRoomOpen('editor', true);
+      },
     },
-    icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" y1="8" x2="19" y2="14" /><line x1="16" y1="11" x2="22" y2="11" /></Icon>,
-  };
+    {
+      id: 'terminal',
+      label: 'Terminal',
+      icon: <Icon><rect x="2" y="3" width="20" height="18" rx="3" /><polyline points="8,9 4,12 8,15" /><line x1="12" y1="15" x2="20" y2="15" /></Icon>,
+      onSelect: () => {
+        setTerminalRoomOpen(true);
+        focusRoom('terminal');
+        // Always a new shell. An empty grid goes through the same claim the
+        // panel's own auto-open uses, so the two cannot both create one.
+        const pa = get(paneAssignments);
+        if (pa.some((id) => id !== null)) void createTerminalSession();
+        else if (claimStartupShell(activeProjectIdValue)) void createTerminalSession();
+      },
+    },
+  ];
 
   // Opens the in-app Sketch room. It used to load excalidraw.com in a Preview
   // browser tab through the embedding proxy; the drawing canvas is native now,
@@ -3056,12 +3071,10 @@ export default function AppShell() {
 
   // Layout actions stay as bare icons in the prompt bar: they are pressed
   // constantly while arranging panes, so a popover round-trip would cost more
-  // than the chrome they take up. Spawn leads the list in code mode and is
-  // filtered out in chat mode, where spawning is disabled anyway.
+  // than the chrome they take up. Adding agents lives in the "+" launcher.
   const isExpanded = stageExpandedRoom !== null;
   const inSplit = ambientLayout === 'gallery';
   const layoutActionItems: ActivityItem[] = [
-    spawnAgentItem,
     {
       id: 'split',
       title: forcedFullscreenRoom
@@ -3548,7 +3561,7 @@ export default function AppShell() {
             {/* DeepSeek Harness is an agent too, but its room is a web panel
                 with no agent session behind it. */}
             {(agentSession || id === 'deepseek' || id === 'terminal' || id === 'dev-terminal') && (
-              <AgentQuickAdd className="room-action" title={agentSession || id === 'deepseek' ? 'Add another agent' : 'Add an agent'} />
+              <AgentQuickAdd className="room-action" title={agentSession || id === 'deepseek' ? 'Add another agent' : 'Add an agent'} items={launcherItems} />
             )}
             {isThisForcedFullscreen ? null : isThisExpanded ? (
               <button
@@ -3974,6 +3987,7 @@ export default function AppShell() {
                   label="New agent"
                   title="Add an agent"
                   icon={<Icon><path d="M12 5v14M5 12h14" /></Icon>}
+                  items={launcherItems}
                 />
               ) : (
                 <button
@@ -4074,9 +4088,7 @@ export default function AppShell() {
                 <FloatingPromptBar
                   trailingControls={
                     <div className="prompt-trailing">
-                      {layoutActionItems
-                        .filter((item) => item.id !== 'spawnAgent' || currentInteractionMode === 'cli')
-                        .map((item) => <ActivityButton key={item.id} item={item} />)}
+                      {layoutActionItems.map((item) => <ActivityButton key={item.id} item={item} />)}
                       <div className="prompt-trailing-separator" />
                       {roomShortcutItems.map((item) => <ActivityButton key={item.id} item={item} />)}
                     </div>
