@@ -181,7 +181,10 @@ export async function readTerminalTranscript(args: {
 
 /** Normalise text the way both a pending send and its transcript row can be compared. */
 export function sendMatchKey(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 200);
+  // The CLI prefixes each attached image with an "[Image #1]" marker in its
+  // transcript row, which the pending send never had — left in, a message with
+  // an image never matched its own row and stayed on screen twice.
+  return text.replace(/\[Image #\d+\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 // ---------------------------------------------------------------------------

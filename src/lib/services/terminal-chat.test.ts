@@ -17,6 +17,8 @@ describe('terminal chat view', () => {
 
   it('matches a pending send to its transcript row across whitespace', () => {
     expect(sendMatchKey('  fix\n the   bug ')).toBe(sendMatchKey('fix the bug'));
+    // The transcript row of a send with images carries the CLI's markers.
+    expect(sendMatchKey('[Image #1][Image #2]fix the bug')).toBe(sendMatchKey('fix the bug'));
   });
 
   it('uses the window a CLI reports, and infers the Claude Code one', () => {
