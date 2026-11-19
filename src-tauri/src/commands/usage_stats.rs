@@ -310,7 +310,8 @@ enum SourceFormat {
     Claude,
     /// Codex rollout logs (cumulative `token_count` events, diffed per turn).
     Codex,
-    /// One JSON file per message under `storage/message/<sessionId>/`.
+    /// One JSON file per message under `storage/message/<sessionId>/`, or (current
+    /// builds) the `*.db` beside `storage/` — see `opencode_db_units`.
     OpenCode,
     /// The shared `{"type":"session",…}` + `{"type":"message",…}` JSONL that
     /// Pi, OMP and Command Code all write (see `parse_session_jsonl`).
@@ -2099,6 +2100,9 @@ fn scan_codex(store: &mut StoreFile, roots: &[PathBuf]) -> (usize, usize) {
 /// `providerID/modelID` so `github-copilot/claude-sonnet-4.5` stays distinct
 /// from Claude Code's own `claude-sonnet-4-5`.
 fn parse_opencode_session(dir: &Path) -> (FileMeta, Vec<ParsedTurn>) {
+    if let Some((db, layout, session)) = split_opencode_db_unit(dir) {
+        return parse_opencode_db_session(&db, layout, &session);
+    }
     let mut meta = FileMeta::default();
     let mut turns: Vec<ParsedTurn> = Vec::new();
     let session_id = dir
@@ -2126,9 +2130,9 @@ fn parse_opencode_session(dir: &Path) -> (FileMeta, Vec<ParsedTurn>) {
         if row.get("role").and_then(Value::as_str) != Some("assistant") {
             continue;
         }
-        let Some(tokens) = row.get("tokens") else {
+        if row.get("tokens").is_none() {
             continue;
-        };
+        }
         if let Some(root) = row
             .get("path")
             .and_then(|p| p.get("root"))
@@ -2136,46 +2140,242 @@ fn parse_opencode_session(dir: &Path) -> (FileMeta, Vec<ParsedTurn>) {
         {
             meta.cwd.get_or_insert_with(|| root.to_string());
         }
+        if let Some(turn) = opencode_turn(&row, &session_id) {
+            turns.push(turn);
+        }
+    }
+    (meta, turns)
+}
 
-        let created = row
-            .get("time")
-            .and_then(|t| t.get("created"))
-            .and_then(Value::as_i64);
-        let Some(ts_ms) = created else { continue };
-        let day = utc_date_str(ts_ms / 1000);
+/// One assistant message → one turn. Reads both message shapes OpenCode has
+/// written: the 1.x one (`providerID` / `modelID` at the top level, used by the
+/// JSON files and the `message` table) and the current `session_message` one
+/// (`model: {id, providerID}`).
+fn opencode_turn(row: &Value, session_id: &str) -> Option<ParsedTurn> {
+    let tokens = row.get("tokens")?;
+    let ts_ms = row
+        .get("time")
+        .and_then(|t| t.get("created"))
+        .and_then(Value::as_i64)?;
+    let day = utc_date_str(ts_ms / 1000);
 
-        let model = match (
-            row.get("providerID").and_then(Value::as_str),
-            row.get("modelID").and_then(Value::as_str),
-        ) {
-            (Some(p), Some(m)) => Some(format!("{p}/{m}")),
-            (None, Some(m)) => Some(m.to_string()),
-            _ => None,
-        };
+    let nested = row.get("model").filter(|m| m.is_object());
+    let provider_id = row
+        .get("providerID")
+        .and_then(Value::as_str)
+        .or_else(|| nested.and_then(|m| m.get("providerID")).and_then(Value::as_str));
+    let model_id = row
+        .get("modelID")
+        .and_then(Value::as_str)
+        .or_else(|| nested.and_then(|m| m.get("id")).and_then(Value::as_str));
+    let model = match (provider_id, model_id) {
+        (Some(p), Some(m)) => Some(format!("{p}/{m}")),
+        (None, Some(m)) => Some(m.to_string()),
+        _ => None,
+    };
 
-        let cache = tokens.get("cache");
-        let cache_read = cache.map(|c| u64_field(c, "read")).unwrap_or(0);
-        let cache_write = cache.map(|c| u64_field(c, "write")).unwrap_or(0);
-        // Reasoning is billed as output and is reported alongside it here
-        // (unlike Codex, where it is nested inside the output figure).
-        let output = u64_field(tokens, "output").saturating_add(u64_field(tokens, "reasoning"));
-        let input = u64_field(tokens, "input");
-        if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
+    let cache = tokens.get("cache");
+    let cache_read = cache.map(|c| u64_field(c, "read")).unwrap_or(0);
+    let cache_write = cache.map(|c| u64_field(c, "write")).unwrap_or(0);
+    // Reasoning is billed as output and is reported alongside it here
+    // (unlike Codex, where it is nested inside the output figure).
+    let output = u64_field(tokens, "output").saturating_add(u64_field(tokens, "reasoning"));
+    let input = u64_field(tokens, "input");
+    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
+        return None;
+    }
+    Some(ParsedTurn {
+        dedupe_key: None,
+        session_id: session_id.to_string(),
+        ts_ms,
+        day,
+        model,
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
+        reported_cost_usd: None,
+    })
+}
+
+// --- OpenCode / Kilo SQLite stores ------------------------------------------
+//
+// OpenCode stopped writing `storage/message/**.json` and now keeps everything in
+// `<data dir>/opencode.db` (Kilo: `kilo.db`). Two layouts exist:
+//
+// | layout | sessions | messages |
+// |---|---|---|
+// | `v2` (current OpenCode) | `session_v2` (`directory`) | `session_message` (`type = 'assistant'`, `data` JSON) |
+// | `v1` (OpenCode 1.x, Kilo) | `session` (`directory`) | `message` (`data` JSON with `role`) |
+//
+// A database holds every project, so each *session* is its own scan unit under
+// a virtual path `<db>#oc-<layout>:<session id>`. That keeps per-project labels
+// and lets one changed session be re-read without touching the rest.
+
+const OPENCODE_DB_MARK: &str = "#oc-";
+
+fn opencode_db_unit_path(db: &Path, layout: &str, session: &str) -> PathBuf {
+    let mut raw = db.as_os_str().to_owned();
+    raw.push(format!("{OPENCODE_DB_MARK}{layout}:{session}"));
+    PathBuf::from(raw)
+}
+
+/// Undo [`opencode_db_unit_path`]: `(db, layout, session id)`.
+fn split_opencode_db_unit(path: &Path) -> Option<(PathBuf, &'static str, String)> {
+    let text = path.to_string_lossy();
+    let at = text.rfind(OPENCODE_DB_MARK)?;
+    let rest = &text[at + OPENCODE_DB_MARK.len()..];
+    let (layout, session) = rest.split_once(':')?;
+    let layout = match layout {
+        "v2" => "v2",
+        "v1" => "v1",
+        _ => return None,
+    };
+    Some((PathBuf::from(&text[..at]), layout, session.to_string()))
+}
+
+/// Does a scan unit still exist? OpenCode's units are directories or virtual
+/// database paths, so a plain `exists()` is not enough.
+fn scan_unit_exists(path: &Path) -> bool {
+    match split_opencode_db_unit(path) {
+        Some((db, _, _)) => db.is_file(),
+        None => path.exists(),
+    }
+}
+
+fn open_opencode_db(db: &Path) -> Option<rusqlite::Connection> {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = rusqlite::Connection::open_with_flags(db, flags).ok()?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+    Some(conn)
+}
+
+fn sqlite_has_table(conn: &rusqlite::Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// The `*.db` files in an OpenCode-style data directory (the grandparent of the
+/// legacy `storage/message` root).
+fn opencode_db_files(root: &Path) -> Vec<PathBuf> {
+    let Some(data_dir) = root.parent().and_then(Path::parent) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(data_dir) else {
+        return Vec::new();
+    };
+    let mut dbs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("db"))
+        .collect();
+    dbs.sort();
+    dbs
+}
+
+/// One unit per session that has messages. The fingerprint is the session's
+/// `time_updated` plus its message count and token totals, so any new message
+/// changes it.
+fn opencode_db_units(db: &Path) -> Vec<ScanUnit> {
+    let Some(conn) = open_opencode_db(db) else {
+        return Vec::new();
+    };
+    let mut units: Vec<ScanUnit> = Vec::new();
+    let layouts: [(&str, &str, &str); 2] = [
+        (
+            "v2",
+            "session_v2",
+            "SELECT s.id, s.time_updated, \
+               (SELECT count(*) FROM session_message m WHERE m.session_id = s.id), \
+               s.tokens_input + s.tokens_output + s.tokens_reasoning + s.tokens_cache_read + s.tokens_cache_write \
+             FROM session_v2 s",
+        ),
+        (
+            "v1",
+            "session",
+            "SELECT s.id, s.time_updated, \
+               (SELECT count(*) FROM message m WHERE m.session_id = s.id), \
+               s.tokens_input + s.tokens_output + s.tokens_reasoning + s.tokens_cache_read + s.tokens_cache_write \
+             FROM session s",
+        ),
+    ];
+    for (layout, table, sql) in layouts {
+        if !sqlite_has_table(&conn, table) {
             continue;
         }
+        let Ok(mut stmt) = conn.prepare(sql) else { continue };
+        let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1).unwrap_or(0),
+                row.get::<_, i64>(2).unwrap_or(0),
+                row.get::<_, i64>(3).unwrap_or(0),
+            ))
+        }) else {
+            continue;
+        };
+        for (id, updated, messages, tokens) in rows.flatten() {
+            if messages <= 0 {
+                continue;
+            }
+            units.push(ScanUnit {
+                path: opencode_db_unit_path(db, layout, &id),
+                mtime_ms: updated,
+                size: (messages as u64).wrapping_add((tokens.max(0) as u64).wrapping_shl(20)),
+            });
+        }
+    }
+    units
+}
 
-        turns.push(ParsedTurn {
-            dedupe_key: None,
-            session_id: session_id.clone(),
-            ts_ms,
-            day,
-            model,
-            input_tokens: input,
-            output_tokens: output,
-            cache_read_tokens: cache_read,
-            cache_write_tokens: cache_write,
-            reported_cost_usd: None,
-        });
+fn parse_opencode_db_session(db: &Path, layout: &str, session: &str) -> (FileMeta, Vec<ParsedTurn>) {
+    let mut meta = FileMeta::default();
+    let mut turns: Vec<ParsedTurn> = Vec::new();
+    let Some(conn) = open_opencode_db(db) else {
+        return (meta, turns);
+    };
+    let (session_sql, message_sql) = match layout {
+        "v2" => (
+            "SELECT directory FROM session_v2 WHERE id = ?1",
+            "SELECT data FROM session_message WHERE session_id = ?1 AND type = 'assistant' ORDER BY seq",
+        ),
+        _ => (
+            "SELECT directory FROM session WHERE id = ?1",
+            "SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created",
+        ),
+    };
+    meta.cwd = conn
+        .query_row(session_sql, [session], |row| row.get::<_, String>(0))
+        .ok()
+        .filter(|d| !d.is_empty());
+    let Ok(mut stmt) = conn.prepare(message_sql) else {
+        return (meta, turns);
+    };
+    let Ok(rows) = stmt.query_map([session], |row| row.get::<_, String>(0)) else {
+        return (meta, turns);
+    };
+    for text in rows.flatten() {
+        let Ok(row) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        // v1 rows carry a role; v2 rows were already filtered by `type`.
+        if row.get("role").and_then(Value::as_str).is_some_and(|r| r != "assistant") {
+            continue;
+        }
+        if meta.cwd.is_none() {
+            meta.cwd = row
+                .get("path")
+                .and_then(|p| p.get("root").or_else(|| p.get("cwd")))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        if let Some(turn) = opencode_turn(&row, session) {
+            turns.push(turn);
+        }
     }
     (meta, turns)
 }
@@ -2210,6 +2410,13 @@ fn scan_opencode(store: &mut StoreFile, provider: &str, roots: &[PathBuf]) -> (u
                 size: total,
             });
         }
+    }
+    // Current builds keep sessions in SQLite next to the old storage folder.
+    let mut dbs: Vec<PathBuf> = roots.iter().flat_map(|root| opencode_db_files(root)).collect();
+    dbs.sort();
+    dbs.dedup();
+    for db in &dbs {
+        units.extend(opencode_db_units(db));
     }
     units.sort_by(|a, b| a.path.cmp(&b.path));
     scan_simple(store, provider, units, parse_opencode_session)
@@ -3491,6 +3698,65 @@ mod antigravity_pb_tests {
         assert_eq!(t.ts_ms, 1_794_856_816_000);
     }
 
+    #[test]
+    fn opencode_sqlite_sessions_are_read_per_session() {
+        let dir = std::env::temp_dir().join(format!("spacron-oc-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let root = dir.join("storage").join("message");
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("opencode.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE session_v2 (id TEXT, directory TEXT, time_updated INTEGER,
+                   tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+                   tokens_cache_read INTEGER, tokens_cache_write INTEGER);
+                 CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, seq INTEGER, data TEXT);
+                 INSERT INTO session_v2 VALUES ('ses_a', 'C:/work/app', 1794987172739, 289, 34, 150, 34304, 0);
+                 INSERT INTO session_message VALUES ('m0', 'ses_a', 'user', 0, '{}');
+                 INSERT INTO session_message VALUES ('m1', 'ses_a', 'assistant', 1,
+                   '{\"time\":{\"created\":1794987172739},\"model\":{\"id\":\"big-pickle\",\"providerID\":\"opencode\"},\"tokens\":{\"input\":289,\"output\":34,\"reasoning\":150,\"cache\":{\"read\":34304,\"write\":0}}}');",
+            )
+            .unwrap();
+        }
+        let files = opencode_db_files(&root);
+        assert_eq!(files, vec![db.clone()]);
+        let units = opencode_db_units(&db);
+        assert_eq!(units.len(), 1);
+        assert!(scan_unit_exists(&units[0].path));
+        let (meta, turns) = parse_opencode_session(&units[0].path);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(meta.cwd.as_deref(), Some("C:/work/app"));
+        assert_eq!(turns.len(), 1, "the user row is not a turn");
+        let t = &turns[0];
+        assert_eq!(t.session_id, "ses_a");
+        assert_eq!(t.model.as_deref(), Some("opencode/big-pickle"));
+        assert_eq!((t.input_tokens, t.output_tokens, t.cache_read_tokens), (289, 184, 34304));
+    }
+
+    /// Manual check against this machine's OpenCode / Kilo databases:
+    /// `cargo test --lib real_opencode_dbs -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_opencode_dbs() {
+        let home = dirs::home_dir().unwrap();
+        for tool in ["opencode", "kilo"] {
+            let root = home.join(".local").join("share").join(tool).join("storage").join("message");
+            for db in opencode_db_files(&root) {
+                let units = opencode_db_units(&db);
+                let (mut turns, mut input, mut output) = (0usize, 0u64, 0u64);
+                for unit in &units {
+                    let (_, parsed) = parse_opencode_session(&unit.path);
+                    turns += parsed.len();
+                    input += parsed.iter().map(|t| t.input_tokens).sum::<u64>();
+                    output += parsed.iter().map(|t| t.output_tokens).sum::<u64>();
+                }
+                println!("{}: {} sessions, {turns} turns, {input} in, {output} out", db.display(), units.len());
+            }
+        }
+    }
+
     /// Manual check against this machine's real logs:
     /// `cargo test --lib real_antigravity_and_grok_logs -- --ignored --nocapture`
     #[test]
@@ -4118,7 +4384,7 @@ fn build_recent_sessions(
         // Only re-read units that still exist; the fingerprint map is pruned of
         // deletions, but a unit can disappear between scan and snapshot.
         // OpenCode's unit is a directory, so this cannot assume a file.
-        if !path.exists() {
+        if !scan_unit_exists(&path) {
             continue;
         }
         // Each provider needs its own reader — running the Claude parser over a
