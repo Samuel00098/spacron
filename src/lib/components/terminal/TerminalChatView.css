@@ -131,6 +131,7 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   position: relative;
   z-index: 1;
   display: flex;
+  flex-direction: column;
   flex: 1 1 0;
   min-height: 0;
   min-width: 0;
@@ -138,14 +139,15 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 
 .terminal-chat-transcript > .terminal-chat-scroll {
   min-width: 0;
-  padding-inline-end: 28px;
   box-sizing: border-box;
-  scroll-padding-block: 16px 56px;
+  scroll-padding-block: 16px;
 }
 
 .terminal-chat-scroll {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: none;
   scrollbar-gutter: stable;
@@ -400,6 +402,7 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 
 .terminal-chat-md {
   min-width: 0;
+  max-width: 100%;
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
@@ -492,16 +495,30 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 .terminal-chat-md pre:hover .terminal-chat-code-copy { opacity: 1; }
 .terminal-chat-code-copy:hover { color: var(--text-primary); }
 
-.terminal-chat-table { overflow-x: auto; margin: 0 0 0.85em; }
-.terminal-chat-md table { border-collapse: collapse; min-width: 100%; }
+.terminal-chat-table {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: none;
+  margin: 0 0 0.85em;
+}
+
+.terminal-chat-md table {
+  width: 100%;
+  border-collapse: collapse;
+  line-height: 1.5;
+}
 .terminal-chat-md th,
 .terminal-chat-md td {
-  padding: 6px 10px;
+  min-width: 7em;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--tc-line);
-  text-align: left;
+  text-align: start;
   vertical-align: top;
 }
-.terminal-chat-md th { color: var(--text-secondary); }
+.terminal-chat-md th {
+  color: var(--text-secondary);
+  background: var(--tc-surface-strong);
+}
 
 /* ── Dock: error strip + composer ───────────────────────────────────────── */
 

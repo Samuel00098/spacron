@@ -861,7 +861,7 @@ export default function TasksPanel() {
               onAssignToAgent={(t, b, n, hb, bb) => openAgentReviewModal('pr', t, b, n, hb, bb)}
             />
           ) : activeTab === 'actions' ? (
-            <TasksActionsList projectId={projectId} />
+            <TasksActionsList key={projectId} projectId={projectId} />
           ) : (
             <>
               <div className="panel-meta">

@@ -406,15 +406,10 @@
 }
 
 .terminal-chat-view button.tcr-jump {
-  position: absolute;
-  /* Centred with margins, not translateX(-50%): global.css sets `transform: scale(0.96) !important`
-     on every pressed button, which replaced the centring and threw the pill to the right on click. */
-  left: 0;
-  right: 0;
-  width: max-content;
-  margin: 0 auto;
-  bottom: 12px;
-  z-index: 5;
+  flex: none;
+  align-self: center;
+  margin: 4px 0;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 7px;

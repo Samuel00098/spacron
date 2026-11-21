@@ -2779,6 +2779,9 @@ export function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (im
       if (table.parentElement?.classList.contains('terminal-chat-table')) return;
       const wrap = document.createElement('div');
       wrap.className = 'terminal-chat-table';
+      wrap.tabIndex = 0;
+      wrap.setAttribute('role', 'region');
+      wrap.setAttribute('aria-label', 'Table');
       table.replaceWith(wrap);
       wrap.appendChild(table);
     });

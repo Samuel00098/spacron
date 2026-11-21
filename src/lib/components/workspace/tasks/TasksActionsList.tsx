@@ -30,6 +30,9 @@ interface TasksActionsListProps {
   projectId: string;
 }
 
+const ACTIVE_REFRESH_MS = 5_000;
+const IDLE_REFRESH_MS = 15_000;
+
 function isFailure(conclusion?: string): boolean {
   return conclusion === 'failure' || conclusion === 'timed_out'
     || conclusion === 'startup_failure' || conclusion === 'stale';
@@ -134,22 +137,24 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
     return () => { runRequest.current += 1; };
   }, [projectId, loadRuns]);
 
+  const hasActiveRuns = runs.some(isActiveRun);
+
   useEffect(() => {
-    if (loading || refreshing || error || !runs.some(isActiveRun)) return;
+    if (!projectId || loading || refreshing || error) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     function schedulePoll() {
       timer = setTimeout(async () => {
         await loadRuns('poll');
         if (!stopped) schedulePoll();
-      }, 15_000);
+      }, hasActiveRuns ? ACTIVE_REFRESH_MS : IDLE_REFRESH_MS);
     }
     schedulePoll();
     return () => {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [error, loadRuns, loading, refreshing, runs]);
+  }, [error, hasActiveRuns, loadRuns, loading, projectId, refreshing]);
 
   const uniqueBranches = useMemo(() => {
     const set = new Set<string>();
@@ -189,26 +194,37 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
     });
   }, [runs, search]);
 
-  const handleToggleJobs = async (runId: number) => {
-    if (expandedRunId === runId) {
-      setExpandedRunId(null);
-      return;
-    }
+  const expandedRun = runs.find((run) => run.id === expandedRunId);
+  const expandedStatus = expandedRun?.status;
+  const expandedIsActive = expandedRun ? isActiveRun(expandedRun) : false;
 
-    setExpandedRunId(runId);
-    if (!jobsByRun[runId]) {
+  useEffect(() => {
+    if (expandedRunId === null || expandedStatus === undefined || loading) return;
+    const runId = expandedRunId;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    async function refreshJobs() {
       setLoadingJobs(runId);
       try {
         const jobs = await getWorkflowRunJobs(projectId, runId);
-        setJobsByRun((prev) => ({ ...prev, [runId]: jobs }));
+        if (!stopped) setJobsByRun((prev) => ({ ...prev, [runId]: jobs }));
       } catch (err) {
-        console.warn('Failed to load jobs for run:', err);
-        showToast('Could not load jobs for workflow run', 'error');
+        if (!stopped) console.warn('Failed to load jobs for run:', err);
       } finally {
-        setLoadingJobs(null);
+        if (!stopped) {
+          setLoadingJobs(null);
+          if (expandedIsActive) timer = setTimeout(refreshJobs, ACTIVE_REFRESH_MS);
+        }
       }
     }
-  };
+
+    void refreshJobs();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [expandedIsActive, expandedRunId, expandedStatus, loading, projectId]);
 
   const handleRerun = async (e: React.MouseEvent, runId: number) => {
     e.stopPropagation();
@@ -404,7 +420,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                 key={run.id}
                 className="work-item-card"
                 style={{ cursor: 'default' }}
-                onClick={() => void handleToggleJobs(run.id)}
+                onClick={() => setExpandedRunId(isExpanded ? null : run.id)}
               >
                 {/* Top Row: Status, Name, Run #, Display Title */}
                 <div className="work-item-card-top" style={{ flexWrap: 'wrap', gap: 8 }}>
@@ -599,7 +615,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                     }}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {loadingJobs === run.id ? (
+                    {loadingJobs === run.id && !jobsByRun[run.id] ? (
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 0' }}>
                         Loading jobs and steps…
                       </div>
