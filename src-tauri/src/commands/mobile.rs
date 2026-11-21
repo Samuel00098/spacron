@@ -276,12 +276,13 @@ pub async fn android_list_avds() -> Result<Vec<String>, String> {
     .await
 }
 
-/// Boot an AVD in the background (`emulator -avd <name>`), detached so it keeps
-/// running independently of this call.
+/// Boot an AVD without opening its graphical window. Spacron shows the device
+/// through its in-app emulator stream, so a separate Emulator window is not
+/// needed. The process remains detached and available to adb/gRPC as usual.
 #[tauri::command]
 pub async fn android_launch_avd(name: String) -> Result<(), String> {
     quiet_command(&emulator_program())
-        .args(["-avd", &name])
+        .args(["-avd", &name, "-no-window"])
         .spawn()
         .map_err(|e| missing_tool("emulator", e))?;
     Ok(())

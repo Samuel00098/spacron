@@ -7,6 +7,7 @@ import {
   updateIssueState,
   addIssueComment,
   listPullRequests,
+  createPullRequest,
   getPullRequestDetails,
   getPullRequestFiles,
   getPullRequestChecks,
@@ -301,5 +302,45 @@ describe('work-items service', () => {
       body: 'Nice PR!',
     });
     expect(comment.id).toBe(88);
+  });
+
+  it('creates pull request', async () => {
+    mockInvoke.mockResolvedValueOnce({
+      id: 99,
+      number: 12,
+      title: 'feat: add compact pr button',
+      body: 'fixes wrapping',
+      state: 'open',
+      headBranch: 'feat/compact-button',
+      baseBranch: 'main',
+      headSha: 'abc1234',
+      isDraft: false,
+      author: { login: 'octocat', avatarUrl: '' },
+      labels: [],
+      assignees: [],
+      commentsCount: 0,
+      createdAt: '2026-11-21T06:00:00Z',
+      updatedAt: '2026-11-21T06:00:00Z',
+      htmlUrl: 'https://github.com/acme/spacron/pull/12',
+    });
+
+    const pr = await createPullRequest('proj-1', {
+      title: 'feat: add compact pr button',
+      body: 'fixes wrapping',
+      base: 'main',
+      draft: false,
+      repoPath: '/repo',
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith('source_control_create_pull_request', {
+      projectId: 'proj-1',
+      repoPath: '/repo',
+      title: 'feat: add compact pr button',
+      body: 'fixes wrapping',
+      base: 'main',
+      draft: false,
+    });
+    expect(pr.number).toBe(12);
+    expect(pr.title).toBe('feat: add compact pr button');
   });
 });

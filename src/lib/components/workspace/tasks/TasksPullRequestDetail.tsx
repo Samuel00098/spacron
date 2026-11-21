@@ -12,6 +12,7 @@ import {
 } from '$lib/services/work-items';
 import MarkdownPreview from '$lib/components/preview/MarkdownPreview';
 import { showToast } from '$lib/stores/notification';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import {
   ArrowLeftIcon,
   AgentSparklesIcon,
@@ -411,14 +412,14 @@ export default function TasksPullRequestDetail({
                       {check.status === 'completed' ? check.conclusion : 'in progress'}
                     </span>
                     {check.htmlUrl && (
-                      <a
-                        href={check.htmlUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ color: 'var(--accent)', fontSize: 10.5, textDecoration: 'none' }}
+                      <button
+                        type="button"
+                        onClick={() => void openUrlInPreviewPanel(check.htmlUrl!)}
+                        className="check-details-link-btn"
+                        title="Open check details in Preview panel"
                       >
                         Details ↗
-                      </a>
+                      </button>
                     )}
                   </div>
                 </div>

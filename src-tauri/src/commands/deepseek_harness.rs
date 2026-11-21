@@ -11,7 +11,7 @@
 //!   `dsh --profile headless` on it. The task travels as a file (see
 //!   [`deepseek_harness_write_task`]), the key through [`resolve_env_markers`].
 //!
-//! Any provider key saved in AI Connections that dsh's catalog supports is
+//! Any provider key saved in AI Providers that dsh's catalog supports is
 //! usable, not only DeepSeek's: see [`EXTRA_ROUTES`] and [`providers_patch`].
 //!
 //! Both launches carry [`MCP_PATCH`], which gives dsh Spacron's MCP tools
@@ -195,7 +195,7 @@ fn providers_patch(input: &PatchInput) -> Option<String> {
         return None;
     }
     let mut out = String::from(
-        "# Written by Spacron on each launch from the keys in AI Connections.\n\
+        "# Written by Spacron on each launch from the keys in AI Providers.\n\
          # Keys arrive through the launch environment; none is stored here.\n",
     );
     if !input.routes.is_empty() {
@@ -342,7 +342,7 @@ fn seed_default_model(keys: &Keys, live: &HashMap<&'static str, Vec<(String, Str
     std::fs::write(&path, text).is_ok()
 }
 
-const NO_KEY: &str = "no_key: Add a DeepSeek key, or a key for another provider DeepSeek Harness supports (Anthropic, OpenAI, Google, OpenRouter, xAI, OpenCode, Moonshot, Mistral, Together, Fireworks, Groq, Cerebras, NVIDIA or Kilo Code), in Settings > AI Connections.";
+const NO_KEY: &str = "no_key: Add a DeepSeek key, or a key for another provider DeepSeek Harness supports (Anthropic, OpenAI, Google, OpenRouter, xAI, OpenCode, Moonshot, Mistral, Together, Fireworks, Groq, Cerebras, NVIDIA or Kilo Code), in Settings > AI Providers.";
 
 /// How long the first `dsh web` start may take. The first run on a machine
 /// initialises the profile from its template and measured ~60s; later starts

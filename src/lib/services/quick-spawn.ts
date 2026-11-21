@@ -5,11 +5,14 @@
 // new agent joins it; elsewhere it is the sidebar's selected worktree.
 
 import { get } from '$lib/stores/storeCompat';
-import { applyLaunchView, type AgentLaunchView } from '$lib/services/terminal-chat';
+import { applyLaunchView, launchViewFor, type AgentLaunchView } from '$lib/services/terminal-chat';
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
-import { sessions, spawnAgentPreset, manualPromptTargetId, waitForAgentReady, sendPromptToSession } from '$lib/stores/terminal';
+import { sessions, spawnAgentPreset, manualPromptTargetId, waitForAgentReady, sendPromptToSession, createTerminalSession, updateSessionTitle } from '$lib/stores/terminal';
+import { markStructuredChatPane, structuredChatAgentFor, type StructuredChatAgent } from '$lib/services/structured-chat/panes';
+import { getStructuredChat, sendStructuredChat, setStructuredChatEffort, setStructuredChatModel, startStructuredChat, structuredChatProvider } from '$lib/services/structured-chat/registry';
+import { structuredAccessFor } from '$lib/services/structured-chat/defaults';
 import { getAgentProviderLaunchOptions } from '$lib/services/chat-provider-adapters';
 import { createChatThread, setChatThreadWorktree, setThreadDraft, sharedWorktreeAt } from '$lib/stores/chatThreads';
 import { showProjectChat } from '$lib/stores/chatNavigation';
@@ -48,9 +51,24 @@ export async function quickSpawnAgent(command: string, options: QuickLaunchOptio
     return;
   }
 
-  // DeepSeek Harness has no terminal UI: it opens its web panel instead.
+  // DeepSeek Harness has no terminal UI: it opens its web panel instead, in
+  // the worktree the launch asked for (the row's "+" names it) or the sidebar's
+  // selected one.
   if (isDeepSeekHarness(command)) {
-    void openDeepSeekHarnessPanel({ isolated: false });
+    void openDeepSeekHarnessPanel({ worktreePath: options.worktreePath });
+    return;
+  }
+
+  // Chat launches use the provider protocol, while Terminal launches use the
+  // CLI PTY. Both render through the same TerminalChatView; only the backend
+  // changes, like Orca's structured Chat UI versus Continue in Terminal.
+  const view = options.view ?? launchViewFor(command);
+  const structured = view === 'chat' ? structuredChatAgentFor(command) : null;
+  if (structured && structuredChatProvider(structured)) {
+    const cwd = options.worktreePath === undefined
+      ? workingRootFor(project.id, project.root_path)
+      : options.worktreePath ?? project.root_path;
+    await openStructuredChat(command, structured, cwd, project.id, options);
     return;
   }
 
@@ -93,6 +111,35 @@ export async function quickSpawnAgent(command: string, options: QuickLaunchOptio
     console.error('Failed spawning agent:', err);
     showToast(err instanceof Error ? err.message : String(err), 'error');
   }
+}
+
+async function openStructuredChat(
+  command: string,
+  agent: StructuredChatAgent,
+  cwd: string,
+  projectId: string,
+  options: QuickLaunchOptions,
+): Promise<void> {
+  // Structured chats still use a terminal session as their pane host, but the
+  // host belongs in the agent's room rather than the user's terminal mosaic.
+  // Marking it as an agent also lets AppShell create the same `agent:<id>` room
+  // used by CLI launches, so the structured view overtakes that room in place.
+  const id = await createTerminalSession(cwd, undefined, projectId, {
+    assignPane: false,
+    agentPreset: command,
+    isDev: get(layoutSnapshot).ambient === 'development',
+  });
+  if (id === null) {
+    showToast("Couldn't open the chat. See the console for details.", 'warning');
+    return;
+  }
+  markStructuredChatPane(id, agent, command);
+  updateSessionTitle(id, `${structuredChatProvider(agent)?.label ?? 'Agent'} Chat`);
+  await startStructuredChat(agent, id, cwd, { access: structuredAccessFor(command) });
+  if (options.model) setStructuredChatModel(agent, id, options.model);
+  if (options.reasoningEffort && options.reasoningEffort !== 'default') setStructuredChatEffort(agent, id, options.reasoningEffort);
+  const prompt = options.prompt?.trim();
+  if (prompt && getStructuredChat(agent, id)?.status === 'ready') await sendStructuredChat(agent, id, prompt);
 }
 
 /**

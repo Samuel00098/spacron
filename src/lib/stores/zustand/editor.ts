@@ -28,6 +28,7 @@ interface EditorState {
 
   saveActiveFile: () => Promise<void>;
   setMarkdownPreview: (path: string, on: boolean) => void;
+  setFileLanguage: (path: string, language: string) => void;
   formatActiveFile: () => Promise<void>;
   openFile: (path: string) => Promise<void>;
   closeFile: (path: string) => void;
@@ -64,6 +65,16 @@ export const useEditorStore = create<EditorState>((set, getState) => ({
         nextPreview.delete(path);
       }
       return { markdownCodeModePaths: nextCodeMode, markdownPreviewPaths: nextPreview };
+    });
+  },
+
+  setFileLanguage: (path: string, language: string) => {
+    set((s) => {
+      const file = s.fileCache.get(path);
+      if (!file || file.kind !== 'text' || file.language === language) return s;
+      const fileCache = new Map(s.fileCache);
+      fileCache.set(path, { ...file, language });
+      return { fileCache };
     });
   },
 

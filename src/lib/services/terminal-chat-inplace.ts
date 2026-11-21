@@ -64,9 +64,21 @@ async function waitForScreen(sessionId: number, test: (text: string) => boolean,
   return null;
 }
 
+/**
+ * One key per PTY write: a multi-character write is read as a paste, and
+ * Codex then takes `/model` as prompt text instead of opening its picker.
+ */
+async function typeKeys(sessionId: number, text: string): Promise<void> {
+  for (const key of text) {
+    writeToSession(sessionId, key);
+    await sleep(16);
+  }
+}
+
 async function typeCommand(sessionId: number, command: string): Promise<void> {
-  writeToSession(sessionId, command);
-  await sleep(180);
+  await typeKeys(sessionId, command);
+  // Codex drops an Enter sent within ~0.3s of the typed command.
+  await sleep(600);
   writeToSession(sessionId, KEY.enter);
 }
 
@@ -134,86 +146,6 @@ async function moveHighlight(sessionId: number, rows: PickerRow[], target: Picke
     await sleep(60);
   }
   await sleep(120);
-}
-
-const CODEX_EFFORT_LABEL: Record<string, string> = {
-  minimal: 'minimal',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'extra high',
-  max: 'max',
-  ultra: 'ultra',
-};
-
-/**
- * Codex: model and/or effort through `/model`, applied for this session only.
- * `model` null keeps the current model; `effort` null keeps the current level.
- */
-export async function codexSetModelInPlace(
-  sessionId: number,
-  target: { model: string | null; modelLabel: string | null; effort: string | null },
-): Promise<string | null> {
-  const CHANGED = /Model changed to/;
-  const changedBefore = countOf(screenOf(sessionId), CHANGED);
-  const changedSince = () => countOf(screenOf(sessionId), CHANGED) > changedBefore;
-  await typeCommand(sessionId, '/model');
-  const modelScreen = await waitForScreen(sessionId, (t) => t.includes('Select Model and Effort') && /enter select|esc back/i.test(t));
-  if (!modelScreen) {
-    await backOut(sessionId);
-    return "Codex didn't open its model picker. Check the terminal view.";
-  }
-  const modelRows = parsePickerRows(modelScreen, 'Select Model and Effort');
-  const wanted = [target.modelLabel, target.model].filter(Boolean).map((v) => normalizeName(v as string));
-  const modelRow = target.model || target.modelLabel
-    ? modelRows.find((row) => wanted.includes(normalizeName(row.label)))
-    : modelRows.find((row) => row.current);
-  if (!modelRow) {
-    await backOut(sessionId);
-    return `Codex doesn't offer ${target.modelLabel ?? target.model ?? 'that model'} here.`;
-  }
-  await moveHighlight(sessionId, modelRows, modelRow);
-  writeToSession(sessionId, KEY.enter);
-
-  const effortScreen = await waitForScreen(sessionId, (t) => t.includes('Select Reasoning Level') || changedSince());
-  if (!effortScreen) {
-    await backOut(sessionId);
-    return "Codex didn't show its reasoning levels. Check the terminal view.";
-  }
-  // A model without effort levels is applied straight away.
-  if (!effortScreen.includes('Select Reasoning Level')) return null;
-
-  let header = 'Select Reasoning Level';
-  let rows = parsePickerRows(effortScreen, header);
-  const wantedEffort = target.effort ? CODEX_EFFORT_LABEL[target.effort] ?? target.effort : null;
-  let effortRow = wantedEffort
-    ? rows.find((row) => row.label.toLowerCase() === wantedEffort)
-    : rows.find((row) => row.current) ?? rows.find((row) => row.highlighted);
-  if (!effortRow && wantedEffort && (wantedEffort === 'max' || wantedEffort === 'ultra')) {
-    const more = rows.find((row) => /^more reasoning/i.test(row.label));
-    if (more) {
-      await moveHighlight(sessionId, rows, more);
-      writeToSession(sessionId, KEY.enter);
-      const advanced = await waitForScreen(sessionId, (t) => t.includes('Advanced Reasoning'));
-      if (advanced) {
-        header = 'Advanced Reasoning';
-        rows = parsePickerRows(advanced, header);
-        effortRow = rows.find((row) => row.label.toLowerCase() === wantedEffort);
-      }
-    }
-  }
-  if (!effortRow) {
-    await backOut(sessionId);
-    return `Codex doesn't offer ${wantedEffort ?? 'that'} reasoning for this model.`;
-  }
-  await moveHighlight(sessionId, rows, effortRow);
-  // `s`: this session only, so the user's Codex default is left alone.
-  writeToSession(sessionId, 's');
-  const done = await waitForScreen(sessionId, () => changedSince(), 4000);
-  if (done) return null;
-  // Never leave a picker open under the next message.
-  if (/Select Reasoning Level|Advanced Reasoning|Select Model and Effort/.test(bottomOf(screenOf(sessionId)))) await backOut(sessionId);
-  return "Codex didn't confirm the change. Check the terminal view.";
 }
 
 const CODEX_PERMISSION_LABEL: Record<string, string> = {
@@ -291,21 +223,41 @@ export async function claudeSetPermissionInPlace(sessionId: number, mode: string
   return 'not-in-cycle';
 }
 
-/** OpenCode: model through `/models`' search box. */
-export async function opencodeSetModelInPlace(sessionId: number, label: string): Promise<string | null> {
-  await typeCommand(sessionId, '/models');
-  const screen = await waitForScreen(sessionId, (t) => t.includes('Select model'));
-  if (!screen) {
-    await backOut(sessionId);
-    return "OpenCode didn't open its model picker. Check the terminal view.";
+/**
+ * The search OpenCode's `/models` box matches an id with. Its rows show the
+ * models.dev name ("Claude Sonnet 4.5", "GPT-5.1", "DeepSeek V4.1 Flash
+ * Free"), so the id's model part is turned into words: the date suffix
+ * dropped, version digits joined ("claude-sonnet-4-5-20250929" → "claude sonnet 4.5").
+ */
+export function opencodeSearchQuery(id: string): string {
+  const model = id.includes('/') ? id.slice(id.indexOf('/') + 1) : id;
+  const parts = model.replace(/[-_]\d{8}$/, '').split(/[-_/]+/).filter(Boolean);
+  const out: string[] = [];
+  for (const part of parts) {
+    const prev = out[out.length - 1];
+    if (/^\d+$/.test(part) && prev && /\d$/.test(prev) && !prev.includes('.')) out[out.length - 1] = `${prev}.${part}`;
+    else out.push(part);
   }
-  writeToSession(sessionId, label);
-  await sleep(450);
-  writeToSession(sessionId, KEY.enter);
-  await sleep(400);
-  if (screenOf(sessionId).includes('Select model')) {
-    await backOut(sessionId);
-    return `OpenCode didn't find ${label}.`;
+  return out.join(' ');
+}
+
+/** OpenCode's footer: `Build · GPT-5.1 Abacus` (agent · model provider). */
+export function opencodeFooterModel(screen: string): string | null {
+  const rows = screen.split('\n').filter((l) => l.trim()).slice(-8).reverse();
+  for (const row of rows) {
+    const m = /^[\s┃]*(?:Build|Plan|[A-Z][\w-]*)\s+·\s+(.+?)\s*$/.exec(row);
+    if (m && !/shift\+tab|ctrl\+p/i.test(m[1])) return m[1];
   }
   return null;
+}
+
+/** Which of `models` (OpenCode ids) the footer's "Name Provider" names. */
+export function opencodeModelFromFooter(footer: string, ids: string[]): string | null {
+  const shown = normalizeName(footer);
+  return ids.find((id) => {
+    const slash = id.indexOf('/');
+    if (slash < 0) return false;
+    const provider = normalizeName(id.slice(0, slash));
+    return normalizeName(opencodeSearchQuery(id)) + provider === shown;
+  }) ?? null;
 }

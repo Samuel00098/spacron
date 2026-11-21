@@ -1,0 +1,174 @@
+.pane-handoff-btn {
+  flex: none;
+  width: 26px;
+  height: 22px;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+.pane-handoff-btn:hover:not(:disabled) { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 10%, transparent); }
+.pane-handoff-btn:disabled { opacity: 0.5; cursor: progress; }
+
+.chh-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+}
+.chh-dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+  padding: 18px 18px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+  background: var(--bg-elevated, var(--bg-secondary, #1b1b1d));
+  color: var(--text-primary);
+  font-size: 13px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.chh-head { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 10px; }
+.chh-head-icon {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+.chh-head-copy { flex: 1; min-width: 0; }
+.chh-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; }
+.chh-note { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.chh-x {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.chh-x:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 10%, transparent); }
+
+.chh-label { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.chh-section { margin-top: 8px; }
+.chh-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+.chh-source .chh-label { margin-right: 2px; }
+.chh-source-name { font-weight: 600; white-space: nowrap; }
+.chh-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: right;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chh-list { display: flex; flex-direction: column; gap: 3px; max-height: 232px; overflow-y: auto; padding-right: 2px; }
+.chh-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.chh-option:hover { background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.chh-option.selected {
+  border-color: color-mix(in srgb, var(--text-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+.chh-option input { position: absolute; opacity: 0; pointer-events: none; }
+.chh-option:has(input:focus-visible) { outline: 2px solid color-mix(in srgb, var(--text-primary) 50%, transparent); outline-offset: 1px; }
+.chh-mark { display: inline-flex; flex: none; width: 18px; height: 18px; align-items: center; justify-content: center; }
+.chh-name { flex: 1; min-width: 0; font-weight: 500; }
+.chh-cmd {
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  font-size: 10.5px;
+}
+.chh-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--text-primary) 28%, transparent);
+  color: transparent;
+}
+.chh-option.selected .chh-check { background: var(--text-primary); border-color: var(--text-primary); color: var(--bg-primary, #111); }
+
+.chh-mode-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+.chh-mode { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+.chh-mode button { padding: 4px 16px; border: 0; border-radius: 7px; background: transparent; color: var(--text-muted); font-weight: 500; cursor: pointer; }
+.chh-mode button[aria-pressed='true'] { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 16%, transparent); }
+.chh-mode button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.chh-empty { margin: 4px 0; color: var(--text-muted); }
+.chh-status { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; color: var(--text-secondary); background: color-mix(in srgb, var(--text-primary) 5%, transparent); line-height: 1.4; }
+.chh-status.failed { color: #f0847b; background: color-mix(in srgb, #e5594f 12%, transparent); }
+.chh-status.delivered { color: #5fc48a; background: color-mix(in srgb, #4caf7a 12%, transparent); }
+
+.chh-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.chh-actions button {
+  padding: 6px 14px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 500;
+  cursor: pointer;
+}
+.chh-actions button:hover:not(:disabled) { background: color-mix(in srgb, var(--text-primary) 8%, transparent); }
+.chh-actions button.primary { background: var(--text-primary); color: var(--bg-primary, #111); border-color: transparent; }
+.chh-actions button.primary:hover:not(:disabled) { background: var(--text-primary); filter: brightness(0.92); }
+.chh-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+.terminal-pane .pane-handoff-btn ~ .pane-view-switch { margin-left: 6px; }
+
+/* The dialog portals to <body>, outside .app-shell, so the shell's brand-mark
+   sizing does not reach it. State the size here. */
+.chh-dialog .agent-brand-mark { display: inline-flex; flex: none; width: 18px; height: 18px; align-items: center; justify-content: center; overflow: hidden; }
+.chh-dialog .agent-brand-mark > svg,
+.chh-dialog .agent-brand-mark > img { width: 100%; height: 100%; max-width: 18px; max-height: 18px; object-fit: contain; }

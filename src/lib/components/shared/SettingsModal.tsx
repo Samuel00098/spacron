@@ -16,14 +16,17 @@ import {
   aiGhostTextEnabled,
   agentBrowserTools,
   computerUse,
+  agentWorkspaceTrustOverrides,
+  agentStatusHooksEnabled,
+  agentAutoGenerateTitles,
+  agentCodexOwnServer,
+  agentWarnCodexSharedServer,
   mcpServers,
-  agentWorktrees,
   aiProvider,
   aiProviders,
   accentColor,
   appearance,
   autoSave,
-  autoStageAgentChanges,
   agentFailover,
   agentFailoverCrossProvider,
   agentFailoverHeadroomPercent,
@@ -48,6 +51,7 @@ import {
   interfaceTransparency,
   isLocalProvider,
   keepSystemAwake,
+  keepAwakeMode,
   minimap,
   notificationsEnabled,
   resetSettingsToDefault,
@@ -86,13 +90,9 @@ import {
   jevAgentTool,
   wordWrap,
   sourceControlProvider,
-  chatQueueWhileBusy,
-  chatAutoAnswerInline,
-  chatDefaultAccessMode,
   type AiModelOption,
   mediaGeneration,
   type AiProviderId,
-  type ChatAccessMode,
   type KeyboardShortcut,
   type VoiceInputProviderId,
 } from '$lib/stores/settings';
@@ -128,6 +128,7 @@ import { ProviderBrandMark } from './providerBrands';
 import AgentsPane from '$lib/components/agents/AgentsPane';
 import VoiceHistoryPanel from './VoiceHistoryPanel';
 import UsageStatsPane from '$lib/components/stats/UsageStatsPane';
+import AgentAccountsSection from '$lib/components/shared/AgentAccountsSection';
 import {
   customAgents,
   addCustomAgent,
@@ -158,7 +159,7 @@ import {
   type RulesFileDetection,
 } from '$lib/services/orchestrator/agent-rules-file';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
-import { agentLaunchView } from '$lib/services/terminal-chat';
+import ChatSettingsPane from './ChatSettingsPane';
 import { useGithubSignIn } from '$lib/react/useGithubSignIn';
 import { useSourceControlSignIn } from '$lib/react/useSourceControlSignIn';
 import {
@@ -185,14 +186,28 @@ type SettingsModalProps = {
   onclose: () => void;
 };
 
+/**
+ * Settings > Agents > ACP Registry and Managed installs, and the "speaks ACP"
+ * checkbox on the add form, are hidden while there is no Chat mode to use ACP agents in.
+ * Hidden, not removed: the stored settings still apply, and flipping this
+ * brings the section back unchanged.
+ */
+const SHOW_ACP_REGISTRY_SECTION = false;
+
+/**
+ * Settings > Agents > Long-running work (auto-settling idle Chat threads) is
+ * hidden for the same reason: there is no Chat mode for it to act on.
+ */
+const SHOW_CHAT_THREAD_SETTINGS = false;
+
 const tabs: { id: Tab; label: string; kicker: string; description: string }[] = [
   { id: 'general', label: 'General', kicker: 'Editor and app', description: 'Editor behaviour and everyday app preferences.' },
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media', description: 'Visual style.' },
-  { id: 'models', label: 'AI Connections', kicker: 'Providers and keys', description: 'Connect AI providers and manage their keys.' },
+  { id: 'models', label: 'AI Providers', kicker: 'Accounts and keys', description: 'Your agent accounts, plus the API keys Spacron’s own AI features use.' },
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation', description: 'Dictation, transcription and voice conversation.' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering', description: 'Default shell and how terminals render.' },
   { id: 'agents', label: 'Agents', kicker: 'Coding CLI tools', description: 'The coding CLI tools Spacron can launch.' },
-  { id: 'chat', label: 'Chat', kicker: 'Chat mode and queue', description: 'Chat mode behavior, message queue and inline requests.' },
+  { id: 'chat', label: 'Chat', kicker: 'Agent chat view', description: 'How the chat view of an agent terminal opens, looks and behaves.' },
   { id: 'source-control', label: 'Source Control', kicker: 'GitHub and git', description: 'GitHub sign-in and source control provider choice.' },
   { id: 'orchestrator', label: 'Orchestrator', kicker: 'Skills and learning', description: 'Orchestrator skills and what it learns.' },
   { id: 'mcp', label: 'MCP & plugins', kicker: 'Tools and plugins', description: 'Tool servers and plugins available to your agents.' },
@@ -200,6 +215,32 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map', description: 'Keyboard shortcuts across the app.' },
   { id: 'about', label: 'About', kicker: 'Version and reset', description: 'Version details and resetting Spacron.' },
 ];
+
+const settingsNavGroups: { label?: string; tabs: Tab[] }[] = [
+  { tabs: ['general', 'appearance', 'chat', 'voice', 'terminal', 'shortcuts', 'stats'] },
+  // 'orchestrator' is left out while there is no Chat mode to configure; its
+  // pane and search entries are kept so it can be listed here again.
+  { label: 'Agents', tabs: ['agents', 'mcp'] },
+  { label: 'Code', tabs: ['source-control'] },
+  { label: 'Connections', tabs: ['models'] },
+  { label: 'Maintenance', tabs: ['about'] },
+];
+
+const settingsTabIconPaths: Record<Tab, string> = {
+  general: 'M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M8 14v6',
+  appearance: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3c0-5.1-4-9.2-9-9.2Z M7.5 10h.01M10 7h.01M15 7.5h.01',
+  models: 'M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',
+  voice: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM5 11a7 7 0 0 0 14 0M12 18v4M8 22h8',
+  terminal: 'm5 7 5 5-5 5M13 17h6',
+  agents: 'M8 7V5a4 4 0 0 1 8 0v2M5 7h14a2 2 0 0 1 2 2v10H3V9a2 2 0 0 1 2-2ZM8 12h.01M16 12h.01M9 16h6',
+  chat: 'M4 4h16v13H9l-5 4V4Z M8 9h8M8 13h5',
+  'source-control': 'M7 5v14M7 8c0 4 10 0 10 5v6M17 5v2M7 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4ZM17 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4ZM17 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z',
+  orchestrator: 'M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M12 8l2.5 5.5L9 11l3-3Z',
+  mcp: 'M8 7V4M16 7V4M5 7h14v6a7 7 0 0 1-14 0V7ZM12 20v2M9 4h.01M15 4h.01',
+  stats: 'M4 19V5M4 19h16M8 15l3-4 3 2 5-7',
+  shortcuts: 'M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12H3V6ZM7 8h.01M11 8h.01M15 8h.01M7 12h.01M11 12h.01M15 12h.01M8 16h8',
+  about: 'M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+};
 
 type SettingsSearchEntry = {
   id: string;
@@ -231,8 +272,9 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'ui-contrast', tab: 'appearance', section: 'Colour', label: 'Contrast', keywords: 'color colour sharp readability' },
   { id: 'custom-background', tab: 'appearance', section: 'Background', label: 'Custom background', keywords: 'wallpaper image' },
   { id: 'background-blur', tab: 'appearance', section: 'Background', label: 'Blur', keywords: 'wallpaper image' },
-  { id: 'ai-provider', tab: 'models', section: 'Provider connections', label: 'Provider', keywords: 'ai model service connection' },
-  { id: 'ai-api-key', tab: 'models', section: 'Provider connections', label: 'API key', keywords: 'token secret credentials subscription', target: 'section' },
+  { id: 'agent-accounts', tab: 'models', section: 'Accounts', label: 'Accounts', keywords: 'account sign in login switch claude codex email add remove', target: 'section' },
+  { id: 'ai-provider', tab: 'models', section: 'API keys', label: 'Provider', keywords: 'ai model service connection' },
+  { id: 'ai-api-key', tab: 'models', section: 'API keys', label: 'API key', keywords: 'token secret credentials subscription', target: 'section' },
   { id: 'ghost-text', tab: 'models', section: 'Inline completion', label: 'Ghost text', keywords: 'inline completion suggestions' },
   { id: 'media-generation', tab: 'models', section: 'Image & video generation', label: 'Image & video generation', keywords: 'image video picture generate fal replicate veo sora dalle', target: 'section' },
   { id: 'jev', tab: 'models', section: 'Jev decisions', label: 'Jev decisions', keywords: 'jev typesafe openrouter vercel gateway decisions classifier system one fast routing', target: 'section' },
@@ -248,18 +290,37 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'terminal-renderer', tab: 'terminal', section: 'Appearance', label: 'Renderer', keywords: 'terminal webgl canvas dom' },
   { id: 'terminal-scrollback', tab: 'terminal', section: 'Appearance', label: 'Scrollback', keywords: 'terminal history lines' },
   { id: 'default-shell', tab: 'terminal', section: 'Default shell', label: 'Default shell', keywords: 'terminal command prompt', target: 'section' },
-  { id: 'agent-launch-view', tab: 'agents', section: 'Launch view', label: 'Open new agents in', keywords: 'terminal chat default launch view' },
-  { id: 'agent-isolation', tab: 'agents', section: 'Isolation & changes', label: 'Isolate agents in worktrees', keywords: 'git branches checkout' },
-  { id: 'auto-stage', tab: 'agents', section: 'Isolation & changes', label: 'Auto-stage agent changes', keywords: 'git review' },
   { id: 'stay-awake', tab: 'agents', section: 'Power', label: 'Stay awake while agents work', keywords: 'sleep idle power' },
+  { id: 'agent-status-hooks', tab: 'agents', section: 'Local Windows', label: 'Agent status hooks', keywords: 'claude turn status working waiting done' },
+  { id: 'auto-agent-titles', tab: 'agents', section: 'Local Windows', label: 'Auto-generate agent titles', keywords: 'first prompt rename tab title' },
+  { id: 'codex-own-server', tab: 'agents', section: 'Codex CLI', label: 'Run each Codex terminal on its own server', keywords: 'daemon shared app-server console windows isolate' },
+  { id: 'codex-shared-server-warning', tab: 'agents', section: 'Codex CLI', label: 'Warn when a Codex tab shares a server', keywords: 'daemon app-server console windows warning' },
   { id: 'browser-tools', tab: 'agents', section: 'Browser', label: 'Browser tools', keywords: 'web agent' },
   { id: 'orchestrator-skills', tab: 'orchestrator', section: 'Built-in skills', label: 'Built-in skills', keywords: 'orchestrator assistant security engineering debugging review git' },
   { id: 'orchestrator-custom-skills', tab: 'orchestrator', section: 'Your skills', label: 'Add a skill', keywords: 'orchestrator custom instructions playbook prompt' },
   { id: 'orchestrator-learned', tab: 'orchestrator', section: 'What it has learned', label: 'What it has learned', keywords: 'orchestrator memory profile preferences forget' },
   { id: 'coding-cli-agents', tab: 'agents', section: 'Coding CLI agents', label: 'Coding CLI agents', keywords: 'custom agent command' },
-  { id: 'chat-mode', tab: 'chat', section: 'Chat mode', label: 'Chat mode', keywords: 'chat conversational send message queue' },
-  { id: 'chat-queue', tab: 'chat', section: 'Queue behavior', label: 'Message queue', keywords: 'queue send chat message order' },
-  { id: 'chat-inline', tab: 'chat', section: 'Inline requests', label: 'Inline request behavior', keywords: 'inline approval choice input request' },
+  { id: 'chat-launch-view', tab: 'chat', section: 'Opening', label: 'Open new agents in', keywords: 'terminal chat default launch view' },
+  { id: 'chat-font', tab: 'chat', section: 'Appearance', label: 'Font family', keywords: 'chat typeface typography terminal' },
+  { id: 'chat-text-size', tab: 'chat', section: 'Appearance', label: 'Text size', keywords: 'chat font size bigger smaller' },
+  { id: 'chat-code-size', tab: 'chat', section: 'Appearance', label: 'Code text size', keywords: 'chat code block inline monospace' },
+  { id: 'chat-width', tab: 'chat', section: 'Appearance', label: 'Width', keywords: 'chat column wide full comfortable' },
+  { id: 'chat-scroll-on-send', tab: 'chat', section: 'Behavior', label: 'Scroll to latest when sending', keywords: 'chat scroll position follow' },
+  { id: 'chat-spellcheck', tab: 'chat', section: 'Behavior', label: 'Spellcheck and autocorrect', keywords: 'chat spelling message box' },
+  { id: 'chat-inline-visuals', tab: 'chat', section: 'Turn activity', label: 'Inline visuals', keywords: 'chat charts diagrams mockups html' },
+  { id: 'chat-queue', tab: 'chat', section: 'Behavior', label: 'Queue follow-ups', keywords: 'chat queue busy steer send later' },
+  { id: 'chat-mark-new', tab: 'chat', section: 'Behavior', label: 'Mark new messages when returning to a chat', keywords: 'chat unread new line' },
+  { id: 'chat-timestamps', tab: 'chat', section: 'Behavior', label: 'Show timestamps', keywords: 'chat time clock message' },
+  { id: 'chat-suggested', tab: 'chat', section: 'Behavior', label: 'Suggested prompts', keywords: 'chat starters empty' },
+  { id: 'chat-diffs', tab: 'chat', section: 'Turn activity', label: 'Turn diffs', keywords: 'chat diff changes files edited' },
+  { id: 'chat-prs', tab: 'chat', section: 'Turn activity', label: 'Opened pull requests', keywords: 'chat pr github ci checks' },
+  { id: 'chat-links', tab: 'chat', section: 'Behavior', label: 'Link previews', keywords: 'chat links cards url' },
+  { id: 'chat-usage-continue', tab: 'chat', section: 'Behavior', label: 'Continue chats automatically when a usage limit resets', keywords: 'chat usage limit reset auto continue' },
+  { id: 'chat-agent-launch', tab: 'chat', section: 'Default launch mode per agent', label: 'Default launch mode per agent', keywords: 'chat cli claude codex grok opencode per agent' },
+  { id: 'chat-match-terminal', tab: 'chat', section: 'Appearance', label: 'Match terminal interface', keywords: 'chat terminal font colours colors theme' },
+  { id: 'chat-contrast', tab: 'chat', section: 'Appearance', label: 'Contrast', keywords: 'chat brightness softer sharper text' },
+  { id: 'chat-ci', tab: 'chat', section: 'Turn activity', label: 'CI result lines', keywords: 'chat ci checks github actions pull request' },
+  { id: 'chat-permissions', tab: 'chat', section: 'Behavior', label: 'Permissions for new chats', keywords: 'chat permission full access approval' },
   { id: 'source-control-github', tab: 'source-control', section: 'Source control provider', label: 'Source control', keywords: 'git github provider clone publish' },
   { id: 'source-control-signin', tab: 'source-control', section: 'GitHub sign-in', label: 'GitHub sign-in', keywords: 'github sign in oauth gh cli personal access token' },
   { id: 'mcp-builtin', tab: 'mcp', section: 'Built in', label: 'Built-in servers', keywords: 'mcp spacron playwright browser tools' },
@@ -304,6 +365,41 @@ function classNames(...parts: Array<string | false | null | undefined>) {
 function providerIcon(id: string) {
   const def = aiProviders.find((item) => item.id === id);
   return <ProviderBrandMark id={id} label={def?.label ?? id} />;
+}
+
+function GithubBrandIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+    </svg>
+  );
+}
+
+function GitlabBrandIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M23.6 9.58 22.3.96a.6.6 0 0 0-1.08-.2l-2.73 6.94H5.51L2.78.76a.6.6 0 0 0-1.08.2L.4 9.58a1.2 1.2 0 0 0 .44 1.35L12 23.33l11.16-12.4a1.2 1.2 0 0 0 .44-1.35Z" />
+    </svg>
+  );
+}
+
+function BitbucketBrandIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M2.66 3h18.68a.9.9 0 0 1 .89 1.03l-2.75 16.36a1.2 1.2 0 0 1-1.18 1H5.7a1.2 1.2 0 0 1-1.18-1L1.77 4.03A.9.9 0 0 1 2.66 3Zm11.83 11.53H9.51l-.78 4.6h6.54l.78-4.6Z" />
+    </svg>
+  );
+}
+
+function GitBrandIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="18" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="6" r="3" />
+      <path d="M6 9v12M18 9a9 9 0 0 1-9 9" />
+    </svg>
+  );
 }
 
 /** Open a provider/help URL in the system default browser. A plain
@@ -583,15 +679,18 @@ function ModeMock({ tone, half = false }: { tone: 'light' | 'dark'; half?: boole
 
 function SettingRow({
   title,
+  searchKey,
   detail,
   children,
 }: {
-  title: string;
+  title: string | React.ReactNode;
+  searchKey?: string;
   detail?: string;
   children: React.ReactNode;
 }) {
+  const key = searchKey ?? (typeof title === 'string' ? settingsSearchKey(title) : '');
   return (
-    <div className="settings-control-row" data-settings-key={settingsSearchKey(title)}>
+    <div className="settings-control-row" data-settings-key={key}>
       <div className="settings-control-copy">
         <span>{title}</span>
         {detail && <small>{detail}</small>}
@@ -649,7 +748,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 /**
  * Settings > Voice > Read aloud. The voice behind the chat's Read aloud
  * button: the free system voice, or a human-sounding cloud voice that uses a
- * saved key (OpenAI's from AI Connections, or an ElevenLabs key saved here).
+ * saved key (OpenAI's from AI Providers, or an ElevenLabs key saved here).
  */
 function ReadAloudSection() {
   const settings = useStore(readAloudSettings) as ReadAloudSettings;
@@ -711,13 +810,13 @@ function ReadAloudSection() {
       : keyExists
         ? `Using your saved ${vendor} key. ${vendor} bills each reply you have read aloud.`
         : engine === 'openai'
-          ? 'No OpenAI key is saved. Add one under AI Connections > Provider connections.'
+          ? 'No OpenAI key is saved. Add one under AI Providers > API keys.'
           : 'No ElevenLabs key is saved yet. Paste one below.';
 
   return (
     <Section title="Read aloud">
       <p className="shell-hint">
-        The voice used when you press Read aloud on a chat reply. Nothing is read out unless you press it.
+        Voice used when reading chat replies aloud.
       </p>
       <SettingRow title="Voice engine" detail={status}>
         <SelectField
@@ -733,7 +832,7 @@ function ReadAloudSection() {
       </SettingRow>
       <SettingRow
         title="Read agent completions aloud"
-        detail="Read task completion replies (done / failed / needs input) out loud via text-to-speech in both chat and terminal modes."
+        detail="Announce task completions (done, failed, needs input) with text-to-speech."
       >
         <Toggle label="Read completions aloud" checked={speakCompletions} onChange={speakAgentCompletions.set} />
       </SettingRow>
@@ -768,7 +867,7 @@ function ReadAloudSection() {
 }
 
 /**
- * Settings > AI Connections > Jev decisions. Where the real Jev is reached
+ * Settings > AI Providers > Jev decisions. Where the real Jev is reached
  * and which saved key pays for it: TypeSafe, OpenRouter, Vercel AI Gateway, or
  * a custom provider that serves `/systemone` (e.g. a LiteLLM proxy). Only
  * sources that run Jev are listed; custom ones are probed first.
@@ -832,16 +931,14 @@ function JevConnectionSection() {
     ? 'Checking…'
     : sourceKeyExists
       ? `On · using your ${sourceLabel} key.`
-      : `Off · no ${sourceLabel} key is saved yet${via === 'typesafe' ? '' : '. Add it under Provider connections above'}.`;
+      : `Off · no ${sourceLabel} key is saved yet${via === 'typesafe' ? '' : '. Add it under API keys above'}.`;
 
   return (
     <Section title="Jev decisions">
       <p className="shell-hint">
-        Jev makes quick, structured decisions for Spacron: what a quiet agent is doing, how to route a request, and
-        whether new work overlaps a running agent. It answers in well under a second and costs a fraction of a chat
-        model. It is optional; when it is off, Spacron uses its built-in rules.
+        Fast, structured decisions for agent routing and status classification. Optional; built-in rules are used when off.
       </p>
-      <SettingRow title="Answered by" detail="Services that run the Jev model. Each uses its own saved key.">
+      <SettingRow title="Answered by" detail="Select the service that powers Jev decisions.">
         <SelectField
           value={via}
           options={jevOptions}
@@ -869,8 +966,8 @@ function JevConnectionSection() {
       )}
       <SettingRow
         title="Let agents use Jev"
-        detail={`Adds a jev_classify tool to every coding agent Spacron runs, for bulk sorting (test failures, files, log lines) using the key above. While on, each agent carries about 250 extra tokens for the tool's description.${agentUsage && agentUsage.calls > 0
-          ? ` So far: ${agentUsage.calls} call${agentUsage.calls === 1 ? '' : 's'}, ${agentUsage.items} item${agentUsage.items === 1 ? '' : 's'}, ${agentUsage.inputTokens.toLocaleString()} tokens${agentUsage.reportedCostUsd > 0 ? `, $${agentUsage.reportedCostUsd.toFixed(4)}` : ''}.`
+        detail={`Adds a jev_classify tool to coding agents for quick categorization.${agentUsage && agentUsage.calls > 0
+          ? ` Used ${agentUsage.calls} time${agentUsage.calls === 1 ? '' : 's'} (${agentUsage.inputTokens.toLocaleString()} tokens).`
           : ''}`}
       >
         <Toggle label="Let agents use Jev" checked={agentTool} onChange={jevAgentTool.set} />
@@ -881,7 +978,7 @@ function JevConnectionSection() {
 }
 
 /**
- * Settings > AI Connections > Custom providers. Any OpenAI-compatible API: a
+ * Settings > AI Providers > Custom providers. Any OpenAI-compatible API: a
  * name, its address and a key. Once saved it joins every provider picker
  * (chat, completion, dictation, image and video, realtime voice), and its
  * models are always the live list its key returns.
@@ -950,9 +1047,7 @@ function CustomProvidersSection() {
   return (
     <Section title="Custom providers">
       <p className="shell-hint">
-        Add any OpenAI-compatible API with its address and key. It then appears in every provider picker, for chat,
-        inline completion, dictation, images, videos and voice mode, with its models loaded live from your key. The key is
-        kept in your OS keychain.
+        Connect any OpenAI-compatible endpoint. Keys are encrypted in your OS keychain.
       </p>
       {list.length > 0 && (
         <ul className="custom-provider-list">
@@ -1024,7 +1119,7 @@ function CustomProvidersSection() {
 }
 
 /**
- * Settings > AI Connections > Image & video generation. Generation tries the
+ * Settings > AI Providers > Image & video generation. Generation tries the
  * ChatGPT plan first for images, then every provider with a key; this picks
  * which one goes first, per-provider models, and the two media-only keys.
  */
@@ -1114,9 +1209,7 @@ function MediaGenerationSection() {
   return (
     <Section title="Image & video generation">
       <p className="shell-hint">
-        Images use your ChatGPT plan first. When it is not signed in or its limit is used up, Spacron uses the next
-        provider with a key: OpenAI, Google and OpenRouter use the keys above; fal and Replicate use the keys below.
-        Files are saved in the project&apos;s <code>generations</code> folder and shown in the chat.
+        Generates media using your ChatGPT plan or API keys. Outputs save to the project&apos;s generations folder.
       </p>
       {providerRow('image')}
       {providerRow('video')}
@@ -1211,16 +1304,14 @@ function McpSettingsPane() {
     <>
       <Section title="Built in">
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-          MCP servers give your agents tools beyond the filesystem and the shell. These two come
-          with Spacron.
+          Core tool servers provided automatically by Spacron.
         </p>
         <div className="agent-list">
           <div className="agent-row">
             <div className="agent-meta">
               <div className="agent-name-row"><span className="agent-name">Spacron</span></div>
               <small className="shell-hint">
-                Agent-to-agent tools and emulator control. Always on: it is how agents see each
-                other and how work gets handed over.
+                Inter-agent communication and emulator controls.
               </small>
             </div>
           </div>
@@ -1228,8 +1319,7 @@ function McpSettingsPane() {
             <div className="agent-meta">
               <div className="agent-name-row"><span className="agent-name">Playwright browser</span></div>
               <small className="shell-hint">
-                Lets an agent open the page it just built and read it. Managed by Browser tools in
-                Agents settings.
+                Allows agents to inspect web pages and verify UI.
               </small>
             </div>
             <Toggle
@@ -1255,12 +1345,7 @@ function McpSettingsPane() {
 
       <Section title="Your servers">
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-          Add a hosted server by URL, or a local one by command. Each is written into every agent
-          CLI's own config, so Claude Code, Codex, Gemini, Copilot, Qwen, Amp, Devin, Antigravity
-          and the rest all get it. Changes are written straight away; an agent that is already
-          running picks them up when it restarts. The chat can use them
-          too: tools a server marks read-only run straight away, and anything else asks you first
-          unless the chat has Full access.
+          Connect local or hosted MCP servers to add tools across all agent CLIs.
         </p>
         {servers.length > 0 && (
           <div className="agent-list">
@@ -1284,8 +1369,7 @@ function McpSettingsPane() {
                     {problem && <small className="shell-hint mcp-server-problem">{problem}</small>}
                     {headersLostOnCodex(server) && (
                       <small className="shell-hint">
-                        Codex has no setting for request headers, so this one reaches Codex without
-                        its auth header. Every other agent gets it.
+                        Codex does not support request headers; other agents will receive them.
                       </small>
                     )}
                   </div>
@@ -1440,8 +1524,7 @@ function OrchestratorSettingsPane() {
     <>
       <Section title="Built-in skills">
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-          Skills are playbooks the orchestrator follows on every turn, whichever model is its brain.
-          Switch off any you do not want.
+          Core guidelines followed by the orchestrator on every turn.
         </p>
         {BRAIN_SKILLS.map((skill) => (
           <SkillRow
@@ -1470,9 +1553,7 @@ function OrchestratorSettingsPane() {
 
       <Section title="Your skills">
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-          Teach the orchestrator how you work: your stack, your review checklist, how you like
-          commits or replies written. Write it the way you would brief a new teammate. Your skills
-          never override the Security skill.
+          Custom instructions for your stack, workflow, and coding style.
         </p>
         {customSkills.length > 0 && (
           <div className="agent-list">
@@ -1544,8 +1625,7 @@ function OrchestratorSettingsPane() {
 
       <Section title="What it has learned">
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-          After each conversation the orchestrator notes lasting preferences and project facts, and
-          anything you have had to say twice becomes a firm rule. Remove anything that is wrong.
+          Preferences and project rules automatically learned from past conversations.
         </p>
         {learned.length === 0 ? (
           <p className="shell-hint">Nothing learned yet.</p>
@@ -1910,10 +1990,12 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [settingsQuery, setSettingsQuery] = useState('');
 
   const settingsSearchResults = useMemo(() => {
+    // A tab hidden from the nav must not be reachable through search either.
     const query = settingsQuery.trim().toLowerCase();
     if (!query) return [];
     return settingsSearchEntries
       .filter((entry) => {
+        if (!settingsNavGroups.some((group) => group.tabs.includes(entry.tab))) return false;
         const haystack = `${entry.label} ${entry.section} ${entry.tab} ${entry.keywords ?? ''}`.toLowerCase();
         return haystack.includes(query);
       })
@@ -2238,13 +2320,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentShowSnapshotsTab = useStore(showSnapshotsTab);
   const currentPreviewPlacement = useStore(previewPlacement);
   const currentNotifications = useStore(notificationsEnabled);
-  const currentAgentWorktrees = useStore(agentWorktrees);
-  const currentAgentLaunchView = useStore(agentLaunchView);
-  const currentAutoStage = useStore(autoStageAgentChanges);
   const currentAgentBrowserTools = useStore(agentBrowserTools);
   const currentComputerUse = useStore(computerUse);
+  const currentAgentWorkspaceTrustOverrides = useStore(agentWorkspaceTrustOverrides);
+  const currentAgentStatusHooksEnabled = useStore(agentStatusHooksEnabled);
+  const currentAgentAutoGenerateTitles = useStore(agentAutoGenerateTitles);
+  const currentAgentCodexOwnServer = useStore(agentCodexOwnServer);
+  const currentAgentWarnCodexSharedServer = useStore(agentWarnCodexSharedServer);
+  const currentProjectId = useStore(activeProjectId);
   // Null until the backend answers; the row stays disabled until then.
   const [computerUseAvailable, setComputerUseAvailable] = useState<boolean | null>(null);
+  const [computerUseExpanded, setComputerUseExpanded] = useState(false);
   useEffect(() => {
     let live = true;
     void computerUseSupported().then((ok) => {
@@ -2257,13 +2343,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentAgentFailover = useStore(agentFailover);
   const currentFailoverHeadroom = useStore(agentFailoverHeadroomPercent);
   const currentFailoverCrossProvider = useStore(agentFailoverCrossProvider);
-  const currentKeepSystemAwake = useStore(keepSystemAwake);
+  const currentKeepAwakeMode = useStore(keepAwakeMode);
   const currentAutoSettleEnabled = useStore(autoSettleEnabled);
   const currentAutoSettleIdleMs = useStore(autoSettleIdleMs);
   const currentSourceControlProvider = useStore(sourceControlProvider);
-  const currentChatQueueWhileBusy = useStore(chatQueueWhileBusy);
-  const currentChatAutoAnswerInline = useStore(chatAutoAnswerInline);
-  const currentChatDefaultAccessMode = useStore(chatDefaultAccessMode);
   const keepAwake = useStore(keepAwakeState);
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
@@ -2773,24 +2856,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }
 
   return (
-    <div className="settings-page-host">
-      <div className="settings-modal settings-page" ref={pageRef} role="region" aria-labelledby="settings-title">
+    <div className="settings-page-host" onClick={(event) => { if (event.target === event.currentTarget) onclose(); }}>
+      <div className="settings-modal settings-page" ref={pageRef} role="region" aria-label="Settings">
         <div className="settings-body">
           <aside className="settings-sidebar" aria-label="Settings navigation">
-            <header className="settings-header">
-              <div className="settings-heading">
-                <button className="settings-back" type="button" onClick={onclose} aria-label="Back to workspace" title="Back to workspace (Esc)">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="m12 5-7 7 7 7M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-                <svg className="settings-heading-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-                <h2 id="settings-title">Settings</h2>
-              </div>
-            </header>
             <div className="settings-search-wrap">
               <svg className="settings-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
@@ -2841,24 +2910,32 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               )}
             </div>
             <nav className="settings-tabs" aria-label="Settings sections">
-              {tabs.map((tab) => (
-                <button key={tab.id} className={activeTab === tab.id ? 'active' : undefined} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => setActiveTab(tab.id)}>
-                  <span>{tab.label}</span>
-                  <small>{tab.kicker}</small>
-                </button>
+              {settingsNavGroups.map((group) => (
+                <div className="settings-nav-group" key={group.label ?? 'general'}>
+                  {group.label && <h3>{group.label}</h3>}
+                  {group.tabs.map((tabId) => {
+                    const tab = tabs.find((item) => item.id === tabId)!;
+                    return (
+                      <button key={tab.id} className={activeTab === tab.id ? 'active' : undefined} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => setActiveTab(tab.id)}>
+                        <svg className="settings-tab-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d={settingsTabIconPaths[tab.id]} />
+                        </svg>
+                        <span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               ))}
             </nav>
           </aside>
 
           <main className="settings-panel" ref={panelRef}>
-            {/* Page header in the Usage tab's style: title and one line of context
-                above the tab's cards. Usage renders its own, with a picker. */}
-            {activeTab !== 'stats' && (
-              <div className="settings-page-head">
-                <h3 className="settings-page-title">{tabs.find((t) => t.id === activeTab)?.label}</h3>
-                <p className="settings-page-sub">{tabs.find((t) => t.id === activeTab)?.description}</p>
-              </div>
-            )}
+            <div className="settings-topbar">
+              <div className="settings-breadcrumb"><span>Settings</span><span className="settings-breadcrumb-divider">/</span><strong>{tabs.find((tab) => tab.id === activeTab)?.label}</strong></div>
+              <button className="settings-topbar-close" type="button" onClick={onclose} aria-label="Close settings" title="Close settings (Esc)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+              </button>
+            </div>
             {activeTab === 'general' && (
               <>
                 <Section title="Editor">
@@ -2961,17 +3038,20 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </div>
                   <p className="window-close-status" aria-live="polite">
                     {currentCloseBehavior === 'minimize'
-                      ? 'When you close the window, Spacron will minimize and keep terminals and agents running.'
-                      : 'When you close the window, Spacron will quit and stop live terminals.'}
+                      ? 'Runs in the background when closed.'
+                      : 'Quits completely when closed.'}
                   </p>
                 </Section>
+              </>
+            )}
 
-                <Section title="Source Control Provider">
-                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Choose which provider Spacron uses for clone, push and pull-request actions. GitHub
-                    supports OAuth sign-in; others use a personal access token pasted in the Clone dialog.
-                  </p>
-                  <SettingRow title="Source control provider">
+            {activeTab === 'source-control' && (
+              <>
+                <Section title="Default provider">
+                  <SettingRow
+                    title="Source control provider"
+                    detail="Primary provider used for cloning and publishing repositories."
+                  >
                     <Dropdown
                       options={[
                         { value: 'github', label: 'GitHub' },
@@ -2983,97 +3063,97 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       onChange={(val) => sourceControlProvider.set(val as 'github' | 'gitlab' | 'bitbucket' | 'other')}
                     />
                   </SettingRow>
-                  <p className="shell-hint" style={{ marginTop: '8px', marginBottom: 0, fontSize: '11px', color: 'var(--text-muted)' }}>
-                    GitHub sign-in lives in the Source Control tab — sign in once here to clone private
-                    repos and publish PRs without pasting a token every time.
-                  </p>
                 </Section>
-              </>
-            )}
 
-            {activeTab === 'source-control' && (
-              <>
-                <Section title="GitHub sign-in">
-                  <div className="settings-github">
-                    {github.identity ? (
-                      <>
-                        <div className="settings-github-status">
-                          <span className="settings-github-login">
-                            Signed in as {github.identity.login}
-                          </span>
-                          <small>
-                            {github.identity.source === 'oauth'
-                              ? 'via GitHub OAuth'
-                              : github.identity.source === 'gh-cli'
-                                ? 'via GitHub CLI'
-                                : 'with a personal access token'}
-                          </small>
-                          {github.identity.scopes.length > 0 && (
-                            <div className="settings-github-scopes">
-                              {github.identity.scopes.map((s) => (
-                                <span key={s} className="settings-github-scope">
-                                  {s}
-                                </span>
-                              ))}
-                            </div>
+                <Section title="Accounts">
+                  <div className="settings-sc-row">
+                    <div className="settings-sc-copy">
+                      <span className="settings-sc-brand-icon github">
+                        <GithubBrandIcon />
+                      </span>
+                      <div className="settings-sc-meta">
+                        <div className="settings-sc-title-row">
+                          <span className="settings-sc-provider-name">GitHub</span>
+                          {currentSourceControlProvider === 'github' && (
+                            <span className="settings-sc-default-pill">Default</span>
+                          )}
+                          {github.identity ? (
+                            <span className="settings-sc-badge connected">
+                              <span className="settings-sc-dot" />
+                              Connected
+                            </span>
+                          ) : (
+                            <span className="settings-sc-badge disconnected">Not connected</span>
                           )}
                         </div>
+                        <span className="settings-sc-detail">
+                          {github.identity
+                            ? `@${github.identity.login} · ${github.identity.source === 'oauth' ? 'GitHub OAuth' : github.identity.source === 'gh-cli' ? 'GitHub CLI' : 'Personal access token'}`
+                            : 'Private repositories and pull requests.'}
+                        </span>
+                        {github.identity && github.identity.scopes.length > 0 && (
+                          <div className="settings-github-scopes" style={{ marginTop: '2px' }}>
+                            {github.identity.scopes.map((s) => (
+                              <span key={s} className="settings-github-scope">
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="settings-sc-control">
+                      {github.identity ? (
                         <button
                           type="button"
-                          className="settings-danger"
+                          className="settings-sc-disconnect-btn"
                           onClick={() => void github.signOut()}
                         >
                           Sign out
                         </button>
-                      </>
-                    ) : github.signingIn ? (
-                      github.device ? (
-                        <div className="settings-github-signin">
-                          <div className="settings-github-device-row">
-                            <code className="settings-github-device-code">
-                              {github.device.user_code}
-                            </code>
-                            <button
-                              type="button"
-                              className="settings-secondary"
-                              onClick={() => void copyGithubCode()}
-                            >
-                              {githubCopied ? 'Copied' : 'Copy'}
+                      ) : github.signingIn ? (
+                        github.device ? (
+                          <div className="settings-sc-device-flow">
+                            <div className="settings-github-device-row">
+                              <code className="settings-github-device-code">
+                                {github.device.user_code}
+                              </code>
+                              <button
+                                type="button"
+                                className="settings-secondary"
+                                onClick={() => void copyGithubCode()}
+                              >
+                                {githubCopied ? 'Copied' : 'Copy'}
+                              </button>
+                            </div>
+                            <div className="settings-github-device-waiting">
+                              <span className="settings-github-spinner" aria-hidden="true" />
+                              <button
+                                type="button"
+                                className="settings-link-button"
+                                onClick={() => void github.openInBrowser(github.device!.verification_uri)}
+                              >
+                                Authorize on GitHub
+                              </button>
+                              <button type="button" className="settings-secondary" onClick={github.cancel}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="settings-github-signin">
+                            <div className="settings-github-device-waiting">
+                              <span className="settings-github-spinner" aria-hidden="true" />
+                              <span>Signing in with GitHub CLI…</span>
+                            </div>
+                            <button type="button" className="settings-secondary" onClick={github.cancel}>
+                              Cancel
                             </button>
                           </div>
-                          <div className="settings-github-device-waiting">
-                            <span className="settings-github-spinner" aria-hidden="true" />
-                            <span>Waiting for approval in your browser…</span>
-                            <button
-                              type="button"
-                              className="settings-link-button"
-                              onClick={() => void github.openInBrowser(github.device!.verification_uri)}
-                            >
-                              Open github.com/login/device
-                            </button>
-                          </div>
-                          <button type="button" className="settings-secondary" onClick={github.cancel}>
-                            Cancel sign-in
-                          </button>
-                        </div>
+                        )
                       ) : (
-                        <div className="settings-github-signin">
-                          <div className="settings-github-device-waiting">
-                            <span className="settings-github-spinner" aria-hidden="true" />
-                            <span>Signing in with your GitHub CLI…</span>
-                          </div>
-                          <button type="button" className="settings-secondary" onClick={github.cancel}>
-                            Cancel sign-in
-                          </button>
-                        </div>
-                      )
-                    ) : (
-                      <>
-                        <div className="settings-github-status">
-                          <span className="settings-github-login">Not signed in</span>
-                          <small>Private clones and publishes need a GitHub sign-in.</small>
-                        </div>
-                        <div className="settings-github-actions">
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                           {github.options?.oauth_available && (
                             <button
                               type="button"
@@ -3089,25 +3169,20 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                               className="settings-secondary"
                               onClick={() => void github.importGhCli()}
                             >
-                              Use my GitHub CLI sign-in
+                              Use GitHub CLI
                             </button>
                           )}
-                          {!github.options?.oauth_available &&
-                            !github.options?.gh_cli_available && (
-                              <small className="settings-github-note">
-                                OAuth sign-in isn't configured for this build, so paste a personal
-                                access token in the Clone dialog instead.
-                              </small>
-                            )}
+                          {!github.options?.oauth_available && !github.options?.gh_cli_available && (
+                            <small className="settings-github-note">
+                              Paste PAT in Clone dialog.
+                            </small>
+                          )}
                         </div>
-                      </>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </Section>
 
-                {SOURCE_CONTROL_PROVIDERS
-                  .filter((p) => p.value !== 'github')
-                  .map((provider) => {
+                  {SOURCE_CONTROL_PROVIDERS.filter((p) => p.value !== 'github').map((provider) => {
                     const sc =
                       provider.value === 'gitlab'
                         ? gitlabSc
@@ -3115,6 +3190,19 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                           ? bitbucketSc
                           : otherSc;
                     const draft = tokenDrafts[provider.value] ?? '';
+                    const isDefault = currentSourceControlProvider === provider.value;
+                    const placeholder =
+                      provider.value === 'gitlab'
+                        ? 'glpat-...'
+                        : provider.value === 'bitbucket'
+                          ? 'App password'
+                          : 'Personal access token';
+                    const providerDesc =
+                      provider.value === 'gitlab'
+                        ? 'Personal access token (glpat-).'
+                        : provider.value === 'bitbucket'
+                          ? 'App password with repo access.'
+                          : 'Personal access token for custom host.';
 
                     const handleSave = async () => {
                       await sc.saveToken(draft.trim());
@@ -3122,52 +3210,69 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     };
 
                     return (
-                      <Section key={provider.value} title={`${provider.label} sign-in`}>
-                        <div className="settings-github">
-                          {sc.identity ? (
-                            <>
-                              <div className="settings-github-status">
-                                <span className="settings-github-login">
-                                  Signed in as {sc.identity.login || provider.label}
+                      <div className="settings-sc-row" key={provider.value}>
+                        <div className="settings-sc-copy">
+                          <span className={`settings-sc-brand-icon ${provider.value}`}>
+                            {provider.value === 'gitlab' ? (
+                              <GitlabBrandIcon />
+                            ) : provider.value === 'bitbucket' ? (
+                              <BitbucketBrandIcon />
+                            ) : (
+                              <GitBrandIcon />
+                            )}
+                          </span>
+                          <div className="settings-sc-meta">
+                            <div className="settings-sc-title-row">
+                              <span className="settings-sc-provider-name">{provider.label}</span>
+                              {isDefault && <span className="settings-sc-default-pill">Default</span>}
+                              {sc.identity ? (
+                                <span className="settings-sc-badge connected">
+                                  <span className="settings-sc-dot" />
+                                  Connected
                                 </span>
-                                <small>via {sc.identity.source === 'oauth' ? 'OAuth' : 'personal access token'}</small>
-                              </div>
-                              <button
-                                type="button"
-                                className="settings-danger"
-                                onClick={() => void sc.signOut()}
-                              >
-                                Sign out
-                              </button>
-                            </>
+                              ) : (
+                                <span className="settings-sc-badge disconnected">Not connected</span>
+                              )}
+                            </div>
+                            <span className="settings-sc-detail">
+                              {sc.identity
+                                ? `${sc.identity.login ? `@${sc.identity.login} · ` : ''}${sc.identity.source === 'oauth' ? 'OAuth' : 'Personal access token'}`
+                                : providerDesc}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="settings-sc-control">
+                          {sc.identity ? (
+                            <button
+                              type="button"
+                              className="settings-sc-disconnect-btn"
+                              onClick={() => void sc.signOut()}
+                            >
+                              Sign out
+                            </button>
                           ) : sc.signingIn ? (
-                            <div className="settings-github-signin">
-                              <div className="settings-github-device-waiting">
-                                <span className="settings-github-spinner" aria-hidden="true" />
-                                <span>Saving token for {provider.label}…</span>
-                              </div>
-                              <button type="button" className="settings-secondary" onClick={() => {}}>
-                                Cancel
-                              </button>
+                            <div className="settings-github-device-waiting">
+                              <span className="settings-github-spinner" aria-hidden="true" />
+                              <span>Saving token…</span>
                             </div>
                           ) : (
-                            <>
-                              <div className="settings-github-status">
-                                <span className="settings-github-login">Not signed in</span>
-                                <small>
-                                  Paste a {provider.label} personal access token to enable private
-                                  clones and publish actions for this provider.
-                                </small>
-                              </div>
-                              <div className="settings-github-actions">
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', width: '100%' }}>
+                              <div className="settings-sc-input-group">
                                 <input
                                   type="password"
-                                  placeholder="Personal access token"
+                                  placeholder={placeholder}
                                   value={draft}
                                   onChange={(e) =>
                                     setTokenDrafts({ ...tokenDrafts, [provider.value]: e.target.value })
                                   }
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && draft.trim() && !sc.signingIn) {
+                                      void handleSave();
+                                    }
+                                  }}
                                   disabled={sc.signingIn}
+                                  aria-label={`${provider.label} token`}
                                 />
                                 <button
                                   type="button"
@@ -3175,15 +3280,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                                   onClick={handleSave}
                                   disabled={sc.signingIn || !draft.trim()}
                                 >
-                                  Save token
+                                  {sc.signingIn ? 'Connecting…' : 'Connect'}
                                 </button>
                               </div>
-                            </>
+                              {sc.error && <span className="settings-sc-error-msg">{sc.error}</span>}
+                            </div>
                           )}
                         </div>
-                      </Section>
+                      </div>
                     );
                   })}
+                </Section>
               </>
             )}
 
@@ -3288,7 +3395,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 </Section>
 
                 <Section title="Background">
-                  <SettingRow title="Custom background" detail="Show your own image behind the interface. It overrides the solid or theme background while enabled and remains available in Light and Dark mode.">
+                  <SettingRow title="Custom background" detail="Display a custom image behind the interface.">
                     <div className="bg-actions">
                       <button className="bg-btn" onClick={chooseBackgroundImage}>
                         {bgPresent ? 'Change…' : 'Choose…'}
@@ -3303,14 +3410,14 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       `enabled && a file is set`. Turning it off falls back to the
                       theme's own wallpaper, which is what the label promises. */}
                   {bgPresent && (
-                    <SettingRow title="Show custom background" detail="Turn off to fall back to the theme's wallpaper without losing your image.">
+                    <SettingRow title="Show custom background" detail="Temporarily show the default theme wallpaper.">
                       <Toggle label="Show custom background" checked={bgEnabled} onChange={backgroundImageEnabled.set} />
                     </SettingRow>
                   )}
                   <SettingRow title="Blur" detail={`${bgBlur}px`}>
                     <input type="range" min="0" max="24" step="1" value={bgBlur} onChange={(event) => backgroundImageBlur.set(Number(event.target.value))} disabled={!bgPresent} />
                   </SettingRow>
-                  <SettingRow title="Panel opacity" detail={`${glassOpacity}%. Lower shows more of your image; raise it if text is hard to read.`}>
+                  <SettingRow title="Panel opacity" detail={`${glassOpacity}% · lower increases translucency`}>
                     <input type="range" min="30" max="100" step="5" value={glassOpacity} onChange={(event) => backgroundGlassOpacity.set(Number(event.target.value))} disabled={!bgPresent || !bgEnabled} aria-label="Panel opacity" />
                   </SettingRow>
                 </Section>
@@ -3319,8 +3426,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'models' && (
               <>
-                <Section title="Provider connections">
-                  <SettingRow title="Provider" detail="Choose a connection to configure. Pick the orchestrator provider and model in each Chat composer.">
+                <AgentAccountsSection />
+
+                <Section title="API keys">
+                  <SettingRow title="Provider" detail="Powers inline completion, voice refinement, and media generation.">
                     <SelectField value={provider} options={aiProviders.filter((item) => item.id !== 'local').map((item) => ({ id: item.id, label: item.label }))} onChange={(value) => setProvider(value as AiProviderId)} ariaLabel="AI provider connection" renderIcon={providerIcon} />
                   </SettingRow>
 
@@ -3352,9 +3461,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       </SettingRow>
                       {provider === 'kilocode' && !keyExists && (
                         <p className="shell-hint">
-                          Kilo Code&apos;s &quot;Auto (free)&quot; model costs nothing, but it still needs a key to
-                          identify your account. Create a free account at app.kilo.ai, copy the API key from your
-                          Kilo profile, and paste it above.
+                          Free tier requires an API key from app.kilo.ai.
                         </p>
                       )}
                       <div className="settings-action-row">
@@ -3402,10 +3509,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
                 <Section title="Local Speech-to-Text (STT)">
                   <div className="local-models-info">
-                    Download Speech-to-Text models to enable 100% private, offline voice typing in Spacron.
+                    Offline Speech-to-Text models for private voice typing.
                   </div>
                   <div style={{ fontSize: '12px', background: 'rgba(78, 201, 176, 0.08)', color: 'var(--text-secondary)', padding: '8px 12px', borderRadius: '6px', marginTop: '8px', marginBottom: '12px', lineHeight: '1.5', border: '1px solid rgba(78, 201, 176, 0.15)' }}>
-                    ⚡ Parakeet now runs natively in the app process (ONNX Runtime) instead of WASM in the renderer, eliminating the OOM crash on long speech. Memory usage is capped via 30-second windowed inference, and short utterances stay single-pass.
+                    ⚡ Runs natively via ONNX Runtime for fast, private offline transcription.
                   </div>
                   <div className="local-models-list">
                     {localModelsLoading && localModels.length === 0 ? (
@@ -3507,7 +3614,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   )}
                   <SettingRow
                     title="Smart voice detection"
-                    detail="Uses a small Silero model to decide when you start and stop speaking. It is far better at ignoring clicks, fans and chatter than the built-in level gate. Download “Silero VAD” under Settings → Models → Local Speech-to-Text; until then dictation uses the level gate."
+                    detail="Uses Silero VAD to detect speech and filter background noise."
                   >
                     <Toggle label="Toggle smart voice detection" checked={smartVad} onChange={smartVadEnabled.set} />
                   </SettingRow>
@@ -3516,13 +3623,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Terminal transcription">
                   <SettingRow
                     title="Hotkey"
-                    detail="Tap the hotkey and speak: pauses do not end it. Tap again or press Esc to send, Ctrl+Esc to discard. The text lands wherever the cursor is, terminal or text field."
+                    detail="Tap to speak, tap again or press Esc to finish, Ctrl+Esc to cancel."
                   >
                     <kbd>{formatShortcutLabel(shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'F9')}</kbd>
                   </SettingRow>
                   <SettingRow
                     title="Send after transcribing"
-                    detail="On presses Enter after typing the transcript; off only types it in."
+                    detail="Automatically press Enter after dictating into a terminal."
                   >
                     <Toggle label="Toggle send after transcribing" checked={transcriptionSend} onChange={transcriptionAutoSend.set} />
                   </SettingRow>
@@ -3531,13 +3638,13 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Voice refinement">
                   <SettingRow
                     title="Refinement"
-                    detail="Cleans prose after dictation. For a fully local option, load S1-mini by Superwhisper in Ollama or LM Studio, then choose it below."
+                    detail="Automatically formats and cleans up dictated text."
                   >
                     <Toggle label="Toggle voice refinement" checked={voiceRefinement} onChange={voiceRefinementEnabled.set} />
                   </SettingRow>
                   <SettingRow
                     title="Custom vocabulary"
-                    detail="Comma-separated terms the polish pass must spell exactly: project names, libraries, APIs, coworkers' names. Uses your refinement provider's key."
+                    detail="Comma-separated terms to preserve exactly (names, libraries, acronyms)."
                   >
                     <input
                       value={vocabulary}
@@ -3562,7 +3669,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 <Section title="Notifications">
                   <SettingRow
                     title="Agent result nudge"
-                    detail="Play a soft chime when an agent finishes, blocks, or fails, even when voice mode is closed. The recap lands in the chat card."
+                    detail="Play a chime when an agent completes or requires input."
                   >
                     <Toggle label="Toggle agent result nudge" checked={announceCompletions} onChange={announceAgentCompletions.set} />
                   </SettingRow>
@@ -3610,7 +3717,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       })
                     )}
                   </div>
-                  <p className="shell-hint">Changes apply to new sessions. Active terminal sessions will automatically restart using the new shell.</p>
+                  <p className="shell-hint">Applies to new and active terminal sessions.</p>
                 </Section>
 
                 <Section title="Appearance">
@@ -3633,7 +3740,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       ariaLabel="Terminal cursor"
                     />
                   </SettingRow>
-                  <SettingRow title="Renderer" detail="Canvas is the balanced default. WebGL is fastest, but it makes the terminal solid instead of see-through, because it cannot draw dim or underlined text over a transparent surface, and a window is limited to 16 GPU contexts, so panes beyond that fall back. Use DOM if text renders wrong.">
+                  <SettingRow title="Renderer" detail="Canvas is recommended. WebGL is faster; DOM provides software fallback.">
                     <SelectField
                       value={renderer}
                       options={[
@@ -3658,71 +3765,33 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'agents' && (
               <>
-                <Section title="Launch view">
+                <Section title="Folder trust">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Every agent runs its real CLI in a terminal. Chat is another view of that same
-                    terminal: it shows the agent's conversation and sends what you type into it, so you
-                    can switch between the two at any time from the pane's title bar (Ctrl+Shift+J).
-                    Chat is available for Claude Code, Codex, OpenCode and Grok; other agents always
-                    open in the terminal.
+                    Allow supported agent CLIs to load project configurations without interactive prompts.
                   </p>
                   <SettingRow
-                    title="Open new agents in"
-                    detail="What the spawn picker's Enter key and the one-click + launchers open. The picker's other button still opens the other view."
-                  >
-                    <Dropdown
-                      options={[
-                        { value: 'terminal', label: 'Terminal' },
-                        { value: 'chat', label: 'Chat' },
-                      ]}
-                      value={currentAgentLaunchView}
-                      onChange={(val) => agentLaunchView.set(val === 'chat' ? 'chat' : 'terminal')}
-                    />
-                  </SettingRow>
-                </Section>
-
-                <Section title="Isolation & changes">
-                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Each agent works on its own git branch in a private checkout, so several can edit
-                    the project at once without colliding. Work stays quarantined there until you review
-                    it. The fleet dashboard shows every agent's changes with per-file diffs, and you
-                    bring the work in or merge it when it's ready. A branch is only removed once
-                    everything in it has been brought across.
-                  </p>
-                  <SettingRow
-                    title="Isolate agents in worktrees"
-                    detail="Off runs every agent directly in the project folder instead. The Isolated / Main repo toggle in the spawn picker still overrides this per agent."
+                    title="Trust this project when launching agents"
+                    detail={currentProjectId ? 'Saved separately for this project.' : 'Open a project to change its trust preference.'}
                   >
                     <Toggle
-                      label="Toggle agent worktree isolation"
-                      checked={currentAgentWorktrees}
-                      onChange={agentWorktrees.set}
-                    />
-                  </SettingRow>
-                  <SettingRow
-                    title="Auto-stage agent changes"
-                    detail="Off (the default) keeps each agent's work in its private checkout until you review and bring it in, the Orca-style review wall. On moves changes across on their own as agents finish, so the app can be run and tested against them without pressing anything."
-                  >
-                    <Toggle
-                      label="Toggle automatic staging of agent changes"
-                      checked={currentAutoStage}
-                      onChange={autoStageAgentChanges.set}
+                      label="Trust this project when launching agents"
+                      checked={currentProjectId ? currentAgentWorkspaceTrustOverrides[currentProjectId] !== false : false}
+                      disabled={!currentProjectId}
+                      onChange={(enabled) => {
+                        if (!currentProjectId) return;
+                        agentWorkspaceTrustOverrides.update((overrides) => ({ ...overrides, [currentProjectId]: enabled }));
+                      }}
                     />
                   </SettingRow>
                 </Section>
 
                 <Section title="Running out of usage">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    An agent that hits its plan's limit halfway through a feature normally just
-                    stops, and you find out later. Instead, Spacron watches each signed-in CLI's own
-                    meter and moves the unfinished work before the wall: it asks the agent to land
-                    what it has and commit, then puts another one in the same checkout, on the same
-                    branch, with a brief built from the actual diff. The task, the conversation and
-                    the review at the end are all unchanged: only who is typing.
+                    Automatically transfer in-progress work to another agent before usage limits are reached.
                   </p>
                   <SettingRow
                     title="Hand work over before the limit"
-                    detail="Off leaves an agent to stop at its limit mid-feature, which is the behaviour without this."
+                    detail="Safely commit and hand over tasks before hitting rate limits."
                   >
                     <Toggle
                       label="Toggle handing agent work over on usage limits"
@@ -3732,7 +3801,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow
                     title="Move the work at"
-                    detail={`${currentFailoverHeadroom}% usage left. Earlier leaves the agent more room to wrap up cleanly; later gets more work out of the plan you are already paying for. Set it high to rehearse a handover without waiting for a real limit.`}
+                    detail={`Trigger handover when remaining quota drops below ${currentFailoverHeadroom}%.`}
                   >
                     <input
                       type="range"
@@ -3747,7 +3816,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow
                     title="Allow switching to a different CLI"
-                    detail="Another account of the same CLI is always tried first and spends only your own plan. Off stops there rather than moving the work to a different service, which may cost money."
+                    detail="Fall back to an alternative CLI if same-CLI accounts are exhausted."
                   >
                     <Toggle
                       label="Toggle handing agent work to a different CLI"
@@ -3759,22 +3828,27 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
                 <Section title="Power">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    A long agent run is unattended by design, which is exactly what your machine
-                    reads as idle before it suspends, taking every agent down mid-turn. Spacron can
-                    hold the system awake for as long as agents are actually working, and let go the
-                    moment the last one finishes.
+                    Prevent your computer from going to sleep while agents are running.
                   </p>
                   <SettingRow
-                    title="Stay awake while agents work"
-                    detail="Blocks idle sleep only while at least one agent is mid-turn. The display still turns off, and asking your machine to sleep still works. Nothing is held once every agent is idle."
+                    title="Keep computer awake"
+                    detail="Keep awake continuously, only while agents work, or never."
                   >
-                    <Toggle
-                      label="Toggle keeping the system awake while agents work"
-                      checked={currentKeepSystemAwake}
-                      onChange={keepSystemAwake.set}
+                    <Dropdown
+                      options={[
+                        { value: 'on', label: 'On' },
+                        { value: 'agent', label: 'Agent' },
+                        { value: 'off', label: 'Off' },
+                      ]}
+                      value={currentKeepAwakeMode}
+                      onChange={(value) => {
+                        const mode = value as 'on' | 'agent' | 'off';
+                        keepAwakeMode.set(mode);
+                        keepSystemAwake.set(mode === 'agent');
+                      }}
                     />
                   </SettingRow>
-                  {currentKeepSystemAwake && (
+                  {currentKeepAwakeMode !== 'off' && (
                     <p
                       className="shell-hint"
                       style={{
@@ -3792,15 +3866,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         : !keepAwake.supported
                         ? 'This platform has no sleep inhibitor Spacron can use.'
                         : keepAwake.holding
-                        ? `Holding the system awake for ${keepAwake.workingAgents} agent${
-                            keepAwake.workingAgents === 1 ? '' : 's'
-                          } working.`
-                        : 'Idle, with nothing held. The hold is taken when an agent starts a turn.'}
+                          ? currentKeepAwakeMode === 'on'
+                            ? 'Holding the system awake continuously.'
+                            : `Holding the system awake for ${keepAwake.workingAgents} agent${keepAwake.workingAgents === 1 ? '' : 's'} working.`
+                        : currentKeepAwakeMode === 'on'
+                          ? 'The system will stay awake continuously.'
+                          : 'Idle, with nothing held. The hold is taken when an agent starts a turn.'}
                     </p>
                   )}
                 </Section>
 
-                <Section title="Long-running work">
+                {SHOW_CHAT_THREAD_SETTINGS && <Section title="Long-running work">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
                     Threads that go quiet stop competing for attention. Auto-settle drops an idle thread
                     out of the active list after a quiet period — T3 Code's "Working section" equivalent.
@@ -3833,19 +3909,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       onChange={(event) => autoSettleIdleMs.set(Number(event.target.value) * 60000)}
                     />
                   </SettingRow>
-                </Section>
+                </Section>}
 
                 <Section title="Browser">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Give agents a real browser so they can open what they just built, read the page
-                    and fix what's wrong, instead of guessing from the dev-server log. Spacron adds
-                    Microsoft's Playwright MCP server to each agent's config alongside its own tools.
-                    Each agent drives its own Chromium window, separate from the preview panel here,
-                    that stays yours.
+                    Enables agents to test web pages and inspect UI using an isolated Chromium browser.
                   </p>
                   <SettingRow
                     title="Let agents use a browser"
-                    detail="Also gives the chat its own browser window. Needs Node.js. Each agent gets an isolated browser, because agents run concurrently and a shared profile can only be held by one of them. Adds a spacron-playwright entry to agent config files, including the global ones for Codex and droid, and removes it again when you turn this off. The chat asks before its first visit to each outside website."
+                    detail="Provides dedicated Playwright browser automation."
                   >
                     <Toggle
                       label="Toggle agent browser tools"
@@ -3857,53 +3929,110 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 </Section>
 
                 <Section title="Computer use">
-                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Let agents, and the chat, use the other apps on your computer: list your open
-                    windows, read what is in one, take a screenshot, and click and type in it. Each
-                    one asks you first, separately for looking at and for controlling each window.
-                    An agent's permission ends with its session; the chat's ends with its reply.
-                    While an agent is in control an orange frame surrounds the window, only one
-                    agent can control the computer at a time, and it waits while you are using the
-                    mouse or keyboard. Press <kbd>Ctrl+Alt+Esc</kbd> at any time to stop every agent
-                    and withdraw every permission. Spacron's own windows, password managers and
-                    Windows security prompts are never shown to an agent.
-                  </p>
                   <SettingRow
                     title="Allow computer use"
                     detail={
                       computerUseAvailable === false
                         ? 'Available on Windows only for now. macOS support is planned.'
-                        : 'While this is off, agents are not offered the desktop tools at all. Turning it off also withdraws every permission already given.'
+                        : 'While off, desktop automation tools are disabled.'
                     }
                   >
-                    <Toggle
-                      label="Toggle computer use"
-                      checked={currentComputerUse && computerUseAvailable === true}
-                      disabled={computerUseAvailable !== true}
-                      onChange={computerUse.set}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <button
+                        type="button"
+                        className={`settings-dropdown-toggle-btn${computerUseExpanded ? ' open' : ''}`}
+                        onClick={() => setComputerUseExpanded((prev) => !prev)}
+                        aria-expanded={computerUseExpanded}
+                        aria-label={computerUseExpanded ? 'Collapse computer use details' : 'Show computer use details'}
+                        title={computerUseExpanded ? 'Collapse details' : 'Show details'}
+                      >
+                        <span>{computerUseExpanded ? 'Hide details' : 'Show details'}</span>
+                        <svg
+                          className={`settings-dropdown-chevron${computerUseExpanded ? ' open' : ''}`}
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                      </button>
+                      <Toggle
+                        label="Toggle computer use"
+                        checked={currentComputerUse && computerUseAvailable === true}
+                        disabled={computerUseAvailable !== true}
+                        onChange={computerUse.set}
+                      />
+                    </div>
                   </SettingRow>
-                  {currentComputerUse && computerUseAvailable === true ? <ComputerUseDetails /> : null}
+                  {computerUseExpanded && (
+                    <div className="settings-computer-use-dropdown">
+                      <p className="shell-hint" style={{ margin: '14px 28px 6px', padding: 0 }}>
+                        Allows agents to view and control desktop apps with your permission. Press <kbd>Ctrl+Alt+Esc</kbd> anytime to revoke.
+                      </p>
+                      <ComputerUseDetails />
+                    </div>
+                  )}
                 </Section>
 
                 <Section title="Agents">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Spacron scans each known agent CLI on your PATH and checks whether it has
-                    credentials saved, so signed-in agents are ready to spawn without being added
-                    by hand. The toggle sets whether every agent launches with its own
-                    skip-permissions flag; each row can pin itself to the other mode. Rate limits
-                    and reset times live in the usage dock in the corner of the workspace.
+                    Manage discovered and authenticated agent CLIs on your PATH.
                   </p>
+                  <SettingRow
+                    title="Agent status hooks"
+                    detail="Report when Claude Code turns complete or need user input."
+                  >
+                    <Toggle
+                      label="Enable Claude agent status hooks"
+                      checked={currentAgentStatusHooksEnabled}
+                      onChange={agentStatusHooksEnabled.set}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Auto-generate tab titles"
+                    detail="Use the first prompt as a short agent title."
+                  >
+                    <Toggle
+                      label="Auto-generate agent tab titles"
+                      checked={currentAgentAutoGenerateTitles}
+                      onChange={agentAutoGenerateTitles.set}
+                    />
+                  </SettingRow>
                   <AgentsPane />
+                </Section>
+
+                <Section title="Codex CLI">
+                  <SettingRow
+                    title="Run each Codex terminal on its own server"
+                    detail="Isolate Codex's app-server within its terminal on Windows."
+                  >
+                    <Toggle
+                      label="Run each Codex terminal on its own server"
+                      checked={currentAgentCodexOwnServer}
+                      onChange={agentCodexOwnServer.set}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Warn when a Codex tab may share a server"
+                    detail="Notify when running Codex without --no-daemon on Windows."
+                  >
+                    <Toggle
+                      label="Warn when a Codex tab may share a server"
+                      checked={currentAgentWarnCodexSharedServer}
+                      onChange={agentWarnCodexSharedServer.set}
+                    />
+                  </SettingRow>
                 </Section>
 
                 <Section title="Coding CLI agents">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Add your own agent CLI alongside the built-ins (Claude Code, Codex…). It appears in the
-                    spawn picker, panes running it show its name, and typing its command in any shell is
-                    recognized as that agent. Agents that read a <code>CLAUDE.md</code> / <code>AGENTS.md</code>
-                    rules file are briefed automatically. The built-in agents are managed in the list
-                    above. Hide one from there and it comes back the same way.
+                    Register custom agent CLIs to spawn them directly with automatic briefings.
                   </p>
 
                   <div className="agent-list">
@@ -3975,15 +4104,15 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       />
                       <span>This CLI reads a <code>CLAUDE.md</code> / <code>AGENTS.md</code> rules file at startup</span>
                     </label>
-                    <label className="agent-rules-row">
+                    {SHOW_ACP_REGISTRY_SECTION && <label className="agent-rules-row">
                       <input
                         type="checkbox"
                         checked={newAgentSupportsAcp}
                         onChange={(e) => setNewAgentSupportsAcp(e.target.checked)}
                       />
                       <span>This command speaks ACP and can be selected by Chat mode</span>
-                    </label>
-                    {newAgentSupportsAcp && (
+                    </label>}
+                    {SHOW_ACP_REGISTRY_SECTION && newAgentSupportsAcp && (
                       <input
                         className="agent-input"
                         type="text"
@@ -4029,21 +4158,16 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </div>
                 </Section>
 
-                <Section title="Managed installs">
+                {SHOW_ACP_REGISTRY_SECTION && <Section title="Managed installs">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Agents published to the ACP registry with a downloadable binary can be installed and
-                    managed by Spacron: each one is downloaded, its sha256 is verified against the registry,
-                    and it is extracted into Spacron's own config directory. npx/uvx-distributed agents need
-                    no install — they resolve at launch. Only agents with a binary for this platform show an
-                    install button.
+                    Agents from the ACP registry can be installed and managed directly.
                   </p>
                   <ManagedAgentInstalls />
-                </Section>
+                </Section>}
 
-                <Section title="ACP Registry">
+                {SHOW_ACP_REGISTRY_SECTION && <Section title="ACP Registry">
                   <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Use ACP-capable agents in Chat mode with their own sign-in and model selection.
-                    Spacron never asks for an API key for these commands; credentials stay with the agent.
+                    Use ACP-capable agents in Chat mode with their own models and credentials.
                   </p>
                   <SettingRow
                     title="Enable ACP agents in Chat"
@@ -4150,54 +4274,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       </SettingRow>
                     );
                   })}
-                </Section>
+                </Section>}
               </>
             )}
 
-            {activeTab === 'chat' && (
-              <>
-                <Section title="Chat Mode">
-                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    How Chat mode behaves: whether messages queue while a turn runs, whether inline
-                    requests are auto-answered when your access tier allows, and the default access
-                    mode for new chat threads.
-                  </p>
-                  <SettingRow
-                    title="Queue messages while busy"
-                    detail="When a turn is running, new messages wait in the queue and run in order instead of being rejected."
-                  >
-                    <Toggle
-                      label="Toggle queue while busy"
-                      checked={currentChatQueueWhileBusy}
-                      onChange={chatQueueWhileBusy.set}
-                    />
-                  </SettingRow>
-                  <SettingRow
-                    title="Auto-answer inline requests"
-                    detail="When your access tier allows, inline requests (approvals, choices, text input) are answered automatically instead of waiting for you."
-                  >
-                    <Toggle
-                      label="Toggle auto-answer inline requests"
-                      checked={currentChatAutoAnswerInline}
-                      onChange={chatAutoAnswerInline.set}
-                    />
-                  </SettingRow>
-                  <SettingRow title="Default access mode for new threads">
-                    <Dropdown
-                      options={[
-                        { value: 'inherit', label: 'Inherit from project default' },
-                        { value: 'supervised', label: 'Supervised (ask before every change)' },
-                        { value: 'auto-edits', label: 'Auto-edits (auto-accept file changes)' },
-                        { value: 'auto', label: 'Auto (approve edits, ask on system commands)' },
-                        { value: 'full-access', label: 'Full access (bypass all permission prompts)' },
-                      ]}
-                      value={currentChatDefaultAccessMode}
-                      onChange={(val) => chatDefaultAccessMode.set(val as ChatAccessMode)}
-                    />
-                  </SettingRow>
-                </Section>
-              </>
-            )}
+            {activeTab === 'chat' && <ChatSettingsPane onOpenAgents={() => setActiveTab('agents')} />}
 
             {activeTab === 'orchestrator' && <OrchestratorSettingsPane />}
             {activeTab === 'mcp' && <McpSettingsPane />}

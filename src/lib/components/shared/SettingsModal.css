@@ -1,34 +1,36 @@
 /* ═══════════════════════════════════════════════════════════════
-   Settings page — fills the window below the native title bar.
-   Keep the workspace mounted underneath and the page fully opaque.
+   Large settings surface over the still-mounted workspace.
+   Keep the workspace mounted underneath and the settings surface inset from the window edges.
    ═══════════════════════════════════════════════════════════════ */
 
 .settings-page-host {
   position: fixed;
-  top: 38px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   z-index: 9000;
-  display: flex;
+  display: grid;
+  place-items: center;
+  padding: 40px 32px;
+  background: rgba(0, 0, 0, 0.74);
+  -webkit-backdrop-filter: blur(9px);
+  backdrop-filter: blur(9px);
   overscroll-behavior: none;
 }
 
 /* Keep the existing .settings-modal boundary for portaled pickers and shared
-   theme rules. It now describes the full page, with no dialog/backdrop. */
+   theme rules. It now sizes the inset settings surface. */
 .settings-modal {
   position: relative;
-  width: 100%;
-  height: 100%;
+  width: min(1440px, 100%);
+  height: min(950px, 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   color: var(--text-primary);
   --settings-divider: color-mix(in srgb, var(--text-primary) 6%, transparent);
   background-color: rgb(var(--bg-secondary-rgb, 18, 18, 22));
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
   isolation: isolate;
   /* Settings lives outside .app-shell, so inherit the app's UI type directly. */
   font-family: var(--font-sans);
@@ -37,6 +39,51 @@
   /* Inner layout responds to the page width. */
   container: settings-modal / inline-size;
 }
+
+.settings-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex: 0 0 48px;
+  min-height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--settings-divider);
+  background: var(--major-panel-surface);
+}
+
+.settings-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.settings-breadcrumb strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.settings-breadcrumb-divider { color: var(--text-muted); }
+
+.settings-topbar-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-topbar-close:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 :root .settings-modal.settings-page {
   background: var(--bg-primary) !important;
@@ -50,9 +97,10 @@
    way the workspace does. The page covers the workspace, so it can't just go
    transparent: it paints its own copy of the wallpaper (same image, blur and
    scrim as body::before + #app::before in global.css). The copy reaches up
-   under the title bar (host is top: 38px) so `cover` sizes it to the whole
+   under the title bar (the host starts at the window edge) so `cover` sizes it to the whole
    window, which keeps it lined up with the real wallpaper. (`has-bg-media`
    marks a user-chosen image, not a video: wallpapers are images only.) */
+/* Reuse the app wallpaper under a stronger solid tint on the settings surface. */
 html.has-bg-image .settings-modal.settings-page {
   background: transparent !important;
 }
@@ -60,16 +108,13 @@ html.has-bg-image .settings-modal.settings-page {
 html.has-bg-image .settings-modal.settings-page::before {
   content: '';
   position: absolute;
-  top: -38px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: -40px -32px;
   z-index: -1;
   background-image:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.06) 0%, rgba(0, 0, 0, 0.09) 40%, rgba(0, 0, 0, 0.13) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.48), rgba(0, 0, 0, 0.62)),
     var(--user-bg-image, none);
   background-size: cover;
-  background-position: center center;
+  background-position: center;
   background-repeat: no-repeat;
   filter: blur(var(--user-bg-blur, 0px));
   pointer-events: none;
@@ -77,8 +122,13 @@ html.has-bg-image .settings-modal.settings-page::before {
 
 html.has-bg-image.light-theme .settings-modal.settings-page::before {
   background-image:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.22) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.7)),
     var(--user-bg-image, none);
+}
+
+@media (max-width: 760px), (max-height: 620px) {
+  .settings-page-host { padding: 12px; }
+  .settings-modal { border-radius: 12px; }
 }
 
 /* ── Header ── */
@@ -115,7 +165,7 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   position: relative;
   flex: 0 0 auto;
   width: calc(100% - 32px);
-  margin: 0 auto 12px;
+  margin: 0 auto 28px;
   z-index: 1;
 }
 
@@ -282,7 +332,7 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
 /* ── Body layout ── */
 .settings-body {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -296,6 +346,7 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  padding-top: 12px;
 }
 
 .settings-sidebar,
@@ -305,27 +356,44 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   box-shadow: var(--major-panel-shadow);
 }
 
+.settings-sidebar { border: 1px solid var(--settings-divider); }
+
 /* ── Tab Sidebar ── */
 .settings-tabs {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   flex: 1;
   min-height: 0;
-  padding: 4px 12px 12px;
+  padding: 4px 8px 12px;
   background: transparent;
   overflow-y: auto;
   overscroll-behavior: none;
 }
 
-.settings-tabs button {
+.settings-nav-group {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  min-height: 52px;
-  /* The rail scrolls; never squash a tab so its two lines overlap the next. */
+  gap: 2px;
+}
+
+.settings-nav-group + .settings-nav-group { margin-top: 14px; }
+
+.settings-nav-group h3 {
+  margin: 0 8px 5px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.settings-tabs button {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
   flex-shrink: 0;
-  padding: 10px 14px;
+  padding: 7px 10px;
   border: 1px solid transparent;
   border-left: 2px solid transparent;
   border-radius: var(--radius-md, 8px);
@@ -343,6 +411,16 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   font-size: 13px;
   font-weight: 600;
 }
+
+.settings-tabs button .settings-tab-icon {
+  flex: 0 0 16px;
+  margin-right: 10px;
+  color: var(--text-muted);
+  transform: none !important;
+  transition: color var(--dur-base) var(--ease-out) !important;
+}
+
+.settings-tabs button:is(:hover, .active) .settings-tab-icon { color: inherit; }
 
 .settings-tabs button small {
   color: var(--text-muted);
@@ -369,10 +447,16 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   min-width: 0;
   min-height: 0;
   /* Keep the room full width, with a comfortable content width inside it. */
-  padding: 32px max(36px, calc((100% - 760px) / 2));
+  padding: 0 0 24px;
   overflow-y: auto;
   overscroll-behavior: none;
 }
+
+.settings-panel > :not(.settings-topbar) {
+  margin-inline: max(20px, calc((100% - 1160px) / 2));
+}
+
+.settings-panel > .settings-topbar + * { margin-top: 36px; }
 
 .settings-panel::-webkit-scrollbar,
 .settings-tabs::-webkit-scrollbar {
@@ -426,10 +510,10 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
 /* Keep section headings outside the faint card outline, like the reference. */
 .settings-card h3 {
   margin: 0;
-  padding: 0 0 14px;
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  font-weight: 600;
+  padding: 0 0 14px 16px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
   background: transparent;
 }
 
@@ -823,6 +907,218 @@ details.settings-github-note pre {
   .settings-github-spinner {
     animation-duration: 2s;
   }
+}
+
+/* ── Source Control Tab (Matching Spacron Shell) ── */
+.settings-sc-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 32px;
+  align-items: center;
+  min-height: 70px;
+  padding: 18px 28px;
+  background: transparent !important;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.settings-sc-row:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+.settings-sc-row:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 0;
+  height: 1px;
+  background: var(--settings-divider);
+  pointer-events: none;
+}
+
+.settings-sc-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-sc-brand-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.settings-sc-brand-icon.github {
+  color: var(--text-primary);
+}
+
+.settings-sc-brand-icon.gitlab {
+  color: #fc6d26;
+  border-color: color-mix(in srgb, #fc6d26 30%, var(--border));
+}
+
+.settings-sc-brand-icon.bitbucket {
+  color: #2684ff;
+  border-color: color-mix(in srgb, #2684ff 30%, var(--border));
+}
+
+.settings-sc-brand-icon.other {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.settings-sc-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-sc-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-sc-provider-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.settings-sc-default-pill {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  line-height: 1.2;
+}
+
+.settings-sc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.settings-sc-badge.connected {
+  color: var(--success, #10b981);
+}
+
+.settings-sc-badge.disconnected {
+  color: var(--text-muted);
+}
+
+.settings-sc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success, #10b981);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success, #10b981) 60%, transparent);
+}
+
+.settings-sc-detail {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.settings-sc-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-sc-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.settings-sc-input-group input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: var(--radius-md, 8px);
+  background: var(--input-bg, var(--bg-primary));
+  color: var(--text-primary);
+  padding: 0 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+}
+
+.settings-sc-input-group input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow, rgba(174, 182, 194, 0.08));
+}
+
+.settings-sc-input-group input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-sans, inherit);
+}
+
+.settings-sc-input-group button {
+  height: 34px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.settings-sc-disconnect-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  height: 32px;
+  font-size: 12px;
+  font-weight: 550;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--dur-base) var(--ease-out);
+}
+
+.settings-sc-disconnect-btn:hover {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+.settings-sc-error-msg {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--error);
+}
+
+.settings-sc-device-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
 }
 
 /* ── Keyboard Shortcuts ── */
@@ -1337,7 +1633,7 @@ details.settings-github-note pre {
   .settings-header { min-height: 60px; padding-block: 12px; }
   .settings-tabs { gap: 4px; }
   .settings-tabs button { min-height: 44px; padding-block: 7px; }
-  .settings-panel { padding-top: 20px; }
+  .settings-panel { padding-top: 0; }
   .settings-control-row { min-height: 60px; padding-block: 14px; }
 }
 
@@ -1353,6 +1649,7 @@ details.settings-github-note pre {
   .settings-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 200px) minmax(0, 1fr);
+    gap: 10px;
     padding: 12px;
   }
 
@@ -1360,6 +1657,8 @@ details.settings-github-note pre {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .settings-nav-group { display: contents; }
 
   .settings-tabs button {
     min-width: 0;
@@ -1369,7 +1668,7 @@ details.settings-github-note pre {
 
 @container settings-modal (max-width: 520px) {
   .settings-header { min-height: 62px; padding: 14px; }
-  .settings-panel  { padding: 14px; }
+  .settings-panel  { padding: 0 0 14px; }
   .settings-card   { margin-bottom: 14px; }
   .shortcut-row    { grid-template-columns: 1fr; }
   .theme-grid      { grid-template-columns: 1fr 1fr; }
@@ -2681,4 +2980,82 @@ button.settings-control-copy.skill-open-btn {
   height: 6px;
   border-radius: 50%;
   background: var(--mm-accent);
+}
+
+/* ── Expandable Details Dropdown ── */
+.settings-clickable-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.settings-clickable-title:hover {
+  color: var(--accent);
+}
+
+.settings-clickable-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.settings-dropdown-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-md, 7px);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.settings-dropdown-toggle-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+.settings-dropdown-toggle-btn.open {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.settings-dropdown-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.settings-dropdown-chevron.open {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+.settings-computer-use-dropdown {
+  display: flex;
+  flex-direction: column;
+  animation: settings-dropdown-fade 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes settings-dropdown-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

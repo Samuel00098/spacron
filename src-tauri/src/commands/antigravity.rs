@@ -196,7 +196,8 @@ fn extract_archive(bytes: &[u8], dest: &Path) -> Result<(), String> {
     let (mut files, mut total) = (0usize, 0u64);
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let Some(rel) = safe_relative(&entry.name().replace('\\', "/")) else {
+        let entry_name = entry.name().map_err(|error| error.to_string())?.replace('\\', "/");
+        let Some(rel) = safe_relative(&entry_name) else {
             let _ = std::fs::remove_dir_all(&tmp);
             return Err("the Antigravity runtime archive contains an unsafe path".into());
         };

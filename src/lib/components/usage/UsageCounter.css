@@ -216,3 +216,21 @@
     margin-left: 0;
   }
 }
+
+/* ── Small footer button ─────────────────────────────────────────────────
+   The icons, numbers and caret are deliberately tiny so every agent fits on
+   one line beside the theme and settings buttons. Last in the file so it wins
+   over the container-query steps above. */
+.usage-dock { min-height: 22px; padding: 2px 5px; gap: 1px 5px; border-radius: 6px; flex-wrap: nowrap; }
+.usage-dock-agent { gap: 3px; }
+.usage-dock-mark,
+.usage-dock-mark svg,
+.usage-dock-mark img { width: 12px; height: 12px; }
+.usage-dock-window { gap: 1.5px; }
+.usage-dock-num { font-size: 9px; }
+.usage-dock-win { font-size: 7.5px; }
+.usage-dock-sep { font-size: 8px; margin: 0 2px 0 1px; }
+.usage-dock-more { font-size: 8px; padding: 1px 4px; }
+.usage-dock-caret { width: 9px; height: 9px; margin-left: 2px; }
+.usage-dock-empty-label { font-size: 9px; }
+.usage-dock-empty-label ~ *, .usage-dock > svg:first-child { width: 12px; height: 12px; }

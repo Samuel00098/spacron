@@ -169,6 +169,7 @@ const LANGUAGE_LOADERS: Record<string, () => Promise<Extension>> = {
   python: async () => (await import('@codemirror/lang-python')).python(),
   java: async () => (await import('@codemirror/lang-java')).java(),
   cpp: async () => (await import('@codemirror/lang-cpp')).cpp(),
+  c: async () => (await import('@codemirror/lang-cpp')).cpp(),
   php: async () => (await import('@codemirror/lang-php')).php(),
   sql: async () => (await import('@codemirror/lang-sql')).sql(),
   xml: async () => (await import('@codemirror/lang-xml')).xml(),
@@ -185,6 +186,14 @@ const LANGUAGE_LOADERS: Record<string, () => Promise<Extension>> = {
     StreamLanguage.define((await import('@codemirror/legacy-modes/mode/clike')).kotlin),
   shell: async () =>
     StreamLanguage.define((await import('@codemirror/legacy-modes/mode/shell')).shell),
+  bash: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/shell')).shell),
+  diff: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/diff')).diff),
+  powershell: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/powershell')).powerShell),
+  ruby: async () =>
+    StreamLanguage.define((await import('@codemirror/legacy-modes/mode/ruby')).ruby),
   swift: async () =>
     StreamLanguage.define((await import('@codemirror/legacy-modes/mode/swift')).swift),
 };
@@ -425,15 +434,15 @@ export default function CodeEditor({ filePath, initialContent, language }: CodeE
   // there is no flash on the second file of a language. A generation guard
   // discards a slow import if the user switched to another language meanwhile.
   useEffect(() => {
-    if (languageCache.has(language)) return;
     const gen = ++languageGenerationRef.current;
+    const view = viewRef.current;
+    if (!view) return;
 
     void loadLanguageExtension(language).then((extension) => {
-      if (!extension) return;
       if (gen !== languageGenerationRef.current) return; // newer file won
-      const view = viewRef.current;
-      if (!view) return;
-      view.dispatch({ effects: languageCompartmentRef.current!.reconfigure(extension) });
+      const currentView = viewRef.current;
+      if (!currentView) return;
+      currentView.dispatch({ effects: languageCompartmentRef.current!.reconfigure(extension ?? []) });
     });
   }, [language]);
 

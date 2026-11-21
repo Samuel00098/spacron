@@ -46,7 +46,7 @@ import ToolboxPanel from '$lib/components/toolbox/ToolboxPanelLazy.tsx';
 import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import ChatModePanel from '$lib/components/workspace/ChatModePanel.tsx';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
-import MobilePanel from '$lib/components/mobile/MobilePanelLazy.tsx';
+import MobilePanel, { MobilePanelFloatingHostLazy } from '$lib/components/mobile/MobilePanelLazy.tsx';
 import { useShallow } from 'zustand/react/shallow';
 import {
   useLayoutStore,
@@ -798,7 +798,7 @@ export default function AppShell() {
   // bottom-right of the overlay row, beside the prompt bar, so the stage can
   // start directly under the title bar.
   const [layoutControlHost, setLayoutControlHost] = useState<HTMLDivElement | null>(null);
-  const [overlaysHeight, setOverlaysHeight] = useState(128);
+  const [overlaysHeight, setOverlaysHeight] = useState(48);
 
   useEffect(() => {
     const el = overlaysRef.current;
@@ -1843,27 +1843,6 @@ export default function AppShell() {
       </button>
     );
 
-    // The project-opening commands used to be a row of unlabelled icons on top
-    // of the project list. They read as a list here, above the global rooms.
-    const renderActionNavItem = (
-      key: string,
-      title: string,
-      icon: React.ReactNode,
-      onClick: () => void,
-      hint?: string,
-    ) => (
-      <button
-        key={key}
-        type="button"
-        className="left-sidebar-nav-item"
-        onClick={onClick}
-        title={hint ?? title}
-      >
-        <span className="left-sidebar-nav-icon" aria-hidden="true">{icon}</span>
-        <span className="left-sidebar-nav-label">{title}</span>
-      </button>
-    );
-
     return (
       <aside
         className="left-utility-panel left-sidebar bento-card"
@@ -1898,29 +1877,7 @@ export default function AppShell() {
           </button>
         </header>
 
-        <nav className="left-sidebar-nav" aria-label="Project actions and global views">
-          {renderActionNavItem(
-            'create-project',
-            'Create Project',
-            <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></Icon>,
-            () => newFolderPromptOpen.set(true),
-            'Create Project… (Ctrl+N)',
-          )}
-          {renderActionNavItem(
-            'open-project',
-            'Open Project',
-            <Icon><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></Icon>,
-            () => void openProject(),
-            'Open Project Folder… (Ctrl+O)',
-          )}
-          {renderActionNavItem(
-            'clone-repo',
-            'Clone Repository',
-            <Icon><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 15V9a4 4 0 0 0-4-4H9" /><line x1="6" y1="9" x2="6" y2="15" /></Icon>,
-            () => cloneRepoPromptOpen.set(true),
-            'Clone Git Repository…',
-          )}
-          <div className="left-sidebar-nav-divider" aria-hidden="true" />
+        <nav className="left-sidebar-nav" aria-label="Workspace tools">
           {[tasksItem, sketchItem, libraryItem].map(renderRoomNavItem)}
         </nav>
 
@@ -2088,7 +2045,7 @@ export default function AppShell() {
     if (next) activateRightTab(next);
     else {
       setActiveRightTabId(null);
-      closeRightUtility();
+      closeRightSidebar();
     }
   }
 
@@ -3202,11 +3159,10 @@ export default function AppShell() {
     const settingsSections: { tab: SettingsTab; name: string }[] = [
       { tab: 'general', name: 'Settings: General' },
       { tab: 'appearance', name: 'Settings: Appearance' },
-      { tab: 'models', name: 'Settings: AI Models' },
+      { tab: 'models', name: 'Settings: AI Providers' },
       { tab: 'voice', name: 'Settings: Voice' },
       { tab: 'terminal', name: 'Settings: Terminal' },
       { tab: 'agents', name: 'Settings: Agents' },
-      { tab: 'orchestrator', name: 'Settings: Orchestrator' },
       { tab: 'stats', name: 'Settings: Usage' },
       { tab: 'shortcuts', name: 'Settings: Shortcuts' },
       { tab: 'about', name: 'Settings: About' },
@@ -4046,6 +4002,7 @@ export default function AppShell() {
     <div className="app-shell">
       <TitleBar />
       <UpdateBanner />
+      <MobilePanelFloatingHostLazy />
 
       <div className="zoom-wrapper">
         {/* The workspace stays MOUNTED whenever one is open — the Home screen
@@ -4062,9 +4019,9 @@ export default function AppShell() {
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
-                // Room left above the floating bar: its measured row plus a
-                // small gap (10px between the panels and the bar).
-                '--overlay-clear': `${overlaysHeight + 4}px`,
+                // Keep the room panels just above the bottom voice/control row
+                // in either sidebar state, with a small gap above the voice bar.
+                '--overlay-clear': `${Math.max(58, overlaysHeight + 10)}px`,
                 '--left-nav-space': `${leftDrawerOpen ? leftPanelWidthFit + 20 : 0}px`,
                 '--right-drawer-space': `${
                   rightSidebarOpen ? rightDrawerWidthFit + 20 : 0
@@ -4102,7 +4059,6 @@ export default function AppShell() {
               {/* The room dock used to sit here as its own strip. Its layout
                   actions and the Editor/Terminal launchers now sit in the
                   prompt bar; the other launchers are right-sidebar tabs. */}
-              <div ref={setLayoutControlHost} className="stage-layout-control-host" />
               <div className="composer-strip">
                 <FloatingPromptBar
                   trailingControls={
@@ -4114,6 +4070,7 @@ export default function AppShell() {
                   }
                 />
               </div>
+              <div ref={setLayoutControlHost} className="stage-layout-control-host" />
               </div>
             </div>
           </div>

@@ -170,6 +170,38 @@ fn codex_command(args: &[&str]) -> Result<Command, String> {
     Ok(command)
 }
 
+/// How to start the user's Codex as an app server for a structured chat tab:
+/// its native binary, never the npm shim (see `native_codex`). Unlike the
+/// brain's server, the user's hooks, apps, plugins and MCP servers stay on:
+/// this is their Codex, the same one the terminal runs.
+#[derive(Serialize)]
+pub struct CodexAppServerLaunch {
+    command: String,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+}
+
+#[tauri::command]
+pub fn codex_app_server_launch() -> Result<CodexAppServerLaunch, String> {
+    let path = crate::commands::agent_probe::which("codex").ok_or_else(|| {
+        "not_installed: the Codex CLI is not installed. Install it with `npm install -g @openai/codex`.".to_string()
+    })?;
+    let args = vec!["app-server".to_string()];
+    if let Some((binary, root)) = native_codex(&path) {
+        let mut env = std::collections::HashMap::new();
+        env.insert("CODEX_MANAGED_BY_NPM".into(), "1".into());
+        env.insert("CODEX_MANAGED_PACKAGE_ROOT".into(), root.to_string_lossy().to_string());
+        return Ok(CodexAppServerLaunch { command: binary.to_string_lossy().to_string(), args, env });
+    }
+    // A non-npm install (Homebrew, a release binary) is the binary itself. A
+    // Windows npm shim without its native package can't be run directly.
+    let lower = path.to_string_lossy().to_lowercase();
+    if lower.ends_with(".cmd") || lower.ends_with(".bat") || (cfg!(windows) && path.extension().is_none()) {
+        return Err("Codex's native program wasn't found next to its npm launcher. Reinstall it with `npm install -g @openai/codex`.".into());
+    }
+    Ok(CodexAppServerLaunch { command: path.to_string_lossy().to_string(), args, env: Default::default() })
+}
+
 impl AppServer {
     async fn start() -> Result<Self, String> {
         // Hooks, apps, plugins and MCP servers from the user's own Codex config

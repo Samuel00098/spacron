@@ -14,6 +14,10 @@ import {
   agentCmdOverrides,
   agentDefaultArgs,
   agentDefaultEnv,
+  agentWorkspaceTrustOverrides,
+  agentAutoGenerateTitles,
+  agentCodexOwnServer,
+  agentWarnCodexSharedServer,
 } from '$lib/stores/settings';
 import {
   resolveAgentLaunchArgs,
@@ -61,6 +65,7 @@ import {
 import { attachTurnSignals, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
 import { readTerminalScreen } from '$lib/services/terminal-screen';
 import { getActiveWorktreePath } from '$lib/stores/projectWorktrees';
+import { chatInlineVisuals } from '$lib/stores/chatViewSettings';
 
 export type TerminalSessionInfo = {
   id: number;
@@ -785,6 +790,40 @@ function typedLine(buffer: string): string {
   return buffer.replace(/\[20[01]~/g, '').replace(/\[[0-9;]*[A-Za-z~]/g, '').trim();
 }
 
+/**
+ * Whether a submitted line that names an agent (`claude …`) was typed at the
+ * shell, not into an agent that is already running. A pane keeps its agent
+ * preset after the CLI exits, so the preset alone can't say; the screen can:
+ * the line must follow a shell prompt (`PS C:\dir>`, `C:\dir>`, `me@box:~/dir$`).
+ * Without this, a prompt or an OpenCode model search starting with "claude"
+ * relabelled a running OpenCode pane as Claude Code.
+ */
+function launchedFromShell(id: number, buffer: string): boolean {
+  // A pane with no agent yet is a shell: the old behaviour stands.
+  if (!findSessionAnyProject(id)?.agentPreset) return true;
+  const screen = readTerminalScreen(id, { maxLines: 8 });
+  if (screen == null) return true;
+  return isShellPromptRow(screen, typedLine(buffer));
+}
+
+/** The screen's input row holds `line` right after a shell prompt. */
+export function isShellPromptRow(screen: string, line: string): boolean {
+  const word = line.trim().split(/\s+/)[0];
+  if (!word) return false;
+  const rows = screen.split('\n').map((r) => r.trimEnd()).filter(Boolean);
+  for (let i = rows.length - 1; i >= Math.max(0, rows.length - 4); i -= 1) {
+    const at = rows[i].lastIndexOf(word);
+    if (at < 0) continue;
+    const prompt = rows[i].slice(0, at).trimEnd();
+    // cmd / PowerShell: `C:\dir>` or `PS C:\dir>`
+    if (/^(PS )?[A-Za-z]:\\[^<>|]*>$/.test(prompt)) return true;
+    // POSIX: `me@box:~/dir$`, `~/dir %`, `bash-5.2$`; never a TUI's `›`, `>`, `┃`.
+    if (/[$#%]$/.test(prompt) && /[@:~/\\]|^[\w.-]+-[\d.]+[$#%]$/.test(prompt) && !/[›❯┃│]/.test(prompt)) return true;
+    return false;
+  }
+  return false;
+}
+
 function processSessionInput(id: number, data: string) {
   let buffer = sessionInputBuffers.get(id) ?? '';
   for (const ch of data) {
@@ -799,7 +838,19 @@ function processSessionInput(id: number, data: string) {
         if (!preset && data === '\r' && findSessionAnyProject(id)?.agentPreset) {
           noteAgentLineSubmitted(id, typedLine(buffer));
         }
-        if (preset && !suppressAgentDetection.has(id)) {
+        if (preset && !suppressAgentDetection.has(id) && launchedFromShell(id, buffer)) {
+          if (
+            preset === 'codex' &&
+            /^win/i.test(typeof navigator !== 'undefined' ? navigator.platform : '') &&
+            !/--no-daemon(?:\s|$)/i.test(buffer) &&
+            get(agentWarnCodexSharedServer)
+          ) {
+            showToast(
+              'This Codex tab may share its app-server with other terminals. Turn on “Run each Codex terminal on its own server” in Settings > Agents to isolate Spacron-launched Codex tabs.',
+              'info',
+              7000,
+            );
+          }
           // A fresh launch starts idle, whatever the pane ran before.
           noteAgentLaunched(id);
           agentLaunchStartLengths.set(id, getSessionOutputLength(id));
@@ -1491,6 +1542,13 @@ export function sendPromptToSession(sessionId: number, text: string, agentPreset
   if (!text) return;
   if (agentPreset) {
     const session = findSessionAnyProject(sessionId);
+    if (get(agentAutoGenerateTitles) && session && !session.taskSummary?.trim()) {
+      const defaultTitle = getAgentDisplayName(session.agentPreset)?.trim().toLowerCase();
+      if (!session.title?.trim() || session.title.trim().toLowerCase() === defaultTitle) {
+        const title = text.replace(/\s+/g, ' ').trim().slice(0, 72).replace(/[.,;:!?-]+$/, '').trim();
+        if (title) setSessionTaskSummary(sessionId, title);
+      }
+    }
     const payload =
       session && !session.briefed
         ? buildAgentCharter(text, { name: session.agentName ?? null })
@@ -1903,7 +1961,9 @@ export function applyRestoredSessionMetadata(id: number, metadata: RestoredSessi
 export async function relaunchRestoredAgentSession(
   id: number,
   agentPreset: string,
-  metadata: RestoredSessionMetadata = {}
+  metadata: RestoredSessionMetadata = {},
+  /** Resume flags (`resumeArgs`) when the pane's conversation is known. */
+  resumeArgs = ''
 ): Promise<boolean> {
   const isDev = devSessionIds.has(id);
   const projectId = terminalSessionProjects.get(id);
@@ -1929,7 +1989,8 @@ export async function relaunchRestoredAgentSession(
   };
   const launchCommand = resolveAgentLaunchCommand(agentPreset, launchOverrides);
   const launchArgs = resolveAgentLaunchArgs(agentPreset, get(agentPermissionMode), launchOverrides);
-  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${platformLaunchFlags(agentPreset)}${mcpFlags}`;
+  const resume = resumeArgs.trim();
+  const launchLine = `${launchCommand}${resume ? ` ${resume}` : ''}${launchArgs ? ` ${launchArgs}` : ''}${platformLaunchFlags(agentPreset, undefined, get(agentCodexOwnServer))}${mcpFlags}`;
 
   agentLaunchStartLengths.set(id, getSessionOutputLength(id));
   suppressAgentDetection.add(id);
@@ -1955,7 +2016,7 @@ export async function relaunchAgentInSession(id: number, agentPreset: string, ar
     agentCmdOverrides: get(agentCmdOverrides),
     agentDefaultArgs: get(agentDefaultArgs),
   });
-  const launchLine = `${launchCommand}${args.trim() ? ` ${args.trim()}` : ''}${platformLaunchFlags(agentPreset)}${mcpFlags}`;
+  const launchLine = `${launchCommand}${args.trim() ? ` ${args.trim()}` : ''}${platformLaunchFlags(agentPreset, undefined, get(agentCodexOwnServer))}${mcpFlags}`;
   agentLaunchStartLengths.set(id, getSessionOutputLength(id));
   suppressAgentDetection.add(id);
   try {
@@ -2696,6 +2757,20 @@ export async function spawnAgentPreset(
     agentDefaultEnv: get(agentDefaultEnv),
   };
   const permissionMode = get(agentPermissionMode);
+  const trustProjectId = opts?.projectId ?? projectForFocus;
+  const trustWorkspace = !trustProjectId || get(agentWorkspaceTrustOverrides)[trustProjectId] !== false;
+  const trustExecutable = agentExecutable(command);
+  const trustSupported = new Set(['claude', 'codex', 'gemini', 'qwen', 'copilot']).has(trustExecutable);
+  if (!get(remoteTarget) && trustWorkspace && trustSupported && (cwd ?? (trustProjectId ? terminalProjectRoots.get(trustProjectId) : undefined))) {
+    const trustPath = cwd ?? terminalProjectRoots.get(trustProjectId!)!;
+    try {
+      await invoke('agent_workspace_trust', { agent: trustExecutable, workspacePath: trustPath });
+    } catch (error) {
+      // Trust preparation is best effort; the CLI keeps its normal prompt if
+      // its native trust store could not be updated.
+      console.warn(`Could not prepare ${trustExecutable} workspace trust:`, error);
+    }
+  }
   const launchCommand = resolveAgentLaunchCommand(command, launchOverrides);
   const defaultLaunchArgs = resolveAgentLaunchArgs(command, permissionMode, launchOverrides);
   const launchArgs = opts?.permissionArgsOverride === undefined
@@ -2729,7 +2804,9 @@ export async function spawnAgentPreset(
   // writes HTML pages there and the chat view shows them. Local only: on a
   // remote box the folder would not exist where the agent runs.
   let visuals: ChatVisualsSpot | null = null;
-  if (!get(remoteTarget)) {
+  // Settings > Chat > Inline visuals: off gives new agents no folder, so the
+  // brief's visuals rule is skipped ("If the variable is unset").
+  if (!get(remoteTarget) && get(chatInlineVisuals)) {
     try {
       visuals = await invoke<ChatVisualsSpot>('chat_visuals_prepare', { key: crypto.randomUUID() });
     } catch (err) {
@@ -2773,7 +2850,7 @@ export async function spawnAgentPreset(
   // `command` (not `launchCommand`) stays the preset key for detection, rules
   // files and display names; only the line written to the PTY carries the
   // resolved command + permission args + MCP flags.
-  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${platformLaunchFlags(command)}${mcpFlags}`;
+  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${platformLaunchFlags(command, undefined, get(agentCodexOwnServer))}${mcpFlags}`;
 
   if (deepSeek) {
     deepSeek.markDeepSeekWorkerSession(sessionId);

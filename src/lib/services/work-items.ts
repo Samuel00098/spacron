@@ -202,6 +202,28 @@ export async function listPullRequests(
   });
 }
 
+export async function createPullRequest(
+  projectId: string,
+  options: {
+    title: string;
+    body: string;
+    base: string;
+    head?: string;
+    draft?: boolean;
+    repoPath?: string;
+  }
+): Promise<WorkItemPR> {
+  return await invoke<WorkItemPR>('source_control_create_pull_request', {
+    projectId,
+    repoPath: options.repoPath,
+    title: options.title,
+    body: options.body,
+    base: options.base,
+    head: options.head,
+    draft: options.draft,
+  });
+}
+
 export async function getPullRequestDetails(
   projectId: string,
   prNumber: number,

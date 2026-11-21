@@ -117,6 +117,13 @@ export interface AgentReportEvent {
  * Exported for tests; `initMcpBridge` is the only caller in the app.
  */
 export async function handleAgentReport(report: AgentReportEvent): Promise<void> {
+  if (report.sessionId !== null) {
+    try {
+      const { handleSubagentReport } = await import('$lib/services/structured-chat/mcp-subagents');
+      handleSubagentReport(report.sessionId, report.state, report.detail);
+    } catch {}
+  }
+
   // "working" is a progress ping, not a turn boundary. It is deliberately not
   // surfaced: an agent that says "still going" every few minutes must not
   // produce a notification each time.

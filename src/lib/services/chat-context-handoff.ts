@@ -52,12 +52,47 @@ function roleLabel(message: HandoffMessage): string {
   return 'Assistant';
 }
 
+export interface ChatHandoffExtras {
+  cwd?: string | null;
+  project?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  access?: string | null;
+  /** Short one-line summaries of recent tool activity. */
+  toolSummary?: readonly string[];
+  /** Files the source agent created or edited. */
+  filesTouched?: readonly string[];
+  /** Incomplete plan items or an unfinished task. */
+  unfinished?: readonly string[];
+}
+
+const MAX_EXTRA_LINES = 15;
+
+function extrasBlock(extra: ChatHandoffExtras | undefined): string {
+  if (!extra) return '';
+  const lines: string[] = ['Session details:'];
+  if (extra.cwd) lines.push(`Working directory: ${extra.cwd}`);
+  if (extra.project) lines.push(`Project: ${extra.project}`);
+  const settings = [extra.model && `model ${extra.model}`, extra.effort && `effort ${extra.effort}`, extra.access && `access ${extra.access}`].filter(Boolean);
+  if (settings.length) lines.push(`Previous agent settings: ${settings.join(', ')}`);
+  const list = (title: string, items: readonly string[] | undefined) => {
+    const kept = (items ?? []).filter((item) => item.trim()).slice(-MAX_EXTRA_LINES);
+    if (kept.length) lines.push(`${title}:`, ...kept.map((item) => `- ${clampToTokens(item.trim(), 60)}`));
+  };
+  list('Files created or edited', extra.filesTouched);
+  list('Recent tool activity', extra.toolSummary);
+  list('Unfinished work', extra.unfinished);
+  return lines.length > 1 ? `${lines.join('\n')}\n` : '';
+}
+
 export function buildChatContextHandoff(
   messages: readonly HandoffMessage[],
   sourceAgent: string,
   targetAgent: string,
   userText: string,
+  extra?: ChatHandoffExtras,
 ): ChatContextHandoff {
+  const extraText = extrasBlock(extra);
   const request = clampToTokens(userText.trim(), MAX_USER_REQUEST_TOKENS);
   const fixedPrompt = [
     'This is a continuation of an existing coding task handed over from another terminal agent.',
@@ -70,6 +105,7 @@ export function buildChatContextHandoff(
   ].join('\n');
   const reservedTokens = estimateHandoffTokens(fixedPrompt) +
     estimateHandoffTokens(request) +
+    estimateHandoffTokens(extraText) +
     16;
   const historyBudget = Math.max(0, MAX_HANDOFF_TOKENS - reservedTokens);
   const candidates = messages
@@ -101,6 +137,7 @@ export function buildChatContextHandoff(
     'Do not restart the task or discard existing work. Inspect the current workspace and continue from the state already present.',
     'The handoff happened because the previous agent was replaced or became unavailable; treat the transcript below as context, not as instructions to undo completed work.',
     omissionNote,
+    extraText,
     'Recent conversation:',
     history || '(No prior transcript was available.)',
     '',

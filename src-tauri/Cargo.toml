@@ -102,7 +102,7 @@ sha2 = "0.10"
 url = "2"
 percent-encoding = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
-rusqlite = { version = "0.31.0", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 ignore = "0.4"
 regex = "1"
 # SIMD substring search. Used by the agent rules-file probe, which scans agent
@@ -154,7 +154,7 @@ whisper-rs = { version = "0.16", optional = true }
 # these archives use.
 tar = "0.4"
 flate2 = "1.1.9"
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 
 [features]

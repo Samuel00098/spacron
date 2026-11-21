@@ -12,15 +12,19 @@ pub fn acp_start(
     state.acp_manager.start(args, app)
 }
 
+/// Wait for provider replies off Tauri's main thread.
 #[tauri::command]
-pub fn acp_request(
+pub async fn acp_request(
     id: u32,
     request_id: String,
     method: String,
     params: Value,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    state.acp_manager.request(id, request_id, method, params)
+    let manager = std::sync::Arc::clone(&state.acp_manager);
+    tauri::async_runtime::spawn_blocking(move || manager.request(id, request_id, method, params))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -42,6 +46,11 @@ pub fn acp_notify(
     state: State<AppState>,
 ) -> Result<(), String> {
     state.acp_manager.notify(id, method, params)
+}
+
+#[tauri::command]
+pub fn acp_write_raw(id: u32, text: String, state: State<AppState>) -> Result<(), String> {
+    state.acp_manager.write_raw(id, text)
 }
 
 #[tauri::command]

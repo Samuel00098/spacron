@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
 import { remoteTarget } from '$lib/stores/remoteWorkspace';
-import { DEEPSEEK_HARNESS_COMMAND, deepSeekPanelRoot, deepSeekPlacements, startDeepSeekHarnessWeb } from '$lib/services/deepseek-harness';
+import { DEEPSEEK_HARNESS_COMMAND, deepSeekPanelRoot, deepSeekPlacements, sameFolder, startDeepSeekHarnessWeb } from '$lib/services/deepseek-harness';
+import { worktreesByProject } from '$lib/stores/projectWorktrees';
+import { worktreeForPath } from '$lib/services/project-worktrees';
 import { agentUpdates } from '$lib/stores/agentUpdates';
 import type { WorktreeInfo, WorktreeStatus } from '$lib/services/orchestrator/worktree-manager';
 import { subscribeWorktreeStatus } from '$lib/services/orchestrator/worktree-status-poll';
@@ -66,8 +68,22 @@ export default function DeepSeekPanel() {
   const project = useStore(activeProject);
   const remote = useStore(remoteTarget);
   const placements = useStore(deepSeekPlacements);
-  // The main checkout, or the project's DeepSeek worktree when it was opened isolated.
+  // The main checkout, or one of the project's own worktrees: wherever the
+  // panel was last opened, like an agent's terminal.
   const root = project?.root_path ? deepSeekPanelRoot(placements, project.id, project.root_path) : null;
+  const worktreeLists = useStore(worktreesByProject);
+  const worktreeRow = project && root ? worktreeForPath(worktreeLists[project.id] ?? [], root) : null;
+  // The worktree badge reads branch and changes from that row; a panel opened
+  // before the list loaded keeps the folder's own name until it does.
+  const panelWorktree: WorktreeInfo | null = !root || !project?.root_path || sameFolder(root, project.root_path)
+    ? null
+    : {
+        path: root,
+        branch: worktreeRow && !worktreeRow.is_main ? worktreeRow.branch ?? worktreeRow.name : root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '',
+        baseBranch: worktreeRow && !worktreeRow.is_main ? worktreeRow.base_ref ?? '' : '',
+        baseCommit: worktreeRow && !worktreeRow.is_main ? worktreeRow.head : '',
+        createdAt: worktreeRow && !worktreeRow.is_main ? worktreeRow.created_at ?? 0 : 0,
+      };
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
   const [attempt, setAttempt] = useState(0);
   // Rust stops every dsh web process before an update replaces its files; the
@@ -152,7 +168,7 @@ export default function DeepSeekPanel() {
   }
   return (
     <div className="deepseek-panel">
-      <PlacementBadge worktree={placements[project!.id]?.worktree ?? null} />
+      <PlacementBadge worktree={panelWorktree} />
       {state.mcpWarning && (
         <div className="deepseek-panel__warning" role="status">
           {state.mcpWarning}

@@ -696,6 +696,218 @@ pub async fn source_control_add_issue_comment(
     })
 }
 
+fn parse_pr_json(item: &serde_json::Value) -> WorkItemPR {
+    let id = item.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+    let number = item.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+    let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let body = item.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let state_str = item.get("state").and_then(|v| v.as_str()).unwrap_or("open").to_string();
+    let draft = item.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let created_at = item.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let updated_at = item.get("updated_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let closed_at = item.get("closed_at").and_then(|v| v.as_str()).map(ToString::to_string);
+    let merged_at = item.get("merged_at").and_then(|v| v.as_str()).map(ToString::to_string);
+    let html_url = item.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    let head = item.get("head");
+    let head_branch = head.and_then(|h| h.get("ref")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let head_sha = head.and_then(|h| h.get("sha")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    let base = item.get("base");
+    let base_branch = base.and_then(|b| b.get("ref")).and_then(|v| v.as_str()).unwrap_or("main").to_string();
+
+    let user = item.get("user");
+    let author = IssueAuthor {
+        login: user.and_then(|u| u.get("login")).and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+        avatar_url: user.and_then(|u| u.get("avatar_url")).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+    };
+
+    let mergeable = item.get("mergeable").and_then(|v| v.as_bool());
+    let mergeable_state = item.get("mergeable_state").and_then(|v| v.as_str()).map(ToString::to_string);
+    let comments_count = item.get("comments").and_then(|v| v.as_u64()).unwrap_or(0);
+    let additions = item.get("additions").and_then(|v| v.as_u64());
+    let deletions = item.get("deletions").and_then(|v| v.as_u64());
+    let changed_files = item.get("changed_files").and_then(|v| v.as_u64());
+
+    let effective_state = if merged_at.is_some() {
+        "merged".to_string()
+    } else {
+        state_str
+    };
+
+    WorkItemPR {
+        id,
+        number,
+        title,
+        body,
+        state: effective_state,
+        draft,
+        author,
+        head_branch,
+        base_branch,
+        head_sha,
+        mergeable,
+        mergeable_state,
+        comments_count,
+        created_at,
+        updated_at,
+        closed_at,
+        merged_at,
+        html_url,
+        additions,
+        deletions,
+        changed_files,
+    }
+}
+
+/// Create a new Pull Request on GitHub.
+#[tauri::command]
+pub async fn source_control_create_pull_request(
+    project_id: String,
+    repo_path: Option<String>,
+    title: String,
+    body: String,
+    head: Option<String>,
+    base: String,
+    draft: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<WorkItemPR, String> {
+    check_git_available()?;
+    let repo = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    let remote_url = run_git(&repo, &["remote", "get-url", "origin"])
+        .map_err(|_| "Project has no origin remote configured.".to_string())?;
+
+    let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
+        "Origin remote is not a recognized GitHub repository.".to_string()
+    })?;
+
+    // Determine head branch
+    let head_branch = match head {
+        Some(h) if !h.trim().is_empty() => h.trim().to_string(),
+        _ => run_git(&repo, &["branch", "--show-current"])
+            .map_err(|_| "Could not determine current git branch.".to_string())?
+            .trim()
+            .to_string(),
+    };
+
+    if head_branch.is_empty() {
+        return Err("Cannot create a pull request with an empty head branch.".to_string());
+    }
+
+    // Push head branch to remote so GitHub knows about it
+    let _ = run_git(&repo, &["push", "-u", "origin", &head_branch]);
+
+    let token = resolve_token(&provider);
+
+    // Try GitHub REST API if token available
+    if let Some(t) = token {
+        let client = http_client();
+        let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/pulls");
+        let payload = serde_json::json!({
+            "title": title.trim(),
+            "body": body,
+            "head": head_branch,
+            "base": base.trim(),
+            "draft": draft.unwrap_or(false),
+        });
+
+        let response = client
+            .post(&url)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(&t)
+            .json(&payload)
+            .send()
+            .await;
+
+        if let Ok(res) = response {
+            if res.status().is_success() {
+                let item: serde_json::Value = res.json().await.map_err(|e| format!("JSON error: {e}"))?;
+                return Ok(parse_pr_json(&item));
+            } else {
+                let err_body: serde_json::Value = res.json().await.unwrap_or(serde_json::Value::Null);
+                if let Some(msg) = err_body.get("message").and_then(|v| v.as_str()) {
+                    let detail = err_body
+                        .get("errors")
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|e| e.get("message"))
+                        .and_then(|v| v.as_str());
+                    let full_msg = match detail {
+                        Some(d) => format!("{msg}: {d}"),
+                        None => msg.to_string(),
+                    };
+                    return Err(format!("GitHub API error: {full_msg}"));
+                }
+            }
+        }
+    }
+
+    // Fallback: try gh CLI
+    let mut args = vec![
+        "pr", "create",
+        "--title", title.trim(),
+        "--body", &body,
+        "--base", base.trim(),
+        "--head", &head_branch,
+    ];
+    if draft.unwrap_or(false) {
+        args.push("--draft");
+    }
+
+    let output = std::process::Command::new("gh")
+        .args(&args)
+        .current_dir(&repo)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let pr_number = stdout
+                .rsplit('/')
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+
+            Ok(WorkItemPR {
+                id: pr_number,
+                number: pr_number,
+                title: title.trim().to_string(),
+                body,
+                state: "open".to_string(),
+                draft: draft.unwrap_or(false),
+                author: IssueAuthor {
+                    login: "you".to_string(),
+                    avatar_url: String::new(),
+                },
+                head_branch,
+                base_branch: base,
+                head_sha: String::new(),
+                mergeable: None,
+                mergeable_state: None,
+                comments_count: 0,
+                created_at: String::new(),
+                updated_at: String::new(),
+                closed_at: None,
+                merged_at: None,
+                html_url: stdout,
+                additions: None,
+                deletions: None,
+                changed_files: None,
+            })
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if stderr.is_empty() {
+                "Failed to create pull request via GitHub CLI".to_string()
+            } else {
+                stderr
+            })
+        }
+        Err(e) => Err(format!("Could not execute GitHub CLI or REST API: {e}")),
+    }
+}
+
 /// List Pull Requests for the repository.
 #[tauri::command]
 pub async fn source_control_list_pull_requests(
@@ -751,64 +963,7 @@ pub async fn source_control_list_pull_requests(
         .await
         .map_err(|e| format!("Failed to parse pull requests JSON: {e}"))?;
 
-    let mut result = Vec::new();
-    for item in items {
-        let id = item.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-        let number = item.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
-        let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let body = item.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let state_str = item.get("state").and_then(|v| v.as_str()).unwrap_or("open").to_string();
-        let draft = item.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
-        let created_at = item.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let updated_at = item.get("updated_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let closed_at = item.get("closed_at").and_then(|v| v.as_str()).map(ToString::to_string);
-        let merged_at = item.get("merged_at").and_then(|v| v.as_str()).map(ToString::to_string);
-        let html_url = item.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-        let head = item.get("head");
-        let head_branch = head.and_then(|h| h.get("ref")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let head_sha = head.and_then(|h| h.get("sha")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-        let base = item.get("base");
-        let base_branch = base.and_then(|b| b.get("ref")).and_then(|v| v.as_str()).unwrap_or("main").to_string();
-
-        let user = item.get("user");
-        let author = IssueAuthor {
-            login: user.and_then(|u| u.get("login")).and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-            avatar_url: user.and_then(|u| u.get("avatar_url")).and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        };
-
-        let effective_state = if merged_at.is_some() {
-            "merged".to_string()
-        } else {
-            state_str
-        };
-
-        result.push(WorkItemPR {
-            id,
-            number,
-            title,
-            body,
-            state: effective_state,
-            draft,
-            author,
-            head_branch,
-            base_branch,
-            head_sha,
-            mergeable: None,
-            mergeable_state: None,
-            comments_count: 0,
-            created_at,
-            updated_at,
-            closed_at,
-            merged_at,
-            html_url,
-            additions: None,
-            deletions: None,
-            changed_files: None,
-        });
-    }
-
+    let result = items.iter().map(parse_pr_json).collect();
     Ok(result)
 }
 

@@ -1,0 +1,151 @@
+/* Settings > Chat (ChatSettingsPane.tsx). global.css clears borders on
+   buttons and inputs and forces one UI text size, so edges here are inset
+   rings and hierarchy is colour. */
+
+.chat-settings-subtitle {
+  margin: -8px 0 12px;
+  padding-left: 16px;
+  color: var(--text-muted);
+}
+
+/* The app's card outline keys off `h3 + body`; a subtitle or a card with no
+   title breaks that, so these cards draw the same outline themselves. */
+.settings-card.chat-settings-card > .settings-card-body {
+  box-shadow: inset 0 0 0 1px var(--settings-divider);
+  border-radius: 16px;
+}
+.settings-card.chat-settings-card > .settings-card-body > :first-child { border-top-left-radius: 16px; border-top-right-radius: 16px; }
+.settings-card.chat-settings-card > .settings-card-body > :last-child { border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; }
+
+/* Segmented control: Chat | CLI, Comfortable | Wide | Full */
+.chat-settings-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--app-surface, transparent));
+  box-shadow: var(--surface-outline, inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 12%, transparent)) !important;
+}
+
+.chat-settings-seg button {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none !important;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.chat-settings-seg.sm button { padding: 2px 11px; }
+
+.chat-settings-seg button:hover { color: var(--text-primary); }
+
+.chat-settings-seg button.active {
+  color: var(--text-primary);
+  background: var(--surface-selected, color-mix(in srgb, var(--text-primary) 12%, transparent));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25) !important;
+}
+
+/* px fields */
+.chat-settings-px {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.chat-settings-px input {
+  width: 96px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 9px;
+  outline: none;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--app-surface, transparent));
+  box-shadow: var(--surface-outline, inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 12%, transparent)) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-settings-px input:focus {
+  box-shadow: var(--surface-outline-active, inset 0 0 0 1px var(--accent)) !important;
+}
+
+/* Contrast slider: Softer ——o—— Sharper  115 */
+.chat-settings-contrast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  min-width: 300px;
+}
+
+.chat-settings-contrast input[type='range'] { flex: 1; min-width: 120px; accent-color: var(--text-primary); }
+
+.chat-settings-contrast b {
+  min-width: 30px;
+  text-align: right;
+  font-weight: 500;
+  color: var(--text-secondary, var(--text-muted));
+  font-variant-numeric: tabular-nums;
+}
+
+/* Font family row with a live sample under it */
+.settings-control-row.chat-settings-font { row-gap: 14px; }
+
+.chat-settings-font-preview {
+  grid-column: 1 / -1;
+  padding: 10px 14px;
+  border-radius: 10px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--app-surface, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+#app#app .chat-settings-font-preview { font-family: var(--chat-preview-font) !important; }
+
+.chat-settings-font-preview code { font-weight: 600; }
+
+/* Per-agent rows */
+.settings-control-copy.chat-settings-agent-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-control-row.chat-settings-agent,
+.settings-control-row.chat-settings-perm {
+  min-height: 0;
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+.chat-settings-agent-mark {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-settings-agent-mark svg,
+.chat-settings-agent-mark img { width: 16px; height: 16px; }
+
+
+.chat-settings-muted { color: var(--text-muted); }
+
+.chat-settings-link {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  box-shadow: none !important;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.chat-settings-link:hover { background: color-mix(in srgb, var(--text-primary) 8%, transparent); }

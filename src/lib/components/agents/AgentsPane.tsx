@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
+import Dropdown from '$lib/components/shared/Dropdown';
 import { usageState, refreshUsage, PANEL_POLL_INTERVAL_MS, type DetectedAgent } from '$lib/stores/usage';
 import { activeProject } from '$lib/stores/workspace';
 import { closeSettings } from '$lib/stores/layout';
@@ -185,34 +186,28 @@ export default function AgentsPane() {
       {/* ── Permission mode ─────────────────────────────────────────────── */}
       <div className="agents-mode">
         <div className="agents-mode-copy">
-          <span className="agents-mode-title">Agent permissions</span>
+          <span className="agents-mode-title">New agents</span>
           <span className="agents-mode-detail">
-            <strong>Yolo</strong> launches every agent with its own skip-permissions
-            flag (Claude's <code>--dangerously-skip-permissions</code>, Codex's{' '}
-            <code>--dangerously-bypass-approvals-and-sandbox</code>, Gemini's{' '}
-            <code>--yolo</code>, …) so runs never stall on a permission prompt.
-            <strong>Manual</strong> launches agents bare and they ask as usual. Use the
-            toggle on each row to pin one agent to the other mode.
+            Default permission level for newly launched agents.
             {customized && (
               <em className="agents-mode-customized">
-                Some agents below have custom launch arguments and won't follow this toggle.
+                Some agents below use custom launch arguments.
               </em>
             )}
           </span>
         </div>
-        <div className="agents-mode-control" role="radiogroup" aria-label="Agent permission mode">
-          {(['yolo', 'manual'] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              role="radio"
-              aria-checked={$agentPermissionMode === mode}
-              className={`agents-mode-segment${$agentPermissionMode === mode ? ' active' : ''}`}
-              onClick={() => agentPermissionMode.set(mode)}
-            >
-              {mode === 'yolo' ? 'Yolo' : 'Manual'}
-            </button>
-          ))}
+        <div className="agents-mode-control">
+          <span className="agents-mode-label">Permissions</span>
+          <Dropdown
+            options={[
+              { value: 'yolo', label: 'Full access' },
+              { value: 'manual', label: 'Manual' },
+            ]}
+            value={$agentPermissionMode}
+            ariaLabel="Default permissions for new agents"
+            onChange={(value) => agentPermissionMode.set(value as AgentPermissionMode)}
+            boundarySelector=".settings-modal"
+          />
         </div>
       </div>
 
@@ -223,9 +218,8 @@ export default function AgentsPane() {
         <div className="agents-roster-head">
           <p className="agents-roster-hint">
             {lastFetchedAt === 0
-              ? 'Looking for agent CLIs on this machine…'
-              : `${installedCount} of ${detected.length} known agent CLIs found on your PATH. ` +
-                'Hide the ones you never use, or open a row to change how it launches.'}
+              ? 'Detecting agent CLIs…'
+              : `${installedCount} of ${detected.length} CLIs detected on your PATH.`}
           </p>
           <LiveTicker
             intervalMs={PANEL_POLL_INTERVAL_MS}
@@ -472,7 +466,7 @@ function AgentRowView({
                       : `Pin ${row.name} to ${option} (overrides the global mode)`
                   }
                 >
-                  {option === 'yolo' ? 'Yolo' : 'Manual'}
+                  {option === 'yolo' ? 'Full access' : 'Manual'}
                 </button>
               ))}
             </div>

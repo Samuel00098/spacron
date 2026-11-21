@@ -381,7 +381,7 @@ fn top_choice(answer: &Value) -> Option<(String, f64)> {
 /// Run the agent tool. Errors are for the agent to read.
 pub async fn run_agent_tool(args: Option<&Map<String, Value>>, project_root: Option<String>) -> Result<String, String> {
     let Some(source) = AGENT_TOOL.read().unwrap_or_else(|e| e.into_inner()).clone() else {
-        return Err("Jev for agents is switched off in Spacron (Settings > AI Connections > Jev decisions).".to_string());
+        return Err("Jev for agents is switched off in Spacron (Settings > AI Providers > Jev decisions).".to_string());
     };
     let args: ToolArgs = serde_json::from_value(Value::Object(args.cloned().unwrap_or_default()))
         .map_err(|e| format!("Invalid arguments: {e}"))?;

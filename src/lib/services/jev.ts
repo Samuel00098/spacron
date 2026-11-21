@@ -50,7 +50,7 @@ export async function classifyDecision(
   }
 }
 
-/** Where the real Jev is reached (Settings > AI Connections > Jev decisions). */
+/** Where the real Jev is reached (Settings > AI Providers > Jev decisions). */
 function jevRoute(): { provider?: string } {
   const provider = get(jevProvider);
   return provider && provider !== 'typesafe' ? { provider } : {};

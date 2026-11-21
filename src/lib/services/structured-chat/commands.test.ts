@@ -1,0 +1,160 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const h = vi.hoisted(() => {
+  const state = {
+    status: 'ready',
+    models: [{ id: 'gpt-a', label: 'A', description: null, efforts: ['low', 'high'], defaultEffort: null, isDefault: true }],
+    model: 'gpt-a',
+    effort: 'low',
+    access: 'ask',
+  };
+  const provider = {
+    agent: 'codex',
+    label: 'Codex',
+    capabilities: {
+      rewind: true,
+      fork: true,
+      compact: 'native' as const,
+      steering: 'inject' as const,
+      contextUsage: true,
+      mcp: true,
+      subagents: { supported: true, spawn: false, inspectTranscript: true },
+      nativeCommands: true,
+      supportedAccessModes: ['ask', 'auto', 'full-access'] as any[],
+    },
+    get: vi.fn(() => state),
+    setModel: vi.fn(),
+    setEffort: vi.fn(),
+    setAccess: vi.fn(),
+    interrupt: vi.fn(async () => {}),
+    send: vi.fn(async () => {}),
+    steer: vi.fn(async () => {}),
+    compact: vi.fn(async () => {}),
+  };
+  const store = {
+    clearStructuredConversation: vi.fn(async () => true),
+    compactStructuredSession: vi.fn(() => true),
+    forkStructuredSession: vi.fn(async (_id, opts) => ({ id: 'fork-1', title: opts?.title ?? 'Chat (fork)', forkMode: 'native' })),
+    rewindStructuredSession: vi.fn(async () => true),
+    renameStructuredSession: vi.fn(() => true),
+    resumeStructuredSessionInPane: vi.fn(async () => true),
+    recordForPane: vi.fn(() => ({ id: 'cur', projectId: 'p', provider: 'codex', restoredMode: 'native' })),
+    listStructuredSessions: vi.fn(() => [
+      { id: 'cur', title: 'Now', lifecycle: 'ready', updatedAt: Date.now() },
+      { id: 'old', title: 'Old chat', lifecycle: 'closed', updatedAt: Date.now() - 3_600_000 },
+    ]),
+  };
+  return { state, provider, store };
+});
+
+vi.mock('./registry', () => ({ structuredChatProvider: () => h.provider }));
+vi.mock('./session-store', () => h.store);
+
+import { runStructuredCommand } from './commands';
+
+describe('structured slash commands', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.state.status = 'ready';
+  });
+
+  it('changes model and effort through the provider, validating against the live catalog', async () => {
+    expect(await runStructuredCommand('codex', 1, '/model gpt-a')).toMatchObject({ handled: true });
+    expect(h.provider.setModel).toHaveBeenCalledWith(1, 'gpt-a');
+    expect((await runStructuredCommand('codex', 1, '/model nope')).error).toContain('nope');
+    expect((await runStructuredCommand('codex', 1, '/effort ultra')).error).toContain('low, high');
+    await runStructuredCommand('codex', 1, '/effort high');
+    expect(h.provider.setEffort).toHaveBeenCalledWith(1, 'high');
+    await runStructuredCommand('codex', 1, '/permissions yolo');
+    expect(h.provider.setAccess).toHaveBeenCalledWith(1, 'full-access');
+  });
+
+  it('runs session operations and leaves unknown commands to the agent', async () => {
+    await runStructuredCommand('codex', 1, '/clear');
+    expect(h.store.clearStructuredConversation).toHaveBeenCalledWith(1);
+    await runStructuredCommand('codex', 1, '/rename Bug hunt');
+    expect(h.store.renameStructuredSession).toHaveBeenCalledWith(1, 'Bug hunt');
+    expect((await runStructuredCommand('codex', 1, '/history')).output).toContain('1. Old chat');
+    await runStructuredCommand('codex', 1, '/resume 1');
+    expect(h.store.resumeStructuredSessionInPane).toHaveBeenCalledWith(1, 'old');
+    await runStructuredCommand('codex', 1, '/retry', { lastUserMessage: 'do it' });
+    expect(h.provider.send).toHaveBeenCalledWith(1, 'do it');
+    expect(await runStructuredCommand('codex', 1, '/terminal')).toEqual({ handled: true, action: 'continue-in-terminal' });
+    expect(await runStructuredCommand('codex', 1, '/review main')).toEqual({ handled: false });
+  });
+
+  it('refuses to clear or interrupt in the wrong state', async () => {
+    h.state.status = 'working';
+    expect((await runStructuredCommand('codex', 1, '/clear')).error).toBeTruthy();
+    await runStructuredCommand('codex', 1, '/stop');
+    expect(h.provider.interrupt).toHaveBeenCalled();
+    h.state.status = 'ready';
+    expect((await runStructuredCommand('codex', 1, '/stop')).output).toBe('Nothing is running.');
+  });
+
+  it('handles /compact, /context, and /account', async () => {
+    const compactRes = await runStructuredCommand('codex', 1, '/compact');
+    expect(compactRes.handled).toBe(true);
+    expect(h.store.compactStructuredSession).toHaveBeenCalledWith(1);
+    expect(h.provider.compact).toHaveBeenCalledWith(1);
+
+    const contextRes = await runStructuredCommand('codex', 1, '/context');
+    expect(contextRes.handled).toBe(true);
+    expect(contextRes.output).toContain('not reported');
+    expect(contextRes.output).toContain('Continuity: native Codex session');
+
+    const accountRes = await runStructuredCommand('codex', 1, '/account');
+    expect(accountRes.handled).toBe(true);
+    expect(accountRes.output).toContain('Account');
+  });
+
+  it('queues /compact behind a running turn instead of refusing it', async () => {
+    h.state.status = 'working';
+    const result = await runStructuredCommand('codex', 1, '/compact');
+    expect(result.handled).toBe(true);
+    expect(result.defer).toBe('compact');
+    expect(result.output).toContain('as soon as it ends');
+    expect(h.store.compactStructuredSession).not.toHaveBeenCalled();
+  });
+
+  it('leaves agent-owned commands to the agent', async () => {
+    for (const command of ['/goal ship it', '/plan', '/mcp', '/init', '/help']) {
+      expect(await runStructuredCommand('codex', 1, command)).toEqual({ handled: false });
+    }
+  });
+
+  it('handles /rewind, /fork, and /steer according to provider capabilities', async () => {
+    const rewindRes = await runStructuredCommand('codex', 1, '/rewind');
+    expect(rewindRes.handled).toBe(true);
+    expect(h.store.rewindStructuredSession).toHaveBeenCalledWith(1);
+    expect(rewindRes.output).toContain('Rewound conversation');
+
+    const forkRes = await runStructuredCommand('codex', 1, '/fork Feature-x');
+    expect(forkRes.handled).toBe(true);
+    expect(h.store.forkStructuredSession).toHaveBeenCalledWith(1, { title: 'Feature-x' });
+    expect(forkRes.output).toContain('Forked conversation');
+
+    // Steer while working
+    h.state.status = 'working';
+    const steerRes = await runStructuredCommand('codex', 1, '/steer use typescript');
+    expect(steerRes.handled).toBe(true);
+    expect(h.provider.steer).toHaveBeenCalledWith(1, 'use typescript');
+    expect(steerRes.output).toContain('Injected steering');
+  });
+
+  it('validates access mode against supported capabilities', async () => {
+    (h.provider.capabilities as any).supportedAccessModes = ['ask', 'auto'];
+    const res = await runStructuredCommand('codex', 1, '/permissions full-access');
+    expect(res.handled).toBe(true);
+    expect(res.error).toContain('only supports [ask, auto]');
+  });
+
+  it('queues steering follow-ups when provider specifies queue steering', async () => {
+    (h.provider.capabilities as any).steering = 'queue';
+    h.state.status = 'working';
+    const res = await runStructuredCommand('codex', 1, '/steer check edge cases');
+    expect(res.handled).toBe(true);
+    expect(res.output).toContain('Added follow-up to message queue');
+    (h.provider.capabilities as any).steering = 'inject';
+  });
+});

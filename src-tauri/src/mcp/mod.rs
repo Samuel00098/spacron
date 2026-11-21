@@ -1613,7 +1613,7 @@ fn tool_generate_media(kind: &str) -> serde_json::Value {
     serde_json::json!({
         "name": name,
         "description": format!(
-            "Generate {article} {noun} with the AI providers configured in Spacron (Settings > AI Connections) and save it to the project's `generations` folder. Returns the saved file's absolute path; use that file rather than generating {noun}s some other way.{extra}"
+            "Generate {article} {noun} with the AI providers configured in Spacron (Settings > AI Providers) and save it to the project's `generations` folder. Returns the saved file's absolute path; use that file rather than generating {noun}s some other way.{extra}"
         ),
         "inputSchema": {
             "type": "object",

@@ -344,7 +344,11 @@ fn extract_from_zip(archive: &[u8]) -> Result<Option<Vec<u8>>, String> {
         let mut entry = zip
             .by_index(index)
             .map_err(|e| format!("The ONNX Runtime archive is corrupt: {e}"))?;
-        if !entry.is_file() || !is_core_library(entry.name()) {
+        let entry_name = entry
+            .name()
+            .map_err(|e| format!("The ONNX Runtime archive is corrupt: {e}"))?
+            .into_owned();
+        if !entry.is_file() || !is_core_library(&entry_name) {
             continue;
         }
         let mut bytes = Vec::new();
@@ -537,11 +541,12 @@ mod tests {
             let mut zip = zip::ZipArchive::new(Cursor::new(&bytes[..])).expect("zip");
             for index in 0..zip.len() {
                 let entry = zip.by_index(index).expect("entry");
+                let entry_name = entry.name().expect("entry name");
                 println!(
                     "  {} size={} core={}",
-                    entry.name(),
+                    entry_name,
                     entry.size(),
-                    is_core_library(entry.name())
+                    is_core_library(&entry_name)
                 );
             }
         } else {

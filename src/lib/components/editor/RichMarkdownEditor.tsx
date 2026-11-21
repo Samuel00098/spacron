@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
+import { EditorContent, NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, useEditorState, type Editor, type NodeViewProps } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import { CodeBlock } from '@tiptap/extension-code-block';
 import { Markdown } from '@tiptap/markdown';
 import { TableKit } from '@tiptap/extension-table';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
@@ -124,6 +125,60 @@ function parentIndexes(entries: HeadingEntry[]): number[] {
 
 const NORMALIZE_META = 'spacronSoftBreaks';
 
+const FENCE_LANGUAGES = [
+  ['plain', 'Plain text'], ['bash', 'Bash'], ['c', 'C'], ['cpp', 'C++'], ['css', 'CSS'],
+  ['diff', 'Diff'], ['go', 'Go'], ['graphql', 'GraphQL'], ['html', 'HTML'], ['java', 'Java'],
+  ['javascript', 'JavaScript'], ['json', 'JSON'], ['kotlin', 'Kotlin'], ['markdown', 'Markdown'],
+  ['mermaid', 'Mermaid'], ['powershell', 'PowerShell'], ['python', 'Python'], ['ruby', 'Ruby'],
+  ['rust', 'Rust'], ['scss', 'SCSS'], ['sql', 'SQL'],
+] as const;
+
+function MarkdownCodeBlock({ node, updateAttributes }: NodeViewProps) {
+  const language = String(node.attrs.language ?? 'plain');
+  const [copied, setCopied] = useState(false);
+
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(node.textContent);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch (error) {
+      console.error('Could not copy code block:', error);
+    }
+  };
+
+  return (
+    <NodeViewWrapper className="rich-md-codeblock">
+      <div className="rich-md-codeblock-toolbar" contentEditable={false}>
+        <span />
+        <button type="button" className="rich-md-code-copy" onClick={() => void copyCode()} aria-label={copied ? 'Code copied' : 'Copy code'} title={copied ? 'Copied' : 'Copy code'}>
+          {copied ? 'Copied' : (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="8" y="8" width="13" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+            </svg>
+          )}
+        </button>
+        <select
+          className="rich-md-code-language"
+          value={language}
+          aria-label="Code block language"
+          onChange={(event) => updateAttributes({ language: event.target.value === 'plain' ? null : event.target.value })}
+        >
+          {!FENCE_LANGUAGES.some(([id]) => id === language) && <option value={language}>{language}</option>}
+          {FENCE_LANGUAGES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+      </div>
+      <NodeViewContent<'pre'> as="pre" spellCheck={false} />
+    </NodeViewWrapper>
+  );
+}
+
+const RichCodeBlock = CodeBlock.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(MarkdownCodeBlock);
+  },
+});
+
 /**
  * A hard-wrapped Markdown paragraph is one paragraph: its line breaks are soft
  * and render as spaces. The Markdown parser keeps them as `\n` inside the text,
@@ -148,16 +203,6 @@ function joinSoftBreaks(editor: Editor) {
   }
   tr.setMeta('addToHistory', false).setMeta(NORMALIZE_META, true);
   editor.view.dispatch(tr);
-}
-
-const TOC_KEY = 'spacron.richMarkdown.tocOpen';
-
-function readTocOpen(): boolean {
-  try {
-    return localStorage.getItem(TOC_KEY) !== '0';
-  } catch {
-    return true;
-  }
 }
 
 function TableOfContents({
@@ -331,13 +376,9 @@ function ToolButton({
 
 function Toolbar({
   editor,
-  tocOpen,
-  onOpenToc,
   onAskUrl,
 }: {
   editor: Editor;
-  tocOpen: boolean;
-  onOpenToc: () => void;
   onAskUrl: (kind: 'link' | 'image') => void;
 }) {
   const s = useEditorState({
@@ -347,6 +388,8 @@ function Toolbar({
       h1: e.isActive('heading', { level: 1 }),
       h2: e.isActive('heading', { level: 2 }),
       h3: e.isActive('heading', { level: 3 }),
+      h4: e.isActive('heading', { level: 4 }),
+      h5: e.isActive('heading', { level: 5 }),
       bold: e.isActive('bold'),
       italic: e.isActive('italic'),
       strike: e.isActive('strike'),
@@ -365,16 +408,12 @@ function Toolbar({
 
   return (
     <div className="rich-md-toolbar" role="toolbar" aria-label="Formatting">
-      {!tocOpen && (
-        <>
-          <ToolButton icon="toc" label="Show table of contents" onClick={onOpenToc} />
-          <span className="rich-md-sep" />
-        </>
-      )}
       <ToolButton icon="paragraph" label="Paragraph" active={s.paragraph} onClick={() => c().setParagraph().run()} />
       <ToolButton text="H1" label="Heading 1" active={s.h1} onClick={() => c().toggleHeading({ level: 1 }).run()} />
       <ToolButton text="H2" label="Heading 2" active={s.h2} onClick={() => c().toggleHeading({ level: 2 }).run()} />
       <ToolButton text="H3" label="Heading 3" active={s.h3} onClick={() => c().toggleHeading({ level: 3 }).run()} />
+      <ToolButton text="H4" label="Heading 4" active={s.h4} onClick={() => c().toggleHeading({ level: 4 }).run()} />
+      <ToolButton text="H5" label="Heading 5" active={s.h5} onClick={() => c().toggleHeading({ level: 5 }).run()} />
       <span className="rich-md-sep" />
       <ToolButton icon="bold" label="Bold (Ctrl+B)" active={s.bold} onClick={() => c().toggleBold().run()} />
       <ToolButton icon="italic" label="Italic (Ctrl+I)" active={s.italic} onClick={() => c().toggleItalic().run()} />
@@ -443,12 +482,21 @@ function UrlBar({
   );
 }
 
-export default function RichMarkdownEditor({ filePath, content }: { filePath: string; content: string }) {
+export default function RichMarkdownEditor({
+  filePath,
+  content,
+  tocOpen,
+  onTocOpenChange,
+}: {
+  filePath: string;
+  content: string;
+  tocOpen: boolean;
+  onTocOpenChange: (open: boolean) => void;
+}) {
   // The Markdown this editor last produced or loaded, so a store update that
   // merely echoes our own edit does not reset the document (and the caret).
   const lastMarkdownRef = useRef(content);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [tocOpen, setTocOpen] = useState(readTocOpen);
   const [urlPrompt, setUrlPrompt] = useState<{ kind: 'link' | 'image'; initial: string } | null>(null);
 
   const editor = useEditor(
@@ -457,7 +505,9 @@ export default function RichMarkdownEditor({ filePath, content }: { filePath: st
         StarterKit.configure({
           heading: { levels: [1, 2, 3, 4, 5, 6] },
           link: { openOnClick: false, autolink: true },
+          codeBlock: false,
         }),
+        RichCodeBlock,
         TableKit.configure({ table: { resizable: false } }),
         TaskList,
         TaskItem.configure({ nested: true }),
@@ -492,14 +542,7 @@ export default function RichMarkdownEditor({ filePath, content }: { filePath: st
     joinSoftBreaks(editor);
   }, [content, editor]);
 
-  const setToc = useCallback((open: boolean) => {
-    setTocOpen(open);
-    try {
-      localStorage.setItem(TOC_KEY, open ? '1' : '0');
-    } catch {
-      /* storage unavailable: the choice just isn't remembered */
-    }
-  }, []);
+  const setToc = useCallback((open: boolean) => onTocOpenChange(open), [onTocOpenChange]);
 
   const askUrl = (kind: 'link' | 'image') => {
     const initial = kind === 'link' && editor ? String(editor.getAttributes('link').href ?? '') : '';
@@ -526,7 +569,7 @@ export default function RichMarkdownEditor({ filePath, content }: { filePath: st
     <div className="rich-md-editor">
       {tocOpen && <TableOfContents editor={editor} scrollRef={scrollRef} onClose={() => setToc(false)} />}
       <div className="rich-md-main">
-        <Toolbar editor={editor} tocOpen={tocOpen} onOpenToc={() => setToc(true)} onAskUrl={askUrl} />
+        <Toolbar editor={editor} onAskUrl={askUrl} />
         {urlPrompt && (
           <UrlBar
             kind={urlPrompt.kind}

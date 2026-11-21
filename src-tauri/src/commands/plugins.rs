@@ -253,7 +253,7 @@ fn extract_subtree(bytes: &[u8], prefix: &str, dest: &Path) -> Result<(), String
     let (mut files, mut total) = (0usize, 0u64);
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = entry.name().replace('\\', "/");
+        let name = entry.name().map_err(|e| e.to_string())?.replace('\\', "/");
         let rel = if prefix.is_empty() {
             name.as_str()
         } else if let Some(rest) = name.strip_prefix(prefix).and_then(|r| r.strip_prefix('/')) {
@@ -300,7 +300,12 @@ fn extract_subtree(bytes: &[u8], prefix: &str, dest: &Path) -> Result<(), String
 /// The top folder GitHub puts every entry of a repository zip under.
 fn zip_root(bytes: &[u8]) -> Result<String, String> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    let first = archive.by_index(0).map_err(|e| e.to_string())?.name().to_string();
+    let first = archive
+        .by_index(0)
+        .map_err(|e| e.to_string())?
+        .name()
+        .map_err(|e| e.to_string())?
+        .to_string();
     Ok(first.split('/').next().unwrap_or("").to_string())
 }
 
@@ -309,7 +314,12 @@ fn manifest_dir_in_zip(bytes: &[u8]) -> Result<String, String> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("not a zip archive: {e}"))?;
     let mut best: Option<String> = None;
     for i in 0..archive.len() {
-        let name = archive.by_index(i).map_err(|e| e.to_string())?.name().replace('\\', "/");
+        let name = archive
+            .by_index(i)
+            .map_err(|e| e.to_string())?
+            .name()
+            .map_err(|e| e.to_string())?
+            .replace('\\', "/");
         for manifest in MANIFESTS {
             if let Some(dir) = name.strip_suffix(manifest) {
                 let dir = dir.trim_end_matches('/').to_string();

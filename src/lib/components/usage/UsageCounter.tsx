@@ -18,7 +18,7 @@ import './UsageCounter.css';
  * How many agents get a readout before the rest collapse into a "+N". Three is
  * where the dock stops having room; the popover has all of them.
  */
-const MAX_AGENTS = 2;
+const MAX_AGENTS = 3;
 
 /** Windows shown per agent. The list is sorted worst-first, so this keeps the constraint. */
 const MAX_WINDOWS = 1;

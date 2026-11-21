@@ -58,13 +58,21 @@ import { activeProject, projects } from '$lib/stores/workspace';
 import { clearProxyTarget, currentUrl, ensureProxyRunning, setPreferredLocalHost, setTargetPort } from '$lib/stores/preview';
 import { showToast } from '$lib/stores/notification';
 import TerminalChatView from './TerminalChatView';
+import ContextHandoffButton from './ContextHandoffButton';
 import { canShowTerminalChat, setTerminalChatView, useTerminalChatView } from '$lib/services/terminal-chat';
 import { appendRunOutput, finalizeRunEntry, activeRunIds } from '$lib/stores/runHistory';
 import { attentionReason, containsAttentionRequest } from '$lib/services/orchestrator/agent-signals';
 import { hasTurnSignalListener } from '$lib/services/orchestrator/agent-hook-signals';
 import { useStore } from '$lib/react/useStore';
 import { registerTerminalScreen } from '$lib/services/terminal-screen';
+import { noteTerminalInput } from '$lib/services/terminal-chat-commands';
+import { useStructuredChatPane, structuredChatPreset } from '$lib/services/structured-chat/panes';
+import { startSessionStore } from '$lib/services/structured-chat/session-store';
+import { canContinueInChat, continueInChat, continueInTerminal } from '$lib/services/structured-chat/switch';
 import './TerminalPane.css';
+
+// Durable records + event journal for structured chat panes.
+startSessionStore();
 
 const ROLE_PRESETS = [
   { label: 'Server', color: 'var(--role-server)' },
@@ -297,6 +305,12 @@ function TerminalPane({
   const sessionInfo = isForeignSession
     ? crossProjectSessions.find((s) => s.id === sessionId)
     : allSessions.find((s) => s.id === sessionId);
+  const structuredChat = useStructuredChatPane(sessionId);
+  const structuredPreset = structuredChat ? structuredChatPreset(sessionId) : null;
+  const effectiveAgentPreset = sessionInfo?.agentPreset ?? structuredPreset;
+  // The agent this pane runs, for the keystroke watcher set up once in the xterm effect.
+  const agentPresetRef = useRef<string | null>(null);
+  agentPresetRef.current = sessionInfo?.agentPreset ?? null;
   // Label disambiguation ("Claude 2") compares against siblings, so a pane from
   // a background project has to be compared against ITS project's sessions.
   const siblingSessions = isForeignSession && sessionInfo
@@ -1487,6 +1501,9 @@ function TerminalPane({
         // Drop xterm's synthetic query replies emitted while replaying history (see
         // the reattach buffer write above); genuine keystrokes still pass through.
         if (suppressReplayInput) return;
+        // Slash commands typed here show in the chat view too (Claude Code
+        // records its own; the other CLIs only draw them on screen).
+        if (agentPresetRef.current) noteTerminalInput(sessionId, agentPresetRef.current, data);
         writeToSession(sessionId, data);
       });
       term.onResize(({ cols, rows }: { cols: number; rows: number }) => resizeSession(sessionId, rows, cols));
@@ -1850,26 +1867,28 @@ function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThemeValue]);
 
-  const chatCapable = canShowTerminalChat(sessionInfo?.agentPreset);
+  const chatCapable = canShowTerminalChat(sessionInfo?.agentPreset) || canContinueInChat(sessionInfo?.agentPreset) || Boolean(structuredChat);
   const chatViewOn = useTerminalChatView(sessionId);
-  const showChat = chatCapable && chatViewOn && !!sessionInfo?.agentPreset;
+  const showChat = !structuredChat && canShowTerminalChat(sessionInfo?.agentPreset) && chatViewOn && !!sessionInfo?.agentPreset;
+  const chatActive = showChat || Boolean(structuredChat);
 
   // Leaving chat hands the keyboard back to the terminal.
-  const wasChatRef = useRef(showChat);
+  const wasChatRef = useRef(chatActive);
   useEffect(() => {
-    if (wasChatRef.current && !showChat) {
+    if (wasChatRef.current && !chatActive) {
       requestAnimationFrame(() => {
         scheduleFit();
         termRef.current?.focus();
       });
     }
-    wasChatRef.current = showChat;
+    wasChatRef.current = chatActive;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showChat]);
+  }, [chatActive]);
 
   const classNames = [
     'terminal-pane',
-    showChat && 'chat-view',
+    chatActive && 'chat-view',
+    structuredChat && 'structured-chat',
     isActive && 'active',
     isDead && 'dead',
     isMaximized && 'maximized',
@@ -1957,6 +1976,15 @@ function TerminalPane({
           </span>
         </span>
 
+        {(sessionInfo?.agentPreset || structuredChat) && (
+          <ContextHandoffButton
+            sessionId={sessionId}
+            sourceAgentName={agentName ?? sessionInfo?.agentPreset ?? structuredChatPreset(sessionId) ?? 'Agent'}
+            sourcePreset={sessionInfo?.agentPreset ?? structuredChatPreset(sessionId)}
+            chatActive={chatActive}
+          />
+        )}
+
         {chatCapable && (
           <div
             className="pane-view-switch"
@@ -1966,14 +1994,15 @@ function TerminalPane({
           >
             <button
               type="button"
-              className={showChat ? '' : 'active'}
-              aria-pressed={!showChat}
+              className={chatActive ? '' : 'active'}
+              aria-pressed={!chatActive}
               aria-label="Terminal view"
-              title="Terminal (Ctrl+Shift+J)"
+              title={structuredChat ? 'Continue in the terminal, same conversation (Ctrl+Shift+J)' : 'Terminal (Ctrl+Shift+J)'}
               onClick={(e) => {
                 e.stopPropagation();
                 onActivate();
-                setTerminalChatView(sessionId, false);
+                if (structuredChat) void continueInTerminal(sessionId);
+                else setTerminalChatView(sessionId, false);
               }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1983,14 +2012,17 @@ function TerminalPane({
             </button>
             <button
               type="button"
-              className={showChat ? 'active' : ''}
-              aria-pressed={showChat}
+              className={chatActive ? 'active' : ''}
+              aria-pressed={chatActive}
               aria-label="Chat view"
               title="Chat, same session (Ctrl+Shift+J)"
               onClick={(e) => {
                 e.stopPropagation();
                 onActivate();
-                setTerminalChatView(sessionId, true);
+                if (structuredChat) return;
+                void continueInChat(sessionId).then((handled) => {
+                  if (!handled) setTerminalChatView(sessionId, true);
+                });
               }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2018,12 +2050,15 @@ function TerminalPane({
         <div className="xterm-container" ref={containerRef}>
           <div className="xterm-fit-host" ref={fitHostRef}></div>
         </div>
-        {showChat && sessionInfo?.agentPreset && (
+        {chatActive && effectiveAgentPreset && (
           <TerminalChatView
+            key={`${effectiveAgentPreset}:${structuredChat ?? 'terminal'}`}
             sessionId={sessionId}
-            agentPreset={sessionInfo.agentPreset}
-            isRunning={Boolean(sessionInfo.isRunning)}
-            worktree={sessionInfo.worktree ?? null}
+            agentPreset={effectiveAgentPreset}
+            isRunning={Boolean(sessionInfo?.isRunning)}
+            worktree={sessionInfo?.worktree ?? null}
+            structuredAgent={structuredChat}
+            onOpenTerminal={structuredChat ? () => void continueInTerminal(sessionId) : undefined}
           />
         )}
       </div>

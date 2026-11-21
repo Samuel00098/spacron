@@ -19,6 +19,9 @@ describe('Antigravity chat provider', () => {
     expect(getChatProviderTransport('pi')).toBe('terminal-fallback');
     expect(getNativeChatProviderTransport('pi')).toBe('pi-rpc');
     expect(getAgentProviderLaunchOptions('pi', { accessMode: 'supervised', model: 'default' }))
-      .toEqual({ permissionArgs: '', runtimeArgs: '--mode rpc --no-session' });
+      .toEqual({ permissionArgs: '', runtimeArgs: '' });
+    // RPC mode is only for the Pi chat-thread transport; a terminal launch of
+    // Pi must start its normal interface.
+    expect(getAgentProviderLaunchOptions('pi', { model: 'openrouter/x' }).runtimeArgs).toBe('--model openrouter/x');
   });
 });

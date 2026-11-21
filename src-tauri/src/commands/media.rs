@@ -223,7 +223,7 @@ pub async fn generate(
         if custom_base.is_some() {
             // A custom provider has no model we could safely guess.
             return Err(format!(
-                "not_configured: pick {} model for {} in Settings > AI Connections",
+                "not_configured: pick {} model for {} in Settings > AI Providers",
                 if kind == Kind::Video { "a video" } else { "an image" },
                 provider_label(provider)
             ));
@@ -262,7 +262,7 @@ pub async fn generate(
 
 fn unsupported(provider: &str, kind: Kind) -> String {
     match kind {
-        Kind::Video => format!("unsupported: {} cannot generate videos. Pick Google, OpenAI, Vercel AI Gateway, fal or Replicate for video in Settings > AI Connections.", provider_label(provider)),
+        Kind::Video => format!("unsupported: {} cannot generate videos. Pick Google, OpenAI, Vercel AI Gateway, fal or Replicate for video in Settings > AI Providers.", provider_label(provider)),
         Kind::Image => format!("unsupported: {} cannot generate images.", provider_label(provider)),
     }
 }

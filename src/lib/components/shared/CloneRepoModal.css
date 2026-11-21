@@ -420,8 +420,9 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 210px;
+  max-height: 230px;
   overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid var(--cr-border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--text-primary, #fff) 2%, var(--cr-surface));
@@ -439,9 +440,9 @@
 .cr-repo-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 12px;
   width: 100%;
-  padding: 9px 12px;
+  padding: 10px 14px;
   background: none;
   border: none;
   border-bottom: 1px solid var(--cr-border);
@@ -489,17 +490,28 @@
 
 .cr-repo-badge {
   flex-shrink: 0;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--warning, #f59e0b);
-  background: color-mix(in srgb, var(--warning, #f59e0b) 14%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted, #8a8a99);
+  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+  line-height: 1.3;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .cr-repo-badge.is-public {
-  color: var(--success, #22c55e);
-  background: color-mix(in srgb, var(--success, #22c55e) 12%, transparent);
+  color: var(--text-muted, #8a8a99);
+  background: color-mix(in srgb, var(--text-primary, #fff) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary, #fff) 8%, transparent);
+}
+
+.cr-repo-item:hover .cr-repo-badge,
+.cr-repo-item.is-active .cr-repo-badge {
+  color: var(--text-secondary, #c4c4d0);
+  background: color-mix(in srgb, var(--text-primary, #fff) 10%, transparent);
+  border-color: color-mix(in srgb, var(--text-primary, #fff) 14%, transparent);
 }
 
 .cr-repos-loading,

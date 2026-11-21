@@ -15,6 +15,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+#[path = "agent_transcript_extra.rs"]
+mod extra;
+
 const MAX_ITEMS: usize = 400;
 const MAX_TEXT_CHARS: usize = 60_000;
 const MAX_TOOL_CHARS: usize = 4_000;
@@ -57,6 +60,14 @@ pub struct ChatItem {
     /// Images attached to a user turn, as `data:` URLs (the CLIs store them inline).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<String>,
+    /// A tool call's input as the CLI wrote it, kept only for tools the chat
+    /// draws richly: file edits and patches (diffs), to-do lists, subagents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_data: Option<Value>,
+    /// The subagent a tool call started (Claude Code's Task/Agent), whose own
+    /// transcript `agent_subagent_transcript_read` returns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -119,12 +130,50 @@ pub async fn chat_image_preview(path: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentQuery {
+    pub cwd: String,
+    /// The parent conversation (the pane's bound provider session).
+    pub session_id: String,
+    pub agent_id: String,
+}
+
+/// A Claude Code subagent's own transcript, which it writes beside the parent
+/// conversation at `<project>/<session>/subagents/agent-<id>.jsonl`.
+#[tauri::command]
+pub async fn agent_subagent_transcript_read(query: SubagentQuery) -> Result<TranscriptResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let safe = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !safe(&query.session_id) || !safe(&query.agent_id) {
+            return Err("Invalid subagent id".to_string());
+        }
+        let Some(dir) = claude_project_dir(&query.cwd) else {
+            return Ok(TranscriptResult::default());
+        };
+        let path = dir.join(&query.session_id).join("subagents").join(format!("agent-{}.jsonl", query.agent_id));
+        if !path.is_file() {
+            return Ok(TranscriptResult::default());
+        }
+        let revision = file_times(&path).map(|(_, modified, len)| format!("{len}:{modified}"));
+        Ok(finish(Some(query.agent_id.clone()), revision, parse_claude_lines(&path, true)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn read_transcript(q: &TranscriptQuery) -> Result<TranscriptResult, String> {
     let mut result = match q.agent.as_str() {
         "claude" => read_file_agent(q, claude_candidates(&q.cwd), parse_claude),
         "codex" => read_file_agent(q, codex_candidates(&q.cwd, q.since_ms), parse_codex),
         "grok" => read_file_agent(q, grok_candidates(&q.cwd), parse_grok),
         "opencode" => read_opencode(q),
+        "openclaude" => read_file_agent(q, extra::openclaude_candidates(&q.cwd), parse_claude),
+        "pi" => read_file_agent(q, extra::pi_candidates(extra::pi_sessions_dir(), &q.cwd), extra::parse_pi),
+        "omp" => read_file_agent(q, extra::pi_candidates(extra::omp_sessions_dir(), &q.cwd), extra::parse_pi),
+        "antigravity" => read_file_agent(q, extra::antigravity_candidates(&q.cwd), extra::parse_antigravity),
+        "copilot" => read_file_agent(q, extra::copilot_candidates(&q.cwd, q.since_ms), extra::parse_copilot),
+        "cursor" => read_file_agent(q, extra::cursor_candidates(&q.cwd), extra::parse_cursor),
         other => Err(format!("Chat view does not support {other}")),
     }?;
     // Before the first turn there is no transcript to say what the session runs
@@ -270,6 +319,9 @@ struct Parsed {
     context_used: Option<u64>,
     context_window: Option<u64>,
     permission: Option<String>,
+    /// The last slash command was a settings change the chat applies itself;
+    /// its "Set model to …" reply is hidden too.
+    hide_next_output: bool,
 }
 
 impl Parsed {
@@ -297,7 +349,7 @@ impl Parsed {
         });
     }
 
-    fn push_tool(&mut self, id: String, name: String, input: String, time: Option<String>) {
+    fn push_tool_with(&mut self, id: String, name: String, input: String, data: Option<Value>, time: Option<String>) {
         self.items.push(ChatItem {
             id,
             kind: "tool".into(),
@@ -305,6 +357,7 @@ impl Parsed {
             tool_input: Some(clip(&input, MAX_TOOL_CHARS)),
             tool_status: Some("running".into()),
             time,
+            tool_data: data,
             ..Default::default()
         });
     }
@@ -373,7 +426,12 @@ fn tool_input_summary(input: &Value) -> String {
         }
         return s.to_string();
     }
-    for key in ["command", "cmd", "file_path", "filePath", "path", "target_file", "target_directory", "pattern", "query", "url", "description", "prompt"] {
+    // Antigravity names its arguments in CamelCase (CommandLine, AbsolutePath…).
+    for key in [
+        "command", "cmd", "CommandLine", "file_path", "filePath", "path", "target_file", "TargetFile", "AbsolutePath",
+        "target_directory", "DirectoryPath", "SearchPath", "pattern", "Pattern", "query", "Query", "url", "Url",
+        "description", "prompt", "toolSummary",
+    ] {
         if let Some(value) = input.get(key) {
             match value {
                 Value::String(s) if !s.is_empty() => return s.clone(),
@@ -385,6 +443,58 @@ fn tool_input_summary(input: &Value) -> String {
         }
     }
     serde_json::to_string(input).unwrap_or_default()
+}
+
+/// Longest single string kept in a tool's structured input (an edit's old or new text).
+const MAX_TOOL_DATA_STRING: usize = 24_000;
+
+/// Input keys that mark a tool the chat draws richly.
+const STRUCTURED_KEYS: &[&str] = &[
+    "old_string", "new_string", "oldString", "newString", "edits", "todos", "plan", "patch", "subagent_type", "subagentType",
+];
+
+/// A tool call's input, kept when the chat can draw it: file edits, whole-file
+/// writes, patches, to-do lists and subagents. Everything else stays summary-only.
+fn tool_structured(name: &str, input: &Value) -> Option<Value> {
+    let lower = name.to_ascii_lowercase();
+    let object = match input {
+        Value::String(s) => match serde_json::from_str::<Value>(s) {
+            Ok(v) if v.is_object() => v,
+            _ => {
+                // Codex's apply_patch is a freeform tool: its input is the patch text.
+                if s.trim_start().starts_with("*** Begin Patch") || lower == "apply_patch" {
+                    return Some(serde_json::json!({ "patch": clip(s, MAX_TOOL_DATA_STRING * 2) }));
+                }
+                return None;
+            }
+        },
+        other => other.clone(),
+    };
+    let map = object.as_object()?;
+    // Older Codex: the shell tool running `apply_patch <patch>`.
+    if let Some(Value::Array(cmd)) = map.get("command") {
+        if cmd.first().and_then(Value::as_str) == Some("apply_patch") {
+            if let Some(patch) = cmd.get(1).and_then(Value::as_str) {
+                return Some(serde_json::json!({ "patch": clip(patch, MAX_TOOL_DATA_STRING * 2) }));
+            }
+        }
+    }
+    let has_path = ["file_path", "filePath", "path", "target_file"].iter().any(|k| map.contains_key(*k));
+    let whole_write = has_path && map.contains_key("content") && (lower.contains("write") || lower.contains("create"));
+    let subagent = (lower == "task" || lower == "agent") && map.contains_key("prompt");
+    if !whole_write && !subagent && !STRUCTURED_KEYS.iter().any(|k| map.contains_key(*k)) {
+        return None;
+    }
+    Some(clip_strings(&object, MAX_TOOL_DATA_STRING))
+}
+
+fn clip_strings(v: &Value, max: usize) -> Value {
+    match v {
+        Value::String(s) => Value::String(clip(s, max)),
+        Value::Array(items) => Value::Array(items.iter().take(200).map(|i| clip_strings(i, max)).collect()),
+        Value::Object(map) => Value::Object(map.iter().map(|(k, val)| (k.clone(), clip_strings(val, max))).collect()),
+        other => other.clone(),
+    }
 }
 
 fn value_text(v: &Value) -> String {
@@ -425,26 +535,26 @@ fn claude_project_dir_name(cwd: &str) -> String {
     cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
 }
 
-fn claude_candidates(cwd: &str) -> Vec<Candidate> {
-    let Some(base) = env_dir("CLAUDE_CONFIG_DIR").or_else(|| home().map(|h| h.join(".claude"))) else {
-        return Vec::new();
-    };
+/// Claude Code's folder for conversations started in `cwd`.
+fn claude_project_dir(cwd: &str) -> Option<PathBuf> {
+    let base = env_dir("CLAUDE_CONFIG_DIR").or_else(|| home().map(|h| h.join(".claude")))?;
     let projects = base.join("projects");
     let wanted = claude_project_dir_name(cwd.trim_end_matches(['\\', '/']));
-    let mut dir = projects.join(&wanted);
-    if !dir.is_dir() {
-        // Drive-letter and folder case can differ between our cwd and Claude's.
-        let found = fs::read_dir(&projects).ok().and_then(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(&wanted))
-                .map(|e| e.path())
-        });
-        match found {
-            Some(path) => dir = path,
-            None => return Vec::new(),
-        }
+    let dir = projects.join(&wanted);
+    if dir.is_dir() {
+        return Some(dir);
     }
+    // Drive-letter and folder case can differ between our cwd and Claude's.
+    fs::read_dir(&projects).ok().and_then(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(&wanted))
+            .map(|e| e.path())
+    })
+}
+
+fn claude_candidates(cwd: &str) -> Vec<Candidate> {
+    let Some(dir) = claude_project_dir(cwd) else { return Vec::new() };
     let Ok(entries) = fs::read_dir(&dir) else { return Vec::new() };
     entries
         .filter_map(Result::ok)
@@ -487,6 +597,91 @@ fn codex_permission(settings: &Value) -> Option<String> {
 
 /// Slash commands that only change session settings; never shown as messages.
 const SETTINGS_COMMANDS: &[&str] = &["/model", "/effort", "/fast", "/permissions", "/approvals"];
+
+/// What a Claude Code user turn is, beyond plain words.
+#[derive(Debug, PartialEq)]
+enum ClaudeUserEntry {
+    /// Nothing to show (injected context, hook output, a settings command).
+    Skip,
+    /// The user's own words.
+    Text(String),
+    /// A slash command the user ran: `/name args`.
+    Command(String),
+    /// A settings command (`/model`, `/effort`…) the chat applies quietly.
+    SettingsCommand,
+    /// What a local command printed (`<local-command-stdout>`).
+    Output(String),
+}
+
+fn claude_user_entry(raw: &str) -> ClaudeUserEntry {
+    let trimmed = raw.trim();
+    if let Some(out) = tag_body(trimmed, "local-command-stdout").or_else(|| tag_body(trimmed, "local-command-stderr")) {
+        return ClaudeUserEntry::Output(strip_ansi(&out).trim().to_string());
+    }
+    if trimmed.starts_with("<command-name>") || trimmed.starts_with("<command-message>") {
+        let name = tag_body(trimmed, "command-name").unwrap_or_default();
+        if SETTINGS_COMMANDS.contains(&name.trim()) {
+            return ClaudeUserEntry::SettingsCommand;
+        }
+        let args = tag_body(trimmed, "command-args").unwrap_or_default();
+        let line = format!("{} {}", name.trim(), args.trim()).trim().to_string();
+        return if line.is_empty() { ClaudeUserEntry::Skip } else { ClaudeUserEntry::Command(line) };
+    }
+    match claude_user_text(raw) {
+        Some(text) => ClaudeUserEntry::Text(text),
+        None => ClaudeUserEntry::Skip,
+    }
+}
+
+/// Terminal colour and cursor sequences out of a command's printed output.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for n in chars.by_ref() {
+                    if n.is_ascii_alphabetic() || n == '~' {
+                        break;
+                    }
+                }
+            } else {
+                chars.next();
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+impl Parsed {
+    /// Apply a classified Claude user turn; true when it was a command or its output.
+    fn push_claude_entry(&mut self, entry: &ClaudeUserEntry, id: &str, time: &Option<String>) -> bool {
+        match entry {
+            ClaudeUserEntry::Command(line) => {
+                self.hide_next_output = false;
+                self.items.push(ChatItem { id: id.to_string(), kind: "command".into(), text: clip(line, MAX_TEXT_CHARS), time: time.clone(), ..Default::default() });
+                self.busy = Some(true);
+                true
+            }
+            ClaudeUserEntry::SettingsCommand => {
+                self.hide_next_output = true;
+                true
+            }
+            ClaudeUserEntry::Output(text) => {
+                // A local command's reply ends it; nothing more runs for it.
+                self.busy = Some(false);
+                if !std::mem::take(&mut self.hide_next_output) && !text.is_empty() {
+                    self.items.push(ChatItem { id: format!("{id}:out"), kind: "command-output".into(), text: clip(text, MAX_TOOL_CHARS * 2), time: time.clone(), ..Default::default() });
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
 
 /// Wrappers Claude Code writes into user turns that are not the user's words.
 fn claude_user_text(raw: &str) -> Option<String> {
@@ -552,13 +747,19 @@ fn strip_tag_blocks(text: &str, tag: &str) -> String {
 }
 
 fn parse_claude(path: &Path) -> Parsed {
+    parse_claude_lines(path, false)
+}
+
+/// `subagent`: the file is a subagent's own transcript, where every line is a
+/// sidechain; in the main transcript those lines are skipped.
+fn parse_claude_lines(path: &Path, subagent: bool) -> Parsed {
     let mut parsed = Parsed::default();
     for (index, line) in read_lines(path).into_iter().enumerate() {
         let kind = line.get("type").and_then(Value::as_str).unwrap_or("");
         if kind != "user" && kind != "assistant" {
             continue;
         }
-        if line.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        if (!subagent && line.get("isSidechain").and_then(Value::as_bool) == Some(true))
             || line.get("isMeta").and_then(Value::as_bool) == Some(true)
         {
             continue;
@@ -593,7 +794,11 @@ fn parse_claude(path: &Path) -> Parsed {
             }
             match &content {
                 Value::String(s) => {
-                    if let Some(text) = claude_user_text(s) {
+                    let entry = claude_user_entry(s);
+                    if parsed.push_claude_entry(&entry, &uuid, &time) {
+                        continue;
+                    }
+                    if let ClaudeUserEntry::Text(text) = entry {
                         parsed.push_text("user", uuid, text, time);
                         parsed.busy = Some(true);
                     } else if s.contains("[Request interrupted") {
@@ -611,7 +816,11 @@ fn parse_claude(path: &Path) -> Parsed {
                             Some("text") => {
                                 let raw = block.get("text").and_then(Value::as_str).unwrap_or("");
                                 interrupted |= raw.contains("[Request interrupted");
-                                if let Some(text) = claude_user_text(raw) {
+                                let entry = claude_user_entry(raw);
+                                if parsed.push_claude_entry(&entry, &format!("{uuid}:{}", words.len()), &time) {
+                                    continue;
+                                }
+                                if let ClaudeUserEntry::Text(text) = entry {
                                     words.push(text);
                                 }
                             }
@@ -625,6 +834,12 @@ fn parse_claude(path: &Path) -> Parsed {
                                 let output = value_text(block.get("content").unwrap_or(&Value::Null));
                                 let error = block.get("is_error").and_then(Value::as_bool) == Some(true);
                                 parsed.finish_tool(&id, output, error);
+                                // A Task/Agent call names the subagent it started.
+                                if let Some(agent) = line.pointer("/toolUseResult/agentId").and_then(Value::as_str) {
+                                    if let Some(item) = parsed.items.iter_mut().rev().find(|i| i.kind == "tool" && i.id == id) {
+                                        item.subagent_id = Some(agent.to_string());
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -672,8 +887,10 @@ fn parse_claude(path: &Path) -> Parsed {
                     Some("tool_use") => {
                         let call = str_of(block, "id").unwrap_or(id);
                         let name = str_of(block, "name").unwrap_or_else(|| "tool".into());
-                        let input = tool_input_summary(block.get("input").unwrap_or(&Value::Null));
-                        parsed.push_tool(call, name, input, time.clone());
+                        let raw = block.get("input").unwrap_or(&Value::Null);
+                        let input = tool_input_summary(raw);
+                        let data = tool_structured(&name, raw);
+                        parsed.push_tool_with(call, name, input, data, time.clone());
                     }
                     _ => {}
                 }
@@ -778,7 +995,14 @@ fn parse_codex(path: &Path) -> Parsed {
         match line.get("type").and_then(Value::as_str) {
             Some("event_msg") => match ptype {
                 "task_started" => parsed.busy = Some(true),
-                "task_complete" | "turn_aborted" => parsed.busy = Some(false),
+                "task_complete" | "turn_aborted" => {
+                    parsed.busy = Some(false);
+                    // A turn that failed (usage limit, network) carries why; the
+                    // TUI shows it, so the chat must too, or the prompt sits unanswered.
+                    if let Some(msg) = p.pointer("/error/message").and_then(Value::as_str).filter(|m| !m.trim().is_empty()) {
+                        parsed.push_text("notice", format!("{index}:error"), msg.to_string(), time);
+                    }
+                }
                 // Written whenever the session's settings change, including a
                 // /model or /permissions pick made mid-session.
                 "thread_settings_applied" => {
@@ -869,13 +1093,10 @@ fn parse_codex(path: &Path) -> Parsed {
                     "function_call" | "custom_tool_call" | "local_shell_call" => {
                         let call = str_of(p, "call_id").unwrap_or(id);
                         let name = str_of(p, "name").unwrap_or_else(|| "shell".into());
-                        let input = p
-                            .get("arguments")
-                            .or_else(|| p.get("input"))
-                            .or_else(|| p.get("action"))
-                            .map(tool_input_summary)
-                            .unwrap_or_default();
-                        parsed.push_tool(call, name, input, time);
+                        let raw = p.get("arguments").or_else(|| p.get("input")).or_else(|| p.get("action"));
+                        let input = raw.map(tool_input_summary).unwrap_or_default();
+                        let data = raw.and_then(|r| tool_structured(&name, r));
+                        parsed.push_tool_with(call, name, input, data, time);
                     }
                     "function_call_output" | "custom_tool_call_output" => {
                         let call = str_of(p, "call_id").unwrap_or_default();
@@ -983,8 +1204,10 @@ fn parse_grok(path: &Path) -> Parsed {
                     for (ci, call) in calls.iter().enumerate() {
                         let call_id = str_of(call, "id").unwrap_or_else(|| format!("{id}:{ci}"));
                         let name = str_of(call, "name").unwrap_or_else(|| "tool".into());
-                        let input = call.get("arguments").map(tool_input_summary).unwrap_or_default();
-                        parsed.push_tool(call_id, name, input, None);
+                        let raw = call.get("arguments");
+                        let input = raw.map(tool_input_summary).unwrap_or_default();
+                        let data = raw.and_then(|r| tool_structured(&name, r));
+                        parsed.push_tool_with(call_id, name, input, data, None);
                     }
                 }
             }
@@ -1132,8 +1355,10 @@ fn read_opencode(q: &TranscriptQuery) -> Result<TranscriptResult, String> {
                             let call = str_of(block, "id").unwrap_or(bid);
                             let name = str_of(block, "name").unwrap_or_else(|| "tool".into());
                             let state = block.get("state").cloned().unwrap_or(Value::Null);
-                            let input = state.get("input").map(tool_input_summary).unwrap_or_default();
-                            parsed.push_tool(call.clone(), name, input, time.clone());
+                            let raw = state.get("input");
+                            let input = raw.map(tool_input_summary).unwrap_or_default();
+                            let data = raw.and_then(|r| tool_structured(&name, r));
+                            parsed.push_tool_with(call.clone(), name, input, data, time.clone());
                             match state.get("status").and_then(Value::as_str) {
                                 Some("completed") => {
                                     let out = state.get("output").map(value_text).unwrap_or_default();
@@ -1223,6 +1448,44 @@ mod tests {
     }
 
     #[test]
+    fn classifies_claude_commands_and_their_output() {
+        assert_eq!(
+            claude_user_entry("<command-name>/cost</command-name>\n<command-args></command-args>"),
+            ClaudeUserEntry::Command("/cost".into())
+        );
+        assert_eq!(claude_user_entry("<command-name>/model</command-name>\n<command-args>opus</command-args>"), ClaudeUserEntry::SettingsCommand);
+        assert_eq!(
+            claude_user_entry("<local-command-stdout>\u{1b}[1mTotal cost:\u{1b}[22m $0.12</local-command-stdout>"),
+            ClaudeUserEntry::Output("Total cost: $0.12".into())
+        );
+        let mut parsed = Parsed::default();
+        let time = None;
+        parsed.push_claude_entry(&ClaudeUserEntry::SettingsCommand, "a", &time);
+        parsed.push_claude_entry(&ClaudeUserEntry::Output("Set model to opus".into()), "b", &time);
+        parsed.push_claude_entry(&ClaudeUserEntry::Command("/cost".into()), "c", &time);
+        parsed.push_claude_entry(&ClaudeUserEntry::Output("Total cost: $0.12".into()), "d", &time);
+        let kinds: Vec<_> = parsed.items.iter().map(|i| i.kind.as_str()).collect();
+        assert_eq!(kinds, ["command", "command-output"]);
+        assert_eq!(parsed.busy, Some(false));
+    }
+
+    #[test]
+    fn keeps_structured_input_only_for_rich_tools() {
+        let edit = serde_json::json!({"file_path": "a.rs", "old_string": "x", "new_string": "y"});
+        assert!(tool_structured("Edit", &edit).is_some());
+        let todos = serde_json::json!({"todos": [{"content": "a", "status": "pending"}]});
+        assert!(tool_structured("TodoWrite", &todos).is_some());
+        let plan = Value::String(r#"{"plan":[{"step":"a","status":"completed"}]}"#.into());
+        assert!(tool_structured("update_plan", &plan).is_some());
+        let patch = Value::String("*** Begin Patch\n*** Update File: a\n*** End Patch".into());
+        assert_eq!(tool_structured("apply_patch", &patch).unwrap()["patch"].as_str().unwrap().lines().count(), 3);
+        assert!(tool_structured("Write", &serde_json::json!({"file_path": "a.md", "content": "hi"})).is_some());
+        assert!(tool_structured("Agent", &serde_json::json!({"description": "d", "prompt": "p"})).is_some());
+        assert!(tool_structured("Bash", &serde_json::json!({"command": "ls"})).is_none());
+        assert!(tool_structured("Read", &serde_json::json!({"file_path": "a.rs", "content": "x"})).is_none());
+    }
+
+    #[test]
     fn civil_dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(20_000), (2024, 10, 4));
@@ -1239,7 +1502,7 @@ mod tests {
     #[ignore]
     fn smoke_reads_local_transcripts() {
         let cwd = std::env::var("TRANSCRIPT_SMOKE_CWD").expect("set TRANSCRIPT_SMOKE_CWD");
-        for agent in ["claude", "codex", "opencode", "grok"] {
+        for agent in ["claude", "codex", "opencode", "grok", "pi", "antigravity", "copilot", "cursor", "openclaude", "omp"] {
             let q = TranscriptQuery {
                 agent: agent.into(),
                 cwd: cwd.clone(),

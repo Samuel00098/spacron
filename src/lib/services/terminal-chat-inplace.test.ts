@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-import { bottomOf, claudeModeFromScreen, normalizeName, parsePickerRows } from './terminal-chat-inplace';
+import { bottomOf, claudeModeFromScreen, normalizeName, opencodeFooterModel, opencodeModelFromFooter, opencodeSearchQuery, parsePickerRows } from './terminal-chat-inplace';
 
 // Screens captured from Codex 0.170 and Claude Code 2.1 running in a ConPTY.
 const CODEX_MODEL_PICKER = `  >_ OpenAI Codex (v0.170.0)
@@ -72,5 +72,22 @@ describe('in-place session changes', () => {
     // The earlier confirmation is above the bottom of the screen, so it can't pass for a new one.
     expect(bottomOf(screen)).not.toMatch(/Model changed to/);
     expect(bottomOf(screen)).toMatch(/Select Model and Effort/);
+  });
+});
+
+describe('OpenCode model names', () => {
+  it('searches with the words OpenCode shows for an id', () => {
+    expect(opencodeSearchQuery('abacus/claude-sonnet-4-5-20250929')).toBe('claude sonnet 4.5');
+    expect(opencodeSearchQuery('abacus/gpt-5.1')).toBe('gpt 5.1');
+    expect(opencodeSearchQuery('opencode/deepseek-v4.1-flash-free')).toBe('deepseek v4.1 flash free');
+    expect(opencodeSearchQuery('abacus/claude-opus-4-6')).toBe('claude opus 4.6');
+  });
+
+  it('reads the live model from the footer and maps it to an id', () => {
+    expect(opencodeFooterModel('  ┃  Build · GPT-5.1 Abacus\n  …/app  shift+tab agents  ctrl+p commands')).toBe('GPT-5.1 Abacus');
+    const ids = ['abacus/gpt-5.1', 'abacus/claude-sonnet-4-5-20250929', 'opencode/big-pickle'];
+    expect(opencodeModelFromFooter('GPT-5.1 Abacus', ids)).toBe('abacus/gpt-5.1');
+    expect(opencodeModelFromFooter('Claude Sonnet 4.5 Abacus', ids)).toBe('abacus/claude-sonnet-4-5-20250929');
+    expect(opencodeModelFromFooter('Claude Sonnet 4.5 OpenCode', ids)).toBeNull();
   });
 });

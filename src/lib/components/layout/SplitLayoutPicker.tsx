@@ -364,10 +364,15 @@ export default function SplitLayoutPicker({
     const width = popoverEl.current?.offsetWidth ?? 220;
     const height = popoverEl.current?.offsetHeight ?? 360;
 
-    const left = Math.max(
-      EDGE_MARGIN,
-      Math.min(r.left, window.innerWidth - width - EDGE_MARGIN),
-    );
+    // The trigger sits near the bottom right. Align the right edge of the popover
+    // to the trigger's right edge so it opens inward rather than spilling off-screen
+    // or under a right sidebar.
+    let left = r.right - width;
+    if (left < EDGE_MARGIN) {
+      left = Math.max(EDGE_MARGIN, Math.min(r.left, window.innerWidth - width - EDGE_MARGIN));
+    } else if (left + width > window.innerWidth - EDGE_MARGIN) {
+      left = window.innerWidth - width - EDGE_MARGIN;
+    }
 
     const openBelow = r.top < height && window.innerHeight - r.bottom >= height;
     setPopoverStyle({
@@ -376,7 +381,7 @@ export default function SplitLayoutPicker({
       ...(openBelow
         ? { top: `${Math.min(window.innerHeight - height - EDGE_MARGIN, r.bottom + GAP)}px` }
         : { bottom: `${Math.max(EDGE_MARGIN, window.innerHeight - r.top + GAP)}px` }),
-      zIndex: 1100,
+      zIndex: 12000,
     });
   }, []);
 

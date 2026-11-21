@@ -29,6 +29,69 @@ pub struct AcpStartArgs {
     #[serde(default)]
     pub args: Vec<String>,
     pub cwd: String,
+    /// Extra environment for the process (provider config directories, etc.).
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// An already-quoted Windows command line after `command`. This is used
+    /// for npm `.cmd` shims because CreateProcess quoting is not cmd.exe's.
+    #[serde(default)]
+    pub raw_args: Option<String>,
+}
+
+/// Variables a running Claude Code session puts in its children's environment.
+/// When Spacron itself was started from inside one (a dev build run from a
+/// Claude Code terminal), every agent it spawns inherits them and Claude Code
+/// treats itself as a child session: it turns transcript saving off ("Transcript
+/// saving is off — inherited CLAUDE…"), so `--resume` finds nothing and the
+/// transcript-backed chat view stays empty. Only these session-identity
+/// variables are dropped; user configuration such as `CLAUDE_CODE_USE_BEDROCK`
+/// or `CLAUDE_CODE_GIT_BASH_PATH` is left alone.
+pub const PARENT_AGENT_SESSION_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_HOST_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SIMPLE",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_DESKTOP_APP_VERSION",
+    "CLAUDE_CODE_TERMINAL_MCP_TOOLS",
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+    "CLAUDE_CODE_DISABLE_CRON",
+    "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES",
+    "CLAUDE_CODE_EMIT_STARTUP_TIMING",
+    "CLAUDE_CODE_STARTUP_FAILURE_RESULTS",
+    "CLAUDE_CODE_EAGER_FLUSH",
+    "CLAUDE_CODE_REPORT_FINDINGS",
+    "CLAUDE_CODE_OAUTH_SCOPES",
+    "CLAUDE_CODE_ACCOUNT_UUID",
+    "CLAUDE_CODE_ORGANIZATION_UUID",
+    "CLAUDE_CODE_USER_EMAIL",
+    "CLAUDE_CODE_HOST_SHORT_TEMP_DIRS",
+    "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
+    "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL",
+    "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH",
+    "CLAUDE_AGENT_SDK_VERSION",
+    "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
+    "CLAUDE_PREVIEW_CLASSIFIER_FLOOR",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+];
+
+/// The parent-session variables to drop from a child's environment: all of
+/// them when Spacron runs inside a Claude Code session, none otherwise.
+pub fn inherited_agent_session_vars() -> Vec<&'static str> {
+    if std::env::var_os("CLAUDECODE").is_none() {
+        return Vec::new();
+    }
+    PARENT_AGENT_SESSION_VARS
+        .iter()
+        .copied()
+        .filter(|key| std::env::var_os(key).is_some())
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -64,12 +127,45 @@ impl AcpManager {
         if command.is_empty() || args.cwd.trim().is_empty() {
             return Err("ACP command and working directory are required".into());
         }
-        let mut child = Command::new(command)
-            .args(args.args)
+        let mut builder = Command::new(command);
+        if let Some(raw_args) = args.raw_args.as_deref() {
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                builder.raw_arg(raw_args);
+            }
+            #[cfg(not(windows))]
+            {
+                builder.args(args.args);
+            }
+        } else {
+            builder.args(args.args);
+        }
+        // Agents start through `cmd.exe` on Windows (npm `.cmd` shims), and
+        // cmd stops resolving commands once PATH passes its 8191-character
+        // line limit: `'claude' is not recognized…` although a terminal finds
+        // it. A dev build's PATH easily exceeds that. `search_path` is the
+        // registry PATH first, bounded, the same one other agent spawns use.
+        // Set before `envs`, so an explicit PATH from the caller still wins.
+        if let Some(path) = crate::commands::agent_probe::search_path() {
+            builder.env("PATH", path);
+        }
+        for key in inherited_agent_session_vars() {
+            builder.env_remove(key);
+        }
+        builder
+            .envs(&args.env)
             .current_dir(args.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            builder.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = builder
             .spawn()
             .map_err(|error| format!("Could not start ACP agent: {error}"))?;
         let stdin = child.stdin.take().ok_or("ACP agent stdin unavailable")?;
@@ -104,6 +200,13 @@ impl AcpManager {
                 for line in BufReader::new(stdout).lines() {
                     let Ok(line) = line else { break };
                     let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                        if !line.trim().is_empty() {
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                &format!("acp://{id}/raw"),
+                                json!({ "text": line }),
+                            );
+                        }
                         continue;
                     };
                     if message.get("method").is_some() && message.get("id").is_some() {
@@ -123,16 +226,27 @@ impl AcpManager {
                         );
                     } else if let Some(request_id) = message.get("id").and_then(Self::response_key)
                     {
-                        if let Some(waiter) = reader_process
+                        let waiter = reader_process
                             .pending
                             .lock()
                             .ok()
-                            .and_then(|mut p| p.remove(&request_id))
-                        {
+                            .and_then(|mut p| p.remove(&request_id));
+                        if let Some(waiter) = waiter {
                             if let Ok(mut value) = waiter.value.lock() {
                                 *value = Some(message);
                                 waiter.ready.notify_one();
                             }
+                        } else {
+                            // Not an answer to one of our JSON-RPC requests:
+                            // protocols with their own ids (Pi's RPC answers
+                            // `{type: "response", id, …}` to commands written
+                            // with `acp_write_raw`) would otherwise be dropped
+                            // here silently ("Pi did not answer get_state").
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                &format!("acp://{id}/notification"),
+                                message,
+                            );
                         }
                     } else {
                         let _ = tauri::Emitter::emit(
@@ -235,12 +349,31 @@ impl AcpManager {
             .map_err(|_| "ACP manager unavailable")?
             .remove(&id)
             .ok_or("ACP session not found")?;
-        let result = process
+        let mut child = process
             .child
             .lock()
-            .map_err(|_| "ACP process unavailable")?
-            .kill()
-            .map_err(|error| error.to_string());
+            .map_err(|_| "ACP process unavailable")?;
+        // On Windows most agents run as `cmd.exe /c <shim>` -> node -> agent.
+        // Killing only the direct child leaves the agent running (it still
+        // holds the pipes), so end the whole tree first.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let _ = Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &child.id().to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        let result = match child.kill() {
+            Ok(()) => Ok(()),
+            // Already ended by the tree kill above.
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
+        let _ = child.try_wait();
         result
     }
 
@@ -289,6 +422,25 @@ impl AcpManager {
             .map_err(|_| "ACP stdin unavailable")?
             .write_all(format!("{line}\n").as_bytes())
             .map_err(|error| format!("Could not write ACP notification: {error}"));
+        result
+    }
+
+    pub fn write_raw(&self, id: u32, text: String) -> Result<(), String> {
+        let process = self
+            .processes
+            .lock()
+            .map_err(|_| "ACP manager unavailable")?
+            .get(&id)
+            .cloned()
+            .ok_or("ACP session not found")?;
+        // Bound to a local: as the block's tail expression the stdin guard
+        // would outlive `process` (E0597).
+        let result = process
+            .stdin
+            .lock()
+            .map_err(|_| "ACP stdin unavailable")?
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("Could not write ACP raw input: {error}"));
         result
     }
 }

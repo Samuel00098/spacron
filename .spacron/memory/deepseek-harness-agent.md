@@ -55,11 +55,13 @@ and `src/lib/services/deepseek-harness.ts`. What they cannot tell you:
   model is seeded once INTO the profile file (only after dsh created it), and
   workers copy the row.
 
-- **An isolated panel's worktree has no session or task**, so it lives in
-  `deepSeekPlacements` (deepseek-harness.ts). `trackedWorktrees`,
-  `persistWorktreePatch`, the cleanup paths and `sweepOrphanWorktrees` in
-  orchestrator.ts must all consult it — miss the sweep and the orphan pass
-  deletes the panel's checkout out from under it.
+- **The panel works in one of the user's worktrees, never one of its own.**
+  Placement is `deepSeekPlacements[projectId].worktreePath` (null = main
+  checkout), taken from the sidebar's selected row when the panel opens, and
+  its row lists under whichever worktree row owns that folder. It deliberately
+  does not get an agent worktree: `.spacron/worktrees/` is invisible in the
+  sidebar, and handing a user's worktree to the orchestrator as agent-owned
+  would let the reconciler stage or merge it.
 
 - **Only the headless worker can raise a completion notification.** Verified
   (2026-09-22, by wiring not by a live key): the worker's PTY gets a status

@@ -31,6 +31,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { agentStatusHooksEnabled } from '$lib/stores/settings';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { backendInvoke } from '$lib/services/backend';
 import { get } from '$lib/stores/storeCompat';
@@ -317,7 +318,7 @@ export function buildClaudeHookSettings(nonce: string, path: string): unknown {
  * whole turn, so this never blocks a spawn.
  */
 export async function prepareTurnSignals(command: string): Promise<PreparedTurnSignals | null> {
-  if (!supportsHookSignals(command)) return null;
+  if (!get(agentStatusHooksEnabled) || !supportsHookSignals(command)) return null;
   if (!signalChannelsReachAgent()) {
     console.info(
       'Remote workspace active: skipping turn-signal hooks (the channel file would be on the laptop, the agent is on the box). Falling back to output scanning.',

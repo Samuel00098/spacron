@@ -82,12 +82,7 @@ export default function ComputerUseDetails() {
     <>
       <Row
         title="Hidden apps"
-        detail={
-          <>
-            Agents never see or control these programs. One per line, e.g. <code>slack.exe</code>. Password
-            managers, Windows security prompts and Spacron itself are always hidden.
-          </>
-        }
+        detail="Applications hidden from agents (one per line, e.g. slack.exe)."
       >
         <textarea
           className="agent-input"
@@ -102,7 +97,7 @@ export default function ComputerUseDetails() {
 
       <Row
         title="Current permissions"
-        detail="What each agent may see or control right now. Permissions end with the agent's session, or the chat's reply; withdraw one here at any time."
+        detail="Active window access permissions granted to agents."
       >
         {byCaller.size === 0 ? (
           <span className="settings-detail-empty">No agent has any permission right now.</span>
@@ -133,16 +128,7 @@ export default function ComputerUseDetails() {
 
       <Row
         title="Recent actions"
-        detail={
-          logPath ? (
-            <>
-              The last {SHOWN_ACTIVITY} clicks, keys and typing. Typed text is logged by length only. Full log:{' '}
-              <code>{logPath}</code>
-            </>
-          ) : (
-            `The last ${SHOWN_ACTIVITY} clicks, keys and typing. Typed text is logged by length only.`
-          )
-        }
+        detail={`Recent desktop interactions (last ${SHOWN_ACTIVITY} actions).`}
       >
         {activity.length === 0 ? (
           <span className="settings-detail-empty">No agent has clicked or typed anything yet.</span>

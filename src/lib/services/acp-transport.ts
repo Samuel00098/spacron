@@ -14,16 +14,21 @@ export interface AcpSession {
   onNotification(handler: (notification: AcpNotification) => void): Promise<UnlistenFn>;
   onRequest(handler: (request: AcpServerRequest) => void): Promise<UnlistenFn>;
   onStderr(handler: (text: string) => void): Promise<UnlistenFn>;
+  onRawLine(handler: (text: string) => void): Promise<UnlistenFn>;
   onExit(handler: () => void): Promise<UnlistenFn>;
   respond(requestId: string | number, result: Record<string, unknown>, error?: Record<string, unknown>): Promise<void>;
   notify(method: string, params: Record<string, unknown>): Promise<void>;
+  writeRaw(text: string): Promise<void>;
   close(): Promise<void>;
 }
 
 let nextRequestId = 0;
 
-export async function openAcpSession(command: string, args: string[], cwd: string): Promise<AcpSession> {
-  const { id } = await invoke<{ id: number }>('acp_start', { args: { command, args, cwd } });
+export async function openAcpSession(command: string, args: string[], cwd: string, env: Record<string, string> = {}, rawArgs?: string): Promise<AcpSession> {
+  // Fields inside `args` keep their Rust (snake_case) names: Tauri only renames
+  // a command's top-level parameters. `rawArgs` here was silently dropped and
+  // `cmd.exe` started as an idle shell with no command.
+  const { id } = await invoke<{ id: number }>('acp_start', { args: { command, args, cwd, env, raw_args: rawArgs ?? null } });
   let closed = false;
   return {
     id,
@@ -53,6 +58,11 @@ export async function openAcpSession(command: string, args: string[], cwd: strin
         if (typeof event.payload.text === 'string') handler(event.payload.text);
       });
     },
+    onRawLine(handler: (text: string) => void) {
+      return listen<{ text?: string }>(`acp://${id}/raw`, (event) => {
+        if (typeof event.payload.text === 'string') handler(event.payload.text);
+      });
+    },
     onExit(handler: () => void) {
       return listen<Record<string, unknown>>(`acp://${id}/exit`, () => handler());
     },
@@ -63,6 +73,10 @@ export async function openAcpSession(command: string, args: string[], cwd: strin
       if (closed) return;
       await invoke('acp_notify', { id, method, params });
     },
+    async writeRaw(text) {
+      if (closed) throw new Error('ACP session is closed');
+      await invoke('acp_write_raw', { id, text });
+    },
     async close() {
       if (closed) return;
       closed = true;
@@ -71,11 +85,90 @@ export async function openAcpSession(command: string, args: string[], cwd: strin
   };
 }
 
+function windowsHost(): boolean {
+  return typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+}
+
+/** Quote one argument for a `cmd.exe /s /c` command line. */
+export function cmdQuote(arg: string): string {
+  return /[\s"&|<>^()%!]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+}
+
+/** The `cmd.exe` arguments that run `command args…` with cmd's own PATH/PATHEXT lookup. */
+export function windowsShimCommandLine(command: string, args: string[]): string {
+  return `/d /s /c ${[command, ...args].map(cmdQuote).join(' ')}`;
+}
+
+/**
+ * Start an agent CLI by bare name. On Windows most agents are npm `.cmd`
+ * shims, which `CreateProcess` cannot start (and an extensionless bash script
+ * of the same name sits beside them), so the line goes through `cmd.exe`,
+ * which resolves `PATHEXT` exactly like a terminal would. Absolute paths and
+ * other platforms spawn directly.
+ */
+export async function openAgentSession(command: string, args: string[], cwd: string, env: Record<string, string> = {}): Promise<AcpSession> {
+  if (windowsHost() && !/^[a-z]:[\\/]|^\\\\/i.test(command)) {
+    return openAcpSession('cmd.exe', [], cwd, env, windowsShimCommandLine(command, args));
+  }
+  return openAcpSession(command, args, cwd, env);
+}
+
+/** Collects an agent's stderr so a failure can say why, not just "stopped". */
+export function stderrTail(session: AcpSession, keep = 6): { lines: string[]; text(): string | null; dispose: Promise<() => void> } {
+  const lines: string[] = [];
+  const dispose = session.onStderr((text) => {
+    for (const line of text.split(/\r?\n/)) {
+      const clean = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
+      if (!clean) continue;
+      lines.push(clean);
+      if (lines.length > keep) lines.shift();
+    }
+  });
+  return {
+    lines,
+    text: () => {
+      // The last meaningful line, skipping warnings that aren't the cause.
+      const useful = lines.filter((line) => !/^warning\b/i.test(line));
+      return (useful.at(-1) ?? lines.at(-1) ?? null)?.slice(0, 300) ?? null;
+    },
+    dispose,
+  };
+}
+
+/** Reject when `promise` hasn't settled after `ms`. */
+export function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
 const ACP_CLIENT_INFO = { name: 'spacron', version: '5.1.3' };
-const ACP_CLIENT_CAPABILITIES = {
+/**
+ * ACP v1 `clientCapabilities`: `fs.readTextFile`, `fs.writeTextFile` and
+ * `terminal` are booleans. `terminal` used to be sent as an object, which
+ * strict agents reject outright: Cursor and Grok answered `initialize` with
+ * -32602 "Invalid params" (`terminal: expected boolean, received object`),
+ * so their chats could never start (seen 2026-11-20).
+ *
+ * The default is for clients that implement `fs/*` and `terminal/*` (the
+ * orchestrator's ACP chat does). A client that doesn't must say so, or the
+ * agent routes its file reads and commands to it and they fail.
+ */
+export interface AcpClientCapabilities {
+  fs: { readTextFile: boolean; writeTextFile: boolean };
+  terminal: boolean;
+}
+
+const ACP_CLIENT_CAPABILITIES: AcpClientCapabilities = {
   fs: { readTextFile: true, writeTextFile: true },
-  terminal: { create: true, output: true, release: true, waitForExit: true },
-  mcp: { http: true, sse: true, stdio: true },
+  terminal: true,
+};
+
+/** For clients that answer no `fs/*` or `terminal/*` requests: the agent uses its own tools. */
+export const ACP_NO_CLIENT_TOOLS: AcpClientCapabilities = {
+  fs: { readTextFile: false, writeTextFile: false },
+  terminal: false,
 };
 
 /** The handshake the rest of the app consumes, whichever protocol answered. */
@@ -117,21 +210,24 @@ function handshake(result: Record<string, unknown>): AcpInitialization {
  * extra round trip. The version used is whatever the agent echoes back — the
  * request never decides it.
  */
-export async function initializeAcp(session: AcpSession): Promise<AcpInitialization> {
+export async function initializeAcp(
+  session: AcpSession,
+  clientCapabilities: AcpClientCapabilities = ACP_CLIENT_CAPABILITIES,
+): Promise<AcpInitialization> {
   try {
     const result = await session.request('initialize', {
       protocolVersion: 2,
       info: ACP_CLIENT_INFO,
       clientInfo: ACP_CLIENT_INFO,
-      capabilities: ACP_CLIENT_CAPABILITIES,
-      clientCapabilities: ACP_CLIENT_CAPABILITIES,
+      capabilities: clientCapabilities,
+      clientCapabilities,
     });
     return handshake(result);
   } catch {
     const result = await session.request('initialize', {
       protocolVersion: 1,
       clientInfo: ACP_CLIENT_INFO,
-      clientCapabilities: ACP_CLIENT_CAPABILITIES,
+      clientCapabilities,
     });
     return handshake(result);
   }
@@ -164,23 +260,36 @@ export async function resumeAcpNativeSession(session: AcpSession, sessionId: str
   return session.request<Record<string, unknown>>('session/resume', { sessionId, cwd, mcpServers });
 }
 
+/** One inline image block of a prompt (`ContentBlock` of type `image`). */
+export interface AcpPromptImage {
+  mimeType: string;
+  data: string;
+}
+
+/**
+ * Send a turn. ACP's prompt is a list of content blocks: the text, plus one
+ * `image` block per attachment the agent can actually receive. An agent that
+ * only reads text still gets the prompt (unknown block types are its call).
+ */
 export async function promptAcpNativeSession(
   session: AcpSession,
   sessionId: string,
   text: string,
+  images: readonly AcpPromptImage[] = [],
 ): Promise<void> {
-  await session.request('session/prompt', {
-    sessionId,
-    prompt: [{ type: 'text', text }],
-  });
+  const prompt: Record<string, unknown>[] = [];
+  if (text.trim()) prompt.push({ type: 'text', text });
+  for (const image of images) prompt.push({ type: 'image', mimeType: image.mimeType, data: image.data });
+  if (!prompt.length) return;
+  await session.request('session/prompt', { sessionId, prompt });
 }
 
 export async function setAcpSessionModel(
   session: AcpSession,
   sessionId: string,
   model: string,
-): Promise<void> {
-  await session.request('session/set_model', { sessionId, modelId: model });
+): Promise<Record<string, unknown>> {
+  return session.request<Record<string, unknown>>('session/set_model', { sessionId, modelId: model });
 }
 
 /**
@@ -193,8 +302,8 @@ export async function setAcpSessionMode(
   session: AcpSession,
   sessionId: string,
   modeId: string,
-): Promise<void> {
-  await session.request('session/set_mode', { sessionId, modeId });
+): Promise<Record<string, unknown>> {
+  return session.request<Record<string, unknown>>('session/set_mode', { sessionId, modeId });
 }
 
 export async function waitForAcpReplayIdle(

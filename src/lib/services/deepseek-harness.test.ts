@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { get } from '$lib/stores/storeCompat';
 import {
+  clearDeepSeekPlacement,
   deepSeekPanelRoot,
   deepSeekPlacements,
-  deepSeekTrackedWorktrees,
-  dropDeepSeekWorktree,
-  patchDeepSeekWorktree,
+  sameFolder,
   setDeepSeekPlacement,
   deepSeekLaunchLine,
   deepSeekWorkerEnv,
@@ -72,36 +71,27 @@ describe('deepseek harness worker launch', () => {
 });
 
 describe('deepseek harness placement', () => {
-  const worktree = (path: string) => ({
-    path,
-    branch: `spacron/deepseek-${path.slice(-1)}`,
-    baseBranch: 'main',
-    baseCommit: 'abc',
-    createdAt: 1,
-  });
-
-  it('opens on the main checkout until a worktree is chosen', () => {
+  it('opens on the main checkout until one of the project worktrees is chosen', () => {
     expect(deepSeekPanelRoot(get(deepSeekPlacements), 'p-main', '/repo')).toBe('/repo');
-    setDeepSeekPlacement('p-main', worktree('/repo/.spacron/worktrees/a'));
-    expect(deepSeekPanelRoot(get(deepSeekPlacements), 'p-main', '/repo')).toBe('/repo/.spacron/worktrees/a');
+    setDeepSeekPlacement('p-main', '/repo/.spacron/trees/login');
+    expect(deepSeekPanelRoot(get(deepSeekPlacements), 'p-main', '/repo')).toBe('/repo/.spacron/trees/login');
   });
 
-  it('keeps a left worktree tracked as not live so its work can still come in', () => {
-    setDeepSeekPlacement('p-retire', worktree('/r/.spacron/worktrees/a'));
-    setDeepSeekPlacement('p-retire', null);
-    const tracked = deepSeekTrackedWorktrees().filter((e) => e.projectId === 'p-retire');
-    expect(tracked).toHaveLength(1);
-    expect(tracked[0]).toMatchObject({ live: false, worktree: { path: '/r/.spacron/worktrees/a' } });
-    expect(deepSeekPanelRoot(get(deepSeekPlacements), 'p-retire', '/r')).toBe('/r');
+  it('returns to the main checkout when the panel is opened there', () => {
+    setDeepSeekPlacement('p-back', '/r/.spacron/trees/a');
+    setDeepSeekPlacement('p-back', null);
+    expect(deepSeekPanelRoot(get(deepSeekPlacements), 'p-back', '/r')).toBe('/r');
   });
 
-  it('records reconciler baselines and forgets reclaimed checkouts', () => {
-    setDeepSeekPlacement('p-life', worktree('/l/.spacron/worktrees/a'));
-    patchDeepSeekWorktree('p-life', '/l/.spacron/worktrees/a', { lastStagedCommit: 'def' });
-    expect(get(deepSeekPlacements)['p-life'].worktree?.lastStagedCommit).toBe('def');
-    const live = deepSeekTrackedWorktrees().find((e) => e.projectId === 'p-life');
-    expect(live?.live).toBe(true);
-    dropDeepSeekWorktree('p-life', '/l/.spacron/worktrees/a');
-    expect(deepSeekTrackedWorktrees().some((e) => e.projectId === 'p-life')).toBe(false);
+  it('forgets a placement whose worktree has been deleted', () => {
+    setDeepSeekPlacement('p-gone', 'C:\\repo\\.spacron\\trees\\a');
+    clearDeepSeekPlacement('p-gone', 'c:/repo/.spacron/trees/a');
+    expect(deepSeekPanelRoot(get(deepSeekPlacements), 'p-gone', 'C:\\repo')).toBe('C:\\repo');
+  });
+
+  it('compares folders the way the worktree lists do', () => {
+    expect(sameFolder('C:\\Repo\\', 'c:/repo')).toBe(true);
+    expect(sameFolder('C:\\Repo\\a', 'C:\\Repo')).toBe(false);
+    expect(sameFolder(null, 'C:\\Repo')).toBe(false);
   });
 });

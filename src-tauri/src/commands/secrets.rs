@@ -202,7 +202,7 @@ pub(crate) fn media_api_key(provider: &str) -> Result<String, String> {
         return Err(format!("unknown provider: {provider}"));
     }
     provider_api_key_get(provider.to_string())?
-        .ok_or_else(|| format!("not_configured: no {provider} API key is saved. Add it in Settings > AI Connections."))
+        .ok_or_else(|| format!("not_configured: no {provider} API key is saved. Add it in Settings > AI Providers."))
 }
 
 fn is_local_provider(provider: &str) -> bool {

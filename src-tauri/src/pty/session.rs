@@ -70,6 +70,10 @@ pub fn spawn(
     }
     cmd.cwd(&cwd);
     let spawn_cwd = std::path::PathBuf::from(&cwd);
+    // Agents run in this shell; see `PARENT_AGENT_SESSION_VARS`.
+    for key in crate::acp::inherited_agent_session_vars() {
+        cmd.env_remove(key);
+    }
     if let Some(env_vars) = env {
         for (k, v) in env_vars {
             cmd.env(k, v);

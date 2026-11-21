@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { createPullRequest } from '$lib/services/work-items';
 import { showToast } from '$lib/stores/notification';
 import { CloseIcon, PlusIcon } from './TasksIcons';
 
@@ -39,11 +39,10 @@ export default function TasksNewPRModal({
     if (!title.trim() || submitting) return;
     setSubmitting(true);
     try {
-      await invoke('github_create_pull_request', {
-        projectId,
+      await createPullRequest(projectId, {
         title: title.trim(),
         body,
-        base,
+        base: base.trim(),
         draft,
       });
 
@@ -148,22 +147,34 @@ export default function TasksNewPRModal({
           />
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, gap: 12 }}>
           <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
             Commits unstaged changes, pushes, and creates PR.
           </span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="tasks-action-btn" onClick={onClose}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <button
+              type="button"
+              className="tasks-action-btn"
+              onClick={onClose}
+              style={{ padding: '6px 12px' }}
+            >
               Cancel
             </button>
             <button
               type="button"
               className="tasks-action-btn primary"
+              style={{
+                padding: '6px 14px',
+                whiteSpace: 'nowrap',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
               disabled={!title.trim() || submitting}
               onClick={handleSubmit}
             >
               <PlusIcon size={12} />
-              <span>{submitting ? 'Creating...' : 'Create PR'}</span>
+              <span style={{ whiteSpace: 'nowrap' }}>{submitting ? 'Creating...' : 'Create PR'}</span>
             </button>
           </div>
         </div>

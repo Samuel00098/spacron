@@ -212,9 +212,10 @@ export function resolveAgentLaunchEnv(
 export function platformLaunchFlags(
   command: string | null | undefined,
   platform: string = typeof navigator !== 'undefined' ? navigator.platform : '',
+  codexOwnServer = true,
 ): string {
   if (!command) return '';
-  if (agentExecutable(command) === 'codex' && /^win/i.test(platform)) {
+  if (codexOwnServer && agentExecutable(command) === 'codex' && /^win/i.test(platform)) {
     return ' --no-daemon';
   }
   return '';

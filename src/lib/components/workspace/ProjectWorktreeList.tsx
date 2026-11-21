@@ -11,6 +11,7 @@ import {
   setActiveWorktree,
   worktreesByProject,
 } from '$lib/stores/projectWorktrees';
+import { clearDeepSeekPlacement } from '$lib/services/deepseek-harness';
 import {
   deleteProjectWorktree,
   isPathInside,
@@ -162,6 +163,9 @@ export default function ProjectWorktreeList({
         return;
       }
       if (samePath(activePath, worktree.path)) setActiveWorktree(projectId, null);
+      // The DeepSeek panel may be working in this folder: send it back to the
+      // main checkout rather than leaving it pointed at a deleted one.
+      clearDeepSeekPlacement(projectId, worktree.path);
       showToast(
         result.preservedBranch
           ? `Deleted worktree ${worktree.name}. Kept branch ${result.preservedBranch} because it has unmerged commits.`

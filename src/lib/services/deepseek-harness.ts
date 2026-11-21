@@ -20,7 +20,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { get, writable } from '$lib/stores/storeCompat';
 import { activeProject, activeProjectId } from '$lib/stores/workspace';
-import { createTaskWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
+import { workingRootFor } from '$lib/stores/projectWorktrees';
+import { isPathInside } from '$lib/services/project-worktrees';
 import { remoteTarget } from '$lib/stores/remoteWorkspace';
 import { showToast } from '$lib/stores/notification';
 import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
@@ -78,18 +79,21 @@ export function deepSeekAgentName(root: string, taken: Iterable<string> = []): s
 }
 
 // ---------------------------------------------------------------------------
-// Placement: main repo or an isolated worktree, per project
+// Placement: which of the project's worktrees the panel works in
 // ---------------------------------------------------------------------------
 
 /**
- * Where a project's DeepSeek panel works. `worktree` null means the main
- * checkout. `retired` holds worktrees the panel has left: they may still carry
- * work, so they stay tracked (not live) until the reconciler's cleanup brings
- * that work in and reclaims them — exactly like a closed agent pane's.
+ * Where a project's DeepSeek panel works: the path of one of the project's own
+ * worktrees, or `null` for the main checkout.
+ *
+ * The panel is an agent like every other one, so it starts in the sidebar's
+ * selected worktree and moves only when it is opened somewhere else. It never
+ * creates a checkout of its own: an agent-owned `.spacron/worktrees/` checkout
+ * is not one of the user's worktree rows, so the panel would be working outside
+ * the worktrees they can see and manage.
  */
 export interface DeepSeekPlacement {
-  worktree: WorktreeInfo | null;
-  retired: WorktreeInfo[];
+  worktreePath: string | null;
 }
 
 const PLACEMENT_STORAGE_KEY = 'spacron.deepseekHarness.placements';
@@ -100,10 +104,11 @@ function loadPlacements(): Record<string, DeepSeekPlacement> {
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== 'object') return {};
     const out: Record<string, DeepSeekPlacement> = {};
-    for (const [projectId, value] of Object.entries(parsed as Record<string, Partial<DeepSeekPlacement>>)) {
-      const worktree = value?.worktree && typeof value.worktree.path === 'string' ? value.worktree : null;
-      const retired = Array.isArray(value?.retired) ? value.retired.filter((w) => typeof w?.path === 'string') : [];
-      out[projectId] = { worktree, retired };
+    for (const [projectId, value] of Object.entries(parsed as Record<string, { worktreePath?: unknown }>)) {
+      // Records written before this shape named an agent-owned checkout under
+      // `worktree`; those folders are not worktree rows, so they are dropped and
+      // the panel opens on the main checkout.
+      out[projectId] = { worktreePath: typeof value?.worktreePath === 'string' ? value.worktreePath : null };
     }
     return out;
   } catch {
@@ -111,10 +116,6 @@ function loadPlacements(): Record<string, DeepSeekPlacement> {
   }
 }
 
-/**
- * Persisted so a worktree survives a restart still owned: the orphan sweep
- * deletes any checkout no session, task or this registry claims.
- */
 export const deepSeekPlacements = writable<Record<string, DeepSeekPlacement>>(loadPlacements());
 deepSeekPlacements.subscribe((value) => {
   try {
@@ -130,60 +131,27 @@ export function deepSeekPanelRoot(
   projectId: string | null | undefined,
   projectRoot: string,
 ): string {
-  return (projectId && placements[projectId]?.worktree?.path) || projectRoot;
+  return (projectId && placements[projectId]?.worktreePath) || projectRoot;
 }
 
-/** Point a project's panel at `worktree` (or the main checkout), retiring the old one. */
-export function setDeepSeekPlacement(projectId: string, worktree: WorktreeInfo | null): void {
+/** True when two folders are the same one, despite separators or case. */
+export function sameFolder(a: string | null | undefined, b: string | null | undefined): boolean {
+  return Boolean(a && b) && isPathInside(a, b!) && isPathInside(b, a!);
+}
+
+/** Point a project's panel at one of its worktrees, or the main checkout. */
+export function setDeepSeekPlacement(projectId: string, worktreePath: string | null): void {
   deepSeekPlacements.update((all) => {
-    const current = all[projectId] ?? { worktree: null, retired: [] };
-    if (current.worktree?.path === worktree?.path) return all;
-    const retired = current.retired.filter((w) => w.path !== worktree?.path);
-    if (current.worktree) retired.push(current.worktree);
-    return { ...all, [projectId]: { worktree, retired } };
+    if ((all[projectId]?.worktreePath ?? null) === worktreePath) return all;
+    return { ...all, [projectId]: { worktreePath } };
   });
 }
 
-/** Every DeepSeek-owned worktree, for the reconciler and the orphan sweep. */
-export function deepSeekTrackedWorktrees(): { projectId: string; agentName: string; worktree: WorktreeInfo; live: boolean }[] {
-  const out: { projectId: string; agentName: string; worktree: WorktreeInfo; live: boolean }[] = [];
-  for (const [projectId, placement] of Object.entries(get(deepSeekPlacements))) {
-    const entries: [WorktreeInfo, boolean][] = [
-      ...(placement.worktree ? [[placement.worktree, true] as [WorktreeInfo, boolean]] : []),
-      ...placement.retired.map((w) => [w, false] as [WorktreeInfo, boolean]),
-    ];
-    for (const [worktree, live] of entries) {
-      out.push({ projectId, agentName: deepSeekAgentName(worktree.path), worktree, live });
-    }
-  }
-  return out;
-}
-
-/** Write a reconciler result (new baseline, conflict state) onto the owner. */
-export function patchDeepSeekWorktree(projectId: string, path: string, patch: Partial<WorktreeInfo>): void {
+/** Forget a project's placement, whose worktree is gone. */
+export function clearDeepSeekPlacement(projectId: string, worktreePath: string): void {
   deepSeekPlacements.update((all) => {
-    const current = all[projectId];
-    if (!current) return all;
-    const apply = (w: WorktreeInfo) => (w.path === path ? { ...w, ...patch } : w);
-    return {
-      ...all,
-      [projectId]: { worktree: current.worktree ? apply(current.worktree) : null, retired: current.retired.map(apply) },
-    };
-  });
-}
-
-/** Forget a worktree once its checkout is reclaimed. */
-export function dropDeepSeekWorktree(projectId: string, path: string): void {
-  deepSeekPlacements.update((all) => {
-    const current = all[projectId];
-    if (!current) return all;
-    return {
-      ...all,
-      [projectId]: {
-        worktree: current.worktree?.path === path ? null : current.worktree,
-        retired: current.retired.filter((w) => w.path !== path),
-      },
-    };
+    if (!sameFolder(all[projectId]?.worktreePath, worktreePath)) return all;
+    return { ...all, [projectId]: { worktreePath: null } };
   });
 }
 
@@ -314,41 +282,28 @@ export async function startDeepSeekHarnessWeb(root: string): Promise<WebPanel> {
 }
 
 /**
- * Open the DeepSeek Harness room on the active project. The room starts dsh and
- * reports its own progress and problems. Resolves false when it cannot open;
- * the reason has been shown as a toast.
+ * Open the DeepSeek Harness room on the active project, working in the
+ * sidebar's selected worktree - exactly where every other agent launch starts.
+ * A caller that knows the worktree (the "+" on a worktree row) names it:
+ * `null` is the main checkout, a path one of the project's worktrees. The room
+ * starts dsh and reports its own progress and problems; it resolves false when
+ * it cannot open, and the reason has been shown as a toast.
  */
-export async function openDeepSeekHarnessPanel(opts: { isolated?: boolean } = {}): Promise<boolean> {
+export async function openDeepSeekHarnessPanel(opts: { worktreePath?: string | null } = {}): Promise<boolean> {
   if (get(remoteTarget)) {
     showToast('DeepSeek Harness runs on this computer only, not in a remote workspace.', 'warning');
     return false;
   }
+  const project = get(activeProject);
   const projectId = get(activeProjectId);
-  if (!get(activeProject)?.root_path || !projectId) {
+  if (!project?.root_path || !projectId) {
     showToast('Open a project first: DeepSeek Harness works inside a project folder.', 'warning');
     return false;
   }
-  // The same choice every agent gets in the picker. An isolated panel keeps
-  // one worktree per project: reopening it returns to the same checkout and
-  // conversation rather than forking another.
-  if (opts.isolated) {
-    const existing = get(deepSeekPlacements)[projectId]?.worktree;
-    if (!existing) {
-      try {
-        const worktree = await createTaskWorktree({
-          projectId,
-          taskId: `dsh_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-          label: 'deepseek',
-        });
-        setDeepSeekPlacement(projectId, worktree);
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : String(e), 'error', 10000);
-        return false;
-      }
-    }
-  } else {
-    setDeepSeekPlacement(projectId, null);
-  }
+  const root = opts.worktreePath === undefined
+    ? workingRootFor(projectId, project.root_path)
+    : opts.worktreePath ?? project.root_path;
+  setDeepSeekPlacement(projectId, sameFolder(root, project.root_path) ? null : root);
   const { useLayoutStore } = await import('$lib/stores/zustand/layout');
   useLayoutStore.getState().revealDeepSeek();
   return true;

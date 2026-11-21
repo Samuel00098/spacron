@@ -102,6 +102,7 @@ import {
   updateSessionTitle,
   recordTerminalGeometry,
   __resetTerminalGeometry,
+  isShellPromptRow,
 } from './terminal';
 import { openPty } from '$lib/services/pty-bridge';
 import { showToast } from './notification';
@@ -1509,5 +1510,23 @@ describe('new PTY spawn geometry', () => {
       extraEnv: { COLORTERM: '24bit' },
     });
     expect(lastSpawnEnv().COLORTERM).toBe('24bit');
+  });
+});
+
+
+describe('agent launch detection', () => {
+  it('counts a line typed at a shell prompt', () => {
+    expect(isShellPromptRow('PS C:\\work\\app> claude --resume', 'claude --resume')).toBe(true);
+    expect(isShellPromptRow('C:\\work\\app>codex', 'codex')).toBe(true);
+    expect(isShellPromptRow('me@box:~/app$ opencode', 'opencode')).toBe(true);
+  });
+
+  it('ignores the same words typed into a running agent', () => {
+    // OpenCode's prompt box, and its /models search box.
+    expect(isShellPromptRow('  ┃  claude sonnet 4.5', 'claude sonnet 4.5')).toBe(false);
+    expect(isShellPromptRow('                 claude sonnet 4.5', 'claude sonnet 4.5')).toBe(false);
+    // Codex and Claude Code composers.
+    expect(isShellPromptRow('› claude, review this', 'claude, review this')).toBe(false);
+    expect(isShellPromptRow('> codex is slow today', 'codex is slow today')).toBe(false);
   });
 });

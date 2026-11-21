@@ -123,7 +123,6 @@ import {
   applyOrchestratorAgentName,
 } from '$lib/services/orchestrator/terminal-lease';
 import { pickAssistantName, isGenericAgentName } from '$lib/services/orchestrator/agent-names';
-import { deepSeekTrackedWorktrees, dropDeepSeekWorktree, patchDeepSeekWorktree } from '$lib/services/deepseek-harness';
 import { createTaskWorktree, removeTaskWorktree, mergeTaskWorktree, reclaimWorktree, listWorktreesOnDisk, pruneWorktrees, sweepAgentBranches, renameTaskWorktree, deriveFirstWorkBranch, getWorktreeDelta, snapshotWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import {
   buildAccountRoster,
@@ -199,6 +198,7 @@ import { buildAgentCharter, buildAgentTaskMessage, type AgentRole } from '$lib/s
 import { parseReviewerVerdict } from '$lib/services/orchestrator/reviewer-verdict';
 import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file';
 import { getAgentProviderLaunchOptions, isChatAgentProvider, isClaudeProvider, isCodexProvider, isCursorProvider, isMuseProvider, isOpenCodeProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
+import { PI_RPC_ARGS } from '$lib/services/chat-provider-adapters';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
 import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
 import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
@@ -1438,7 +1438,6 @@ export async function cleanupStaleWorktrees(projectId: string): Promise<number> 
       const outcome = await reclaimWorktree(projectId, entry.worktree, { deleteBranch: false, stagePending: false });
       if (!outcome.removed) continue;
       forgetWorktree(entry.worktree.path);
-      dropDeepSeekWorktree(projectId, entry.worktree.path);
       for (const task of get(orchestratorTasks)) {
         if (task.projectId === projectId && task.worktree?.path === entry.worktree.path) {
           patchTask(task.id, (t) => ({ ...t, worktree: null }));
@@ -1492,7 +1491,6 @@ export async function reclaimProjectWorktrees(projectId: string): Promise<Reclai
     if (result.removed) {
       outcome.removed += 1;
       forgetWorktree(entry.worktree.path);
-      dropDeepSeekWorktree(projectId, entry.worktree.path);
       const task = get(orchestratorTasks).find((t) => t.worktree?.path === entry.worktree.path);
       if (task) patchTask(task.id, (t) => ({ ...t, worktree: null }));
     } else {
@@ -1525,11 +1523,6 @@ export async function sweepOrphanWorktrees(projectId: string): Promise<number> {
       if (session.worktree) known.add(session.worktree.path);
     }
   }
-  // A DeepSeek panel's worktree has no session or task behind it.
-  for (const entry of deepSeekTrackedWorktrees()) {
-    if (entry.projectId === projectId) known.add(entry.worktree.path);
-  }
-
   let removed = 0;
   for (const dir of onDisk) {
     if (known.has(dir)) continue;
@@ -6455,7 +6448,7 @@ export async function sendChatMessage(
       model: opts.model,
       accessMode: accessTier(opts.accessMode ?? chatThread.accessMode),
     });
-    const piCommand = [opts.forcedAgent, piLaunch.permissionArgs, piLaunch.runtimeArgs].filter(Boolean).join(' ');
+    const piCommand = [opts.forcedAgent, PI_RPC_ARGS, piLaunch.permissionArgs, piLaunch.runtimeArgs].filter(Boolean).join(' ');
     await sendPiRpcChatTurn(
       projectId,
       rootPath,
@@ -8693,13 +8686,6 @@ export function trackedWorktrees(): TrackedWorktree[] {
     });
   }
 
-  // DeepSeek Harness panels: a worktree with no terminal session or task
-  // behind it (see `deepSeekPlacements`). Live while it is the panel's folder.
-  for (const entry of deepSeekTrackedWorktrees()) {
-    if (!projectPaths.has(entry.projectId) || byPath.has(entry.worktree.path)) continue;
-    byPath.set(entry.worktree.path, entry);
-  }
-
   return [...byPath.values()];
 }
 
@@ -8709,7 +8695,6 @@ export function trackedWorktrees(): TrackedWorktree[] {
  * a task can't end up with two disagreeing baselines.
  */
 function persistWorktreePatch(projectId: string, worktreePath: string, patch: Partial<WorktreeInfo>): void {
-  patchDeepSeekWorktree(projectId, worktreePath, patch);
   for (const task of get(orchestratorTasks)) {
     if (task.worktree?.path !== worktreePath) continue;
     patchTask(task.id, (t) =>

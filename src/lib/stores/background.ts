@@ -282,6 +282,10 @@ export function applyWallpaperGlass(percent: number): void {
   root.style.setProperty('--wallpaper-glass-light', Math.min(1, p + 0.1).toFixed(2));
 }
 
+// Keep the live glass surfaces in sync as the Settings slider changes. The
+// persisted value alone does not repaint CSS custom properties.
+backgroundGlassOpacity.subscribe(applyWallpaperGlass);
+
 let appearanceTimeout: any = null;
 let lastAppearanceRun = 0;
 

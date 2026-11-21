@@ -21,6 +21,7 @@ import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voi
 import { recordTranscription } from '$lib/stores/voiceHistory';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { useStore } from '$lib/react/useStore';
+import { useLayoutStore } from '$lib/stores/zustand/layout';
 import TaskEditorModal from './TaskEditorModal';
 import './TasksPanel.css';
 import './tasks/TasksStyles.css';
@@ -200,6 +201,7 @@ export default function TasksPanel() {
         : `Review and verify Pull Request #${number}: ${title}\n\n${body}`;
     const defaultAgent = dispatchableAgents[0]?.command;
     void sendChatMessage(projectId, root, prompt, defaultAgent ? { forcedAgent: defaultAgent } : undefined);
+    useLayoutStore.getState().setActiveView('terminal');
     showToast({
       title: `Dispatched #${number} to agent`,
       tone: 'success',

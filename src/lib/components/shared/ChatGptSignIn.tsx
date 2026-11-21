@@ -31,7 +31,7 @@ function readableError(error: unknown): string {
 }
 
 /**
- * Settings → AI Connections → ChatGPT subscription. The orchestrator runs on
+ * Settings → AI Providers → ChatGPT subscription. The orchestrator runs on
  * the user's own ChatGPT plan through their Codex CLI (`commands/chatgpt.rs`):
  * Codex runs the OAuth flow and keeps the tokens, Spacron only relays the link.
  */
@@ -145,9 +145,7 @@ export function ChatGptSignIn({
       </div>
 
       <p className="shell-hint chatgpt-signin-intro">
-        Use the ChatGPT plan you already pay for (Plus, Pro, Business…) as the orchestrator&apos;s brain.
-        No API key and no extra cost: requests count against your plan&apos;s Codex usage limits.
-        It runs through OpenAI&apos;s Codex CLI on this computer, which keeps your login; Spacron never sees it.
+        Use your existing ChatGPT plan (Plus, Pro, Business). Runs locally via the Codex CLI without API keys.
       </p>
 
       {status && !status.installed && (

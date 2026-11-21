@@ -1255,7 +1255,21 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
               }
               const roomId = await createTerminalSession(pane.cwd || rootPath, undefined, projectId, { assignPane: false, agentPreset: pane.agentPreset });
               if (roomId !== null) {
-                await relaunchRestoredAgentSession(roomId, pane.agentPreset, metadata);
+                // A CLI pane that had been switched into structured chat comes
+                // back as that chat; one switched back to its terminal resumes
+                // the same conversation in the CLI. Dynamic import: the session
+                // store reaches the terminal store, which imports this one.
+                const structured = await import('$lib/services/structured-chat/session-store').catch(() => null);
+                const claimed = structured?.claimConvertedSession(projectId, pane.agentPreset, pane.cwd || rootPath) ?? null;
+                if (structured && claimed?.view === 'chat') {
+                  applyRestoredSessionMetadata(roomId, metadata);
+                  if (await structured.restoreConvertedInChat(roomId, claimed)) return roomId;
+                }
+                const { resumeArgs, transcriptAgentFor } = await import('$lib/services/terminal-chat');
+                const transcriptAgent = transcriptAgentFor(pane.agentPreset);
+                const resume = claimed?.nativeSessionId && transcriptAgent ? resumeArgs(transcriptAgent, claimed.nativeSessionId) : '';
+                await relaunchRestoredAgentSession(roomId, pane.agentPreset, metadata, resume);
+                if (structured && claimed) structured.adoptConvertedPane(roomId, claimed.id);
                 return roomId;
               }
               return null;
@@ -1289,6 +1303,18 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           if (generation !== restoreProjectStateGeneration) return;
           if (spawnedIds.length > 1) {
             showToast(`Restored ${spawnedIds.length} terminal sessions`, 'info', 3000);
+          }
+        }
+        // Structured chats are not terminal panes the snapshot above knows how
+        // to bring back: their own session store reopens them, resumed by
+        // their native conversation id. Dynamic import: that module reaches
+        // the terminal store, which imports this one.
+        if (generation === restoreProjectStateGeneration) {
+          try {
+            const { restoreStructuredSessions } = await import('$lib/services/structured-chat/session-store');
+            await restoreStructuredSessions(projectId);
+          } catch (error) {
+            console.warn('Could not restore structured chats:', error);
           }
         }
       }

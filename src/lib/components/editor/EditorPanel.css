@@ -27,6 +27,43 @@
   box-sizing: border-box;
 }
 
+.editor-panel .editor-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-panel .editor-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.editor-panel .editor-language-select {
+  height: 24px;
+  max-width: 140px;
+  padding: 0 22px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.editor-panel .editor-language-select:hover,
+.editor-panel .editor-language-select:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.editor-panel .editor-language-select option {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
 .editor-panel .markdown-toggle-btn {
   display: flex;
   align-items: center;
@@ -46,6 +83,26 @@
   white-space: nowrap;
 }
 
+.editor-panel .markdown-toc-toggle {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.editor-panel .markdown-toc-toggle:hover,
+.editor-panel .markdown-toc-toggle.active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
 .editor-panel .markdown-toggle-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -55,6 +112,30 @@
 .editor-panel .markdown-toggle-btn.active {
   background: var(--accent-light);
   color: var(--accent);
+  border-color: var(--accent);
+}
+
+.editor-panel .html-preview-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.editor-panel .html-preview-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
   border-color: var(--accent);
 }
 

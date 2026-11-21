@@ -88,6 +88,18 @@ export function loadLiveAgentProviderModels(command: string): Promise<AgentProvi
 }
 
 /**
+ * The CLI's current list, never the copy saved from an earlier run:
+ * `loadLiveAgentProviderModels` answers with that copy at once, so a picker
+ * that stays open (the chat composer's) also needs the fresh probe, or it
+ * keeps offering models the account no longer has.
+ */
+export function freshLiveAgentProviderModels(command: string): Promise<AgentProviderModel[]> {
+  void loadLiveAgentProviderModels(command);
+  const key = catalogueKey(getAgentProviderCapabilities(command).provider);
+  return catalogueCache.get(key)?.models ?? Promise.resolve([]);
+}
+
+/**
  * Start probing these CLIs now so their pickers are ready when opened.
  * Already-cached providers cost nothing.
  */

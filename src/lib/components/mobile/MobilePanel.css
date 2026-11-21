@@ -962,6 +962,140 @@
   box-shadow: inset 0 0 0 1px var(--border), 0 8px 24px rgba(0, 0, 0, 0.25) !important;
 }
 
+.mobile-panel .mobile-device-menu-wrap {
+  position: relative;
+  display: flex;
+}
+
+.mobile-panel .mobile-device-menu {
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  right: calc(100% + 8px);
+  width: max-content;
+  min-width: 192px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #151515;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+
+.mobile-panel .mobile-device-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mobile-panel .mobile-device-menu button:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(255, 255, 255, .08));
+}
+
+.mobile-panel .mobile-device-menu button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.mobile-panel .mobile-device-menu button.danger {
+  color: var(--color-danger, #ef4444);
+}
+
+.mobile-panel .mobile-device-menu-separator {
+  display: block;
+  height: 1px;
+  margin: 5px 2px;
+  background: var(--border);
+}
+
+.mobile-panel.mobile-panel-floating {
+  position: fixed;
+  /* Keep Settings (z-index 9000) above the device overlay. */
+  z-index: 8500;
+  right: 24px;
+  bottom: 24px;
+  width: min(460px, calc(100vw - 32px));
+  height: min(780px, calc(100vh - 48px));
+  min-width: min(340px, calc(100vw - 32px));
+  min-height: min(420px, calc(100vh - 48px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  resize: both;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #101010;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .55);
+  cursor: grab;
+  touch-action: none;
+}
+
+.mobile-panel.mobile-panel-floating .mobile-device-view,
+.mobile-panel.mobile-panel-floating .mobile-device-body,
+.mobile-panel.mobile-panel-floating .mobile-stage {
+  background: #101010;
+}
+
+.mobile-panel.mobile-panel-floating .mobile-device-body > .mobile-stage,
+.mobile-panel.mobile-panel-floating .mobile-stage {
+  padding: 16px;
+}
+
+.mobile-panel .mobile-floating-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 8px 5px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.mobile-panel .mobile-floating-header:active {
+  cursor: grabbing;
+}
+
+.mobile-panel .mobile-floating-header > span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-panel .mobile-floating-header button {
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mobile-panel .mobile-floating-header .mobile-device-menu-wrap {
+  flex: 0 0 auto;
+}
+
+.mobile-panel.mobile-panel-floating .mobile-device-menu {
+  top: calc(100% + 6px);
+  right: 0;
+}
+
 .mobile-panel .mobile-side-btn {
   display: inline-flex;
   align-items: center;

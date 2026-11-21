@@ -824,10 +824,7 @@ export default function UsageStatsPane() {
         <h3>Usage stats</h3>
         <div className="settings-card-body">
           <p className="shell-hint" style={{ marginTop: 0 }}>
-            Spacron can tally tokens and cost across supported agent sessions
-            by scanning the transcript files those CLIs write
-            to disk. Stats are estimates. No API key is used, and nothing is
-            sent anywhere.
+            Estimates tokens and costs by scanning local CLI transcript files. All data stays on your machine.
           </p>
           <div className="settings-control-row">
             <div className="settings-control-copy">

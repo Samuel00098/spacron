@@ -454,7 +454,7 @@ pub async fn generate_and_save(
         }
         let prefix = if quota_hit { "quota" } else { "none_available" };
         Err(format!(
-            "{prefix}: No provider could make the {noun}. Add a key for another provider in Settings > AI Connections, or wait for your limit to reset.\n{}",
+            "{prefix}: No provider could make the {noun}. Add a key for another provider in Settings > AI Providers, or wait for your limit to reset.\n{}",
             skipped.iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n")
         ))
     };

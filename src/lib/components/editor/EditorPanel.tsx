@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import EditorTabs from './EditorTabs.tsx';
 import ImageViewer from './ImageViewer.tsx';
 import MediaViewer from './MediaViewer.tsx';
@@ -8,11 +8,36 @@ import { useEditorStore } from '$lib/stores/zustand/editor';
 import CodeEditor from './CodeEditor.tsx';
 import './EditorPanel.css';
 
+const EDITOR_LANGUAGES = [
+  ['plaintext', 'Plain text'], ['shell', 'Bash'], ['c', 'C'], ['cpp', 'C++'],
+  ['css', 'CSS'], ['diff', 'Diff'], ['go', 'Go'], ['graphql', 'GraphQL'],
+  ['html', 'HTML'], ['java', 'Java'], ['javascript', 'JavaScript'], ['json', 'JSON'],
+  ['kotlin', 'Kotlin'], ['markdown', 'Markdown'], ['mermaid', 'Mermaid'],
+  ['powershell', 'PowerShell'], ['python', 'Python'], ['ruby', 'Ruby'],
+  ['rust', 'Rust'], ['scss', 'SCSS'], ['sql', 'SQL'],
+] as const;
+
+const LANGUAGE_LABELS = new Map<string, string>([
+  ...EDITOR_LANGUAGES,
+  ['typescript', 'TypeScript'], ['sass', 'Sass'], ['svelte', 'Svelte'],
+  ['php', 'PHP'], ['xml', 'XML'], ['yaml', 'YAML'], ['toml', 'TOML'],
+  ['csharp', 'C#'], ['swift', 'Swift'],
+]);
+
 function CodeIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="16 18 22 12 16 6" />
       <polyline points="8 6 2 12 8 18" />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
@@ -25,15 +50,37 @@ function PencilIcon() {
   );
 }
 
+function TableOfContentsIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 6h12M9 12h12M9 18h12" />
+      <path d="M3 6h.01M3 12h.01M3 18h.01" />
+    </svg>
+  );
+}
+
+const MARKDOWN_TOC_KEY = 'spacron.richMarkdown.tocOpen';
+
+function initialMarkdownTocOpen() {
+  try {
+    return localStorage.getItem(MARKDOWN_TOC_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
 export default function EditorPanel() {
   const files = useEditorStore((s) => s.openFiles);
   const active = useEditorStore((s) => s.activeFile);
   const cache = useEditorStore((s) => s.fileCache);
   const markdownCodeModePaths = useEditorStore((s) => s.markdownCodeModePaths);
   const setMarkdownPreview = useEditorStore((s) => s.setMarkdownPreview);
+  const setFileLanguage = useEditorStore((s) => s.setFileLanguage);
+  const [markdownTocOpen, setMarkdownTocOpen] = useState(initialMarkdownTocOpen);
 
   const file = active ? cache.get(active) : null;
   const canPreviewMarkdown = file?.kind === 'text' && file?.language === 'markdown';
+  const canPreviewHtml = file?.kind === 'text' && (file.language === 'html' || /\.(html?|htm)$/i.test(file.path));
   const showMarkdownPreview = canPreviewMarkdown && active ? !markdownCodeModePaths?.has(active) : false;
 
   const codeEditorProps = useMemo(
@@ -45,7 +92,7 @@ export default function EditorPanel() {
             language: file.language,
           }
         : undefined,
-    [file?.path],
+    [file?.path, file?.content, file?.language],
   );
 
   if (files.length === 0 || !active || !file) {
@@ -71,17 +118,67 @@ export default function EditorPanel() {
     <div className="editor-panel">
       <div className="editor-toolbar">
         <EditorTabs />
-        {canPreviewMarkdown && (
-          <button
-            className={`markdown-toggle-btn${showMarkdownPreview ? ' active' : ''}`}
-            onClick={() => active && setMarkdownPreview(active, !showMarkdownPreview)}
-            title={showMarkdownPreview ? 'Edit the Markdown source' : 'Edit as formatted text'}
-            aria-label={showMarkdownPreview ? 'Edit the Markdown source' : 'Edit as formatted text'}
-          >
-            {showMarkdownPreview ? <CodeIcon /> : <PencilIcon />}
-            <span>{showMarkdownPreview ? 'Source' : 'Rich editor'}</span>
-          </button>
-        )}
+        <div className="editor-toolbar-actions">
+          {canPreviewMarkdown && (
+            <>
+              {showMarkdownPreview && (
+                <button
+                  className={`markdown-toc-toggle${markdownTocOpen ? ' active' : ''}`}
+                  onClick={() => {
+                    const next = !markdownTocOpen;
+                    setMarkdownTocOpen(next);
+                    try { localStorage.setItem(MARKDOWN_TOC_KEY, next ? '1' : '0'); } catch { /* optional preference */ }
+                  }}
+                  title={markdownTocOpen ? 'Hide table of contents' : 'Show table of contents'}
+                  aria-label={markdownTocOpen ? 'Hide table of contents' : 'Show table of contents'}
+                  aria-pressed={markdownTocOpen}
+                >
+                  <TableOfContentsIcon />
+                </button>
+              )}
+              <button
+                className={`markdown-toggle-btn${showMarkdownPreview ? ' active' : ''}`}
+                onClick={() => active && setMarkdownPreview(active, !showMarkdownPreview)}
+                title={showMarkdownPreview ? 'Edit the Markdown source' : 'Edit as formatted text'}
+                aria-label={showMarkdownPreview ? 'Edit the Markdown source' : 'Edit as formatted text'}
+              >
+                {showMarkdownPreview ? <CodeIcon /> : <PencilIcon />}
+                <span>{showMarkdownPreview ? 'Source' : 'Rich editor'}</span>
+              </button>
+            </>
+          )}
+          {canPreviewHtml && (
+            <button
+              type="button"
+              className="html-preview-btn"
+              onClick={() => {
+                void import('$lib/stores/preview').then(({ previewLocalFile }) => {
+                  previewLocalFile(file.path);
+                });
+              }}
+              title="Open preview in Preview tab"
+              aria-label="Open preview in Preview tab"
+            >
+              <EyeIcon />
+              <span>Preview</span>
+            </button>
+          )}
+          {file.kind === 'text' && !canPreviewMarkdown && (
+            <select
+              className="editor-language-select"
+              value={file.language}
+              onChange={(event) => setFileLanguage(file.path, event.target.value)}
+              aria-label="Editor language"
+              title="Choose syntax highlighting language"
+            >
+              {!LANGUAGE_LABELS.has(file.language) && <option value={file.language}>{file.language}</option>}
+              {EDITOR_LANGUAGES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+              {[...LANGUAGE_LABELS.entries()]
+                .filter(([id]) => !EDITOR_LANGUAGES.some(([choice]) => choice === id))
+                .map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+          )}
+        </div>
       </div>
 
       <div className="editor-workspace-area">
@@ -98,7 +195,16 @@ export default function EditorPanel() {
             size={file.size}
           />
         ) : file.language === 'markdown' && showMarkdownPreview ? (
-          <RichMarkdownEditor key={file.path} filePath={file.path} content={file.content} />
+          <RichMarkdownEditor
+            key={file.path}
+            filePath={file.path}
+            content={file.content}
+            tocOpen={markdownTocOpen}
+            onTocOpenChange={(next) => {
+              setMarkdownTocOpen(next);
+              try { localStorage.setItem(MARKDOWN_TOC_KEY, next ? '1' : '0'); } catch { /* optional preference */ }
+            }}
+          />
         ) : (
           codeEditorProps && (
             <CodeEditor

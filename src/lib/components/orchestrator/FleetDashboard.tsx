@@ -381,11 +381,12 @@ export default function FleetDashboard() {
 
     // The DeepSeek panel is an agent without a terminal: dsh's own web UI in a
     // room. Terminal-session rows can never see it, so it joins from the room
-    // being open, working where its placement says (main repo or worktree).
+    // being open, working where its placement says (a worktree the user created
+    // or the main checkout).
     if (deepseekOpen && projectRoot) {
-      const worktree = placements[projectId]?.worktree ?? null;
+      const worktreePath = placements[projectId]?.worktreePath ?? null;
       const panelRoot = deepSeekPanelRoot(placements, projectId, projectRoot);
-      const key = worktree ? worktree.path : `deepseek:${projectId}`;
+      const key = worktreePath ?? `deepseek:${projectId}`;
       if (!byKey.has(key)) {
         byKey.set(key, {
           key,
@@ -395,10 +396,12 @@ export default function FleetDashboard() {
             allSessions.map((session) => session.agentName ?? '').filter(Boolean),
           ),
           agentPreset: DEEPSEEK_HARNESS_COMMAND,
-          placement: worktree ? 'worktree' : 'main',
-          worktree,
-          repoPath: worktree?.path ?? null,
-          baseCommit: worktree?.baseCommit ?? null,
+          placement: worktreePath ? 'worktree' : 'main',
+          // One of the user's own worktrees: the panel works in it but does not
+          // own it, so there is nothing here to merge, stage or discard.
+          worktree: null,
+          repoPath: worktreePath,
+          baseCommit: null,
           live: true,
           summary: null,
           sessionId: null,

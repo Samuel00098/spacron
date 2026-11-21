@@ -38,4 +38,19 @@ describe('chat context handoff', () => {
     expect(estimateHandoffTokens(handoff.prompt)).toBeLessThanOrEqual(16_000);
     expect(handoff.omittedMessages).toBeGreaterThan(0);
   });
+
+  it('adds workspace, files and unfinished work while staying bounded', () => {
+    const messages = Array.from({ length: 40 }, (_, i) => ({ id: String(i), role: i % 2 ? 'assistant' : 'user', text: 'x'.repeat(9000) }));
+    const result = buildChatContextHandoff(messages, 'Claude', 'Codex', 'go', {
+      cwd: '/repo',
+      project: 'demo',
+      model: 'opus',
+      filesTouched: ['src/a.ts'],
+      unfinished: ['Latest user request: fix it'],
+    });
+    expect(result.prompt).toContain('Working directory: /repo');
+    expect(result.prompt).toContain('- src/a.ts');
+    expect(result.prompt).toContain('Latest user request: fix it');
+    expect(estimateHandoffTokens(result.prompt)).toBeLessThanOrEqual(16_000);
+  });
 });

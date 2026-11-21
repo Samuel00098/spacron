@@ -443,6 +443,7 @@ pub fn run() {
             commands::source_control::source_control_update_issue_state,
             commands::source_control::source_control_add_issue_comment,
             commands::source_control::source_control_list_pull_requests,
+            commands::source_control::source_control_create_pull_request,
             commands::source_control::source_control_get_pr_details,
             commands::source_control::source_control_get_pr_files,
             commands::source_control::source_control_get_pr_checks,

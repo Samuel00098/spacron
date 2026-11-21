@@ -214,7 +214,9 @@ export default function FloatingPromptBar({
   // sit in a chip with no way to send it.
   const attachmentCount = pastedImages.length + pastedFiles.length;
   const hasStagedContent = hasPromptText || attachmentCount > 0;
-  const isActive = true;
+  // Keep the workspace dock compact unless it has staged content that still
+  // needs an explicit Send / Discard action.
+  const isActive = hasStagedContent || isExpanded;
 
   const waitingTaskCount = useMemo(
     () =>
@@ -1314,26 +1316,18 @@ export default function FloatingPromptBar({
       {!isActive && (
         <button
           type="button"
-          className="prompt-bubble"
-          onClick={openPromptBar}
-          title="Open prompt bar"
-          aria-label="Open prompt bar"
+          className={`prompt-bubble${transcribing ? ' listening' : ''}`}
+          onClick={toggleTranscriptionMode}
+          title={transcribing ? 'Stop dictation' : 'Start voice input'}
+          aria-label={transcribing ? 'Stop dictation' : 'Start voice input'}
           aria-controls="floating-prompt-bar"
           aria-expanded={isActive}
         >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="m8 8 4 4-4 4" />
-            <path d="M13 16h3.5" />
-          </svg>
+          {transcribing ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="13" height="13" rx="1.6" />
+            </svg>
+          ) : <VoiceInputIcon />}
           {waitingTaskCount > 0 && (
             <span className="bubble-waiting-badge">{waitingTaskCount}</span>
           )}

@@ -29,7 +29,7 @@
  */
 
 import { get, writable } from '$lib/stores/storeCompat';
-import { keepSystemAwake } from '$lib/stores/settings';
+import { keepAwakeMode, keepSystemAwake } from '$lib/stores/settings';
 import { isTauriRuntime } from '$lib/utils/tauri';
 
 export interface KeepAwakeStatus {
@@ -80,7 +80,9 @@ function publish(patch: Partial<KeepAwakeState>) {
 }
 
 function desiredHold(): boolean {
-  return get(keepSystemAwake) && workingSessions.size > 0;
+  const mode = get(keepAwakeMode);
+  // Preserve the legacy setting for users upgrading from the boolean control.
+  return mode === 'on' || (mode === 'agent' || (mode === 'off' && get(keepSystemAwake))) && workingSessions.size > 0;
 }
 
 async function applyHold(active: boolean): Promise<void> {
@@ -188,5 +190,8 @@ if (isTauriRuntime()) {
 // waiting for the current turn to end — the user asked for the machine back now.
 // Turning it on mid-run takes the hold for turns already in flight.
 keepSystemAwake.subscribe(() => {
+  void reconcile();
+});
+keepAwakeMode.subscribe(() => {
   void reconcile();
 });

@@ -1,4 +1,5 @@
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '$lib/react/useStore';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
@@ -8,14 +9,17 @@ import {
   usagePanelHeight,
   setUsagePanelHeight,
   persistUsagePanelHeight,
+  refreshUsage,
+  severityOf,
+  describeReset,
   USAGE_PANEL_MIN_HEIGHT,
-  PANEL_POLL_INTERVAL_MS,
   hasNumbers,
   type ProviderUsage,
   type UsageStatus,
 } from '$lib/stores/usage';
 import {
   accountsState,
+  accountsFor,
   connectWebSession,
   refreshAccounts,
   isWebSessionProvider,
@@ -23,8 +27,10 @@ import {
 } from '$lib/stores/agentAccounts';
 import UsageMeter from './UsageMeter';
 import AccountSwitcher from './AccountSwitcher';
-import LiveTicker from '$lib/components/shared/LiveTicker';
+import { openSettings } from '$lib/stores/layout';
 import './UsagePanel.css';
+
+const DRAG_KEY_STEP = 24;
 
 /**
  * What to say when a provider has no numbers.
@@ -60,11 +66,6 @@ const STATUS_NOTE: Record<Exclude<UsageStatus, 'ok'>, string> = {
  * the store, so the clamp the handle applies and the clamp the stored value
  * applies cannot drift apart.
  */
-const MIN_DRAWER_BODY = 96;
-
-/** How far one arrow-key press moves the handle. */
-const DRAG_KEY_STEP = 24;
-
 function relativeAge(fetchedAt: number, now: number): string {
   const mins = Math.floor(Math.max(0, now / 1000 - fetchedAt) / 60);
   if (mins < 1) return 'just now';
@@ -85,10 +86,16 @@ function ProviderRow({
   provider,
   now,
   accounts,
+  density,
+  display,
+  onOpen,
 }: {
   provider: ProviderUsage;
   now: number;
   accounts: AccountsState;
+  density: 'compact' | 'detailed';
+  display: 'used' | 'left';
+  onOpen: (provider: ProviderUsage, rect: DOMRect) => void;
 }) {
   const reporting = hasNumbers(provider);
   const note = provider.status === 'ok' ? null : STATUS_NOTE[provider.status];
@@ -100,25 +107,41 @@ function ProviderRow({
   const needsConnect =
     webLinked && (provider.status === 'notConnected' || provider.status === 'expired');
   const connecting = accounts.connecting === provider.provider;
+  const headline = [...provider.windows].sort((a, b) => b.usedPercent - a.usedPercent)[0];
+  const percent = headline ? Math.round(headline.usedPercent) : null;
+  const reset = headline ? describeReset(headline, now)?.replace(/^resets in /, '') : null;
 
   return (
     <li className="usage-row" data-reporting={reporting ? 'true' : 'false'}>
       <div className="usage-row-head">
-        <span className="usage-row-mark" aria-hidden="true">
-          <AgentBrandMark command={provider.command} name={provider.name} />
-        </span>
-        <span className="usage-row-name">{provider.name}</span>
-        {provider.plan && <span className="usage-row-plan">{provider.plan}</span>}
+        <button className="usage-row-open" type="button" onClick={(event) => onOpen(provider, event.currentTarget.getBoundingClientRect())} aria-label={`Show ${provider.name} usage details`}>
+          <span className="usage-row-mark" aria-hidden="true">
+            <AgentBrandMark command={provider.command} name={provider.name} />
+          </span>
+          <span className="usage-row-name">{provider.name}</span>
+          {provider.plan && <span className="usage-row-plan">{provider.plan}</span>}
+          {reporting && (
+            <span className="usage-row-summary" data-severity={headline ? severityOf(headline.usedPercent) : undefined}>
+              <span className="usage-row-reset" title={reset ? `Resets in ${reset}` : 'Reset time unavailable'}>{reset ?? '—'}</span>
+              <span className="usage-row-mini-track" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, percent ?? 0))}%` }} /></span>
+              <span className="usage-row-percent">{display === 'used' ? percent : Math.max(0, 100 - (percent ?? 0))}%</span>
+            </span>
+          )}
+        </button>
         <AccountSwitcher provider={provider.provider} accounts={accounts} />
       </div>
 
-      {provider.account && <span className="usage-row-account">{provider.account}</span>}
+      {/* The switcher already names the active account; repeating it here
+          showed the same email twice. */}
+      {provider.account && accountsFor(accounts, provider.provider).length === 0 && (
+        <span className="usage-row-account">{provider.account}</span>
+      )}
 
-      {reporting ? (
+      {reporting ? density === 'detailed' ? (
         <>
           <div className="usage-row-meters">
             {provider.windows.map((window) => (
-              <UsageMeter key={window.label} window={window} now={now} />
+              <UsageMeter key={window.label} window={window} display={display} now={now} />
             ))}
           </div>
           {/* A reporting provider can still have something to say — spent
@@ -145,7 +168,7 @@ function ProviderRow({
             </details>
           )}
         </>
-      ) : (
+      ) : null : (
         <p className="usage-row-note">
           {/* An expired web session says "reconnect", not the CLI advice. */}
           {needsConnect && provider.status === 'expired'
@@ -187,12 +210,39 @@ export default function UsagePanel() {
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ y: number; height: number; maxHeight: number } | null>(null);
   const height = useStore(usagePanelHeight);
+  const [density, setDensity] = useState<'compact' | 'detailed'>('compact');
+  const [display, setDisplay] = useState<'used' | 'left'>('used');
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  const [detailPosition, setDetailPosition] = useState<{ top: number; left: number } | null>(null);
+  const [panelPosition, setPanelPosition] = useState<{ top: number; left: number } | null>(null);
+  const [sortDescending, setSortDescending] = useState(true);
 
   // Accounts and linked sessions change far less often than the meters, so they
   // load when the panel opens rather than on the usage poll.
   useEffect(() => {
     if (open) void refreshAccounts();
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const placePanel = () => {
+      const rect = document.querySelector<HTMLElement>('[data-usage-toggle]')?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(440, window.innerWidth - 24);
+      const panelHeight = Math.min(Math.max(height, 420), window.innerHeight - 24);
+      setPanelPosition({
+        top: Math.max(12, rect.top - panelHeight - 8),
+        left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
+      });
+    };
+    placePanel();
+    window.addEventListener('resize', placePanel);
+    window.addEventListener('scroll', placePanel, true);
+    return () => {
+      window.removeEventListener('resize', placePanel);
+      window.removeEventListener('scroll', placePanel, true);
+    };
+  }, [open, height]);
 
   // Inline disclosure, not modal — must not trap Tab or swallow app shortcuts.
   // Escape and outside-click still collapse it so it behaves naturally beside
@@ -202,15 +252,19 @@ export default function UsagePanel() {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        closeUsagePanel();
+        if (selectedProviderId) setSelectedProviderId(null);
+        else closeUsagePanel();
       }
     }
     function onPointerDown(e: PointerEvent) {
       const target = e.target as Node | null;
+      const element = target instanceof Element ? target : null;
+      if (element?.closest('[data-usage-detail], [data-usage-detail-trigger]')) return;
+      setSelectedProviderId(null);
       if (panelRef.current?.contains(target ?? null)) return;
       // The counter toggles on its own click; ignoring it here stops the two
       // handlers cancelling each other into a no-op.
-      if (target instanceof Element && target.closest('[data-usage-toggle]')) return;
+      if (element?.closest('[data-usage-toggle]')) return;
       closeUsagePanel();
     }
     window.addEventListener('keydown', onKey, true);
@@ -219,7 +273,7 @@ export default function UsagePanel() {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('pointerdown', onPointerDown, true);
     };
-  }, [open]);
+  }, [open, selectedProviderId]);
 
   /**
    * What the panel is now, and the most it could become.
@@ -234,9 +288,7 @@ export default function UsagePanel() {
     const panel = panelRef.current;
     if (!panel) return { height: USAGE_PANEL_MIN_HEIGHT, max: USAGE_PANEL_MIN_HEIGHT };
     const shown = panel.getBoundingClientRect().height;
-    const body = panel.parentElement?.querySelector<HTMLElement>(':scope > .drawer-body');
-    const spare = Math.max(0, (body?.getBoundingClientRect().height ?? 0) - MIN_DRAWER_BODY);
-    return { height: shown, max: Math.max(USAGE_PANEL_MIN_HEIGHT, shown + spare) };
+    return { height: shown, max: Math.max(USAGE_PANEL_MIN_HEIGHT, window.innerHeight - 24) };
   }
 
   function onDragStart(e: ReactPointerEvent<HTMLButtonElement>) {
@@ -277,12 +329,32 @@ export default function UsagePanel() {
     if (dragged) persistUsagePanelHeight();
   }
 
+  function openProviderDetails(provider: ProviderUsage, row: DOMRect) {
+    const panel = panelRef.current?.getBoundingClientRect();
+    const width = Math.min(420, window.innerWidth - 24);
+    const left = Math.min((panel?.right ?? row.right) + 10, window.innerWidth - width - 12);
+    const top = Math.max(12, Math.min(row.top - 48, window.innerHeight - 480));
+    setDetailPosition({ top, left: Math.max(12, left) });
+    setSelectedProviderId(provider.provider);
+  }
+
   if (!open) return null;
 
   const now = Date.now();
   const reporting = providers.filter(hasNumbers);
+  const sortedProviders = [...providers].sort((a, b) => {
+    const reportingOrder = Number(hasNumbers(b)) - Number(hasNumbers(a));
+    if (reportingOrder !== 0) return reportingOrder;
+    const aUsed = Math.max(0, ...a.windows.map((window) => window.usedPercent));
+    const bUsed = Math.max(0, ...b.windows.map((window) => window.usedPercent));
+    const aValue = display === 'used' ? aUsed : 100 - aUsed;
+    const bValue = display === 'used' ? bUsed : 100 - bUsed;
+    return (sortDescending ? bValue - aValue : aValue - bValue) || a.name.localeCompare(b.name);
+  });
+  const selectedProvider = providers.find((provider) => provider.provider === selectedProviderId) ?? null;
+  const selectedAccounts = selectedProvider ? accountsFor(accounts, selectedProvider.provider) : [];
 
-  return (
+  const panel = (
     <section
       id="sidebar-usage-details"
       className="usage-panel"
@@ -291,7 +363,7 @@ export default function UsagePanel() {
       /* One variable, not a height/max-height pair: the panel opens at this
          stored height every time, and the stylesheet owns how a short window
          trims it from there. */
-      style={{ '--usage-panel-height': `${height}px` } as React.CSSProperties}
+      style={{ '--usage-panel-height': `${height}px`, ...(panelPosition ?? {}) } as React.CSSProperties}
     >
       <header className="usage-head">
         <button
@@ -307,29 +379,18 @@ export default function UsagePanel() {
         >
           <span aria-hidden="true" />
         </button>
-        <span className="usage-title">
-          <span className="usage-title-glyph" aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 17a8 8 0 1 1 16 0" />
-              <path d="m12 14 3-4" />
-              <circle cx="12" cy="14" r="1" fill="currentColor" stroke="none" />
-            </svg>
-          </span>
-          Usage
-          {lastFetchedAt > 0 && (
-            <span className="usage-head-age">
-              updated {relativeAge(lastFetchedAt / 1000, now)}
-            </span>
-          )}
-        </span>
-        <span className="usage-subtitle">Capacity across your coding agents</span>
-        <div className="usage-head-actions">
-          <LiveTicker
-            intervalMs={PANEL_POLL_INTERVAL_MS}
-            lastFetchedAt={lastFetchedAt}
-            refreshing={loading}
-            labelOnly
-          />
+        <div className="usage-toolbar">
+          <div className="usage-toolbar-title">
+            <span>Usage</span><span className="usage-toolbar-separator">·</span><span className="usage-toolbar-scope">all agents</span>
+            <button className="usage-refresh" type="button" onClick={() => void refreshUsage(true)} disabled={loading} aria-label="Refresh usage" title={lastFetchedAt ? `Updated ${relativeAge(lastFetchedAt / 1000, now)} · refresh now` : 'Refresh usage'}>
+              <svg className={loading ? 'is-spinning' : undefined} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M20 7v5h-5M4 17v-5h5" /><path d="M5.6 9A7 7 0 0 1 18 6l2 2M4 16l2 2a7 7 0 0 0 12.4-3" />
+              </svg>
+            </button>
+          </div>
+          <button className="usage-sort" type="button" onClick={() => { setDisplay((value) => value === 'used' ? 'left' : 'used'); setSortDescending(true); }} aria-label={`Show ${display === 'used' ? 'remaining' : 'used'} usage`} title="Switch between used and remaining usage">
+            {display === 'used' ? 'Used' : 'Left'} <span aria-hidden="true">↕</span>
+          </button>
           <button
             className="usage-close"
             onClick={closeUsagePanel}
@@ -342,6 +403,10 @@ export default function UsagePanel() {
             </svg>
           </button>
         </div>
+        <div className="usage-density" role="group" aria-label="Usage display density">
+          <button type="button" className={density === 'detailed' ? 'active' : undefined} aria-pressed={density === 'detailed'} onClick={() => setDensity('detailed')}>Detailed</button>
+          <button type="button" className={density === 'compact' ? 'active' : undefined} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
+        </div>
       </header>
 
       {providers.length === 0 ? (
@@ -352,16 +417,17 @@ export default function UsagePanel() {
       ) : (
         <ul className="usage-list">
           {/* Reporting providers first — the ones with an answer lead. */}
-          {[...providers]
-            .sort((a, b) => Number(hasNumbers(b)) - Number(hasNumbers(a)))
-            .map((provider) => (
+          {sortedProviders.map((provider) => (
               <ProviderRow
                 key={provider.provider}
                 provider={provider}
                 now={now}
                 accounts={accounts}
+                density={density}
+                display={display}
+                onOpen={openProviderDetails}
               />
-            ))}
+          ))}
         </ul>
       )}
 
@@ -370,6 +436,64 @@ export default function UsagePanel() {
           Nothing is reporting numbers right now. See each row above for why.
         </p>
       )}
+      <footer className="usage-panel-footer">
+        <button type="button" onClick={() => { closeUsagePanel(); openSettings('stats'); }}>
+          Usage details &amp; history <span aria-hidden="true">›</span>
+        </button>
+        <button type="button" onClick={() => { closeUsagePanel(); openSettings('models'); }}>
+          Manage Accounts… <span aria-hidden="true">›</span>
+        </button>
+      </footer>
+      {selectedProvider && detailPosition && typeof document !== 'undefined' && createPortal(
+        <aside
+          className="usage-detail-popover"
+          data-usage-detail
+          role="dialog"
+          aria-label={`${selectedProvider.name} usage details`}
+          style={{ top: detailPosition.top, left: detailPosition.left }}
+        >
+          <header className="usage-detail-head">
+            <span className="usage-detail-mark"><AgentBrandMark command={selectedProvider.command} name={selectedProvider.name} /></span>
+            <span className="usage-detail-provider">{selectedProvider.name}{selectedProvider.plan ? ` · ${selectedProvider.plan}` : ''}</span>
+            <span className="usage-detail-updated">{lastFetchedAt > 0 ? `Updated ${relativeAge(lastFetchedAt / 1000, now)}` : ''}</span>
+            <button className="usage-detail-close" type="button" onClick={() => setSelectedProviderId(null)} aria-label="Close usage details">×</button>
+          </header>
+          {selectedProvider.account && <p className="usage-detail-account-label">{selectedProvider.account}</p>}
+          {hasNumbers(selectedProvider) ? (
+            <div className="usage-detail-meters">
+              {selectedProvider.windows.map((window) => <UsageMeter key={window.label} window={window} display={display} now={now} />)}
+              {selectedProvider.note && <p className="usage-row-note">{selectedProvider.note}</p>}
+            </div>
+          ) : (
+            <p className="usage-detail-status">{selectedProvider.error ?? selectedProvider.note ?? (selectedProvider.status === 'ok' ? 'No usage data available' : STATUS_NOTE[selectedProvider.status])}</p>
+          )}
+          {selectedProvider.resetCreditsAvailable != null && (
+            <details className="usage-row-credits usage-detail-credits">
+              <summary>{selectedProvider.resetCreditsAvailable === 0 ? 'No reset credits available' : `${selectedProvider.resetCreditsAvailable} reset credits`}</summary>
+              {selectedProvider.resetCredits.length > 0 && (
+                <ul className="usage-row-credit-list">
+                  {selectedProvider.resetCredits.map((credit) => <li key={credit.id}><span>{credit.resetType ?? 'Rate-limit reset'}</span><span>{describeCreditExpiry(credit.expiresAtIso, now)}</span></li>)}
+                </ul>
+              )}
+            </details>
+          )}
+          {selectedAccounts.length > 0 && (
+            <section className="usage-detail-accounts">
+              <div className="usage-detail-section-head"><span aria-hidden="true" /><span>Accounts</span><span>{display === 'used' ? 'Used' : 'Left'}</span></div>
+              {selectedAccounts.map((account) => (
+                <div className={`usage-detail-account${account.active ? ' active' : ''}`} key={account.id}>
+                  <span aria-hidden="true">{account.active ? '✓' : ''}</span>
+                  <span>{account.id === 'default' ? 'System default' : account.label}</span>
+                  {account.active && <span>{Math.round(display === 'used' ? Math.max(0, ...selectedProvider.windows.map((window) => window.usedPercent)) : Math.min(100, ...selectedProvider.windows.map((window) => 100 - window.usedPercent)))}%</span>}
+                </div>
+              ))}
+              <div className="usage-detail-manage"><button type="button" className="usage-detail-manage-link" onClick={() => { setSelectedProviderId(null); closeUsagePanel(); openSettings('models'); }}>Manage Accounts…</button><AccountSwitcher provider={selectedProvider.provider} accounts={accounts} /></div>
+            </section>
+          )}
+        </aside>,
+        document.body,
+      )}
     </section>
   );
+  return typeof document !== 'undefined' ? createPortal(panel, document.body) : null;
 }

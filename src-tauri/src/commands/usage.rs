@@ -431,7 +431,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
     },
     // DeepSeek Harness has no terminal UI: the tile opens a web panel and
     // delegation runs it headless (see `commands/deepseek_harness.rs`). Its key
-    // is the DeepSeek one from AI Connections, so there is no auth file.
+    // is the DeepSeek one from AI Providers, so there is no auth file.
     ProviderSpec {
         provider: "deepseek-harness",
         command: "dsh",

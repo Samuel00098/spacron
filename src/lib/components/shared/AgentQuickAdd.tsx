@@ -7,7 +7,7 @@ import { getPresetRuns, filterInstalledAgents } from '$lib/stores/runs';
 import { usageState, installedAgentCommands, haveAgentDetection } from '$lib/stores/usage';
 import { agentUpdates } from '$lib/stores/agentUpdates';
 import { quickSpawnAgent } from '$lib/services/quick-spawn';
-import { agentLaunchView, canShowTerminalChat } from '$lib/services/terminal-chat';
+import { agentLaunchView, agentLaunchViewByAgent, canShowTerminalChat } from '$lib/services/terminal-chat';
 import { loadLiveAgentProviderModels, peekLiveAgentProviderModels, prewarmLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import type { ChatReasoningEffort } from '$lib/types/chat';
@@ -101,6 +101,7 @@ export default function AgentQuickAdd({
   const [loading, setLoading] = useState<Record<string, boolean>>({});
 
   const defaultLaunchView = useStore(agentLaunchView);
+  const launchViewByAgent = useStore(agentLaunchViewByAgent);
   const project = useStore(activeProject);
   const $customAgents = useStore(customAgents);
   const $removedPresetAgents = useStore(removedPresetAgents);
@@ -318,8 +319,9 @@ export default function AgentQuickAdd({
   }
 
   const chatAvailable = selectedPreset ? canShowTerminalChat(selectedPreset.command) : false;
-  // Enter launches the default view from Settings → Agents; Ctrl+Enter the other.
-  const enterView: 'terminal' | 'chat' = defaultLaunchView === 'chat' && chatAvailable ? 'chat' : 'terminal';
+  // Enter launches the agent's default view from Settings → Chat; Ctrl+Enter the other.
+  const agentView = (selectedPreset && launchViewByAgent[selectedPreset.command]) ?? defaultLaunchView;
+  const enterView: 'terminal' | 'chat' = agentView === 'chat' && chatAvailable ? 'chat' : 'terminal';
   const defaultModelLabel = options?.defaultModel ? `Default · ${options.defaultModel.label}` : 'CLI default';
 
   return (

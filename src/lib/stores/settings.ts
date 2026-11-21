@@ -158,6 +158,19 @@ export const computerUse = persistentWritable('computerUse', false);
 // Apps (image names like `slack.exe`) agents may never see or control, on top
 // of the built-in list of password managers and security prompts.
 export const computerUseBlockedApps = persistentWritable<string[]>('computerUseBlockedApps', []);
+// Per-project opt-out for CLI-native folder trust prompts. Missing entries use
+// the default-on behavior; this preference never changes agent permissions.
+export const agentWorkspaceTrustOverrides = persistentWritable<Record<string, boolean>>('agentWorkspaceTrustOverrides', {});
+// Claude Code's Stop/Notification hooks provide guaranteed turn boundaries;
+// the shell reporting channel remains available to every agent independently.
+export const agentStatusHooksEnabled = persistentWritable('agentStatusHooksEnabled', true);
+// Give an agent pane a stable title from its first prompt until the user or CLI
+// supplies a more specific title.
+export const agentAutoGenerateTitles = persistentWritable('agentAutoGenerateTitles', false);
+// Keep Codex's app-server attached to its terminal on Windows. Codex's shared
+// daemon can launch commands outside the terminal and open extra console windows.
+export const agentCodexOwnServer = persistentWritable('agentCodexOwnServer', true);
+export const agentWarnCodexSharedServer = persistentWritable('agentWarnCodexSharedServer', true);
 
 // Auto-settle idle threads so they drop out of the active list after a quiet
 // period — T3 Code's "Working section" equivalent. Settled threads are one click
@@ -201,6 +214,10 @@ export const mediaGeneration = persistentWritable<MediaGenerationSettings>('medi
 // Defaults OFF: overriding the machine's power policy is not something to do to
 // a user who never asked, and on a laptop away from a charger it is the wrong
 // trade. The hold is released the moment the last turn ends either way.
+export type KeepAwakeMode = 'off' | 'agent' | 'on';
+// `keepSystemAwake` remains as a compatibility key for existing installs; the
+// tri-state preference is the source of truth for new UI and runtime behavior.
+export const keepAwakeMode = persistentWritable<KeepAwakeMode>('keepAwakeMode', 'off');
 export const keepSystemAwake = persistentWritable('keepSystemAwake', false);
 
 // ─── Source control ────────────────────────────────────────────────────────
@@ -722,15 +739,15 @@ export function syncCustomProviderDefs(list: { id: string; name: string; baseUrl
 export function providerSetupHint(id: AiProviderId): string {
   const def = getProviderDef(id);
   if (def.signIn === 'chatgpt') {
-    return 'Open Settings → AI Connections → ChatGPT subscription and click "Sign in with ChatGPT" (it uses your ChatGPT plan through the Codex CLI, so no API key is needed).';
+    return 'Open Settings → AI Providers → ChatGPT subscription and click "Sign in with ChatGPT" (it uses your ChatGPT plan through the Codex CLI, so no API key is needed).';
   }
   if (id === 'kilocode') {
-    return "Kilo Code's free models only need a free account: sign up at app.kilo.ai, copy your API key from your Kilo profile, and paste it into Settings → AI Connections → Kilo Code. The \"Auto (free)\" model then works at no cost.";
+    return "Kilo Code's free models only need a free account: sign up at app.kilo.ai, copy your API key from your Kilo profile, and paste it into Settings → AI Providers → Kilo Code. The \"Auto (free)\" model then works at no cost.";
   }
   if (def.local) {
-    return `Check the ${def.keyLabel || `${def.label} server URL`} in Settings → AI Connections, and make sure ${def.label} is running.`;
+    return `Check the ${def.keyLabel || `${def.label} server URL`} in Settings → AI Providers, and make sure ${def.label} is running.`;
   }
-  return `Add the ${def.keyLabel || `${def.label} API key`} in Settings → AI Connections.`;
+  return `Add the ${def.keyLabel || `${def.label} API key`} in Settings → AI Providers.`;
 }
 
 export interface VoiceOption {

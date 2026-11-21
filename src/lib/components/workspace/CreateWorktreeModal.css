@@ -19,18 +19,24 @@
 }
 
 .cwt-card {
-  --cwt-field-bg: color-mix(in srgb, var(--bg-primary) 70%, var(--bg-secondary));
-  --cwt-field-border: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  /* Solid, like every other modal: --app-surface, never the translucent
+     --bg-secondary, which let the terminal behind show through under a
+     wallpaper. Fields sit one step up from the card. */
+  --cwt-field-bg: color-mix(in srgb, var(--text-primary) 4%, var(--app-surface));
+  --cwt-field-border: var(--border);
   --cwt-radius: 9px;
   width: min(480px, 100%);
   max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--cwt-field-border);
+  /* global.css clears border colours on any `-card`, so the edge is a ring. */
+  border: 0;
   border-radius: 16px;
-  background: var(--bg-secondary);
+  background: var(--app-surface) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   color: var(--text-primary);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--surface-outline), 0 30px 80px rgba(0, 0, 0, 0.55) !important;
   animation: cwt-in 0.2s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
@@ -145,6 +151,20 @@
   font-size: 13.5px;
 }
 
+.cwt-select,
+.cwt-card .dd-trigger,
+.cwt-input,
+.cwt-base-pill {
+  /* global.css clears border colours on inputs, buttons and `-pill`; the
+     outline has to be a ring to show at all. */
+  border-color: transparent !important;
+  box-shadow: var(--surface-outline) !important;
+}
+
+/* The shared Dropdown sizes to its content; here every field spans the row. */
+.cwt-card .dropdown,
+.cwt-card .dd-trigger { width: 100%; }
+
 .cwt-select > svg:last-child { margin-left: auto; color: var(--text-muted); flex: none; }
 
 .cwt-select.is-static { cursor: default; }
@@ -164,7 +184,7 @@
   text-overflow: ellipsis;
 }
 
-.cwt-card .dd-trigger:hover { border-color: color-mix(in srgb, var(--text-primary) 20%, transparent); }
+.cwt-card .dd-trigger:hover:not(:disabled) { background: color-mix(in srgb, var(--text-primary) 7%, var(--app-surface)); }
 .cwt-card .dd-chevron { color: var(--text-muted); }
 
 .cwt-project-dot {
@@ -191,7 +211,7 @@
 }
 
 .cwt-input::placeholder { color: var(--text-muted); }
-.cwt-input:focus { border-color: color-mix(in srgb, var(--text-primary) 32%, transparent); }
+.cwt-input:focus { box-shadow: var(--surface-outline-active) !important; }
 .cwt-input:disabled { opacity: 0.6; }
 
 /* ── Create From ─────────────────────────────────────────────────────────── */
@@ -276,10 +296,13 @@
 .cwt-suggest {
   position: absolute;
   z-index: 2;
-  border: 1px solid var(--cwt-field-border);
+  border: 0;
   border-radius: 10px;
-  background: var(--bg-secondary);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  /* The app's one menu colour (see "One menu colour" in global.css). */
+  background: var(--surface-menu) !important;
+  box-shadow: var(--surface-menu-shadow), 0 14px 36px rgba(0, 0, 0, 0.45) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .cwt-popover {
@@ -334,7 +357,7 @@
 }
 
 .cwt-option:hover,
-.cwt-option.selected { background: var(--bg-hover); color: var(--text-primary); }
+.cwt-option.selected { background: var(--surface-selected, var(--bg-hover)); color: var(--text-primary); }
 
 .cwt-option-tag {
   margin-left: auto;
@@ -493,17 +516,27 @@
   padding: 0 16px;
   border: none;
   border-radius: 9px;
-  background: var(--text-primary);
-  color: var(--bg-primary);
+  /* The theme's accent, like Settings' primary button — not raw text-on-bg
+     inversion, which ignored the accent and greyed out into a blob when
+     disabled. */
+  background: var(--accent);
+  color: var(--button-text, #ffffff);
   font: inherit;
   font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity var(--dur-fast, 0.12s);
+  transition: opacity var(--dur-fast, 0.12s), background var(--dur-fast, 0.12s);
 }
 
 .cwt-create:hover:not(:disabled) { opacity: 0.9; }
-.cwt-create:disabled { opacity: 0.45; cursor: default; }
+
+/* Disabled reads as an empty field, not a faded accent. */
+.cwt-create:disabled {
+  background: var(--cwt-field-bg);
+  color: var(--text-muted);
+  box-shadow: var(--surface-outline) !important;
+  cursor: default;
+}
 
 .cwt-create kbd {
   font: inherit;

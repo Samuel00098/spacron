@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { get } from 'svelte/store';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useStore } from '$lib/react/useStore';
@@ -9,6 +10,9 @@ import {
   reorderRecentWorkspaces,
   reorderWorkspaceProject,
   openWorkspace,
+  openProject,
+  newFolderPromptOpen,
+  cloneRepoPromptOpen,
   switchToProject,
   deleteCollection,
   removeProjectFromCollection,
@@ -48,7 +52,7 @@ import { getAgentDisplayName } from '$lib/stores/terminal';
 import { aiProviders, getProviderDef, type AiProviderId } from '$lib/stores/settings';
 import { hoveredStageRoom, layoutSnapshot, requestRoomControl, type RoomOp } from '$lib/stores/layoutControl';
 import { isFullscreenRoom } from '$lib/components/layout/fullscreenRooms';
-import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
+import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements, sameFolder } from '$lib/services/deepseek-harness';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
   HIDDEN_PROJECTS_KEY,
@@ -273,7 +277,10 @@ export default function ProjectHUD() {
   const allWorktreeLists = useStore(worktreesByProject);
 
   const [search, setSearch] = useState('');
-  const [projectSearchOpen, setProjectSearchOpen] = useState(false);
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const [sourceMenuPosition, setSourceMenuPosition] = useState<{ left: number; top: number } | null>(null);
+  const sourceButtonRef = useRef<HTMLButtonElement | null>(null);
+  const sourceMenuRef = useRef<HTMLDivElement | null>(null);
   const [activeMenuKey, setActiveMenuKey] = useState<string | null>(null);
   const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
   const [renamingProjectPath, setRenamingProjectPath] = useState<string | null>(null);
@@ -295,6 +302,45 @@ export default function ProjectHUD() {
     } catch {}
     return 'custom';
   });
+
+  useEffect(() => {
+    if (!sourceMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (sourceMenuRef.current?.contains(target) || sourceButtonRef.current?.contains(target)) return;
+      setSourceMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSourceMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [sourceMenuOpen]);
+
+  function toggleSourceMenu() {
+    if (sourceMenuOpen) {
+      setSourceMenuOpen(false);
+      return;
+    }
+    const rect = sourceButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(300, window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 290));
+    setSourceMenuPosition({ left, top });
+    setSourceMenuOpen(true);
+  }
+
+  function chooseProjectSource(source: 'new' | 'folder' | 'git' | 'clone' | 'url' | 'github') {
+    setSourceMenuOpen(false);
+    if (source === 'new') newFolderPromptOpen.set(true);
+    else if (source === 'folder') void openProject();
+    else cloneRepoPromptOpen.set(true);
+  }
 
   function changeProjectSort(mode: SortMode) {
     setProjectSort(mode);
@@ -413,7 +459,6 @@ export default function ProjectHUD() {
     });
   }
 
-  const inputRef = useRef<HTMLInputElement | null>(null);
   const projectRenameInputRef = useRef<HTMLInputElement | null>(null);
   const lastCardClickRef = useRef<{ path: string; at: number }>({ path: '', at: 0 });
 
@@ -987,6 +1032,11 @@ export default function ProjectHUD() {
     const mainThreadList = buildThreadList(chatRows, p.path);
     const isPinnedProject = Boolean(p.path) && pinnedProjects.has(normalizeProjectPath(p.path));
     const hasOpenContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
+    // Grouped by worktree, agents and the DeepSeek panel list under their own
+    // worktree, so the Active section only holds the rooms that stay here.
+    const hasActiveRows = groupByWorktree
+      ? projectRooms.some((room) => room !== 'deepseek')
+      : projectRooms.length > 0 || projectSessions.length > 0;
     const hasContents = hasOpenContents || chatRows.length > 0 || Boolean(p.path);
     const isExpanded = p.path ? expandedProjects.has(p.path) : false;
     const itemIndex = projectItems.findIndex(
@@ -1068,6 +1118,24 @@ export default function ProjectHUD() {
             </button>
           </div>
         </div>
+      );
+    };
+
+    // The DeepSeek panel is an agent without a terminal. Its row lists under the
+    // worktree it works in — the main checkout or one of the user's own — like
+    // every other agent's, instead of floating above them at project level.
+    const deepSeekRoot = projectId && p.path && deepSeekIsRunning
+      ? deepSeekPanelRoot(deepSeekPlacementState, projectId, p.path)
+      : null;
+    const renderDeepSeekRow = (worktreePath: string): ReactNode => {
+      if (!deepSeekRoot || !p.path || ownerPath(deepSeekRoot) !== worktreePath) return null;
+      const name = deepSeekAgentName(deepSeekRoot, projectSessions.map((s) => s.agentName ?? '').filter(Boolean));
+      return renderOpenRoomRow(
+        'deepseek',
+        name,
+        <AgentBrandMark command="dsh" name="DeepSeek Harness" />,
+        'DeepSeek Harness',
+        `${name}: DeepSeek Harness, running`,
       );
     };
 
@@ -1554,7 +1622,10 @@ export default function ProjectHUD() {
                     return list.rows.length > 0 ? renderThreadList(list, null) : null;
                   }
                   const rows = sessionsFor(worktree.path);
-                  return rows.length > 0 ? <>{rows.map(renderSessionRow)}</> : null;
+                  const deepseekRow = renderDeepSeekRow(worktree.path);
+                  return rows.length > 0 || deepseekRow
+                    ? <>{rows.map(renderSessionRow)}{deepseekRow}</>
+                    : null;
                 }}
               />
             )}
@@ -1584,17 +1655,17 @@ export default function ProjectHUD() {
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
             {currentInteractionMode === 'cli' && <>
-            {(projectRooms.length > 0 || (!groupByWorktree && projectSessions.length > 0)) && (
+            {hasActiveRows && (
               <div className="project-contents-section">
                 {/* Covers both senses: a panel that is open, and a process
                     that is actually running inside one. */}
                 <div className="project-contents-label">Active</div>
                 {previewIsRunning && renderOpenRoomRow('preview', 'Preview', ROOM_GLYPHS.preview, 'active', 'Preview: running')}
                 {editorIsRunning && renderOpenRoomRow('editor', 'Editor', ROOM_GLYPHS.editor)}
-                {deepSeekIsRunning && p.path && (() => {
+                {!groupByWorktree && deepSeekIsRunning && p.path && (() => {
                   // Listed like an agent: its assistant name, the product beside it.
                   const dsRoot = deepSeekPanelRoot(deepSeekPlacementState, projectId, p.path);
-                  const isolated = dsRoot !== p.path;
+                  const isolated = !sameFolder(dsRoot, p.path);
                   const name = deepSeekAgentName(dsRoot, projectSessions.map((s) => s.agentName ?? '').filter(Boolean));
                   return renderOpenRoomRow(
                     'deepseek', name, <AgentBrandMark command="dsh" name="DeepSeek Harness" />,
@@ -1622,6 +1693,44 @@ export default function ProjectHUD() {
 
   return (
     <div className="projects-sidebar-panel">
+      <div className="projects-top-search">
+        <div className="projects-search-field">
+          <svg className="projects-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="text"
+            className="projects-search-input"
+            placeholder="Search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            aria-label="Search projects"
+          />
+          {search && (
+            <button type="button" className="projects-search-clear" onClick={() => setSearch('')} title="Clear search" aria-label="Clear search">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+          <button
+            ref={sourceButtonRef}
+            type="button"
+            className={`projects-source-trigger${sourceMenuOpen ? ' active' : ''}`}
+            onClick={toggleSourceMenu}
+            title="Create or open a project"
+            aria-label="Create or open a project"
+            aria-haspopup="menu"
+            aria-expanded={sourceMenuOpen}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+              <path d="M12 10v6M9 13h6" />
+            </svg>
+          </button>
+        </div>
+      </div>
       {/* Main Scrollable Body */}
       <div className="projects-panel-body scrollable">
         {/* PROJECTS SECTION */}
@@ -1638,28 +1747,6 @@ export default function ProjectHUD() {
                 title={isProjectsCollapsed ? 'Expand Projects section' : 'Collapse Projects section'}
               >
                 <div className="projects-section-header-left">
-                  <button
-                    type="button"
-                    className={`projects-search-toggle${projectSearchOpen || search ? ' active' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (projectSearchOpen) {
-                        setProjectSearchOpen(false);
-                        setSearch('');
-                      } else {
-                        if (isProjectsCollapsed) toggleSectionCollapse('projects');
-                        setProjectSearchOpen(true);
-                      }
-                    }}
-                    title={projectSearchOpen ? 'Close project search' : 'Search projects'}
-                    aria-label={projectSearchOpen ? 'Close project search' : 'Search projects'}
-                    aria-expanded={projectSearchOpen}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <circle cx="11" cy="11" r="7" />
-                      <path d="m20 20-4-4" />
-                    </svg>
-                  </button>
                   <button
                     type="button"
                     className={`projects-section-chevron${isProjectsCollapsed ? ' collapsed' : ''}`}
@@ -1812,39 +1899,6 @@ export default function ProjectHUD() {
 
               {!isProjectsCollapsed && (
                 <>
-                  {projectSearchOpen && (
-                    <div className="projects-search-section">
-                      <div className="projects-search-field">
-                        <svg className="projects-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                          <circle cx="11" cy="11" r="8" />
-                          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                        </svg>
-                        <input
-                          ref={inputRef}
-                          autoFocus
-                          type="text"
-                          className="projects-search-input"
-                          placeholder="Filter projects…"
-                          value={search}
-                          onChange={(e) => setSearch(e.target.value)}
-                        />
-                        {search && (
-                          <button
-                            type="button"
-                            className="projects-search-clear"
-                            onClick={() => setSearch('')}
-                            title="Clear search"
-                            aria-label="Clear search"
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <line x1="18" y1="6" x2="6" y2="18" />
-                              <line x1="6" y1="6" x2="18" y2="18" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
                   <div className="projects-section-list">
                     {filteredProjects.map((p) => renderProjectCard(p))}
                     {filteredProjects.length === 0 && !search && (
@@ -1873,6 +1927,30 @@ export default function ProjectHUD() {
           </div>
         )}
       </div>
+      {sourceMenuOpen && sourceMenuPosition && createPortal(
+        <div
+          ref={sourceMenuRef}
+          className="projects-source-menu"
+          role="menu"
+          aria-label="Project sources"
+          style={{ left: sourceMenuPosition.left, top: sourceMenuPosition.top }}
+        >
+          <div className="projects-source-menu-title">Sources</div>
+          <button type="button" role="menuitem" onClick={() => chooseProjectSource('new')}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /><path d="M12 10v6M9 13h6" /></svg>
+            <span><strong>New project</strong><small>Start a new Git repository from a name</small></span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => chooseProjectSource('folder')}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /><path d="M12 10v6M9 13h6" /></svg>
+            <span><strong>Local folder</strong><small>Browse a folder on disk</small></span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => chooseProjectSource('git')}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5a9.5 9.5 0 0 0-3 18.5v-2.2c-2.4.5-2.9-1-2.9-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.2 1.8.9 2.3.7.1-.5.3-.9.5-1.1-1.9-.2-3.9-.9-3.9-4.2 0-.9.3-1.6.8-2.2-.1-.2-.3-1.1.1-2.2 0 0 .7-.2 2.3.8a8 8 0 0 1 4.2 0c1.6-1 2.3-.8 2.3-.8.4 1.1.2 2 .1 2.2.5.6.8 1.3.8 2.2 0 3.3-2 4-3.9 4.2.3.3.5.7.5 1.4V21A9.5 9.5 0 0 0 12 2.5Z" /></svg>
+            <span><strong>Git repository</strong><small>Clone from GitHub or a remote URL</small></span>
+          </button>
+        </div>,
+        document.body,
+      )}
       {/* Mounted only while open, so its modal focus hook never pins the
           app-wide shortcut gate (see the modal-open-count note). */}
       {worktreeDialog && (

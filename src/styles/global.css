@@ -16,6 +16,7 @@
    terminal opt into the matching system monospace token. Reference these
    instead of hardcoding a stack so the whole app stays consistent. */
 :root {
+  color-scheme: dark;
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Ubuntu Mono', Consolas, monospace;
   /* Application chrome base size. Editor and terminal components set their own
@@ -49,6 +50,7 @@
 }
 
 :root.light-theme {
+  color-scheme: light;
   --app-surface: #efefef;
   --app-surface-rgb: 239, 239, 239;
 }
@@ -952,6 +954,10 @@ input:where(:not([type='range'])):focus {
 :focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
+}
+
+* {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -1923,7 +1929,8 @@ input[type='range']::-webkit-slider-thumb:active {
   .asm-card,
   .context-menu,
   .dd-menu,
-  .dropdown-menu
+  .dropdown-menu,
+  .tasks-modal-dialog
 ) {
   background: var(--app-surface) !important;
   backdrop-filter: none !important;

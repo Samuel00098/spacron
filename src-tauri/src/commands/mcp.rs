@@ -62,6 +62,86 @@ pub fn mcp_write_global_agent_config(agent: String, content: String) -> Result<(
     std::fs::write(&path, content).map_err(|e| format!("Could not write {}: {e}", path.display()))
 }
 
+/// Record a project trust decision in the native store used by supported CLIs.
+/// This is intentionally separate from permission settings: it only permits
+/// project-local hooks/settings to load without an interactive trust prompt.
+#[tauri::command]
+pub fn agent_workspace_trust(agent: String, workspace_path: String) -> Result<(), String> {
+    let workspace = std::fs::canonicalize(&workspace_path)
+        .map_err(|e| format!("Could not resolve project folder: {e}"))?;
+    let mut path_key = workspace.to_string_lossy().to_string();
+    // Windows `canonicalize` may emit the Win32 device prefix, while these
+    // CLIs record ordinary DOS paths. Keep UNC roots intact when removing it.
+    if let Some(unc) = path_key.strip_prefix(r"\\?\UNC\") {
+        path_key = format!(r"\\{unc}");
+    } else if let Some(dos) = path_key.strip_prefix(r"\\?\") {
+        path_key = dos.to_string();
+    }
+    let home = dirs::home_dir().ok_or_else(|| "Could not resolve the user's home directory".to_string())?;
+    let (file, kind) = match agent.as_str() {
+        "claude" => (home.join(".claude.json"), "claude"),
+        "codex" => (home.join(".codex/config.toml"), "codex"),
+        "gemini" => (home.join(".gemini/trustedFolders.json"), "gemini"),
+        "qwen" => (home.join(".qwen/trustedFolders.json"), "qwen"),
+        "copilot" => {
+            let copilot_home = std::env::var_os("COPILOT_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".copilot"));
+            (copilot_home.join("config.json"), "copilot")
+        }
+        _ => return Ok(()),
+    };
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+    }
+    let existing = match std::fs::read_to_string(&file) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("Could not read {}: {error}", file.display())),
+    };
+    let updated = match kind {
+        "claude" => {
+            let mut root: serde_json::Value = if existing.trim().is_empty() { serde_json::json!({}) } else { serde_json::from_str(&existing).map_err(|e| format!("Could not parse {}: {e}", file.display()))? };
+            let projects = root.as_object_mut().ok_or_else(|| "Claude config must be a JSON object".to_string())?.entry("projects").or_insert_with(|| serde_json::json!({}));
+            let projects = projects.as_object_mut().ok_or_else(|| "Claude projects config must be a JSON object".to_string())?;
+            let project = projects.entry(path_key).or_insert_with(|| serde_json::json!({}));
+            project.as_object_mut().ok_or_else(|| "Claude project config must be a JSON object".to_string())?.insert("hasTrustDialogAccepted".into(), serde_json::Value::Bool(true));
+            serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?
+        }
+        "gemini" | "qwen" => {
+            let mut root: serde_json::Value = if existing.trim().is_empty() { serde_json::json!({}) } else { serde_json::from_str(&existing).map_err(|e| format!("Could not parse {}: {e}", file.display()))? };
+            let rules = root.as_object_mut().ok_or_else(|| "Trusted folders file must be a JSON object".to_string())?;
+            rules.insert(path_key, serde_json::Value::String("TRUST_FOLDER".into()));
+            serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?
+        }
+        "copilot" => {
+            let mut root: serde_json::Value = if existing.trim().is_empty() { serde_json::json!({}) } else { serde_json::from_str(&existing).map_err(|e| format!("Could not parse {}: {e}", file.display()))? };
+            let config = root.as_object_mut().ok_or_else(|| "Copilot config must be a JSON object".to_string())?;
+            let trusted = config.entry("trustedFolders").or_insert_with(|| serde_json::json!([]));
+            let trusted = trusted.as_array_mut().ok_or_else(|| "Copilot trustedFolders must be an array".to_string())?;
+            if !trusted.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(&path_key))) { trusted.push(serde_json::Value::String(path_key)); }
+            serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?
+        }
+        "codex" => {
+            let escaped = path_key.replace('\\', "\\\\").replace('"', "\\\"");
+            let header = format!("[projects.\"{escaped}\"]");
+            let mut lines = existing.lines().map(str::to_string).collect::<Vec<_>>();
+            if let Some(start) = lines.iter().position(|line| line.trim() == header) {
+                let end = lines.iter().enumerate().skip(start + 1).find(|(_, line)| line.trim_start().starts_with('[')).map(|(i, _)| i).unwrap_or(lines.len());
+                if let Some(i) = (start + 1..end).find(|&i| lines[i].trim_start().starts_with("trust_level")) {
+                    lines[i] = "trust_level = \"trusted\"".into();
+                } else { lines.insert(end, "trust_level = \"trusted\"".into()); }
+            } else {
+                if !lines.is_empty() && !lines.last().is_some_and(|l| l.is_empty()) { lines.push(String::new()); }
+                lines.push(header);
+                lines.push("trust_level = \"trusted\"".into());
+            }
+            lines.join("\n") + "\n"
+        }
+        _ => unreachable!(),
+    };
+    if updated.len() > 1024 * 1024 { return Err("Refusing to write an implausibly large trust config".into()); }
+    std::fs::write(&file, updated).map_err(|e| format!("Could not write {}: {e}", file.display()))
+}
+
 /// Write the Claude Code `--mcp-config` file and return its absolute path.
 ///
 /// This file used to be written into every project as

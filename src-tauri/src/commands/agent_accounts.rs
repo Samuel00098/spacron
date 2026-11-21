@@ -95,6 +95,20 @@ pub const ACCOUNT_PROVIDERS: &[AccountProvider] = &[
         label_keys: &["email"],
         label_jwt: Some("id_token"),
     },
+    AccountProvider {
+        provider: "grok",
+        name: "Grok CLI",
+        // Documented in Grok CLI's own README ("Override config directory").
+        config_env: "GROK_HOME",
+        home_dir: &[".grok"],
+        credential: &["auth.json"],
+        // `auth.json` is keyed by issuer + client id, with the profile one
+        // level down — the depth `find_label` already looks at.
+        label_file: None,
+        label_file_home: None,
+        label_keys: &["email"],
+        label_jwt: None,
+    },
 ];
 
 pub fn provider_spec(provider: &str) -> Option<&'static AccountProvider> {
@@ -831,13 +845,15 @@ mod tests {
     }
 
     #[test]
-    fn only_the_two_verified_clis_support_switching() {
+    fn only_clis_with_a_config_dir_override_support_switching() {
         assert!(supports_accounts("claude"));
         assert!(supports_accounts("codex"));
-        // Gemini and Grok have no documented config-dir override that is
-        // honoured on login, so they are deliberately absent rather than
-        // half-supported.
+        // Grok CLI 1.0.89 documents `GROK_HOME` ("Override config directory",
+        // default `~/.grok`, where `auth.json` lives), and `grok login` under
+        // an empty `GROK_HOME` wrote its files there, not into `~/.grok`.
+        assert!(supports_accounts("grok"));
+        // Gemini has no documented config-dir override honoured on login, so
+        // it stays absent rather than half-supported.
         assert!(!supports_accounts("gemini"));
-        assert!(!supports_accounts("grok"));
     }
 }

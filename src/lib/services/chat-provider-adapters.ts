@@ -369,11 +369,11 @@ const piAdapter: ChatProviderAdapter = {
         supervised: '',
         'full-access': '',
       }),
-      runtimeArgs: [
-        '--mode rpc',
-        '--no-session',
-        model && model !== 'default' ? `--model ${model}` : '',
-      ].filter(Boolean).join(' '),
+      // Model only. These args also reach terminal launches (quick spawn,
+      // task leases), where `--mode rpc` started Pi's machine protocol in the
+      // pane: nothing drawn, Ctrl+C ignored, and switching to chat impossible.
+      // The RPC flags belong to the Pi chat-thread transport (`PI_RPC_ARGS`).
+      runtimeArgs: model && model !== 'default' ? `--model ${model}` : '',
     };
   },
   parseModels: () => [],
@@ -515,6 +515,9 @@ export function isOpenCodeProvider(command: string): boolean {
 export function isMuseProvider(command: string): boolean {
   return getChatProviderAdapter(command)?.id === 'muse';
 }
+
+/** Pi's RPC transport flags, for the Pi chat-thread session only (never a terminal launch). */
+export const PI_RPC_ARGS = '--mode rpc --no-session';
 
 export function getAgentProviderLaunchOptions(
   command: string,

@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+const writes: string[] = [];
+vi.mock('$lib/stores/terminal', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  writeToSession: (_id: number, data: string) => { writes.push(data); },
+}));
 
-import { canShowTerminalChat, contextUsageFor, formatTokens, modelApplyFor, isShellPromptLine, permissionArgs, permissionModesFor, resumeArgs, sendMatchKey, transcriptAgentFor } from './terminal-chat';
+import { canShowTerminalChat, contextUsageFor, effortApplyFor, formatTokens, modelApplyFor, typeSlashCommand, serialPaneWrite, isShellPromptLine, permissionArgs, permissionModesFor, resumeArgs, sendMatchKey, transcriptAgentFor } from './terminal-chat';
 
 describe('terminal chat view', () => {
   it('offers chat only for agents whose transcripts it can read', () => {
@@ -10,7 +15,12 @@ describe('terminal chat view', () => {
     expect(transcriptAgentFor('codex')).toBe('codex');
     expect(transcriptAgentFor('opencode')).toBe('opencode');
     expect(transcriptAgentFor('grok')).toBe('grok');
-    expect(transcriptAgentFor('cursor-agent')).toBeNull();
+    // Orca's other chat agents, read from their own session files.
+    expect(transcriptAgentFor('cursor-agent')).toBe('cursor');
+    expect(transcriptAgentFor('agy')).toBe('antigravity');
+    expect(transcriptAgentFor('pi')).toBe('pi');
+    expect(transcriptAgentFor('copilot')).toBe('copilot');
+    expect(transcriptAgentFor('kimi')).toBeNull();
     expect(transcriptAgentFor(null)).toBeNull();
     expect(canShowTerminalChat('aider')).toBe(false);
   });
@@ -39,8 +49,37 @@ describe('terminal chat view', () => {
   it('changes models the way each CLI accepts mid-session', () => {
     const claude = modelApplyFor('claude');
     expect(claude.kind === 'command' && claude.build('opus')).toBe('/model opus');
-    expect(modelApplyFor('codex')).toEqual({ kind: 'inplace' });
-    expect(modelApplyFor('opencode')).toEqual({ kind: 'inplace' });
+    // Orca: Codex and OpenCode pick in their own pickers; nothing presses keys in them.
+    expect(modelApplyFor('codex')).toEqual({ kind: 'picker', command: '/model' });
+    expect(effortApplyFor('codex')).toEqual({ kind: 'picker', command: '/model' });
+    expect(modelApplyFor('opencode')).toEqual({ kind: 'picker', command: '/models' });
+    const cursor = modelApplyFor('cursor');
+    expect(cursor.kind === 'command' && cursor.build('gpt-5')).toBe('/model gpt-5');
+    const antigravity = effortApplyFor('antigravity');
+    expect(antigravity.kind === 'command' && antigravity.build('high')).toBe('/effort high');
+  });
+
+  it('clears the input line first where Ctrl+U does that', async () => {
+    writes.length = 0;
+    await typeSlashCommand(1, '/x', { clearInput: true });
+    expect(writes[0]).toBe(String.fromCharCode(21));
+    expect(writes.slice(1).join('')).toBe('/x' + String.fromCharCode(13));
+  });
+
+  it('runs one write at a time per pane, in the order asked', async () => {
+    const order: string[] = [];
+    const slow = serialPaneWrite(7, async () => { await new Promise((r) => setTimeout(r, 30)); order.push('first'); });
+    const fast = serialPaneWrite(7, async () => { order.push('second'); });
+    const other = serialPaneWrite(8, async () => { order.push('other pane'); });
+    await Promise.all([slow, fast, other]);
+    expect(order).toEqual(['other pane', 'first', 'second']);
+  });
+
+  it('types a slash command one key per write, then Enter on its own', async () => {
+    writes.length = 0;
+    await typeSlashCommand(1, '/model');
+    // A multi-character write is a paste; Codex would take it as prompt text.
+    expect(writes).toEqual(['/', 'm', 'o', 'd', 'e', 'l', '\r']);
   });
 
   it('offers Orca’s permission modes per agent with each CLI’s own flags', () => {

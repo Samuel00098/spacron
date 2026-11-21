@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import './MobilePanel.css';
@@ -16,6 +17,7 @@ import {
 } from './streamResolution';
 import { sendStreamKey, sendStreamText, useStreamTouch, type FrameDims } from './useStreamInput';
 import { useProjectPanelState } from '$lib/react/useProjectPanelState';
+import { setRightDrawerTool, toggleMobileVisible } from '$lib/stores/layout';
 import {
   advanceScroll,
   createWheelGestures,
@@ -288,10 +290,37 @@ function SideBtn({
   );
 }
 
-export default function MobilePanel() {
+const FLOAT_DEVICE_EVENT = 'spacron:mobile-float-device';
+const CLOSE_FLOAT_DEVICE_EVENT = 'spacron:mobile-close-floating-device';
+
+export function MobilePanelFloatingHost() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const show = () => setOpen(true);
+    const hide = () => setOpen(false);
+    window.addEventListener(FLOAT_DEVICE_EVENT, show);
+    window.addEventListener(CLOSE_FLOAT_DEVICE_EVENT, hide);
+    return () => {
+      window.removeEventListener(FLOAT_DEVICE_EVENT, show);
+      window.removeEventListener(CLOSE_FLOAT_DEVICE_EVENT, hide);
+    };
+  }, []);
+  return open ? <MobilePanel floatingHost onFloatingClose={() => setOpen(false)} /> : null;
+}
+
+export default function MobilePanel({ floatingHost = false, onFloatingClose }: { floatingHost?: boolean; onFloatingClose?: () => void } = {}) {
   const [tab, setTab] = useProjectPanelState<MobileTab>('mobile.tab', 'android');
   // The panel opens on the device list; "Open" on a device shows its screen.
-  const [view, setView] = useState<'list' | 'device'>('list');
+  const [view, setView] = useState<'list' | 'device'>(() => {
+    const openDevice = floatingHost || localStorage.getItem('spacron.mobile.openDeviceOnMount') === '1';
+    localStorage.removeItem('spacron.mobile.openDeviceOnMount');
+    return openDevice ? 'device' : 'list';
+  });
+  const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
+  const [floating, setFloating] = useState(floatingHost);
+  const [floatingPosition, setFloatingPosition] = useState<{ left: number; top: number } | null>(null);
+  const floatingDragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
+  const deviceMenuRef = useRef<HTMLDivElement | null>(null);
   // The platform whose screen is being mirrored, or null on the device list —
   // every stream / screenshot loop keys off this, so the list never streams.
   const mirrorTab: MobileTab | null = view === 'device' ? tab : null;
@@ -350,6 +379,22 @@ export default function MobilePanel() {
   const [iosShotDims, setIosShotDims] = useState<{ width: number; height: number } | null>(null);
   const [iosError, setIosError] = useState<string | null>(null);
   const [iosActionKey, setIosActionKey] = useState(0);
+
+  useEffect(() => {
+    if (!deviceMenuOpen) return;
+    const closeMenu = (event: PointerEvent) => {
+      if (!deviceMenuRef.current?.contains(event.target as Node)) setDeviceMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDeviceMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', closeMenu);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', closeMenu);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [deviceMenuOpen]);
 
   // The Android stage. Measured (not the device shell, which is content-sized
   // until a frame gives it an aspect ratio) to decide what resolution to ask
@@ -1375,6 +1420,110 @@ export default function MobilePanel() {
   }
   const icoMenu = <Ico><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></Ico>;
 
+  const canPowerOff = tab === 'android'
+    ? selectedSerial.startsWith('emulator-')
+    : Boolean(iosUdid);
+
+  async function powerOffDevice() {
+    setDeviceMenuOpen(false);
+    setShowSettings(false);
+    if (tab === 'android') {
+      if (!selectedSerial.startsWith('emulator-')) return;
+      try {
+        stopStream();
+        await invoke('android_emu_kill', { serial: selectedSerial });
+        setFrame(null);
+        setFrameError(null);
+        setSelectedSerial('');
+        localStorage.removeItem('spacron.mobile.serial');
+        setView('list');
+        await refreshAndroid();
+        if (floatingHost) onFloatingClose?.();
+      } catch (error) {
+        setFrameError(String(error));
+      }
+      return;
+    }
+    if (!iosUdid) return;
+    try {
+      stopMjpeg();
+      await invoke('ios_shutdown', { udid: iosUdid });
+      setIosShot(null);
+      setIosShotDims(null);
+      setIosActionKey((key) => key + 1);
+      setView('list');
+      if (floatingHost) onFloatingClose?.();
+    } catch (error) {
+      setIosError(String(error));
+    }
+  }
+
+  function renderDeviceMenu() {
+    return (
+      <div className="mobile-device-menu-wrap" ref={deviceMenuRef}>
+        <SideBtn title="Device actions" onClick={() => setDeviceMenuOpen((open) => !open)} active={deviceMenuOpen}>
+          {icoMenu}
+        </SideBtn>
+        {deviceMenuOpen && (
+          <div className="mobile-device-menu" role="menu" aria-label="Device actions">
+            {!floatingHost && (
+              <button type="button" role="menuitem" onClick={() => {
+                setDeviceMenuOpen(false);
+                window.dispatchEvent(new Event(FLOAT_DEVICE_EVENT));
+                toggleMobileVisible();
+              }}>
+                Float device over chat
+              </button>
+            )}
+            <button type="button" role="menuitem" onClick={() => {
+              setDeviceMenuOpen(false);
+              if (floatingHost) onFloatingClose?.();
+              else toggleMobileVisible();
+            }}>
+              {floatingHost ? 'Close floating phone' : 'Close device panel'}
+            </button>
+            <span className="mobile-device-menu-separator" />
+            <button type="button" role="menuitem" className="danger" disabled={!canPowerOff} onClick={() => void powerOffDevice()}>
+              {icoPower}<span>Power off device</span>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function startFloatingDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.closest('button, .mobile-device-shell, .mobile-ios-shell, .mobile-device-menu')) return;
+    const panel = event.currentTarget.closest<HTMLElement>('.mobile-panel-floating');
+    const bounds = panel?.getBoundingClientRect();
+    if (!bounds) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    floatingDragRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: bounds.left,
+      top: bounds.top,
+    };
+    setFloatingPosition({ left: bounds.left, top: bounds.top });
+  }
+
+  function moveFloatingPanel(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = floatingDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const panel = event.currentTarget.closest<HTMLElement>('.mobile-panel-floating');
+    if (!panel) return;
+    const left = Math.max(0, Math.min(window.innerWidth - panel.offsetWidth, drag.left + event.clientX - drag.x));
+    const top = Math.max(0, Math.min(window.innerHeight - 48, drag.top + event.clientY - drag.y));
+    setFloatingPosition({ left, top });
+  }
+
+  function endFloatingDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (floatingDragRef.current?.pointerId === event.pointerId) floatingDragRef.current = null;
+  }
+
   const deviceName = tab === 'android'
     ? selectedDevice?.label ?? (booting && bootingName ? bootingName : 'Android device')
     : iosSelectedSim?.name ?? 'iOS Simulator';
@@ -1453,7 +1602,7 @@ export default function MobilePanel() {
             )}
           </div>
 
-          <div className="mobile-side-toolbar" role="toolbar" aria-label="Device controls" aria-orientation="vertical">
+          {!floatingHost && <div className="mobile-side-toolbar" role="toolbar" aria-label="Device controls" aria-orientation="vertical">
             <SideBtn title="Home" onClick={() => sendKey(KEY_HOME)} disabled={!selectedSerial}>{icoHome}</SideBtn>
             <SideBtn title="Back" onClick={() => sendKey(KEY_BACK)} disabled={!selectedSerial}>{icoBack}</SideBtn>
             <SideBtn title="Recents" onClick={() => sendKey(KEY_RECENTS)} disabled={!selectedSerial}>{icoRecents}</SideBtn>
@@ -1463,14 +1612,14 @@ export default function MobilePanel() {
             <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!selectedSerial}>{icoText}</SideBtn>
             <SideBtn title="Tools" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!selectedSerial}>{icoSettings}</SideBtn>
             <SideBtn title="Save screenshot" onClick={() => void saveScreenshot()} disabled={!selectedSerial}>{icoCamera}</SideBtn>
-            <SideBtn title="Menu" onClick={() => sendKey(KEY_MENU)} disabled={!selectedSerial}>{icoMenu}</SideBtn>
+            {renderDeviceMenu()}
             <span className="mobile-side-sep" />
             <SideBtn title="Power" onClick={() => sendKey(KEY_POWER)} disabled={!selectedSerial}>{icoPower}</SideBtn>
             <SideBtn title="Volume up" onClick={() => sendKey(KEY_VOL_UP)} disabled={!selectedSerial}>{icoVolUp}</SideBtn>
             <SideBtn title="Volume down" onClick={() => sendKey(KEY_VOL_DOWN)} disabled={!selectedSerial}>{icoVolDown}</SideBtn>
-          </div>
+          </div>}
 
-          {showSettings && selectedSerial && (
+          {!floatingHost && showSettings && selectedSerial && (
             <DeviceToolsPanel
               key={`android:${selectedSerial}:${toolsKey}`}
               platform="android"
@@ -1525,7 +1674,7 @@ export default function MobilePanel() {
           )}
         </div>
 
-        {showText && selectedSerial && (
+        {!floatingHost && showText && selectedSerial && (
           <div className="mobile-input-row">
             <input
               className="mobile-text-input"
@@ -1543,7 +1692,7 @@ export default function MobilePanel() {
           </div>
         )}
 
-        {(frameError || deviceOffline || (streamMode === 'stream' && streamState.phase === 'starting')) && (
+        {!floatingHost && (frameError || deviceOffline || (streamMode === 'stream' && streamState.phase === 'starting')) && (
           <div className={`mobile-status${frameError ? ' error' : ''}`}>
             <span className="mobile-status-text">
               {frameError
@@ -1608,7 +1757,7 @@ export default function MobilePanel() {
             )}
           </div>
 
-          <div className="mobile-side-toolbar" role="toolbar" aria-label="Simulator controls" aria-orientation="vertical">
+          {!floatingHost && <div className="mobile-side-toolbar" role="toolbar" aria-label="Simulator controls" aria-orientation="vertical">
             <SideBtn title="Home" onClick={() => iosButton('home')} disabled={!booted}>{icoHome}</SideBtn>
             <SideBtn title="Rotate" onClick={cycleIosOrientation} disabled={!booted}>{icoRotate}</SideBtn>
             <span className="mobile-side-sep" />
@@ -1616,6 +1765,7 @@ export default function MobilePanel() {
             <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!booted}>{icoText}</SideBtn>
             <SideBtn title="Tools" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!booted}>{icoSettings}</SideBtn>
             <SideBtn title="Save screenshot" onClick={() => void saveScreenshot()} disabled={!booted}>{icoCamera}</SideBtn>
+            {renderDeviceMenu()}
             <span className="mobile-side-sep" />
             <SideBtn
               title={booted ? 'Shut down simulator' : 'Boot simulator'}
@@ -1624,9 +1774,9 @@ export default function MobilePanel() {
             >
               {icoPower}
             </SideBtn>
-          </div>
+          </div>}
 
-          {showSettings && booted && (
+          {!floatingHost && showSettings && booted && (
             <DeviceToolsPanel
               key={`ios:${iosUdid}:${toolsKey}`}
               platform="ios"
@@ -1656,7 +1806,7 @@ export default function MobilePanel() {
           )}
         </div>
 
-        {showText && booted && (
+        {!floatingHost && showText && booted && (
           <div className="mobile-input-row">
             <input
               className="mobile-text-input"
@@ -1674,7 +1824,7 @@ export default function MobilePanel() {
           </div>
         )}
 
-        {iosError && booted && (
+        {!floatingHost && iosError && booted && (
           <div className="mobile-status error">
             <span className="mobile-status-text">{iosError}</span>
           </div>
@@ -1683,16 +1833,34 @@ export default function MobilePanel() {
     );
   }
 
-  return (
-    <div className="mobile-panel">
+  const panel = (
+    <div
+      className={`mobile-panel${floating ? ' mobile-panel-floating' : ''}`}
+      style={floatingPosition ? { left: floatingPosition.left, top: floatingPosition.top, right: 'auto', bottom: 'auto' } : undefined}
+      onPointerDown={floating ? startFloatingDrag : undefined}
+      onPointerMove={floating ? moveFloatingPanel : undefined}
+      onPointerUp={floating ? endFloatingDrag : undefined}
+      onPointerCancel={floating ? endFloatingDrag : undefined}
+    >
+      {floating && (
+        <div className="mobile-floating-header">
+          <span>{deviceName}</span>
+          <button type="button" onClick={() => {
+            localStorage.setItem('spacron.mobile.openDeviceOnMount', '1');
+            onFloatingClose?.();
+            setRightDrawerTool('mobile');
+          }}>Go back to sidebar</button>
+        </div>
+      )}
       {view === 'list' ? (
         renderDeviceList()
       ) : (
         <div className="mobile-device-view">
-          {renderDeviceHeader()}
+          {!floatingHost && renderDeviceHeader()}
           {tab === 'android' ? renderAndroidDevice() : renderIosDevice()}
         </div>
       )}
     </div>
   );
+  return floating ? createPortal(panel, document.body) : panel;
 }

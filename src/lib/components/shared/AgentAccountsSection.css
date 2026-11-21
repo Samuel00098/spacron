@@ -1,0 +1,186 @@
+/* Settings > AI Providers > Accounts. One block per agent CLI, rows per account. */
+
+.agent-accounts-empty {
+  margin: 0;
+  padding: 20px 28px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.agent-accounts-provider {
+  position: relative;
+  padding: 18px 24px;
+}
+
+.agent-accounts-provider:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 0;
+  height: 1px;
+  background: var(--settings-divider);
+  pointer-events: none;
+}
+
+.agent-accounts-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* An explicit pixel box is mandatory around <AgentBrandMark>; see
+   [[agent-brand-marks]]. */
+.agent-accounts-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.agent-accounts-mark > * {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-accounts-name {
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.agent-accounts-count {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.agent-accounts-add-btn {
+  margin-left: auto;
+  min-height: 28px;
+  padding: 0 12px;
+}
+
+.agent-accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-accounts-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 4px 8px 4px 12px;
+  border-radius: 8px;
+}
+
+.agent-accounts-row:hover {
+  background: var(--bg-hover);
+}
+
+.agent-accounts-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.45;
+}
+
+.agent-accounts-row[data-active='true'] .agent-accounts-dot {
+  background: var(--success, #4ec9b0);
+  opacity: 1;
+}
+
+.agent-accounts-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-accounts-label small {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.agent-accounts-badge,
+.agent-accounts-flag {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-accounts-badge {
+  color: var(--success, #4ec9b0);
+  background: color-mix(in srgb, var(--success, #4ec9b0) 14%, transparent);
+}
+
+.agent-accounts-flag {
+  color: var(--warning, #e2c08d);
+  background: color-mix(in srgb, var(--warning, #e2c08d) 14%, transparent);
+}
+
+.agent-accounts-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.agent-accounts-actions .settings-link-button {
+  min-height: 26px;
+  padding: 0 8px;
+}
+
+.agent-accounts-remove {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.agent-accounts-remove:hover {
+  color: var(--error, #c74e39);
+  background: color-mix(in srgb, var(--error, #c74e39) 12%, transparent);
+}
+
+.agent-accounts-new {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-left: 12px;
+}
+
+.agent-accounts-new input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.agent-accounts-new small {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
