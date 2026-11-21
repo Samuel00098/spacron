@@ -3704,6 +3704,7 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .left-sidebar-nav {
   gap: 1px;
   padding: 9px 9px 11px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .app-shell .left-sidebar-nav-item {
@@ -3718,14 +3719,9 @@ html.is-webkitgtk .app-shell .composer-strip {
   background: transparent;
 }
 
-/* Sidebar controls use fills for hover and selection, with a separate focus outline. */
-.app-shell .left-sidebar :is(.left-sidebar-header, .left-sidebar-nav, .projects-sidebar-panel, .left-sidebar-footer) :where(button, input),
-.app-shell .left-sidebar :is(.projects-search-field, .project-worktree-row-wrap.active, .project-active-dot, .project-worktree-dot) {
-  box-shadow: none !important;
-}
-
-.app-shell .left-sidebar :is(.project-worktree-children, .project-process-children) {
-  border-left-color: transparent;
+/* The shared scroll shadows draw seams around the search row and above the footer. */
+.app-shell .left-sidebar :is(.drawer-body, .projects-panel-body) {
+  box-shadow: none;
 }
 
 .app-shell .left-sidebar .projects-search-section {
