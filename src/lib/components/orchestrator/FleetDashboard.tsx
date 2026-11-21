@@ -72,6 +72,7 @@ import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
 import HunkDiffView from '$lib/components/review/HunkDiffView.tsx';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
 import WorktreeReviewModal from './WorktreeReviewModal.tsx';
+import AgentHistoryTab from './AgentHistoryTab.tsx';
 import {
   filesOwnedBy,
   isSharedFile,
@@ -83,7 +84,7 @@ import './FleetDashboard.css';
 /** How often the per-card diff stat is refreshed. Three cheap git reads each. */
 const POLL_MS = 5000;
 
-type FleetStatus = 'working' | 'idle' | 'awaiting' | 'finished' | 'failed' | 'exited' | 'open';
+type FleetStatus = 'working' | 'idle' | 'awaiting' | 'finished' | 'failed' | 'exited' | 'open' | 'quiet';
 
 
 /** Where the agent is doing its work — decides which actions the card offers. */
@@ -154,6 +155,7 @@ const STATUS_LABEL: Record<FleetStatus, string> = {
   idle: 'Idle',
   awaiting: 'Awaiting input',
   finished: 'Finished',
+  quiet: 'Went quiet',
   failed: 'Failed',
   exited: 'Exited',
   // The DeepSeek panel: its web UI does not report turns to Spacron, so the
@@ -180,7 +182,11 @@ export function statusFor(
 ): FleetStatus {
   // Task completion is authoritative even when its terminal stays open for
   // another prompt. A stale per-session turn flag must not keep it Working.
-  if (task?.status === 'complete') return 'finished';
+  if (task?.status === 'complete') {
+    if (task.turnEndedBy === 'inferred') return 'quiet';
+    if (task.turnEndedBy === 'exit') return 'exited';
+    return 'finished';
+  }
   if (task?.status === 'failed' || task?.status === 'cancelled') return 'failed';
   if (!live) {
     return 'exited';
@@ -196,6 +202,7 @@ export function statusFor(
     turnSince <= lastActivity.ts
   ) return 'finished';
   if (turn === 'working') return 'working';
+  if (turn === 'quiet') return 'quiet';
   if (turn === 'finished') return 'finished';
   if (turn === 'failed') return 'failed';
   return 'idle';
@@ -210,6 +217,7 @@ const STATUS_ORDER: Record<FleetStatus, number> = {
   awaiting: 1,
   failed: 2,
   finished: 3,
+  quiet: 3,
   idle: 4,
   open: 5,
   exited: 6,
@@ -221,6 +229,7 @@ const SUMMARY_FALLBACK: Record<FleetStatus, string> = {
   idle: 'No task yet',
   awaiting: 'Waiting for your answer',
   finished: 'Finished its task',
+  quiet: 'Completion unconfirmed',
   failed: 'Stopped with an error',
   exited: 'Closed',
   open: 'Open in its panel',
@@ -251,6 +260,46 @@ export function formatElapsed(ms: number): string {
   return `${sec}s`;
 }
 
+type FleetView = 'live' | 'history';
+
+/**
+ * The panel's title and its Live / History switch. It is drawn in every state,
+ * including "no project" and "no agents running": History needs neither, so it
+ * must never sit behind an agent being open.
+ */
+function FleetHeader({ view, setView, pill }: { view: FleetView; setView: (view: FleetView) => void; pill?: React.ReactNode }) {
+  return (
+    <header className="fleet-head">
+      <div className="fleet-head-left">
+        <span className="fleet-icon">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+        </span>
+        <span className="fleet-title">Sessions</span>
+        <div className="fleet-tabs" role="tablist" aria-label="Sessions view">
+          <button type="button" role="tab" aria-selected={view === 'live'} className={view === 'live' ? 'on' : ''} onClick={() => setView('live')}>Live</button>
+          <button type="button" role="tab" aria-selected={view === 'history'} className={view === 'history' ? 'on' : ''} onClick={() => setView('history')}>History</button>
+        </div>
+      </div>
+      {view === 'live' && pill}
+    </header>
+  );
+}
+
+/** The panel's frame for states that have nothing live to show. */
+function FleetShell({ view, setView, empty }: { view: FleetView; setView: (view: FleetView) => void; empty: React.ReactNode }) {
+  return (
+    <div className="fleet-root">
+      <FleetHeader view={view} setView={setView} />
+      {view === 'history' ? <AgentHistoryTab /> : empty}
+    </div>
+  );
+}
+
 function FleetEmpty({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="fleet-empty">
@@ -269,6 +318,8 @@ function FleetEmpty({ title, children }: { title: string; children: React.ReactN
 }
 
 export default function FleetDashboard() {
+  // Live: the review/merge/discard cards. History: past sessions from the CLIs' own transcripts.
+  const [view, setView] = useState<FleetView>('live');
   const project = useStore(activeProject);
   const projectId = project?.id ?? null;
   const projectRoot = project?.root_path ?? null;
@@ -667,17 +718,27 @@ export default function FleetDashboard() {
 
   if (!project) {
     return (
-      <FleetEmpty title="No project open">Open a project to see what its agents changed.</FleetEmpty>
+      <FleetShell
+        view={view}
+        setView={setView}
+        empty={<FleetEmpty title="No project open">Open a project to see what its agents changed.</FleetEmpty>}
+      />
     );
   }
 
   if (rows.length === 0) {
     return (
-      <FleetEmpty title="No agents running in this project">
-        Spawn agents and they show up here, whether they take their own branch
-        and checkout or work directly in the main repo. Isolated ones are ready to
-        review, merge or throw away; main-repo ones are ready to read.
-      </FleetEmpty>
+      <FleetShell
+        view={view}
+        setView={setView}
+        empty={
+          <FleetEmpty title="No agents running in this project">
+            Spawn agents and they show up here, whether they take their own branch
+            and checkout or work directly in the main repo. Isolated ones are ready to
+            review, merge or throw away; main-repo ones are ready to read. Past sessions are under History.
+          </FleetEmpty>
+        }
+      />
     );
   }
 
@@ -1085,23 +1146,19 @@ export default function FleetDashboard() {
 
   return (
     <div className="fleet-root">
-      <header className="fleet-head">
-        <div className="fleet-head-left">
-          <span className="fleet-icon">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
+      <FleetHeader
+        view={view}
+        setView={setView}
+        pill={
+          <span className="fleet-count-pill">
+            {rows.length} agent{rows.length === 1 ? '' : 's'}
+            {isolatedCount > 0 && isolatedCount < rows.length && ` · ${isolatedCount} isolated`}
           </span>
-          <span className="fleet-title">Agent Fleet</span>
-        </div>
-        <span className="fleet-count-pill">
-          {rows.length} agent{rows.length === 1 ? '' : 's'}
-          {isolatedCount > 0 && isolatedCount < rows.length && ` · ${isolatedCount} isolated`}
-        </span>
-      </header>
+        }
+      />
+
+      {view === 'history' ? <AgentHistoryTab /> : (
+      <>
 
       {/* The fleet's state in one slim line. Working leads; clicking it opens
           the list of who is working, on what, and for how long. */}
@@ -1119,6 +1176,8 @@ export default function FleetDashboard() {
       </div>
 
       <div className={`fleet-grid${suppressEnter ? ' no-enter' : ''}`}>{ordered.map(renderCard)}</div>
+      </>
+      )}
 
       {reviewing &&
         (() => {

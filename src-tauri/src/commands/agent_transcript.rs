@@ -41,6 +41,9 @@ pub struct TranscriptQuery {
     pub exclude: Vec<String>,
     /// Revision the caller already rendered; when equal no messages are sent.
     pub known_revision: Option<String>,
+    /// Managed account whose home holds the session (Agent History); None is the CLI's own home.
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, Default)]
@@ -148,7 +151,7 @@ pub async fn agent_subagent_transcript_read(query: SubagentQuery) -> Result<Tran
         if !safe(&query.session_id) || !safe(&query.agent_id) {
             return Err("Invalid subagent id".to_string());
         }
-        let Some(dir) = claude_project_dir(&query.cwd) else {
+        let Some(dir) = claude_project_dir(&query.cwd, None) else {
             return Ok(TranscriptResult::default());
         };
         let path = dir.join(&query.session_id).join("subagents").join(format!("agent-{}.jsonl", query.agent_id));
@@ -162,10 +165,15 @@ pub async fn agent_subagent_transcript_read(query: SubagentQuery) -> Result<Tran
     .map_err(|e| e.to_string())?
 }
 
+/// The managed account home a query names, when it names one that exists.
+fn account_base(q: &TranscriptQuery) -> Option<PathBuf> {
+    q.account.as_deref().and_then(|account| super::agent_history::account_home(&q.agent, account))
+}
+
 fn read_transcript(q: &TranscriptQuery) -> Result<TranscriptResult, String> {
     let mut result = match q.agent.as_str() {
-        "claude" => read_file_agent(q, claude_candidates(&q.cwd), parse_claude),
-        "codex" => read_file_agent(q, codex_candidates(&q.cwd, q.since_ms), parse_codex),
+        "claude" => read_file_agent(q, claude_candidates(&q.cwd, account_base(q)), parse_claude),
+        "codex" => read_file_agent(q, codex_candidates(&q.cwd, q.since_ms, account_base(q)), parse_codex),
         "grok" => read_file_agent(q, grok_candidates(&q.cwd), parse_grok),
         "opencode" => read_opencode(q),
         "openclaude" => read_file_agent(q, extra::openclaude_candidates(&q.cwd), parse_claude),
@@ -536,8 +544,8 @@ fn claude_project_dir_name(cwd: &str) -> String {
 }
 
 /// Claude Code's folder for conversations started in `cwd`.
-fn claude_project_dir(cwd: &str) -> Option<PathBuf> {
-    let base = env_dir("CLAUDE_CONFIG_DIR").or_else(|| home().map(|h| h.join(".claude")))?;
+fn claude_project_dir(cwd: &str, base: Option<PathBuf>) -> Option<PathBuf> {
+    let base = base.or_else(|| env_dir("CLAUDE_CONFIG_DIR")).or_else(|| home().map(|h| h.join(".claude")))?;
     let projects = base.join("projects");
     let wanted = claude_project_dir_name(cwd.trim_end_matches(['\\', '/']));
     let dir = projects.join(&wanted);
@@ -553,8 +561,8 @@ fn claude_project_dir(cwd: &str) -> Option<PathBuf> {
     })
 }
 
-fn claude_candidates(cwd: &str) -> Vec<Candidate> {
-    let Some(dir) = claude_project_dir(cwd) else { return Vec::new() };
+fn claude_candidates(cwd: &str, base: Option<PathBuf>) -> Vec<Candidate> {
+    let Some(dir) = claude_project_dir(cwd, base) else { return Vec::new() };
     let Ok(entries) = fs::read_dir(&dir) else { return Vec::new() };
     entries
         .filter_map(Result::ok)
@@ -906,8 +914,8 @@ fn parse_claude_lines(path: &Path, subagent: bool) -> Parsed {
 // Codex: <CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl, first line session_meta
 // ---------------------------------------------------------------------------
 
-fn codex_candidates(cwd: &str, since_ms: i64) -> Vec<Candidate> {
-    let Some(base) = env_dir("CODEX_HOME").or_else(|| home().map(|h| h.join(".codex"))) else {
+fn codex_candidates(cwd: &str, since_ms: i64, base: Option<PathBuf>) -> Vec<Candidate> {
+    let Some(base) = base.or_else(|| env_dir("CODEX_HOME")).or_else(|| home().map(|h| h.join(".codex"))) else {
         return Vec::new();
     };
     let sessions = base.join("sessions");
@@ -1510,6 +1518,7 @@ mod tests {
                 session_id: None,
                 exclude: vec![],
                 known_revision: None,
+                account: None,
             };
             match read_transcript(&q) {
                 Ok(r) => {
@@ -1546,6 +1555,7 @@ mod tests {
             session_id: bound.map(str::to_string),
             exclude: exclude.into_iter().map(str::to_string).collect(),
             known_revision: None,
+            account: None,
         };
         let all = || vec![mk("old", 1, 2), mk("a", 100_000, 120_000), mk("b", 110_000, 115_000)];
         assert_eq!(pick(&q(None, vec![]), all()).unwrap().id, "b");

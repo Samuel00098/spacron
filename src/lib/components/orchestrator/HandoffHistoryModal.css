@@ -1,0 +1,81 @@
+/* Hand-off dialog for Agent History. Portaled to <body>. global.css clears
+   border colours on buttons and anything named -card/-chip/-menu, so every
+   outline here is a box-shadow ring and every button has a real fill. */
+
+.hom-backdrop {
+  position: fixed; inset: 0; z-index: 1600; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(0, 0, 0, 0.5); animation: hom-fade 0.16s ease-out;
+}
+@keyframes hom-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.hom-card {
+  width: min(620px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column;
+  border: 0; border-radius: 16px; background: var(--app-surface) !important;
+  backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  color: var(--text-primary); font-size: 13px;
+  box-shadow: var(--surface-outline), 0 30px 80px rgba(0, 0, 0, 0.55) !important;
+  animation: hom-in 0.2s var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+}
+@keyframes hom-in { from { opacity: 0; transform: translateY(8px) scale(0.985); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .hom-card, .hom-backdrop { animation: none; } }
+
+.hom-head { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px 4px; }
+.hom-head h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.hom-close {
+  display: grid; place-items: center; width: 28px; height: 28px; margin-right: -6px; border: none; border-radius: 7px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.hom-close:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+
+.hom-body { display: flex; flex-direction: column; gap: 16px; padding: 14px 24px 6px; overflow-y: auto; min-height: 0; }
+.hom-muted { color: var(--text-muted); font-size: 11.5px; }
+.hom-section { display: flex; flex-direction: column; gap: 7px; }
+.hom-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.hom-label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+
+.hom-source {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--app-surface)); box-shadow: var(--surface-outline) !important;
+}
+.hom-source-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hom-source-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.hom-source .ah-brand { flex-basis: 20px; width: 20px; height: 20px; }
+
+.hom-agents { display: flex; flex-wrap: wrap; gap: 8px; }
+.hom-agent {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px; border: none; border-radius: 9px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent); color: var(--text-primary); font-size: 13px; cursor: pointer;
+  box-shadow: var(--surface-outline) !important;
+}
+.hom-agent:hover:not(:disabled) { background: var(--bg-hover); }
+.hom-agent.on { box-shadow: var(--surface-outline-active) !important; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.hom-agent:disabled { opacity: 0.6; cursor: default; }
+
+.hom-seg { display: inline-flex; align-self: flex-start; padding: 2px; gap: 2px; border-radius: 9px; box-shadow: var(--surface-outline); }
+.hom-seg button { height: 28px; padding: 0 16px; border: none; border-radius: 7px; background: transparent; color: var(--text-muted); font-size: 12.5px; cursor: pointer; }
+.hom-seg button.on { background: var(--bg-hover); color: var(--text-primary); }
+.hom-seg button:disabled { opacity: 0.45; cursor: default; }
+
+.hom-context {
+  width: 100%; min-height: 200px; max-height: 38vh; resize: vertical; padding: 10px 12px; border: none; border-radius: 10px;
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--app-surface)); color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; line-height: 1.5; box-sizing: border-box;
+  box-shadow: var(--surface-outline) !important;
+}
+.hom-context:focus { outline: none; box-shadow: var(--surface-outline-active) !important; }
+.hom-note { padding: 14px 4px; color: var(--text-muted); }
+.hom-error { color: #e5484d; }
+.hom-link { border: none; background: transparent; padding: 0; color: var(--accent); font-size: 11.5px; cursor: pointer; }
+
+.hom-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px 20px; }
+.hom-foot-actions { display: flex; gap: 8px; }
+.hom-btn {
+  display: inline-flex; align-items: center; height: 34px; padding: 0 16px; border: none; border-radius: 9px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent); color: var(--text-primary); font-size: 13px; font-weight: 500; cursor: pointer;
+  box-shadow: var(--surface-outline) !important;
+}
+.hom-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.hom-btn:disabled { opacity: 0.55; cursor: default; }
+.hom-btn-primary { background: var(--accent); color: var(--button-text, #ffffff); box-shadow: none !important; }
+.hom-btn-primary:hover:not(:disabled) { background: var(--accent); opacity: 0.9; }
+.hom-btn-primary:disabled { background: color-mix(in srgb, var(--text-primary) 6%, transparent); color: var(--text-muted); box-shadow: var(--surface-outline) !important; opacity: 1; }
