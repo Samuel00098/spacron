@@ -338,6 +338,7 @@ export interface WorkflowJob {
   completedAt?: string;
   htmlUrl: string;
   steps: WorkflowJobStep[];
+  failureReason?: string;
 }
 
 export async function listWorkflowRuns(
@@ -367,6 +368,18 @@ export async function getWorkflowRunJobs(
     projectId,
     repoPath,
     runId,
+  });
+}
+
+export async function getWorkflowJobLog(
+  projectId: string,
+  jobId: number,
+  repoPath?: string
+): Promise<string> {
+  return await invoke<string>('source_control_get_workflow_job_log', {
+    projectId,
+    repoPath,
+    jobId,
   });
 }
 

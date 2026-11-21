@@ -15,6 +15,7 @@ import {
   addPullRequestComment,
   listWorkflowRuns,
   getWorkflowRunJobs,
+  getWorkflowJobLog,
   rerunWorkflow,
   cancelWorkflowRun,
 } from './work-items';
@@ -421,6 +422,17 @@ describe('work-items service', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0].steps).toHaveLength(1);
     expect(jobs[0].steps[0].name).toBe('Run vitest');
+  });
+
+  it('requests a log excerpt for a job in the selected repository', async () => {
+    mockInvoke.mockResolvedValueOnce('Error: test command exited with code 1');
+    const log = await getWorkflowJobLog('proj-1', 501, '/repo');
+    expect(mockInvoke).toHaveBeenCalledWith('source_control_get_workflow_job_log', {
+      projectId: 'proj-1',
+      repoPath: '/repo',
+      jobId: 501,
+    });
+    expect(log).toBe('Error: test command exited with code 1');
   });
 
   it('triggers rerun and cancel workflow run', async () => {

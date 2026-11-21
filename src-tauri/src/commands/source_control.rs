@@ -5,6 +5,7 @@
 //! comment timelines, diffs, CI checks, and one-click merge with head verification.
 
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tauri::State;
 
@@ -1426,6 +1427,8 @@ pub struct WorkflowJob {
     pub completed_at: Option<String>,
     pub html_url: String,
     pub steps: Vec<WorkflowJobStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
 }
 
 /// List workflow runs (GitHub Actions CI/CD).
@@ -1630,7 +1633,7 @@ pub async fn source_control_get_workflow_run_jobs(
 
     if provider == "gitlab" {
         let project_encoded = format!("{owner}%2F{repo_name}");
-        let url = format!("https://gitlab.com/api/v4/projects/{project_encoded}/pipelines/{run_id}/jobs");
+        let url = format!("https://gitlab.com/api/v4/projects/{project_encoded}/pipelines/{run_id}/jobs?per_page=100");
         let response = client
             .get(&url)
             .header("PRIVATE-TOKEN", &token)
@@ -1639,10 +1642,11 @@ pub async fn source_control_get_workflow_run_jobs(
             .map_err(|e| format!("Failed to fetch GitLab pipeline jobs: {}", e.without_url()))?;
 
         if !response.status().is_success() {
-            return Ok(Vec::new());
+            return Err(format!("Could not load GitLab pipeline jobs ({})", response.status()));
         }
 
-        let jobs_arr: Vec<serde_json::Value> = response.json().await.unwrap_or_default();
+        let jobs_arr: Vec<serde_json::Value> = response.json().await
+            .map_err(|_| "GitLab returned an unreadable job list.")?;
         let mut result = Vec::new();
         for j in jobs_arr {
             let id = j.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -1670,12 +1674,13 @@ pub async fn source_control_get_workflow_run_jobs(
                 completed_at,
                 html_url,
                 steps: Vec::new(),
+                failure_reason: j.get("failure_reason").and_then(|v| v.as_str()).map(ToString::to_string),
             });
         }
         return Ok(result);
     }
 
-    let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/jobs");
+    let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/jobs?per_page=100");
 
     let response = client
         .get(&url)
@@ -1687,11 +1692,13 @@ pub async fn source_control_get_workflow_run_jobs(
         .map_err(|e| format!("Failed to fetch workflow jobs: {}", e.without_url()))?;
 
     if !response.status().is_success() {
-        return Ok(Vec::new());
+        return Err(format!("Could not load GitHub workflow jobs ({})", response.status()));
     }
 
-    let payload: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
-    let jobs_arr = payload.get("jobs").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let payload: serde_json::Value = response.json().await
+        .map_err(|_| "GitHub returned an unreadable job list.")?;
+    let jobs_arr = payload.get("jobs").and_then(|v| v.as_array())
+        .ok_or("GitHub returned no workflow job list.")?;
 
     let mut result = Vec::new();
     for j in jobs_arr {
@@ -1734,10 +1741,76 @@ pub async fn source_control_get_workflow_run_jobs(
             completed_at,
             html_url,
             steps,
+            failure_reason: None,
         });
     }
 
     Ok(result)
+}
+
+/// Fetch a bounded log excerpt for the current project's job.
+#[tauri::command]
+pub async fn source_control_get_workflow_job_log(
+    project_id: String,
+    repo_path: Option<String>,
+    job_id: u64,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    const MAX_LOG_BYTES: usize = 8 * 1024;
+    static ANSI: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap());
+
+    check_git_available()?;
+    let repo = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    let remote = run_git(&repo, &["remote", "get-url", "origin"])
+        .map_err(|_| "Project has no origin remote configured.")?;
+    let (provider, owner, repo_name) = parse_remote_url(&remote)
+        .ok_or("Origin remote is not a recognized GitHub or GitLab repository.")?;
+    let url = match provider.as_str() {
+        "github" => format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/jobs/{job_id}/logs"),
+        "gitlab" => format!("https://gitlab.com/api/v4/projects/{owner}%2F{repo_name}/jobs/{job_id}/trace"),
+        _ => return Err("Job logs are supported for GitHub Actions and GitLab CI/CD.".into()),
+    };
+    let token = resolve_token(&provider).ok_or("No authentication token found.")?;
+    let log_error = |err: reqwest::Error| format!("Job log unavailable ({})", err.without_url());
+    let mut response = http_client()
+        .get(url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(log_error)?;
+
+    let mut tail = Vec::new();
+    let mut truncated = false;
+    while let Some(chunk) = response.chunk().await.map_err(log_error)? {
+        if chunk.len() >= MAX_LOG_BYTES {
+            truncated |= !tail.is_empty() || chunk.len() > MAX_LOG_BYTES;
+            tail.clear();
+            tail.extend_from_slice(&chunk[chunk.len() - MAX_LOG_BYTES..]);
+        } else {
+            let overflow = (tail.len() + chunk.len()).saturating_sub(MAX_LOG_BYTES);
+            truncated |= overflow > 0;
+            tail.drain(..overflow);
+            tail.extend_from_slice(&chunk);
+        }
+    }
+    let text = String::from_utf8_lossy(&tail);
+    let text = if truncated {
+        text.split_once('\n').map_or(text.as_ref(), |(_, rest)| rest)
+    } else {
+        text.as_ref()
+    };
+    let clean = ANSI.replace_all(text, "");
+    let clean = super::secrets::redact_secrets(&clean.replace(token.as_str(), "[redacted]"));
+    let excerpt = clean.trim();
+    if excerpt.is_empty() {
+        Err("The provider returned an empty job log.".into())
+    } else if truncated {
+        Ok(format!("[End of job log]\n{excerpt}"))
+    } else {
+        Ok(excerpt.to_string())
+    }
 }
 
 /// Re-run a workflow run.

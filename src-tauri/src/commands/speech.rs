@@ -104,14 +104,22 @@ pub async fn read_aloud_speak(
                 "instructions": OPENAI_DELIVERY,
                 "response_format": "mp3",
             }))),
-        "elevenlabs" => ("ElevenLabs", client
-            .post(format!("{ELEVENLABS_URL}/text-to-speech/{voice}?output_format=mp3_44100_128"))
-            .header("xi-api-key", media_api_key("elevenlabs")?)
-            .json(&json!({
+        "elevenlabs" => {
+            let model = model.unwrap_or(ELEVENLABS_MODEL);
+            let mut body = json!({
                 "text": text,
-                "model_id": model.unwrap_or(ELEVENLABS_MODEL),
-                "voice_settings": { "stability": 0.45, "similarity_boost": 0.8, "style": 0.15, "use_speaker_boost": true },
-            }))),
+                "model_id": model,
+            });
+            if matches!(model, ELEVENLABS_MODEL | "eleven_flash_v2_5" | "eleven_turbo_v2_5") {
+                body["voice_settings"] = json!({
+                    "stability": 0.45, "similarity_boost": 0.8, "style": 0.15, "use_speaker_boost": true
+                });
+            }
+            ("ElevenLabs", client
+                .post(format!("{ELEVENLABS_URL}/text-to-speech/{voice}?output_format=mp3_44100_128"))
+                .header("xi-api-key", media_api_key("elevenlabs")?)
+                .json(&body))
+        }
         "minimax" => ("MiniMax", client
             .post(format!("{MINIMAX_URL}/t2a_v2"))
             .bearer_auth(media_api_key("minimax")?)
@@ -250,6 +258,53 @@ fn catalog_voice(voice: &Value, name_field: &str) -> Option<SpeechVoice> {
     Some(SpeechVoice { id, name, detail: None })
 }
 
+/// Discover text-to-speech models using the provider's stored credential.
+#[tauri::command]
+pub async fn read_aloud_provider_models(provider: String) -> Result<Vec<SpeechModel>, String> {
+    let client = shared_http_client(Duration::from_secs(20))?;
+    let (vendor, request) = match provider.as_str() {
+        "elevenlabs" => ("ElevenLabs", client.get(format!("{ELEVENLABS_URL}/models"))
+            .header("xi-api-key", media_api_key("elevenlabs")?)),
+        "minimax" => ("MiniMax", client.get(format!("{MINIMAX_URL}/models"))
+            .bearer_auth(media_api_key("minimax")?)),
+        _ => return Err("Unsupported speech model catalog.".into()),
+    };
+    let payload: Value = request
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|err| safe_request_error(&format!("Could not load {vendor} speech models"), err))?
+        .json()
+        .await
+        .map_err(|_| format!("{vendor} returned an unreadable model list."))?;
+    if provider == "minimax" {
+        let models = payload["data"].as_array().ok_or("MiniMax returned no model list.")?;
+        return Ok(models.iter().filter_map(minimax_speech_model).collect());
+    }
+    let models = payload.as_array().ok_or("ElevenLabs returned no model list.")?;
+    Ok(models.iter().filter_map(elevenlabs_speech_model).collect())
+}
+
+fn minimax_speech_model(model: &Value) -> Option<SpeechModel> {
+    let id = model["id"].as_str()?;
+    if !id.starts_with("speech-") || !speech_model_id_is_safe(id) {
+        return None;
+    }
+    Some(SpeechModel { id: id.into(), name: id.into(), voices: Vec::new() })
+}
+
+fn elevenlabs_speech_model(model: &Value) -> Option<SpeechModel> {
+    let id = model["model_id"].as_str()?;
+    if model["can_do_text_to_speech"].as_bool() != Some(true) || !speech_model_id_is_safe(id) {
+        return None;
+    }
+    Some(SpeechModel {
+        id: id.into(),
+        name: model["name"].as_str().unwrap_or(id).into(),
+        voices: Vec::new(),
+    })
+}
+
 /// OpenRouter's public catalog includes format and voice support per model.
 #[tauri::command]
 pub async fn read_aloud_openrouter_models() -> Result<Vec<SpeechModel>, String> {
@@ -318,5 +373,31 @@ mod tests {
         assert_eq!(parsed.voices, ["en-US-Harper:MAI-Voice-2.1"]);
         model["output_modalities"][0]["supported_parameters"]["response_format"]["values"] = json!(["pcm"]);
         assert!(openrouter_mp3_model(&model).is_none());
+    }
+
+    #[test]
+    fn elevenlabs_catalog_only_includes_speech_models() {
+        let model = json!({
+            "model_id": "eleven_v3",
+            "name": "Eleven v3",
+            "can_do_text_to_speech": true,
+        });
+        let parsed = elevenlabs_speech_model(&model).unwrap();
+        assert_eq!(parsed.id, "eleven_v3");
+        assert_eq!(parsed.name, "Eleven v3");
+        assert!(elevenlabs_speech_model(&json!({
+            "model_id": "scribe_v2",
+            "can_do_text_to_speech": false,
+        })).is_none());
+    }
+
+    #[test]
+    fn minimax_catalog_excludes_text_and_media_models() {
+        assert!(minimax_speech_model(&json!({ "id": "MiniMax-M3" })).is_none());
+        assert!(minimax_speech_model(&json!({ "id": "MiniMax-H3" })).is_none());
+        assert_eq!(
+            minimax_speech_model(&json!({ "id": "speech-2.8-turbo" })).unwrap().id,
+            "speech-2.8-turbo",
+        );
     }
 }

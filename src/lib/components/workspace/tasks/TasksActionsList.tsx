@@ -1,7 +1,8 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   listWorkflowRuns,
   getWorkflowRunJobs,
+  getWorkflowJobLog,
   rerunWorkflow,
   cancelWorkflowRun,
   type WorkflowRun,
@@ -10,6 +11,7 @@ import {
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
 import { showToast } from '$lib/stores/notification';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
+import { copyTextToClipboard } from '$lib/utils/clipboard';
 import {
   SearchIcon,
   RefreshIcon,
@@ -26,6 +28,19 @@ import {
 
 interface TasksActionsListProps {
   projectId: string;
+}
+
+function isFailure(conclusion?: string): boolean {
+  return conclusion === 'failure' || conclusion === 'timed_out'
+    || conclusion === 'startup_failure' || conclusion === 'stale';
+}
+
+function isActiveRun(run: WorkflowRun): boolean {
+  return ['queued', 'in_progress', 'requested', 'pending', 'waiting'].includes(run.status);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export default function TasksActionsList({ projectId }: TasksActionsListProps) {
@@ -46,32 +61,95 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
 
   // Action busy states
   const [actionBusyId, setActionBusyId] = useState<number | null>(null);
+  const [copyingRunId, setCopyingRunId] = useState<number | null>(null);
+  const runRequest = useRef(0);
 
-  const loadRuns = async (isManualRefresh = false) => {
-    if (isManualRefresh) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
+  const handleCopyFailure = async (event: React.MouseEvent, run: WorkflowRun) => {
+    event.stopPropagation();
+    setCopyingRunId(run.id);
+    const report = [
+      `CI failure: ${run.name} #${run.runNumber} (${run.conclusion})`,
+      run.displayTitle,
+      run.headBranch && `Branch: ${run.headBranch}`,
+      run.headSha && `Commit: ${run.headSha}`,
+      run.htmlUrl,
+    ].filter(Boolean);
+    try {
+      const jobs = await getWorkflowRunJobs(projectId, run.id);
+      const failedJobs = jobs.filter((job) => isFailure(job.conclusion));
+      const logs = await Promise.allSettled(
+        failedJobs.slice(0, 6).map((job) => getWorkflowJobLog(projectId, job.id)),
+      );
+      for (const [index, job] of failedJobs.entries()) {
+        report.push('', `Job: ${job.name} (${job.conclusion})`);
+        if (job.htmlUrl) report.push(job.htmlUrl);
+        if (job.failureReason) report.push(`Reason: ${job.failureReason}`);
+        for (const step of job.steps.filter((step) => isFailure(step.conclusion))) {
+          report.push(`Failed step: ${step.name} (${step.conclusion})`);
+        }
+        const log = logs[index];
+        if (!log) report.push('Log omitted from this report. See the job link for full output.');
+        else if (log.status === 'fulfilled') report.push('Log excerpt:', log.value);
+        else report.push(errorMessage(log.reason));
+      }
+      if (failedJobs.length === 0) report.push('', 'The provider reported no failed jobs for this run.');
+    } catch (error) {
+      report.push('', `Job details unavailable: ${errorMessage(error)}`);
+    }
+
+    try {
+      await copyTextToClipboard(report.join('\n'));
+      showToast('Failure details copied', 'success');
+    } catch {
+      showToast('Could not copy failure details', 'error');
+    } finally {
+      setCopyingRunId(null);
+    }
+  };
+
+  const loadRuns = useCallback(async (mode: 'initial' | 'manual' | 'poll' = 'initial') => {
+    const request = ++runRequest.current;
+    if (mode === 'manual') setRefreshing(true);
+    if (mode === 'initial') setLoading(true);
+    if (mode !== 'poll') setError(null);
 
     try {
       const data = await listWorkflowRuns(projectId, {
         statusFilter: statusFilter !== 'all' ? statusFilter : undefined,
         branch: branchFilter !== 'all' ? branchFilter : undefined,
       });
-      setRuns(data);
-    } catch (err: any) {
-      console.warn('Failed to load GitHub Actions workflow runs:', err);
-      setError(typeof err === 'string' ? err : err?.message || 'Could not fetch workflow runs.');
+      if (request === runRequest.current) setRuns(data);
+    } catch (err) {
+      if (request === runRequest.current && mode !== 'poll') setError(errorMessage(err));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
-  useEffect(() => {
-    if (projectId) {
-      void loadRuns();
+      if (request === runRequest.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [projectId, statusFilter, branchFilter]);
+
+  useEffect(() => {
+    if (projectId) void loadRuns();
+    return () => { runRequest.current += 1; };
+  }, [projectId, loadRuns]);
+
+  useEffect(() => {
+    if (loading || refreshing || error || !runs.some(isActiveRun)) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    function schedulePoll() {
+      timer = setTimeout(async () => {
+        await loadRuns('poll');
+        if (!stopped) schedulePoll();
+      }, 15_000);
+    }
+    schedulePoll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [error, loadRuns, loading, refreshing, runs]);
 
   const uniqueBranches = useMemo(() => {
     const set = new Set<string>();
@@ -138,7 +216,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
     try {
       await rerunWorkflow(projectId, runId);
       showToast('Workflow re-run requested', 'success');
-      await loadRuns(true);
+      await loadRuns('manual');
     } catch (err: any) {
       showToast(typeof err === 'string' ? err : 'Failed to re-run workflow', 'error');
     } finally {
@@ -152,7 +230,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
     try {
       await cancelWorkflowRun(projectId, runId);
       showToast('Workflow run cancelled', 'info');
-      await loadRuns(true);
+      await loadRuns('manual');
     } catch (err: any) {
       showToast(typeof err === 'string' ? err : 'Failed to cancel workflow', 'error');
     } finally {
@@ -237,7 +315,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
           <button
             type="button"
             className="tasks-action-btn"
-            onClick={() => void loadRuns(true)}
+            onClick={() => void loadRuns('manual')}
             disabled={loading || refreshing}
             title="Refresh CI/CD runs"
           >
@@ -272,7 +350,21 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
             }}
           >
             <div style={{ color: 'var(--error, #ef4444)' }}>{error}</div>
-            <button type="button" className="tasks-action-btn" onClick={() => void loadRuns(true)}>
+            <button
+              type="button"
+              className="tasks-action-btn"
+              onClick={async () => {
+                try {
+                  await copyTextToClipboard(error);
+                  showToast('Error copied', 'success');
+                } catch {
+                  showToast('Could not copy the error', 'error');
+                }
+              }}
+            >
+              Copy error
+            </button>
+            <button type="button" className="tasks-action-btn" onClick={() => void loadRuns('manual')}>
               <RefreshIcon size={12} /> Retry
             </button>
           </div>
@@ -295,7 +387,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
             <div style={{ fontSize: 11.5 }}>
               {search || statusFilter !== 'all' || branchFilter !== 'all'
                 ? 'Try clearing your search or status filter.'
-                : 'No GitHub Actions runs found for this repository.'}
+                : 'No CI/CD runs found for this repository.'}
             </div>
           </div>
         ) : (
@@ -303,9 +395,9 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
             const isExpanded = expandedRunId === run.id;
             const jobs = jobsByRun[run.id] || [];
             const isBusy = actionBusyId === run.id;
-            const isRunning = run.status === 'in_progress' || run.status === 'queued';
+            const isRunning = isActiveRun(run);
             const isSuccess = run.conclusion === 'success';
-            const isFailed = run.conclusion === 'failure' || run.conclusion === 'timed_out';
+            const isFailed = isFailure(run.conclusion);
 
             return (
               <div
@@ -363,6 +455,19 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                     >
                       {run.conclusion || run.status}
                     </span>
+
+                    {isFailed && (
+                      <button
+                        type="button"
+                        className="tasks-action-btn"
+                        style={{ padding: '2px 7px', fontSize: 10 }}
+                        onClick={(e) => void handleCopyFailure(e, run)}
+                        disabled={copyingRunId !== null}
+                        title="Copy failed jobs, steps and available logs"
+                      >
+                        {copyingRunId === run.id ? 'Copying…' : 'Copy failure'}
+                      </button>
+                    )}
 
                     {/* Re-run button */}
                     <button
@@ -505,7 +610,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                     ) : (
                       jobs.map((job) => {
                         const jobSuccess = job.conclusion === 'success';
-                        const jobFailed = job.conclusion === 'failure';
+                        const jobFailed = isFailure(job.conclusion);
                         const isWorkingNow = job.status === 'in_progress';
                         return (
                           <div
@@ -568,12 +673,18 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                               </div>
                             </div>
 
+                            {job.failureReason && (
+                              <span style={{ fontSize: 10.5, color: 'var(--text-secondary)' }}>
+                                {job.failureReason}
+                              </span>
+                            )}
+
                             {/* Job Steps Breakdown */}
                             {job.steps.length > 0 && (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, paddingLeft: 18 }}>
                                 {job.steps.map((step) => {
                                   const stepSuccess = step.conclusion === 'success';
-                                  const stepFailed = step.conclusion === 'failure';
+                                  const stepFailed = isFailure(step.conclusion);
                                   const stepWorking = step.status === 'in_progress';
                                   return (
                                     <div

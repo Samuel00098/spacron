@@ -779,7 +779,7 @@ function ReadAloudSection() {
   );
 }
 
-interface OpenRouterSpeechModel {
+interface ReadAloudSpeechModel {
   id: string;
   name: string;
   voices: string[];
@@ -797,14 +797,24 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   const [keyError, setKeyError] = useState('');
   const [accountVoices, setAccountVoices] = useState<{ id: string; label: string }[]>([]);
   const [voicesError, setVoicesError] = useState('');
-  const [openRouterModels, setOpenRouterModels] = useState<OpenRouterSpeechModel[] | null>(null);
+  const modelCatalogCommand = engine === 'openrouter' ? 'read_aloud_openrouter_models'
+    : engine === 'elevenlabs' || engine === 'minimax' ? 'read_aloud_provider_models' : null;
+  const canLoadModels = modelCatalogCommand !== null && (engine === 'openrouter' || keyExists === true);
+  const [liveModels, setLiveModels] = useState<ReadAloudSpeechModel[] | null>(null);
   const [modelsError, setModelsError] = useState('');
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsRefresh, setModelsRefresh] = useState(0);
 
   useEffect(() => {
     let active = true;
     void invoke<boolean>('provider_api_key_exists', { provider: engine })
       .then((exists) => { if (active) setKeyExists(exists); })
-      .catch(() => { if (active) setKeyExists(false); });
+      .catch((error) => {
+        if (active) {
+          setKeyExists(null);
+          setKeyError(explainError(error).summary);
+        }
+      });
     return () => { active = false; };
   }, [engine]);
 
@@ -818,17 +828,23 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   }, [engine, keyExists, savingKey]);
 
   useEffect(() => {
-    if (engine !== 'openrouter') return;
+    if (!modelCatalogCommand || !canLoadModels || savingKey) {
+      setModelsLoading(false);
+      return;
+    }
     let active = true;
-    void invoke<OpenRouterSpeechModel[]>('read_aloud_openrouter_models')
-      .then((list) => { if (active) setOpenRouterModels(list); })
-      .catch((error) => { if (active) setModelsError(explainError(error).summary); });
+    setModelsError('');
+    setModelsLoading(true);
+    void invoke<ReadAloudSpeechModel[]>(modelCatalogCommand, engine === 'openrouter' ? undefined : { provider: engine })
+      .then((list) => { if (active) setLiveModels(list); })
+      .catch((error) => { if (active) setModelsError(explainError(error).summary); })
+      .finally(() => { if (active) setModelsLoading(false); });
     return () => { active = false; };
-  }, [engine]);
+  }, [engine, modelCatalogCommand, canLoadModels, savingKey, modelsRefresh]);
 
-  const selectedRouterModel = openRouterModels?.find((item) => item.id === model);
+  const selectedRouterModel = engine === 'openrouter' ? liveModels?.find((item) => item.id === model) : undefined;
   const setModel = (next: string) => {
-    const routerModel = openRouterModels?.find((item) => item.id === next);
+    const routerModel = engine === 'openrouter' ? liveModels?.find((item) => item.id === next) : undefined;
     readAloudSettings.update((s) => {
       const updated = { ...s, models: { ...s.models, [engine]: next } };
       if (!routerModel) return updated;
@@ -855,6 +871,8 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
         key ? { provider: engine, apiKey: key } : { provider: engine });
       setAccountVoices([]);
       setVoicesError('');
+      setLiveModels(null);
+      setModelsError('');
       setKeyExists(Boolean(key));
       setKeyInput('');
     } catch (error) {
@@ -864,9 +882,16 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
     }
   };
 
-  const modelOptions = engine === 'openrouter'
-    ? (openRouterModels ?? []).map(({ id, name }) => ({ id, label: name }))
-    : engine === 'minimax' || engine === 'elevenlabs' ? READ_ALOUD_MODELS[engine] : [];
+  // MiniMax's general catalog can return only text models. Keep its documented
+  // speech options available when the provider returns no speech model IDs.
+  const usingMiniMaxPresets = engine === 'minimax' && !liveModels?.length;
+  const modelOptions = liveModels && !usingMiniMaxPresets
+    ? liveModels.map(({ id, name }) => ({ id, label: name }))
+    : engine === 'minimax' || engine === 'elevenlabs' ? [...READ_ALOUD_MODELS[engine]] : [];
+  if (((engine === 'elevenlabs' && liveModels === null) || usingMiniMaxPresets)
+    && !modelOptions.some((option) => option.id === model)) {
+    modelOptions.unshift({ id: model, label: model });
+  }
   const availableVoices = engine === 'openrouter'
     ? (selectedRouterModel?.voices ?? []).map((id) => ({ id, label: id }))
     : engine === 'openai' ? OPENAI_READ_ALOUD_VOICES
@@ -874,23 +899,33 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   const voiceOptions = voice && !availableVoices.some((option) => option.id === voice)
     ? [{ id: voice, label: voice === ELEVENLABS_DEFAULT_VOICE ? 'Rachel' : voice }, ...availableVoices]
     : availableVoices;
-  const status = keyExists === null ? 'Checking for an API key…'
-    : keyExists ? `Using the saved ${vendor} API key. Cloud speech uses your API balance.`
+  const status = keyExists === null ? (keyError ? 'Could not check the OS keychain.' : 'Checking for an API key…')
+    : keyExists ? `Using the ${vendor} API key saved in the OS keychain. Cloud speech uses your API balance.`
       : keyUrl ? `Add a ${vendor} API key below.` : `Add a ${vendor} API key under AI Providers > API keys.`;
-  const routerSelectionUnavailable = engine === 'openrouter' && openRouterModels !== null
-    && !selectedRouterModel?.voices.includes(voice);
-  const routerModelDetail = engine === 'openrouter'
-    ? modelsError || (openRouterModels === null ? 'Loading speech models…'
-      : routerSelectionUnavailable ? 'Choose an available model and voice.' : undefined)
-    : undefined;
+  const selectionUnavailable = liveModels !== null && (engine === 'openrouter'
+    ? !selectedRouterModel?.voices.includes(voice)
+    : !modelOptions.some((option) => option.id === model));
+  const modelDetail = modelsLoading ? 'Loading speech models…'
+    : modelsError || (usingMiniMaxPresets && liveModels ? 'Using built-in MiniMax speech models.'
+      : liveModels?.length === 0 ? 'The provider returned no speech models.'
+      : selectionUnavailable ? 'Choose an available speech model.' : undefined);
 
   return (
     <>
       <p className="shell-hint">{status}</p>
-      {(engine === 'openrouter' || modelOptions.length > 0) && (
-        <SettingRow title="Speech model" detail={routerModelDetail}>
-          <StyledSelect value={model} options={modelOptions} onChange={setModel} ariaLabel="Read aloud speech model" showSearch={engine === 'openrouter'} />
-        </SettingRow>
+      {(modelCatalogCommand || modelOptions.length > 0) && (
+        <>
+          <SettingRow title="Speech model" detail={modelDetail}>
+            <StyledSelect value={model} options={modelOptions} onChange={setModel} ariaLabel="Read aloud speech model" showSearch={modelCatalogCommand !== null} />
+          </SettingRow>
+          {canLoadModels && (
+            <div className="settings-action-row">
+              <button className="settings-secondary" onClick={() => setModelsRefresh((revision) => revision + 1)} disabled={modelsLoading || savingKey}>
+                {modelsLoading ? 'Refreshing…' : 'Refresh models'}
+              </button>
+            </div>
+          )}
+        </>
       )}
       <SettingRow title="Voice" detail={voicesError || undefined}>
         <StyledSelect value={voice} options={voiceOptions} onChange={setVoice} ariaLabel="Read aloud voice" showSearch={voiceOptions.length > 10} />
@@ -906,14 +941,14 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
             />
           </SettingRow>
           <div className="settings-action-row">
-            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={savingKey || keyExists === null || !keyInput.trim()}>Save key</button>
+            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={savingKey || (keyExists === null && !keyError) || !keyInput.trim()}>Save key</button>
             <button className="settings-secondary" onClick={() => void saveKey('')} disabled={savingKey || !keyExists}>Clear key</button>
             <button className="settings-link-button" onClick={() => openExternalUrl(keyUrl)}>Get a key</button>
           </div>
         </>
       )}
       <div className="settings-action-row">
-        <button className="settings-secondary" onClick={previewReadAloud} disabled={!keyExists || savingKey || !voice || routerSelectionUnavailable}>Test voice</button>
+        <button className="settings-secondary" onClick={previewReadAloud} disabled={!keyExists || savingKey || !voice || selectionUnavailable}>Test voice</button>
       </div>
       {keyError && <p className="shell-hint">{keyError}</p>}
     </>
