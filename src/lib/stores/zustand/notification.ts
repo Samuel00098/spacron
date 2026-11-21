@@ -141,13 +141,25 @@ export const useNotificationStore = create<NotificationState>((set, getState) =>
   toasts: [],
 
   showToast: (
-    message: string,
+    message: any,
     type: Toast['type'] = 'info',
     duration?: number,
     notifySystem = false,
     action?: { label: string; onClick: () => void },
     explained?: { hint?: string; details?: string }
   ) => {
+    if (typeof message === 'object' && message !== null) {
+      if (message.tone) {
+        type = (message.tone === 'success' || message.tone === 'error' || message.tone === 'warning')
+          ? message.tone
+          : 'info';
+      } else if (message.type) {
+        type = message.type;
+      }
+      message = message.title || message.message || JSON.stringify(message);
+    } else {
+      message = String(message ?? '');
+    }
     // Errors and warnings are often raw output (npm, git, OS codes). Every one
     // goes through the explainer so the toast leads with what happened and
     // what to do, and the raw text waits behind "Show details".

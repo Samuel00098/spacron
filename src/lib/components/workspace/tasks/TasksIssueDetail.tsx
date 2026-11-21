@@ -66,15 +66,9 @@ export default function TasksIssueDetail({
     try {
       await updateIssueState(projectId, issue.number, targetState);
       setIssue({ ...issue, state: targetState });
-      showToast({
-        title: targetState === 'closed' ? 'Issue closed' : 'Issue reopened',
-        tone: 'success',
-      });
+      showToast(targetState === 'closed' ? 'Issue closed' : 'Issue reopened', 'success');
     } catch {
-      showToast({
-        title: 'Failed to update issue',
-        tone: 'error',
-      });
+      showToast('Failed to update issue', 'error');
     } finally {
       setUpdatingState(false);
     }
@@ -87,9 +81,9 @@ export default function TasksIssueDetail({
       const newComment = await addIssueComment(projectId, issue.number, replyText);
       setComments((prev) => [...prev, newComment]);
       setReplyText('');
-      showToast({ title: 'Comment posted', tone: 'success' });
+      showToast('Comment posted', 'success');
     } catch {
-      showToast({ title: 'Failed to post comment', tone: 'error' });
+      showToast('Failed to post comment', 'error');
     } finally {
       setSubmittingReply(false);
     }

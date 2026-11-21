@@ -11,6 +11,8 @@ import {
   type PRChecksSummary,
 } from '$lib/services/work-items';
 import MarkdownPreview from '$lib/components/preview/MarkdownPreview';
+import TasksDiffViewer from './TasksDiffViewer';
+import TasksPRTimeline from './TasksPRTimeline';
 import { showToast } from '$lib/stores/notification';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import {
@@ -23,6 +25,7 @@ import {
   MessageSquareIcon,
   CheckCircleIcon,
   FileCodeIcon,
+  ClockIcon,
 } from './TasksIcons';
 
 export default function TasksPullRequestDetail({
@@ -40,7 +43,7 @@ export default function TasksPullRequestDetail({
   const [comments, setComments] = useState<WorkItemComment[]>([]);
   const [files, setFiles] = useState<WorkItemFile[]>([]);
   const [checks, setChecks] = useState<PRChecksSummary | null>(null);
-  const [activeTab, setActiveTab] = useState<'conversation' | 'checks' | 'files'>('conversation');
+  const [activeTab, setActiveTab] = useState<'conversation' | 'timeline' | 'checks' | 'files'>('conversation');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,12 +109,12 @@ export default function TasksPullRequestDetail({
 
       if (res.success) {
         setPr({ ...pr, state: 'merged', mergedAt: new Date().toISOString() });
-        showToast({ title: 'Pull Request merged successfully!', tone: 'success' });
+        showToast('Pull Request merged successfully!', 'success');
       }
     } catch (err) {
       const msg = typeof err === 'string' ? err : 'Failed to merge pull request';
       setMergeError(msg);
-      showToast({ title: 'Merge failed', tone: 'error' });
+      showToast('Merge failed', 'error');
     } finally {
       setMerging(false);
     }
@@ -124,9 +127,9 @@ export default function TasksPullRequestDetail({
       const newComment = await addPullRequestComment(projectId, pr.number, replyText);
       setComments((prev) => [...prev, newComment]);
       setReplyText('');
-      showToast({ title: 'Comment posted', tone: 'success' });
+      showToast('Comment posted', 'success');
     } catch {
-      showToast({ title: 'Failed to post comment', tone: 'error' });
+      showToast('Failed to post comment', 'error');
     } finally {
       setSubmittingReply(false);
     }
@@ -225,7 +228,7 @@ export default function TasksPullRequestDetail({
         </div>
       </div>
 
-      {/* Sub-Tabs: Conversation, Checks, Files Changed */}
+      {/* Sub-Tabs: Conversation, Timeline, Checks, Files Changed */}
       <div className="pr-tabs-bar">
         <button
           type="button"
@@ -235,6 +238,15 @@ export default function TasksPullRequestDetail({
           <MessageSquareIcon size={13} />
           <span>Conversation</span>
           {comments.length > 0 && <span className="pr-tab-count">{comments.length}</span>}
+        </button>
+
+        <button
+          type="button"
+          className={`pr-tab-btn ${activeTab === 'timeline' ? 'active' : ''}`}
+          onClick={() => setActiveTab('timeline')}
+        >
+          <ClockIcon size={13} />
+          <span>Timeline</span>
         </button>
 
         <button
@@ -388,7 +400,12 @@ export default function TasksPullRequestDetail({
           </>
         )}
 
-        {/* Tab 2: Checks */}
+        {/* Tab 2: Timeline */}
+        {activeTab === 'timeline' && (
+          <TasksPRTimeline pr={pr} comments={comments} checks={checks} />
+        )}
+
+        {/* Tab 3: Checks */}
         {activeTab === 'checks' && (
           <div className="checks-list">
             <h4 style={{ fontSize: 12, fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>
@@ -430,47 +447,9 @@ export default function TasksPullRequestDetail({
           </div>
         )}
 
-        {/* Tab 3: Files Changed */}
+        {/* Tab 4: Files Changed */}
         {activeTab === 'files' && (
-          <div className="diff-files-layout">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-              <h4 style={{ fontSize: 12, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-                Changed Files ({files.length})
-              </h4>
-            </div>
-
-            {files.map((file) => (
-              <div key={file.filename} className="diff-file-card">
-                <div className="diff-file-header">
-                  <span className="diff-filename">{file.filename}</span>
-                  <span className="diff-stats-pill">
-                    <span className="diff-additions">+{file.additions}</span>
-                    <span className="diff-deletions">-{file.deletions}</span>
-                  </span>
-                </div>
-
-                {file.patch ? (
-                  <pre className="diff-patch-pre">
-                    {file.patch.split('\n').map((line, idx) => {
-                      const isAdd = line.startsWith('+');
-                      const isDel = line.startsWith('-');
-                      const isHunk = line.startsWith('@@');
-                      const cls = isAdd ? 'diff-line-add' : isDel ? 'diff-line-del' : isHunk ? 'diff-line-hunk' : '';
-                      return (
-                        <span key={idx} className={cls}>
-                          {line}
-                        </span>
-                      );
-                    })}
-                  </pre>
-                ) : (
-                  <p style={{ padding: 12, margin: 0, color: 'var(--text-muted)', fontSize: 11 }}>
-                    Binary or large file changed without inline diff preview.
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
+          <TasksDiffViewer files={files} />
         )}
       </div>
     </div>

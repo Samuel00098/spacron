@@ -46,14 +46,11 @@ export default function TasksNewIssueModal({
         labelList.length > 0 ? labelList : undefined
       );
 
-      showToast({ title: `Created issue #${issue.number}`, tone: 'success' });
+      showToast(`Created issue #${issue.number}`, 'success');
       onCreated(issue);
       onClose();
     } catch (err) {
-      showToast({
-        title: typeof err === 'string' ? err : 'Failed to create issue',
-        tone: 'error',
-      });
+      showToast(typeof err === 'string' ? err : 'Failed to create issue', 'error');
     } finally {
       setSubmitting(false);
     }

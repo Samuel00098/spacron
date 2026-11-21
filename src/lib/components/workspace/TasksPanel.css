@@ -542,7 +542,7 @@
 .tasks-panel .add-task-row {
   flex-shrink: 0;
   padding: 9px 0 12px;
-  border-top: 1px dashed var(--border-subtle);
+  border-top: 1px solid var(--border-subtle);
   margin-top: 2px;
 }
 

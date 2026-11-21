@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { WorkItemPR } from '$lib/services/work-items';
 import {
   SearchIcon,
@@ -22,36 +22,123 @@ export default function TasksPullRequestsList({
 }) {
   const [filter, setFilter] = useState<'open' | 'closed' | 'merged' | 'all'>('open');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'updated' | 'title-asc' | 'title-desc'>('newest');
+  const [authorFilter, setAuthorFilter] = useState<string>('all');
 
-  const filteredPRs = pullRequests.filter((item) => {
-    if (filter !== 'all' && item.state !== filter) return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      return (
-        item.title.toLowerCase().includes(q) ||
-        item.number.toString().includes(q) ||
-        item.headBranch.toLowerCase().includes(q) ||
-        item.baseBranch.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
+  const uniqueAuthors = useMemo(() => {
+    const set = new Set<string>();
+    pullRequests.forEach((pr) => {
+      if (pr.author?.login) set.add(pr.author.login);
+    });
+    return Array.from(set).sort();
+  }, [pullRequests]);
+
+  const filteredPRs = useMemo(() => {
+    const list = pullRequests.filter((item) => {
+      if (filter !== 'all' && item.state !== filter) return false;
+      if (authorFilter !== 'all' && item.author?.login !== authorFilter) return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        return (
+          item.title.toLowerCase().includes(q) ||
+          item.number.toString().includes(q) ||
+          item.headBranch.toLowerCase().includes(q) ||
+          item.baseBranch.toLowerCase().includes(q) ||
+          item.author?.login.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+
+    list.sort((a, b) => {
+      switch (sortBy) {
+        case 'newest':
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        case 'oldest':
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        case 'updated':
+          return new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime();
+        case 'title-asc':
+          return a.title.localeCompare(b.title);
+        case 'title-desc':
+          return b.title.localeCompare(a.title);
+        default:
+          return 0;
+      }
+    });
+
+    return list;
+  }, [pullRequests, filter, search, sortBy, authorFilter]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Search and state filters */}
-      <div className="tasks-filter-bar">
-        <div className="tasks-search-input-wrap">
-          <SearchIcon size={12} />
-          <input
-            type="text"
-            className="tasks-search-input"
-            placeholder="Filter pull requests..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+      {/* Search, Sort, and Filters Bar */}
+      <div className="tasks-filter-bar" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 260 }}>
+          <div className="tasks-search-input-wrap" style={{ flex: 1 }}>
+            <SearchIcon size={12} />
+            <input
+              type="text"
+              className="tasks-search-input"
+              placeholder="Filter by title, branch, #number, author..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+
+          {/* Sort Selector */}
+          <select
+            className="tasks-filter-pill"
+            style={{
+              padding: '4px 8px',
+              fontSize: 11,
+              background: 'var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent))',
+              border: '1px solid var(--border, rgba(127, 127, 127, 0.15))',
+              borderRadius: 6,
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              outline: 'none',
+            }}
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            title="Sort pull requests"
+          >
+            <option value="newest">Sort: Newest</option>
+            <option value="oldest">Sort: Oldest</option>
+            <option value="updated">Sort: Recently Updated</option>
+            <option value="title-asc">Sort: Title (A-Z)</option>
+            <option value="title-desc">Sort: Title (Z-A)</option>
+          </select>
+
+          {/* Author Filter (if multiple authors exist) */}
+          {uniqueAuthors.length > 1 && (
+            <select
+              className="tasks-filter-pill"
+              style={{
+                padding: '4px 8px',
+                fontSize: 11,
+                background: 'var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent))',
+                border: '1px solid var(--border, rgba(127, 127, 127, 0.15))',
+                borderRadius: 6,
+                color: 'var(--text-primary)',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+              value={authorFilter}
+              onChange={(e) => setAuthorFilter(e.target.value)}
+              title="Filter by author"
+            >
+              <option value="all">Author: All</option>
+              {uniqueAuthors.map((auth) => (
+                <option key={auth} value={auth}>
+                  Author: @{auth}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
+        {/* State Pills: Open, Merged, Closed, All */}
         <div className="tasks-filter-pills">
           <button
             type="button"
@@ -79,7 +166,7 @@ export default function TasksPullRequestsList({
             className={`tasks-filter-pill ${filter === 'all' ? 'active' : ''}`}
             onClick={() => setFilter('all')}
           >
-            All
+            All ({pullRequests.length})
           </button>
         </div>
       </div>
@@ -114,7 +201,9 @@ export default function TasksPullRequestsList({
             </div>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>No pull requests found</div>
             <div style={{ fontSize: 11.5, marginTop: 4 }}>
-              {search ? 'Try clearing your search query.' : 'There are no pull requests matching this filter.'}
+              {search || authorFilter !== 'all'
+                ? 'Try clearing your search or author filter.'
+                : 'There are no pull requests matching this filter.'}
             </div>
           </div>
         )}
@@ -156,7 +245,7 @@ export default function TasksPullRequestsList({
                     onSelectPR(pr);
                   }}
                 >
-                  <span>Review & Merge</span>
+                  <span>{pr.state === 'merged' ? 'View Details' : 'Review & Merge'}</span>
                   <span style={{ fontSize: 11 }}>→</span>
                 </button>
               </div>
@@ -168,12 +257,30 @@ export default function TasksPullRequestsList({
                     <span>{pr.headBranch} → {pr.baseBranch}</span>
                   </span>
                   <span>
-                    Opened by <strong style={{ color: 'var(--text-primary)' }}>{pr.author.login}</strong> ·{' '}
-                    {new Date(pr.createdAt).toLocaleDateString(undefined, {
-                      month: 'short',
-                      day: 'numeric',
-                    })}
+                    {pr.state === 'merged' && pr.mergedAt ? (
+                      <>
+                        Merged on{' '}
+                        {new Date(pr.mergedAt).toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </>
+                    ) : (
+                      <>
+                        Opened by <strong style={{ color: 'var(--text-primary)' }}>{pr.author.login}</strong> ·{' '}
+                        {new Date(pr.createdAt).toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </>
+                    )}
                   </span>
+                  {(pr.additions !== null && pr.additions !== undefined) && (
+                    <span className="diff-stats-pill" style={{ marginLeft: 4 }}>
+                      <span className="diff-additions">+{pr.additions}</span>
+                      <span className="diff-deletions">-{pr.deletions}</span>
+                    </span>
+                  )}
                 </div>
 
                 <div className="work-item-meta-right">

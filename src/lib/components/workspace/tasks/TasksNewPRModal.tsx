@@ -46,14 +46,11 @@ export default function TasksNewPRModal({
         draft,
       });
 
-      showToast({ title: 'Pull Request created!', tone: 'success' });
+      showToast('Pull Request created!', 'success');
       onCreated();
       onClose();
     } catch (err) {
-      showToast({
-        title: typeof err === 'string' ? err : 'Failed to create pull request',
-        tone: 'error',
-      });
+      showToast(typeof err === 'string' ? err : 'Failed to create pull request', 'error');
     } finally {
       setSubmitting(false);
     }

@@ -169,8 +169,8 @@ export default function TasksPanel() {
       const info = await getRepoInfo(projectId);
       setRepoInfo(info);
       const [fetchedIssues, fetchedPRs] = await Promise.all([
-        listIssues(projectId, 'open').catch(() => []),
-        listPullRequests(projectId, 'open').catch(() => []),
+        listIssues(projectId, 'all').catch(() => []),
+        listPullRequests(projectId, 'all').catch(() => []),
       ]);
       setIssues(fetchedIssues);
       setPrs(fetchedPRs);
@@ -202,10 +202,7 @@ export default function TasksPanel() {
     const defaultAgent = dispatchableAgents[0]?.command;
     void sendChatMessage(projectId, root, prompt, defaultAgent ? { forcedAgent: defaultAgent } : undefined);
     useLayoutStore.getState().setActiveView('terminal');
-    showToast({
-      title: `Dispatched #${number} to agent`,
-      tone: 'success',
-    });
+    showToast(`Dispatched #${number} to agent`, 'success');
   };
 
   // Columns sort by urgency (priority → due date → drag order) — the same rule
@@ -498,15 +495,6 @@ export default function TasksPanel() {
     },
     [],
   );
-
-  function moveTaskByArrow(taskId: string, currentStatus: TaskStatus, dir: 1 | -1) {
-    const idx = statusOrder.indexOf(currentStatus);
-    const next = statusOrder[idx + dir];
-    if (next) {
-      snapshotCards();
-      moveTask(taskId, next);
-    }
-  }
 
   // ── Drag & drop ────────────────────────────────────────────────────────────
   // Pointer-based, because HTML5 drag-and-drop never fires inside Tauri on
@@ -868,20 +856,6 @@ export default function TasksPanel() {
                           <button className="task-btn run-btn" onClick={(e) => runClick(e, task)} title="Run with agent" aria-label="Run with agent">
                             <RocketGlyph />
                           </button>
-                          {col.id !== 'todo' && (
-                            <button className="task-btn" onClick={(e) => { e.stopPropagation(); moveTaskByArrow(task.id, col.id, -1); }} title="Move back">
-                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="15 18 9 12 15 6"/>
-                              </svg>
-                            </button>
-                          )}
-                          {col.id !== 'done' && (
-                            <button className="task-btn" onClick={(e) => { e.stopPropagation(); moveTaskByArrow(task.id, col.id, 1); }} title="Move forward">
-                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="9 18 15 12 9 6"/>
-                              </svg>
-                            </button>
-                          )}
                           <button className="task-btn" onClick={(e) => { e.stopPropagation(); setEditingTaskId(task.id); }} title="Edit" aria-label="Edit task">
                             <PencilGlyph />
                           </button>
