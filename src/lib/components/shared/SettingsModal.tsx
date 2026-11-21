@@ -240,8 +240,7 @@ const settingsNavGroups: { label?: string; tabs: Tab[] }[] = [
   // 'orchestrator' is left out while there is no Chat mode to configure; its
   // pane and search entries are kept so it can be listed here again.
   { label: 'Agents', tabs: ['agents', 'mcp'] },
-  { label: 'Code', tabs: ['source-control'] },
-  { label: 'Connections', tabs: ['models'] },
+  { label: 'Connections', tabs: ['models', 'source-control'] },
   { label: 'Projects', tabs: ['project'] },
   { label: 'Workspace', tabs: ['cleanup'] },
   { label: 'Maintenance', tabs: ['about'] },
