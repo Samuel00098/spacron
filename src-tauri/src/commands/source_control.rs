@@ -1358,3 +1358,311 @@ pub async fn source_control_add_pr_comment(
 ) -> Result<WorkItemComment, String> {
     source_control_add_issue_comment(project_id, repo_path, pr_number, body, state).await
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRun {
+    pub id: u64,
+    pub name: String,
+    pub display_title: String,
+    pub run_number: u64,
+    pub event: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub head_branch: String,
+    pub head_sha: String,
+    pub actor: IssueAuthor,
+    pub created_at: String,
+    pub updated_at: String,
+    pub run_started_at: Option<String>,
+    pub html_url: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowJobStep {
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub number: u64,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowJob {
+    pub id: u64,
+    pub run_id: u64,
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub html_url: String,
+    pub steps: Vec<WorkflowJobStep>,
+}
+
+/// List workflow runs (GitHub Actions CI/CD).
+#[tauri::command]
+pub async fn source_control_list_workflow_runs(
+    project_id: String,
+    repo_path: Option<String>,
+    branch: Option<String>,
+    status_filter: Option<String>,
+    page: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<WorkflowRun>, String> {
+    check_git_available()?;
+    let repo = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    let remote_url = run_git(&repo, &["remote", "get-url", "origin"])
+        .map_err(|_| "Project has no origin remote configured.".to_string())?;
+
+    let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
+        "Origin remote is not a recognized GitHub repository.".to_string()
+    })?;
+
+    let token = resolve_token(&provider).ok_or_else(|| {
+        "No authentication token found. Please sign in via Settings or GitHub CLI.".to_string()
+    })?;
+
+    let client = http_client();
+    let page_num = page.unwrap_or(1);
+    let mut url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs?per_page=30&page={page_num}");
+    if let Some(b) = branch.filter(|s| !s.trim().is_empty() && s != "all") {
+        url.push_str(&format!("&branch={b}"));
+    }
+    if let Some(s) = status_filter.filter(|s| !s.trim().is_empty() && s != "all") {
+        url.push_str(&format!("&status={s}"));
+    }
+
+    let response = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch workflow runs: {}", e.without_url()))?;
+
+    if !response.status().is_success() {
+        let err_text = response.text().await.unwrap_or_default();
+        return Err(format!("GitHub API returned error fetching workflow runs: {err_text}"));
+    }
+
+    let payload: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let runs_arr = payload.get("workflow_runs").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    let mut result = Vec::new();
+    for r in runs_arr {
+        let id = r.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+        let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("Workflow").to_string();
+        let display_title = r.get("display_title").and_then(|v| v.as_str()).unwrap_or(&name).to_string();
+        let run_number = r.get("run_number").and_then(|v| v.as_u64()).unwrap_or(0);
+        let event = r.get("event").and_then(|v| v.as_str()).unwrap_or("push").to_string();
+        let status = r.get("status").and_then(|v| v.as_str()).unwrap_or("queued").to_string();
+        let conclusion = r.get("conclusion").and_then(|v| v.as_str()).map(ToString::to_string);
+        let head_branch = r.get("head_branch").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let head_sha = r.get("head_sha").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let created_at = r.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let updated_at = r.get("updated_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let run_started_at = r.get("run_started_at").and_then(|v| v.as_str()).map(ToString::to_string);
+        let html_url = r.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        let actor = r.get("actor").map(|a| IssueAuthor {
+            login: a.get("login").and_then(|v| v.as_str()).unwrap_or("ghost").to_string(),
+            avatar_url: a.get("avatar_url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        }).unwrap_or(IssueAuthor {
+            login: "ghost".to_string(),
+            avatar_url: String::new(),
+        });
+
+        result.push(WorkflowRun {
+            id,
+            name,
+            display_title,
+            run_number,
+            event,
+            status,
+            conclusion,
+            head_branch,
+            head_sha,
+            actor,
+            created_at,
+            updated_at,
+            run_started_at,
+            html_url,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Fetch jobs for a workflow run.
+#[tauri::command]
+pub async fn source_control_get_workflow_run_jobs(
+    project_id: String,
+    repo_path: Option<String>,
+    run_id: u64,
+    state: State<'_, AppState>,
+) -> Result<Vec<WorkflowJob>, String> {
+    check_git_available()?;
+    let repo = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    let remote_url = run_git(&repo, &["remote", "get-url", "origin"])
+        .map_err(|_| "Project has no origin remote configured.".to_string())?;
+
+    let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
+        "Origin remote is not a recognized GitHub repository.".to_string()
+    })?;
+
+    let token = resolve_token(&provider).ok_or_else(|| {
+        "No authentication token found.".to_string()
+    })?;
+
+    let client = http_client();
+    let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/jobs");
+
+    let response = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch workflow jobs: {}", e.without_url()))?;
+
+    if !response.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let payload: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
+    let jobs_arr = payload.get("jobs").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    let mut result = Vec::new();
+    for j in jobs_arr {
+        let id = j.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+        let name = j.get("name").and_then(|v| v.as_str()).unwrap_or("job").to_string();
+        let status = j.get("status").and_then(|v| v.as_str()).unwrap_or("queued").to_string();
+        let conclusion = j.get("conclusion").and_then(|v| v.as_str()).map(ToString::to_string);
+        let started_at = j.get("started_at").and_then(|v| v.as_str()).map(ToString::to_string);
+        let completed_at = j.get("completed_at").and_then(|v| v.as_str()).map(ToString::to_string);
+        let html_url = j.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        let mut steps = Vec::new();
+        if let Some(steps_arr) = j.get("steps").and_then(|v| v.as_array()) {
+            for s in steps_arr {
+                let s_name = s.get("name").and_then(|v| v.as_str()).unwrap_or("step").to_string();
+                let s_status = s.get("status").and_then(|v| v.as_str()).unwrap_or("queued").to_string();
+                let s_conclusion = s.get("conclusion").and_then(|v| v.as_str()).map(ToString::to_string);
+                let s_number = s.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+                let s_started = s.get("started_at").and_then(|v| v.as_str()).map(ToString::to_string);
+                let s_completed = s.get("completed_at").and_then(|v| v.as_str()).map(ToString::to_string);
+
+                steps.push(WorkflowJobStep {
+                    name: s_name,
+                    status: s_status,
+                    conclusion: s_conclusion,
+                    number: s_number,
+                    started_at: s_started,
+                    completed_at: s_completed,
+                });
+            }
+        }
+
+        result.push(WorkflowJob {
+            id,
+            run_id,
+            name,
+            status,
+            conclusion,
+            started_at,
+            completed_at,
+            html_url,
+            steps,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Re-run a workflow run.
+#[tauri::command]
+pub async fn source_control_rerun_workflow(
+    project_id: String,
+    repo_path: Option<String>,
+    run_id: u64,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    check_git_available()?;
+    let repo = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    let remote_url = run_git(&repo, &["remote", "get-url", "origin"])
+        .map_err(|_| "Project has no origin remote configured.".to_string())?;
+
+    let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
+        "Origin remote is not a recognized GitHub repository.".to_string()
+    })?;
+
+    let token = resolve_token(&provider).ok_or_else(|| {
+        "No authentication token found.".to_string()
+    })?;
+
+    let client = http_client();
+    let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/rerun");
+
+    let response = client
+        .post(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to rerun workflow: {}", e.without_url()))?;
+
+    if response.status().is_success() || response.status().as_u16() == 201 {
+        Ok(true)
+    } else {
+        let msg = response.text().await.unwrap_or_default();
+        Err(format!("Could not rerun workflow: {msg}"))
+    }
+}
+
+/// Cancel an in-progress workflow run.
+#[tauri::command]
+pub async fn source_control_cancel_workflow_run(
+    project_id: String,
+    repo_path: Option<String>,
+    run_id: u64,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    check_git_available()?;
+    let repo = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
+    let remote_url = run_git(&repo, &["remote", "get-url", "origin"])
+        .map_err(|_| "Project has no origin remote configured.".to_string())?;
+
+    let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
+        "Origin remote is not a recognized GitHub repository.".to_string()
+    })?;
+
+    let token = resolve_token(&provider).ok_or_else(|| {
+        "No authentication token found.".to_string()
+    })?;
+
+    let client = http_client();
+    let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/cancel");
+
+    let response = client
+        .post(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to cancel workflow: {}", e.without_url()))?;
+
+    if response.status().is_success() || response.status().as_u16() == 202 {
+        Ok(true)
+    } else {
+        let msg = response.text().await.unwrap_or_default();
+        Err(format!("Could not cancel workflow: {msg}"))
+    }
+}

@@ -30,8 +30,12 @@ import TasksIssuesList from './tasks/TasksIssuesList';
 import TasksIssueDetail from './tasks/TasksIssueDetail';
 import TasksPullRequestsList from './tasks/TasksPullRequestsList';
 import TasksPullRequestDetail from './tasks/TasksPullRequestDetail';
+import TasksActionsList from './tasks/TasksActionsList';
 import TasksNewIssueModal from './tasks/TasksNewIssueModal';
 import TasksNewPRModal from './tasks/TasksNewPRModal';
+import TasksAgentReviewModal from './tasks/TasksAgentReviewModal';
+import type { AgentPlacement } from '$lib/stores/agentPlacement';
+import type { ChatReasoningEffort } from '$lib/types/chat';
 import {
   getRepoInfo,
   listIssues,
@@ -187,22 +191,63 @@ export default function TasksPanel() {
     }
   }, [projectId]);
 
-  const dispatchWorkItemToAgent = (
+  const [reviewModalState, setReviewModalState] = useState<{
+    isOpen: boolean;
+    itemType: 'pr' | 'issue';
+    itemNumber: number;
+    itemTitle: string;
+    itemBody: string;
+    headBranch?: string;
+    baseBranch?: string;
+  }>({
+    isOpen: false,
+    itemType: 'pr',
+    itemNumber: 0,
+    itemTitle: '',
+    itemBody: '',
+  });
+
+  const openAgentReviewModal = (
     type: 'issue' | 'pr',
     title: string,
     body: string,
-    number: number
+    number: number,
+    headBranch?: string,
+    baseBranch?: string
   ) => {
+    setReviewModalState({
+      isOpen: true,
+      itemType: type,
+      itemNumber: number,
+      itemTitle: title,
+      itemBody: body,
+      headBranch,
+      baseBranch,
+    });
+  };
+
+  const handleLaunchAgentReview = (config: {
+    agentCommand: string;
+    agentName: string;
+    placement: AgentPlacement;
+    model: string | null;
+    reasoningEffort: ChatReasoningEffort;
+  }) => {
     const root = project?.root_path;
     if (!root || !projectId) return;
+
+    const { itemType, itemNumber, itemTitle, itemBody, headBranch, baseBranch } = reviewModalState;
     const prompt =
-      type === 'issue'
-        ? `Work on Issue #${number}: ${title}\n\n${body}`
-        : `Review and verify Pull Request #${number}: ${title}\n\n${body}`;
-    const defaultAgent = dispatchableAgents[0]?.command;
-    void sendChatMessage(projectId, root, prompt, defaultAgent ? { forcedAgent: defaultAgent } : undefined);
+      itemType === 'issue'
+        ? `Work on Issue #${itemNumber}: ${itemTitle}\n\n${itemBody}`
+        : `Review and verify Pull Request #${itemNumber}: ${itemTitle}\n\nBranch: ${headBranch || 'HEAD'} → ${baseBranch || 'main'}\n\n${itemBody}`;
+
+    void sendChatMessage(projectId, root, prompt, {
+      forcedAgent: config.agentCommand,
+      model: config.model || undefined,
+    });
     useLayoutStore.getState().setActiveView('terminal');
-    showToast(`Dispatched #${number} to agent`, 'success');
+    showToast(`${itemType === 'pr' ? 'Review' : 'Task'} dispatched to ${config.agentName}`, 'success');
   };
 
   // Columns sort by urgency (priority → due date → drag order) — the same rule
@@ -742,14 +787,14 @@ export default function TasksPanel() {
               projectId={projectId}
               issueNumber={selectedItem.number}
               onBack={() => setSelectedItem(null)}
-              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('issue', t, b, n)}
+              onAssignToAgent={(t, b, n) => openAgentReviewModal('issue', t, b, n)}
             />
           ) : selectedItem?.type === 'pr' ? (
             <TasksPullRequestDetail
               projectId={projectId}
               prNumber={selectedItem.number}
               onBack={() => setSelectedItem(null)}
-              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('pr', t, b, n)}
+              onAssignToAgent={(t, b, n, hb, bb) => openAgentReviewModal('pr', t, b, n, hb, bb)}
             />
           ) : activeTab === 'issues' ? (
             <TasksIssuesList
@@ -757,7 +802,7 @@ export default function TasksPanel() {
               loading={loadingItems}
               error={itemsError}
               onSelectIssue={(issue) => setSelectedItem({ type: 'issue', number: issue.number })}
-              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('issue', t, b, n)}
+              onAssignToAgent={(t, b, n) => openAgentReviewModal('issue', t, b, n)}
             />
           ) : activeTab === 'prs' ? (
             <TasksPullRequestsList
@@ -765,8 +810,10 @@ export default function TasksPanel() {
               loading={loadingItems}
               error={itemsError}
               onSelectPR={(pr) => setSelectedItem({ type: 'pr', number: pr.number })}
-              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('pr', t, b, n)}
+              onAssignToAgent={(t, b, n, hb, bb) => openAgentReviewModal('pr', t, b, n, hb, bb)}
             />
+          ) : activeTab === 'actions' ? (
+            <TasksActionsList projectId={projectId} />
           ) : (
             <>
               <div className="panel-meta">
@@ -976,6 +1023,18 @@ export default function TasksPanel() {
           onClose={() => setEditingTaskId(null)}
         />
       )}
+
+      <TasksAgentReviewModal
+        isOpen={reviewModalState.isOpen}
+        onClose={() => setReviewModalState((prev) => ({ ...prev, isOpen: false }))}
+        itemType={reviewModalState.itemType}
+        itemNumber={reviewModalState.itemNumber}
+        itemTitle={reviewModalState.itemTitle}
+        itemBody={reviewModalState.itemBody}
+        headBranch={reviewModalState.headBranch}
+        baseBranch={reviewModalState.baseBranch}
+        onLaunch={handleLaunchAgentReview}
+      />
     </>
   )}
 </div>

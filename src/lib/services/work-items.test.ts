@@ -13,6 +13,10 @@ import {
   getPullRequestChecks,
   mergePullRequest,
   addPullRequestComment,
+  listWorkflowRuns,
+  getWorkflowRunJobs,
+  rerunWorkflow,
+  cancelWorkflowRun,
 } from './work-items';
 
 const mockInvoke = vi.fn();
@@ -342,5 +346,98 @@ describe('work-items service', () => {
     });
     expect(pr.number).toBe(12);
     expect(pr.title).toBe('feat: add compact pr button');
+  });
+
+  it('lists workflow runs for GitHub Actions', async () => {
+    mockInvoke.mockResolvedValueOnce([
+      {
+        id: 1001,
+        name: 'CI',
+        workflowId: 2001,
+        headBranch: 'main',
+        headSha: 'abc1234',
+        status: 'completed',
+        conclusion: 'success',
+        event: 'push',
+        url: 'https://github.com/acme/spacron/actions/runs/1001',
+        htmlUrl: 'https://github.com/acme/spacron/actions/runs/1001',
+        createdAt: '2026-11-21T06:00:00Z',
+        updatedAt: '2026-11-21T06:05:00Z',
+        runNumber: 42,
+        runAttempt: 1,
+        actor: { login: 'dev', avatarUrl: '' },
+        displayTitle: 'build and test',
+      },
+    ]);
+
+    const runs = await listWorkflowRuns('proj-1', {
+      branch: 'main',
+      statusFilter: 'completed',
+      page: 1,
+      repoPath: '/repo',
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith('source_control_list_workflow_runs', {
+      projectId: 'proj-1',
+      repoPath: '/repo',
+      branch: 'main',
+      statusFilter: 'completed',
+      page: 1,
+    });
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runNumber).toBe(42);
+    expect(runs[0].conclusion).toBe('success');
+  });
+
+  it('fetches workflow run jobs and steps', async () => {
+    mockInvoke.mockResolvedValueOnce([
+      {
+        id: 501,
+        runId: 1001,
+        name: 'test',
+        status: 'completed',
+        conclusion: 'success',
+        startedAt: '2026-11-21T06:01:00Z',
+        completedAt: '2026-11-21T06:04:00Z',
+        steps: [
+          {
+            name: 'Run vitest',
+            status: 'completed',
+            conclusion: 'success',
+            number: 1,
+            startedAt: '2026-11-21T06:01:10Z',
+            completedAt: '2026-11-21T06:03:50Z',
+          },
+        ],
+      },
+    ]);
+
+    const jobs = await getWorkflowRunJobs('proj-1', 1001, '/repo');
+    expect(mockInvoke).toHaveBeenCalledWith('source_control_get_workflow_run_jobs', {
+      projectId: 'proj-1',
+      repoPath: '/repo',
+      runId: 1001,
+    });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].steps).toHaveLength(1);
+    expect(jobs[0].steps[0].name).toBe('Run vitest');
+  });
+
+  it('triggers rerun and cancel workflow run', async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await rerunWorkflow('proj-1', 1001, '/repo');
+    expect(mockInvoke).toHaveBeenCalledWith('source_control_rerun_workflow', {
+      projectId: 'proj-1',
+      repoPath: '/repo',
+      runId: 1001,
+    });
+
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await cancelWorkflowRun('proj-1', 1001, '/repo');
+    expect(mockInvoke).toHaveBeenCalledWith('source_control_cancel_workflow_run', {
+      projectId: 'proj-1',
+      repoPath: '/repo',
+      runId: 1001,
+    });
   });
 });

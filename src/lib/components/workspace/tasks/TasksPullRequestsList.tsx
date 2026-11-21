@@ -7,6 +7,7 @@ import {
   GitMergeIcon,
   XCircleIcon,
   GitBranchIcon,
+  AgentSparklesIcon,
 } from './TasksIcons';
 
 const SORT_OPTIONS: DropdownOption[] = [
@@ -27,7 +28,7 @@ export default function TasksPullRequestsList({
   loading: boolean;
   error: string | null;
   onSelectPR: (pr: WorkItemPR) => void;
-  onAssignToAgent: (title: string, body: string, number: number) => void;
+  onAssignToAgent: (title: string, body: string, number: number, headBranch?: string, baseBranch?: string) => void;
 }) {
   const [filter, setFilter] = useState<'open' | 'closed' | 'merged' | 'all'>('open');
   const [search, setSearch] = useState('');
@@ -226,18 +227,34 @@ export default function TasksPullRequestsList({
                   <span className="work-item-title">{pr.title}</span>
                 </div>
 
-                <button
-                  type="button"
-                  className="tasks-action-btn primary"
-                  style={{ fontSize: 10, padding: '3px 8px' }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectPR(pr);
-                  }}
-                >
-                  <span>{pr.state === 'merged' ? 'View Details' : 'Review & Merge'}</span>
-                  <span style={{ fontSize: 11 }}>→</span>
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="tasks-action-btn"
+                    style={{ fontSize: 10, padding: '3px 8px' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAssignToAgent(pr.title, pr.body, pr.number, pr.headBranch, pr.baseBranch);
+                    }}
+                    title="Review with an Agent"
+                  >
+                    <AgentSparklesIcon size={11} />
+                    <span>Review with Agent</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="tasks-action-btn primary"
+                    style={{ fontSize: 10, padding: '3px 8px' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectPR(pr);
+                    }}
+                  >
+                    <span>{pr.state === 'merged' ? 'View Details' : 'Review & Merge'}</span>
+                    <span style={{ fontSize: 11 }}>→</span>
+                  </button>
+                </div>
               </div>
 
               <div className="work-item-card-meta">

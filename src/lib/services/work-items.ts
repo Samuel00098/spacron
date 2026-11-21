@@ -299,3 +299,97 @@ export async function addPullRequestComment(
     body,
   });
 }
+
+/* ─── CI/CD: GitHub Actions Workflow Runs ─── */
+
+export interface WorkflowRun {
+  id: number;
+  name: string;
+  displayTitle: string;
+  runNumber: number;
+  event: string;
+  status: 'queued' | 'in_progress' | 'completed' | string;
+  conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'timed_out' | 'action_required' | string;
+  headBranch: string;
+  headSha: string;
+  actor: IssueAuthor;
+  createdAt: string;
+  updatedAt: string;
+  runStartedAt?: string;
+  htmlUrl: string;
+}
+
+export interface WorkflowJobStep {
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed' | string;
+  conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | string;
+  number: number;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface WorkflowJob {
+  id: number;
+  runId: number;
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed' | string;
+  conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | string;
+  startedAt?: string;
+  completedAt?: string;
+  htmlUrl: string;
+  steps: WorkflowJobStep[];
+}
+
+export async function listWorkflowRuns(
+  projectId: string,
+  options?: {
+    branch?: string;
+    statusFilter?: string;
+    page?: number;
+    repoPath?: string;
+  }
+): Promise<WorkflowRun[]> {
+  return await invoke<WorkflowRun[]>('source_control_list_workflow_runs', {
+    projectId,
+    repoPath: options?.repoPath,
+    branch: options?.branch,
+    statusFilter: options?.statusFilter,
+    page: options?.page || 1,
+  });
+}
+
+export async function getWorkflowRunJobs(
+  projectId: string,
+  runId: number,
+  repoPath?: string
+): Promise<WorkflowJob[]> {
+  return await invoke<WorkflowJob[]>('source_control_get_workflow_run_jobs', {
+    projectId,
+    repoPath,
+    runId,
+  });
+}
+
+export async function rerunWorkflow(
+  projectId: string,
+  runId: number,
+  repoPath?: string
+): Promise<boolean> {
+  return await invoke<boolean>('source_control_rerun_workflow', {
+    projectId,
+    repoPath,
+    runId,
+  });
+}
+
+export async function cancelWorkflowRun(
+  projectId: string,
+  runId: number,
+  repoPath?: string
+): Promise<boolean> {
+  return await invoke<boolean>('source_control_cancel_workflow_run', {
+    projectId,
+    repoPath,
+    runId,
+  });
+}

@@ -206,6 +206,61 @@
   font-weight: 600;
 }
 
+/* ─── Agent Review Launch Modal (Hand-off styled roster) ─── */
+.apm-agent-select-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 18px 10px;
+}
+
+.apm-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.apm-agent-roster-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.apm-agent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.apm-agent-pill:hover {
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 10%, transparent));
+  color: var(--text-primary);
+}
+
+.apm-agent-pill.active {
+  background: rgba(var(--accent-rgb, 59, 130, 246), 0.12);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.apm-agent-pill-mark {
+  width: 14px;
+  height: 14px;
+}
+
 /* ─── Dropdown Wrappers in Tasks Header & Merge Bar ─── */
 .tasks-filter-dropdown-wrap .dropdown {
   min-width: 140px;

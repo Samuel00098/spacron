@@ -44,7 +44,7 @@ export default function TasksPullRequestDetail({
   projectId: string;
   prNumber: number;
   onBack: () => void;
-  onAssignToAgent: (title: string, body: string, number: number) => void;
+  onAssignToAgent: (title: string, body: string, number: number, headBranch?: string, baseBranch?: string) => void;
 }) {
   const [pr, setPr] = useState<WorkItemPR | null>(null);
   const [comments, setComments] = useState<WorkItemComment[]>([]);
@@ -177,7 +177,7 @@ export default function TasksPullRequestDetail({
           <button
             type="button"
             className="tasks-action-btn primary"
-            onClick={() => onAssignToAgent(pr.title, pr.body, pr.number)}
+            onClick={() => onAssignToAgent(pr.title, pr.body, pr.number, pr.headBranch, pr.baseBranch)}
             title="Create an isolated worktree branch and dispatch an agent to review or edit this PR"
           >
             <AgentSparklesIcon size={12} />

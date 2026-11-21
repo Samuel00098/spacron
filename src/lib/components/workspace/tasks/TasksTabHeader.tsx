@@ -3,12 +3,13 @@ import {
   BoardIcon,
   IssueIcon,
   PullRequestIcon,
+  WorkflowIcon,
   GitBranchIcon,
   RefreshIcon,
   PlusIcon,
 } from './TasksIcons';
 
-export type TaskPanelTab = 'board' | 'issues' | 'prs';
+export type TaskPanelTab = 'board' | 'issues' | 'prs' | 'actions';
 
 export default function TasksTabHeader({
   activeTab,
@@ -63,6 +64,16 @@ export default function TasksTabHeader({
           <PullRequestIcon size={14} />
           <span>Pull Requests</span>
           {prsCount > 0 && <span className="tasks-nav-count">{prsCount}</span>}
+        </button>
+
+        <button
+          type="button"
+          className={`tasks-nav-btn ${activeTab === 'actions' ? 'active' : ''}`}
+          onClick={() => onTabChange('actions')}
+          title="CI/CD & GitHub Actions Workflows"
+        >
+          <WorkflowIcon size={14} />
+          <span>Actions</span>
         </button>
       </div>
 
