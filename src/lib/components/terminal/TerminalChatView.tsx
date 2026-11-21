@@ -1683,13 +1683,13 @@ export default function TerminalChatView({
           {blocks.map((block, index) => {
             const key = blockKey(block);
             const marker = newMarker === key ? <NewMessagesLine key={`new-${key}`} /> : null;
-            const rollup = turnDiffs && (index !== blocks.length - 1 || !busy) ? turnRollups.get(index) : undefined;
+            const rollup = turnDiffs ? turnRollups.get(index) : undefined;
             const files = rollup ? rollupChanges(rollup) : [];
             const changes = files.length ? (
               <TurnChanges
                 key={`changes-${key}`}
                 files={files}
-                changesFor={(path) => rollup!.flatMap((item) => fileChangesFor(item)).filter((c: FileChange) => c.path === path)}
+                changesFor={(path) => rollup!.filter((item) => item.toolStatus !== 'running').flatMap((item) => fileChangesFor(item)).filter((c: FileChange) => c.path === path)}
                 onOpen={openPath}
               />
             ) : null;

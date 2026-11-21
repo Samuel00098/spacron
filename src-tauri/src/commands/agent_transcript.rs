@@ -503,8 +503,11 @@ fn tool_structured(name: &str, input: &Value) -> Option<Value> {
     }
     let has_path = ["file_path", "filePath", "path", "target_file"].iter().any(|k| map.contains_key(*k));
     let whole_write = has_path && map.contains_key("content") && (lower.contains("write") || lower.contains("create"));
+    let antigravity_file = map.get("Path").and_then(Value::as_str).is_some()
+        && ((lower == "edit_file" && map.contains_key("Replacement"))
+            || (lower == "write_file" && map.contains_key("Content")));
     let subagent = (lower == "task" || lower == "agent") && map.contains_key("prompt");
-    if !whole_write && !subagent && !STRUCTURED_KEYS.iter().any(|k| map.contains_key(*k)) {
+    if !whole_write && !antigravity_file && !subagent && !STRUCTURED_KEYS.iter().any(|k| map.contains_key(*k)) {
         return None;
     }
     Some(clip_strings(&object, MAX_TOOL_DATA_STRING))

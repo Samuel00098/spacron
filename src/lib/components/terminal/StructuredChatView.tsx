@@ -1066,13 +1066,13 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
             {diffBlocks.map((block, index) => {
               const key = blockKeyOf(block);
               const marker = newMarker === key ? <NewMessagesLine key={`new-${key}`} /> : null;
-              const rollup = turnDiffs && (index !== diffBlocks.length - 1 || !working) ? turnRollups.get(index) : undefined;
+              const rollup = turnDiffs ? turnRollups.get(index) : undefined;
               const files = rollup ? rollupChanges(rollup) : [];
               const changes = files.length ? (
                 <TurnChanges
                   key={`changes-${key}`}
                   files={files}
-                  changesFor={(path) => rollup!.flatMap((item) => fileChangesFor(item)).filter((change: FileChange) => change.path === path)}
+                  changesFor={(path) => rollup!.filter((item) => item.toolStatus !== 'running').flatMap((item) => fileChangesFor(item)).filter((change: FileChange) => change.path === path)}
                   onOpen={openPath}
                 />
               ) : null;

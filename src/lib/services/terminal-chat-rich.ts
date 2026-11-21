@@ -116,7 +116,7 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 function pathOf(data: Record<string, unknown>): string | null {
-  return str(data.file_path) ?? str(data.filePath) ?? str(data.path) ?? str(data.target_file);
+  return str(data.file_path) ?? str(data.filePath) ?? str(data.path) ?? str(data.target_file) ?? str(data.Path);
 }
 
 /** Codex's `*** Begin Patch` format, one change per file. */
@@ -156,14 +156,37 @@ export function parseApplyPatch(patch: string): FileChange[] {
 /** The file changes one tool call made, when it is an edit, write or patch. */
 export function fileChangesFor(item: TerminalChatItem): FileChange[] {
   if (item.kind !== 'tool' || item.toolStatus === 'error') return [];
-  const data = record(item.toolData);
+  const toolName = (item.toolName ?? '').trim().toLowerCase();
+  let data = record(item.toolData);
+  if (!data && EDIT_TOOLS.has(toolName) && item.toolInput?.startsWith('{')) {
+    try { data = record(JSON.parse(item.toolInput)); } catch { /* An older transcript may have clipped the input. */ }
+  }
   if (!data) return [];
+  if (Array.isArray(data.fileDiffs) && data.fileDiffs.length) {
+    return data.fileDiffs.flatMap((value): FileChange[] => {
+      const diff = record(value);
+      const path = str(diff?.path);
+      const newText = str(diff?.newText);
+      if (!path || newText === null) return [];
+      const oldText = str(diff?.oldText);
+      const lines = lineDiff(oldText ?? '', newText);
+      return [{ path, kind: oldText === null ? 'write' : 'edit', lines, ...count(lines) }];
+    });
+  }
   const patch = str(data.patch) ?? str(data.input);
   if (patch && /\*\*\* (Add|Update|Delete) File:/.test(patch)) return parseApplyPatch(patch);
   const path = pathOf(data);
-  if (!path) return [];
-  const oldText = str(data.old_string) ?? str(data.oldString);
-  const newText = str(data.new_string) ?? str(data.newString);
+  const locations = Array.isArray(data.filePaths) ? data.filePaths : [];
+  const fileOperation = data.fileOperation;
+  const locationChanges = () => locations.flatMap((value): FileChange[] => {
+    const location = str(value);
+    if (!location) return [];
+    const kind = fileOperation === 'delete' ? 'delete' : 'edit';
+    return [{ path: location, kind, lines: [], added: 0, removed: 0 }];
+  });
+  if (!path) return locationChanges();
+  const oldText = str(data.old_string) ?? str(data.oldString) ?? (toolName === 'edit_file' ? str(data.Target) : null);
+  const newText = str(data.new_string) ?? str(data.newString) ?? (toolName === 'edit_file' ? str(data.Replacement) : null);
   if (oldText != null && newText != null) {
     const lines = lineDiff(oldText, newText);
     return [{ path, kind: 'edit', lines, ...count(lines) }];
@@ -179,11 +202,14 @@ export function fileChangesFor(item: TerminalChatItem): FileChange[] {
     }
     return lines.length ? [{ path, kind: 'edit', lines, ...count(lines) }] : [];
   }
-  const content = str(data.content);
-  if (content != null) {
+  const content = str(data.content) ?? (toolName === 'write_file' ? str(data.Content) : null);
+  if (content != null && EDIT_TOOLS.has(toolName)) {
+    if (data.Overwrite === true) return [{ path, kind: 'edit', lines: [], added: 0, removed: 0 }];
     const lines = lineDiff('', content);
     return [{ path, kind: 'write', lines, ...count(lines) }];
   }
+  if (locations.length) return locationChanges();
+  if (EDIT_TOOLS.has(toolName)) return [{ path, kind: 'edit', lines: [], added: 0, removed: 0 }];
   return [];
 }
 
@@ -199,6 +225,7 @@ export interface FileRollup {
 export function rollupChanges(items: TerminalChatItem[]): FileRollup[] {
   const byPath = new Map<string, FileRollup>();
   for (const item of items) {
+    if (item.toolStatus === 'running') continue;
     for (const change of fileChangesFor(item)) {
       const entry = byPath.get(change.path) ?? { path: change.path, added: 0, removed: 0, created: false, deleted: false };
       entry.added += change.added;

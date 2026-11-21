@@ -137,7 +137,7 @@ export function TurnChanges({ files, changesFor, onOpen }: { files: FileRollup[]
       </div>
       {files.map((file) => (
         <div key={file.path} className="tcr-turn-file">
-          <button type="button" className="tcr-turn-file-row" aria-expanded={open === file.path} onClick={() => setOpen((v) => (v === file.path ? null : file.path))}>
+          <button type="button" className="tcr-turn-file-row" title={file.path} aria-expanded={open === file.path} onClick={() => setOpen((v) => (v === file.path ? null : file.path))}>
             <span className={`tcr-file-badge${file.created ? ' new' : file.deleted ? ' gone' : ''}`}>{file.created ? 'A' : file.deleted ? 'D' : 'M'}</span>
             <span className="tcr-diff-name">{baseName(file.path)}</span>
             {dirName(file.path) && <span className="tcr-diff-dir">{dirName(file.path)}</span>}
@@ -146,7 +146,9 @@ export function TurnChanges({ files, changesFor, onOpen }: { files: FileRollup[]
           {!file.deleted && <button type="button" className="tcr-link-btn" onClick={() => onOpen(file.path)}>Open</button>}
           {open === file.path && (
             <div className="tcr-turn-file-diffs">
-              {changesFor(file.path).map((change, i) => <DiffCard key={i} change={change} />)}
+              {changesFor(file.path).map((change, i) => change.lines.length
+                ? <DiffCard key={i} change={change} />
+                : <div key={i} className="tcr-muted">Line changes unavailable</div>)}
             </div>
           )}
         </div>

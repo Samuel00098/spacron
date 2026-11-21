@@ -14,6 +14,7 @@ Spacron 5.1.5 keeps long Antigravity turns connected, makes agent chats easier t
 ### Fixed
 
 - **Long ACP turns** can finish after two minutes, including Antigravity turns that are still running tools or waiting for approval. Setup and configuration requests retain their timeout.
+- **Files changed in agent chat** appear as each edit completes in terminal-backed and structured chats. Each row names the file and can open it in the editor, with line counts and expandable diffs when the agent reports them. Antigravity edits and structured ACP file locations now feed this summary.
 - **Chat tables** fit the pane without horizontal scrolling. Wide tables switch to labeled rows when space is limited.
 - **Structured chat attachments** appear as clickable thumbnails alongside sent prompts, including Codex image attachments. Pi prompts also support image attachments.
 - **Message timestamps** appear on replies after tool activity when enabled. Structured chats record message times and recover them from journal events where available.

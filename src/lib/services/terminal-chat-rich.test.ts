@@ -60,6 +60,22 @@ describe('terminal chat rich helpers', () => {
     expect(fileChangesFor(tool('Edit', { file_path: 'a', old_string: 'x', new_string: 'y' }, { toolStatus: 'error' }))).toEqual([]);
   });
 
+  it('includes Antigravity edits and completed path-only changes without counting reads or pending edits', () => {
+    const items = [
+      tool('edit_file', { Path: 'src/a.ts', Target: 'old', Replacement: 'new' }),
+      tool('write_file', { Path: 'src/b.ts', Content: 'new file' }),
+      tool('Edit', undefined, { toolInput: '{"path":"src/c.ts"}' }),
+      tool('Read', { path: 'src/read.ts', content: 'read output' }),
+      tool('Edit', { path: 'src/pending.ts' }, { toolStatus: 'running' }),
+      tool('Edit', { path: 'src/failed.ts' }, { toolStatus: 'error' }),
+    ];
+    expect(rollupChanges(items)).toEqual([
+      { path: 'src/a.ts', added: 1, removed: 1, created: false, deleted: false },
+      { path: 'src/b.ts', added: 1, removed: 0, created: true, deleted: false },
+      { path: 'src/c.ts', added: 0, removed: 0, created: false, deleted: false },
+    ]);
+  });
+
   it('rolls a turn up per file', () => {
     const items = [
       tool('Write', { file_path: 'n.ts', content: 'a' }),

@@ -113,12 +113,36 @@ export function chatItemForAcpUpdate(agent: string, notification: Json, fallback
   if (kind.includes('agent_message') || kind.includes('assistant_message') || kind === 'text_delta' || kind === 'message_chunk') return text ? { id, kind: 'assistant', text } : null;
   if (kind.includes('agent_thought') || kind.includes('assistant_thought') || kind.includes('reasoning') || kind === 'thought_chunk') return text ? { id, kind: 'reasoning', text } : null;
   if (kind.includes('user_message')) return { id, kind: 'user', text };
-  if (kind.includes('tool_call_update') || kind.includes('tool_result')) {
+  if (kind.includes('tool_call') || kind.includes('tool_result') || kind.includes('tool_use')) {
+    const isUpdate = kind.includes('tool_call_update') || kind.includes('tool_result');
+    const rawInput = update.rawInput ?? update.input ?? update.arguments;
+    const input = rec(rawInput);
+    const fileDiffs = (Array.isArray(update.content) ? update.content : [])
+      .map(rec)
+      .filter((part) => part?.type === 'diff' && typeof part.path === 'string' && typeof part.newText === 'string');
+    const fileOperation = update.kind === 'edit' || update.kind === 'move' || update.kind === 'delete' ? update.kind : null;
+    const filePaths = fileOperation && Array.isArray(update.locations)
+      ? update.locations.map((location) => str(rec(location)?.path)).filter(Boolean) : [];
     const status = String(update.status ?? '').toLowerCase();
-    const toolStatus = status.includes('fail') || status.includes('error') ? 'error' : status.includes('progress') || status === 'running' ? 'running' : 'done';
-    return { id, kind: 'tool', text: '', toolName: str(update.title) ?? str(update.name) ?? 'tool', toolOutput: text, toolStatus };
+    const toolStatus = !status && kind.includes('tool_call_update') ? undefined
+      : /fail|error|cancel/.test(status) ? 'error'
+        : /progress|running|pending/.test(status) || (!status && !isUpdate) ? 'running' : 'done';
+    const toolName = str(update.title) ?? str(update.name);
+    return {
+      id, kind: 'tool', text: '',
+      ...(toolStatus ? { toolStatus } : {}),
+      ...(toolName ? { toolName } : !isUpdate ? { toolName: 'tool' } : {}),
+      ...(rawInput != null ? { toolInput: JSON.stringify(rawInput) } : {}),
+      ...(input || fileDiffs.length || filePaths.length ? {
+        toolData: {
+          ...input,
+          ...(fileDiffs.length ? { fileDiffs } : {}),
+          ...(filePaths.length ? { filePaths, fileOperation } : {}),
+        },
+      } : {}),
+      ...(isUpdate ? { toolOutput: text } : {}),
+    };
   }
-  if (kind.includes('tool_call') || kind.includes('tool_use')) return { id, kind: 'tool', text: '', toolName: str(update.title) ?? str(update.name) ?? 'tool', toolInput: JSON.stringify(update.rawInput ?? update.input ?? update.arguments ?? {}), toolStatus: 'running' };
   if (kind === 'plan' || kind.includes('plan_update')) return { id, kind: 'reasoning', text: text || JSON.stringify(update.entries ?? []) };
   if (kind.includes('error')) return { id, kind: 'notice', text: text || 'The agent reported an error.' };
   return null;
@@ -559,7 +583,13 @@ function makeProvider(agent: string): StructuredChatProvider {
     const item = chatItemForAcpUpdate(agent, notification, fallbackId);
     if (item) {
       if ((isAssistantChunk || isReasoningChunk) && (item.kind === 'assistant' || item.kind === 'reasoning')) stores.append(sessionId, fallbackId!, item.kind, item.text);
-      else stores.upsert(sessionId, item);
+      else {
+        if (item.kind === 'tool' && item.toolData) {
+          const previous = stores.get(sessionId)?.items.find((entry) => entry.id === item.id);
+          item.toolData = { ...rec(previous?.toolData), ...rec(item.toolData) };
+        }
+        stores.upsert(sessionId, item);
+      }
     }
     // A session update can be tool progress or replayed history. The prompt
     // request owns the working state and its result settles the turn.
