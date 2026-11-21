@@ -465,6 +465,13 @@
   transform: none !important;
 }
 
+.work-item-card.linear-issue-row {
+  flex-shrink: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
 .work-item-card:hover {
   background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 4%, var(--app-surface))) !important;
   border-color: var(--border-focus) !important;

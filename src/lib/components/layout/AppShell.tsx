@@ -15,6 +15,8 @@ import SourceControl from '$lib/components/explorer/SourceControl.tsx';
 import SnapshotsPanel from './SnapshotsPanel.tsx';
 import TerminalSnippetsPanel from '$lib/components/explorer/TerminalSnippetsPanel.tsx';
 import ProjectHUD from '$lib/components/workspace/ProjectHUD.tsx';
+import { CreateWorktreeDialog } from '$lib/components/workspace/CreateWorktreeModal';
+import { openIssuesRequest } from '$lib/stores/tasks';
 
 import TerminalPanel from '$lib/components/terminal/TerminalPanel.tsx';
 import TerminalPane from '$lib/components/terminal/TerminalPane.tsx';
@@ -486,10 +488,10 @@ function PanelHost({ id, onClose }: { id: AuxPanelId; onClose?: () => void }) {
   return null;
 }
 
-function SidebarContent({ tab }: { tab: SidebarTab }) {
+function SidebarContent({ tab, onOpenIssues }: { tab: SidebarTab; onOpenIssues: () => void }) {
   if (tab === 'projects') return <ProjectHUD />;
   if (tab === 'search') return <SearchPanel />;
-  if (tab === 'git') return <SourceControl />;
+  if (tab === 'git') return <SourceControl onOpenIssues={onOpenIssues} />;
   if (tab === 'snapshots') return <SnapshotsPanel />;
   if (tab === 'snippets') return <TerminalSnippetsPanel />;
 
@@ -2203,7 +2205,7 @@ export default function AppShell() {
     // points it at its own preview page.
     if (tab.surface === 'preview') return null;
     const content = (RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(tab.surface)
-      ? <SidebarContent key={activeProjectIdValue ?? 'no-project'} tab={tab.surface as RightNavigatorTool} />
+      ? <SidebarContent key={activeProjectIdValue ?? 'no-project'} tab={tab.surface as RightNavigatorTool} onOpenIssues={openIssues} />
       : <PanelHost id={tab.surface as RightTool} onClose={() => closeRightTab(tab)} />;
     return (
       <div key={tab.id} className="right-sidebar-tab-pane" hidden={tab.id !== activeRightTabId}>
@@ -2370,6 +2372,11 @@ export default function AppShell() {
         setFocusedRoom(nextVisibleRoom(id));
       }
     });
+  }
+
+  function openIssues() {
+    openIssuesRequest.set(true);
+    setPanelRoomOpen('tasks', true);
   }
 
   function togglePanelRoom(id: AuxPanelId) {
@@ -3347,7 +3354,7 @@ export default function AppShell() {
   const onFocusRoom = useCallback((id: RoomId) => () => focusRoom(id), []);
 
   function renderRoomContent(id: RoomId) {
-    if (id === 'workspace') return <SidebarContent tab={layoutState.sidebarTab} />;
+    if (id === 'workspace') return <SidebarContent tab={layoutState.sidebarTab} onOpenIssues={openIssues} />;
     if (isAgentRoomId(id)) {
       const sessionId = getAgentRoomSessionId(id);
       // Cross-project lookup: a background project's agent stays mounted here
@@ -4078,6 +4085,7 @@ export default function AppShell() {
 
         {/* Rendered conditionally, never mounted-and-null: `useModalFocus` inside
             it pins the app-wide modal count for as long as it is mounted. */}
+        <CreateWorktreeDialog />
         {pendingTerminalClose && (
           <ConfirmDialog
             title={

@@ -67,8 +67,7 @@ import './ProjectHUD.css';
 import PinIcon from '$lib/components/shared/PinIcon';
 import StandaloneChatsSidebar from './StandaloneChatsSidebar';
 import ProjectWorktreeList from './ProjectWorktreeList';
-import CreateWorktreeModal from './CreateWorktreeModal';
-import { createWorktreeRequest, mainWorktreeRow, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
+import { mainWorktreeRow, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
 import { worktreeForPath } from '$lib/services/project-worktrees';
 import AgentQuickAdd from '$lib/components/shared/AgentQuickAdd';
 import { showProjectChat } from '$lib/stores/chatNavigation';
@@ -273,7 +272,6 @@ export default function ProjectHUD() {
   const activeWsId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const activeProjId = useWorkspaceStore((s) => s.activeProjectId);
   const projectsMap = useWorkspaceStore((s) => s.projects);
-  const worktreeDialog = useStore(createWorktreeRequest);
   const allWorktreeLists = useStore(worktreesByProject);
 
   const [search, setSearch] = useState('');
@@ -1950,15 +1948,6 @@ export default function ProjectHUD() {
           </button>
         </div>,
         document.body,
-      )}
-      {/* Mounted only while open, so its modal focus hook never pins the
-          app-wide shortcut gate (see the modal-open-count note). */}
-      {worktreeDialog && (
-        <CreateWorktreeModal
-          key={`${worktreeDialog.projectId}:${worktreeDialog.parent ?? ''}`}
-          projectId={worktreeDialog.projectId}
-          initialParent={worktreeDialog.parent}
-        />
       )}
     </div>
   );

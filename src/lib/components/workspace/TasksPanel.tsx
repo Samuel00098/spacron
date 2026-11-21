@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   tasks,
+  openIssuesRequest,
   addTask,
   updateTaskStatus,
   moveTask,
@@ -31,6 +32,7 @@ import './TasksPanel.css';
 import './tasks/TasksStyles.css';
 import TasksTabHeader, { type TaskPanelTab } from './tasks/TasksTabHeader';
 import TasksIssuesList from './tasks/TasksIssuesList';
+import TasksLinearIssues from './tasks/TasksLinearIssues';
 import TasksIssueDetail from './tasks/TasksIssueDetail';
 import TasksPullRequestsList from './tasks/TasksPullRequestsList';
 import TasksPullRequestDetail from './tasks/TasksPullRequestDetail';
@@ -160,7 +162,11 @@ export default function TasksPanel() {
 
   // Source Control & Multi-Tab State
   const [activeTab, setActiveTab] = useState<TaskPanelTab>('board');
+  const [issueProvider, setIssueProvider] = useState<'repo' | 'linear'>('repo');
+  const [linearRefresh, setLinearRefresh] = useState(0);
+  const showingLinear = activeTab === 'issues' && issueProvider === 'linear';
   const [selectedItem, setSelectedItem] = useState<{ type: 'issue' | 'pr'; number: number } | null>(null);
+  const issuesRequest = useStore(openIssuesRequest);
   const [repoInfo, setRepoInfo] = useState<RemoteRepoInfo | null>(null);
   const [issues, setIssues] = useState<WorkItemIssue[]>([]);
   const [prs, setPrs] = useState<WorkItemPR[]>([]);
@@ -168,6 +174,13 @@ export default function TasksPanel() {
   const [itemsError, setItemsError] = useState<string | null>(null);
   const [isNewIssueModalOpen, setIsNewIssueModalOpen] = useState(false);
   const [isNewPRModalOpen, setIsNewPRModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!issuesRequest) return;
+    setActiveTab('issues');
+    setSelectedItem(null);
+    openIssuesRequest.set(false);
+  }, [issuesRequest]);
 
   const loadRemoteItems = async () => {
     if (!projectId) return;
@@ -821,15 +834,22 @@ export default function TasksPanel() {
               setActiveTab(tab);
               setSelectedItem(null);
             }}
-            issuesCount={issues.filter((i) => i.state === 'open').length}
+            issuesCount={issueProvider === 'repo' ? issues.filter((i) => i.state === 'open').length : 0}
+            issueProvider={issueProvider}
+            onIssueProviderChange={(provider) => {
+              setSelectedItem(null);
+              setIssueProvider(provider);
+            }}
             prsCount={prs.filter((p) => p.state === 'open').length}
             repoInfo={repoInfo}
-            onRefresh={loadRemoteItems}
+            onRefresh={showingLinear ? () => setLinearRefresh((value) => value + 1) : loadRemoteItems}
             onOpenNewIssue={() => setIsNewIssueModalOpen(true)}
             onOpenNewPR={() => setIsNewPRModalOpen(true)}
           />
 
-          {selectedItem?.type === 'issue' ? (
+          {showingLinear ? (
+            <TasksLinearIssues projectId={projectId} refresh={linearRefresh} />
+          ) : selectedItem?.type === 'issue' ? (
             <TasksIssueDetail
               projectId={projectId}
               issueNumber={selectedItem.number}

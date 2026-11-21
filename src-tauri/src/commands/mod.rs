@@ -59,6 +59,7 @@ pub mod search;
 pub mod speech;
 pub mod secrets;
 pub mod source_control;
+pub mod linear;
 pub mod terminal;
 pub mod thread_pr;
 pub mod theme;

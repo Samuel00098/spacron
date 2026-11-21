@@ -31,6 +31,8 @@ export interface Task {
 // In-memory store — all currently loaded project tasks
 export const tasks = writable<Task[]>([]);
 
+export const openIssuesRequest = writable(false);
+
 // The board is keyed by project id alone now that it persists outside the repo —
 // flushing no longer needs the project's root path, so nothing tracks it here.
 export async function loadProjectTasks(project: { id: string; root_path: string }): Promise<void> {

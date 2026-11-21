@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { linkedLinearIssueUrl } from '$lib/services/linear';
 import { useStore } from '$lib/react/useStore';
 import { showToast } from '$lib/stores/notification';
 import { createTerminalSession, type TerminalSessionInfo } from '$lib/stores/terminal';
@@ -231,6 +233,7 @@ export default function ProjectWorktreeList({
           const label = worktree.is_main ? worktree.branch ?? worktree.name : worktree.name;
           const branchDetail = !worktree.is_main && worktree.branch && worktree.branch !== worktree.name ? worktree.branch : null;
           const age = worktree.is_main ? null : relativeAge(worktree.created_at);
+          const linearIssueUrl = linkedLinearIssueUrl(worktree.note);
           const title = [
             worktree.is_main ? 'Primary worktree (original clone directory)' : worktree.name,
             worktree.branch ? `Branch: ${worktree.branch}` : worktree.head ? 'Detached HEAD' : null,
@@ -342,6 +345,15 @@ export default function ProjectWorktreeList({
                 </button>
                 {menuPath === worktree.path && (
                   <div className="project-thread-action-menu project-worktree-menu" role="menu">
+                    {linearIssueUrl && (
+                      <button type="button" role="menuitem" onClick={() => {
+                        setMenuPath(null);
+                        void invoke('preview_open_in_browser', { url: linearIssueUrl })
+                          .catch(() => showToast('Could not open the Linear issue', 'error'));
+                      }}>
+                        Open Linear issue
+                      </button>
+                    )}
                     {!worktree.missing && (
                       <button
                         type="button"

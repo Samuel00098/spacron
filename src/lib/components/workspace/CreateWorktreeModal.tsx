@@ -17,10 +17,13 @@ import {
 } from '$lib/services/project-worktrees';
 import {
   closeCreateWorktree,
+  createWorktreeRequest,
   refreshProjectWorktrees,
   setActiveWorktree,
   worktreesByProject,
+  type WorktreeIssue,
 } from '$lib/stores/projectWorktrees';
+import { linearIssueReference } from '$lib/services/linear';
 import './CreateWorktreeModal.css';
 
 /**
@@ -84,9 +87,11 @@ const PLACEHOLDERS: Record<SourceMode, string> = {
 export default function CreateWorktreeModal({
   projectId,
   initialParent,
+  issue,
 }: {
   projectId: string;
   initialParent?: string | null;
+  issue?: WorktreeIssue;
 }) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
@@ -105,8 +110,8 @@ export default function CreateWorktreeModal({
   const [baseRef, setBaseRef] = useState<string>('');
   const [basePickerOpen, setBasePickerOpen] = useState(false);
   const [baseQuery, setBaseQuery] = useState('');
-  const [mode, setMode] = useState<SourceMode>('smart');
-  const [name, setName] = useState('');
+  const [mode, setMode] = useState<SourceMode>(issue ? 'name' : 'smart');
+  const [name, setName] = useState(() => issue ? `${issue.identifier} ${issue.title}`.slice(0, 120) : '');
   const [branch, setBranch] = useState('');
   const [reuseBranch, setReuseBranch] = useState<string | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
@@ -220,7 +225,7 @@ export default function CreateWorktreeModal({
         name: trimmed,
         branch: reuse ?? (branch.trim() || null),
         baseRef: reuse ? null : baseRef || null,
-        note,
+        note: issue ? [linearIssueReference(issue), note.trim()].filter(Boolean).join('\n\n') : note,
         parent: parent || null,
       });
       if (result.warning) showToast(result.warning, 'warning', 6000);
@@ -231,7 +236,11 @@ export default function CreateWorktreeModal({
       if (agent && canStartAgent) {
         const { quickSpawnAgent } = await import('$lib/services/quick-spawn');
         // The new worktree is now the active one, so the agent starts there.
-        await quickSpawnAgent(agent);
+        await quickSpawnAgent(agent, issue ? {
+          worktreePath: result.worktree.path,
+          prompt: [`Work on Linear issue ${issue.identifier}: ${issue.title}`, issue.url, issue.description]
+            .filter(Boolean).join('\n\n'),
+        } : undefined);
       }
 
       if (createMore) {
@@ -270,7 +279,7 @@ export default function CreateWorktreeModal({
         onKeyDown={onKeyDown}
       >
         <div className="cwt-head">
-          <h2 id="cwt-title">Create worktree</h2>
+          <h2 id="cwt-title">{issue ? `Create worktree for ${issue.identifier}` : 'Create worktree'}</h2>
           <button type="button" className="cwt-close" onClick={closeCreateWorktree} aria-label="Close">
             <Icon size={15}><path d="M6 6l12 12M18 6L6 18" /></Icon>
           </button>
@@ -510,14 +519,17 @@ export default function CreateWorktreeModal({
         </div>
 
         <div className="cwt-foot">
-          <label className="cwt-toggle">
-            <input type="checkbox" checked={createMore} onChange={(e) => setCreateMore(e.target.checked)} />
-            <span className="cwt-switch" aria-hidden="true" />
-            Create more
-          </label>
+          {!issue && (
+            <label className="cwt-toggle">
+              <input type="checkbox" checked={createMore} onChange={(e) => setCreateMore(e.target.checked)} />
+              <span className="cwt-switch" aria-hidden="true" />
+              Create more
+            </label>
+          )}
           <button
             type="button"
             className="cwt-create"
+            style={issue ? { marginLeft: 'auto' } : undefined}
             onClick={() => void submit()}
             disabled={busy || !name.trim()}
           >
@@ -530,4 +542,17 @@ export default function CreateWorktreeModal({
   );
 
   return createPortal(modal, document.body);
+}
+
+export function CreateWorktreeDialog() {
+  const request = useStore(createWorktreeRequest);
+  if (!request) return null;
+  return (
+    <CreateWorktreeModal
+      key={`${request.projectId}:${request.parent ?? ''}:${request.issue?.id ?? ''}`}
+      projectId={request.projectId}
+      initialParent={request.parent}
+      issue={request.issue}
+    />
+  );
 }

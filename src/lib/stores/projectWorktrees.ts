@@ -48,11 +48,23 @@ export const worktreesByProject = writable<Record<string, ProjectWorktree[]>>({}
 /** Active (non-main) worktree path per project id. */
 export const activeWorktreeByProject = writable<Record<string, string>>(loadActive());
 
-/** The Create worktree dialog's target, or null when it is closed. */
-export const createWorktreeRequest = writable<{ projectId: string; parent?: string | null } | null>(null);
+export interface WorktreeIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  description: string | null;
+}
 
-export function openCreateWorktree(projectId: string, parent?: string | null) {
-  createWorktreeRequest.set({ projectId, parent: parent ?? null });
+/** The Create worktree dialog's target, or null when it is closed. */
+export const createWorktreeRequest = writable<{
+  projectId: string;
+  parent?: string | null;
+  issue?: WorktreeIssue;
+} | null>(null);
+
+export function openCreateWorktree(projectId: string, parent?: string | null, issue?: WorktreeIssue) {
+  createWorktreeRequest.set({ projectId, parent: parent ?? null, ...(issue ? { issue } : {}) });
 }
 
 export function closeCreateWorktree() {

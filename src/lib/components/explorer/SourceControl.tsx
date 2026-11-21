@@ -28,6 +28,7 @@ import { useGithubSignIn } from '$lib/react/useGithubSignIn';
 import { useStore } from '$lib/react/useStore';
 import { useGitStatusCache, type GitStatusData as GitStatus, type GitLogEntry } from '$lib/stores/zustand/gitStatus';
 import { cleanupStaleWorktrees } from '$lib/stores/orchestrator';
+import { IssueIcon } from '../workspace/tasks/TasksIcons';
 import HunkDiffView from '../review/HunkDiffView.tsx';
 import './SourceControl.css';
 
@@ -73,7 +74,7 @@ function BranchIcon({ className }: { className?: string }) {
   );
 }
 
-export default function SourceControl() {
+export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => void }) {
   const project = useStore(activeProject);
   const projectId = useStore(activeProjectId);
   const branches = useStore(branchInfo);
@@ -917,6 +918,11 @@ export default function SourceControl() {
         <div className="sc-header">
           <span className="sc-title">Source Control</span>
           <div className="sc-header-actions">
+            {project && (
+              <button type="button" className="header-btn" title="Open Issues" aria-label="Open Issues" onClick={onOpenIssues}>
+                <IssueIcon size={14} />
+              </button>
+            )}
             <button className="header-btn" onClick={() => void triggerGitFetch()} title="Fetch from Remote" disabled={isFetching}>
               {isFetching ? (
                 <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">

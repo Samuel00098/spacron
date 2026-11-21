@@ -1,4 +1,5 @@
 import type { RemoteRepoInfo } from '$lib/services/work-items';
+import Dropdown from '$lib/components/shared/Dropdown';
 import {
   BoardIcon,
   IssueIcon,
@@ -15,6 +16,8 @@ export default function TasksTabHeader({
   activeTab,
   onTabChange,
   issuesCount,
+  issueProvider,
+  onIssueProviderChange,
   prsCount,
   repoInfo,
   onRefresh,
@@ -24,12 +27,16 @@ export default function TasksTabHeader({
   activeTab: TaskPanelTab;
   onTabChange: (tab: TaskPanelTab) => void;
   issuesCount: number;
+  issueProvider: 'repo' | 'linear';
+  onIssueProviderChange: (provider: 'repo' | 'linear') => void;
   prsCount: number;
   repoInfo: RemoteRepoInfo | null;
   onRefresh: () => void;
   onOpenNewIssue: () => void;
   onOpenNewPR: () => void;
 }) {
+  const showingLinear = activeTab === 'issues' && issueProvider === 'linear';
+  const repoLabel = repoInfo?.provider === 'github' ? 'GitHub' : 'Repository';
   return (
     <div className="tasks-tabs-header">
       {/* Navigation Pills */}
@@ -48,7 +55,7 @@ export default function TasksTabHeader({
           type="button"
           className={`tasks-nav-btn ${activeTab === 'issues' ? 'active' : ''}`}
           onClick={() => onTabChange('issues')}
-          title="Remote Repository Issues"
+          title="Issues from your task providers"
         >
           <IssueIcon size={14} />
           <span>Issues</span>
@@ -79,7 +86,15 @@ export default function TasksTabHeader({
 
       {/* Right Controls: Repo details & Actions */}
       <div className="tasks-actions-bar">
-        {repoInfo && (
+        {activeTab === 'issues' && (
+          <Dropdown
+            ariaLabel="Issue provider"
+            value={issueProvider}
+            options={[{ value: 'repo', label: repoLabel }, { value: 'linear', label: 'Linear' }]}
+            onChange={(provider) => onIssueProviderChange(provider === 'linear' ? 'linear' : 'repo')}
+          />
+        )}
+        {repoInfo && !showingLinear && (
           <div
             className="tasks-repo-chip"
             title={`Remote: ${repoInfo.remoteUrl}`}
@@ -95,12 +110,12 @@ export default function TasksTabHeader({
           type="button"
           className="tasks-action-btn"
           onClick={onRefresh}
-          title="Refresh issues and pull requests"
+          title={showingLinear ? 'Refresh Linear issues' : 'Refresh issues and pull requests'}
         >
           <RefreshIcon size={13} />
         </button>
 
-        {activeTab === 'issues' && (
+        {activeTab === 'issues' && !showingLinear && (
           <button
             type="button"
             className="tasks-action-btn primary"

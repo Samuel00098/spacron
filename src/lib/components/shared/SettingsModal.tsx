@@ -174,6 +174,7 @@ import './SettingsModal.css';
 
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import type { SettingsTab as Tab } from '$lib/types/layout';
+import LinearSettings from './LinearSettings';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
 // App actions a custom shortcut can be bound to. Zoom actions are dispatched
@@ -327,6 +328,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'chat-permissions', tab: 'chat', section: 'Behavior', label: 'Permissions for new chats', keywords: 'chat permission full access approval' },
   { id: 'source-control-github', tab: 'source-control', section: 'Source control provider', label: 'Source control', keywords: 'git github provider clone publish' },
   { id: 'source-control-signin', tab: 'source-control', section: 'GitHub sign-in', label: 'GitHub sign-in', keywords: 'github sign in oauth gh cli personal access token' },
+  { id: 'linear-task-provider', tab: 'source-control', section: 'Task providers', label: 'Linear', keywords: 'task providers issue tracker team project personal api key', target: 'section' },
   { id: 'mcp-builtin', tab: 'mcp', section: 'Built in', label: 'Built-in servers', keywords: 'mcp spacron playwright browser tools' },
   { id: 'mcp-catalog', tab: 'mcp', section: 'Plugins', label: 'Plugins', keywords: 'mcp catalog plugins marketplace install github notion linear figma supabase stripe vercel sentry' },
   { id: 'mcp-servers', tab: 'mcp', section: 'Your servers', label: 'Add an MCP server', keywords: 'mcp model context protocol remote hosted stdio integration linear notion github' },
@@ -3136,6 +3138,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
 
             {activeTab === 'source-control' && (
               <>
+                <Section title="Task providers">
+                  <LinearSettings onOpenKeyHelp={() => openExternalUrl('https://linear.app/docs/api-and-webhooks#api-keys')} />
+                </Section>
+
                 <Section title="Default provider">
                   <SettingRow
                     title="Source control provider"
