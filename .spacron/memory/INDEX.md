@@ -13,6 +13,8 @@ short enough that it says what the note is *about*, never what it says.
 
 - [agent-history-persistence](agent-history-persistence.md) — spacron persists agent structure not content; Orca indexer model + two viable approaches
 - [orca-chat-view](orca-chat-view.md) — how Orca's per-terminal chat toggle reads transcripts and writes the PTY, vs our chat mode
+- [structured-chat](structured-chat.md) — Orca-style structured chat tabs (agent over its own protocol, no terminal): how a pane hosts one, the bridge, what was verified live
+- [structured-chat-attachments](structured-chat-attachments.md) — attachments cross as paths and each adapter inlines or not; the visuals folder for chats with no PTY
 - [agent-background-poll-budget](agent-background-poll-budget.md) — what each running agent costs at rest, and the rules for anything that polls per agent
 - [agent-failover](agent-failover.md) — moving unfinished work off an agent that is running out of usage: the invariants it spans, and two traps
 - [project-worktrees](project-worktrees.md) — sidebar worktree rows vs agent worktrees, the sweep trap, and where the selected row applies
@@ -63,6 +65,7 @@ short enough that it says what the note is *about*, never what it says.
 - [resource-monitor-removed](resource-monitor-removed.md) — the CPU/RAM chip and its Rust side are deleted; `sysinfo` stays
 - [embedded-command-sentinel](embedded-command-sentinel.md) — completion sentinel is on a fresh line, per-run token, shell-dialect aware; interactive runs are unwrapped
 - [hidden-background-sessions](hidden-background-sessions.md) — hidden terminal sessions must be filtered from every user-facing surface; the one entry point and the one kill path
+- [source-control-tasks](source-control-tasks.md) — tabbed tasks panel (board, issues, prs), keychain and gh token fallback, and head SHA merge safety
 
 ## Remote workspace & mobile
 
@@ -97,6 +100,8 @@ short enough that it says what the note is *about*, never what it says.
 - [agent-browser-install](agent-browser-install.md) — the pinned Playwright MCP install, its PATH trap, and what must change together on a version bump
 
 ## Build, release & repo hygiene
+
+- [lost-uncommitted-work](lost-uncommitted-work.md) — recovering uncommitted work wiped by a dropped stash (dangling commit → patch)
 
 - [drive-the-real-app-at-any-size](drive-the-real-app-at-any-size.md) — how to screenshot the desktop app with a project open at a chosen size, and why viewport breakpoints under 960px are dead
 - [release-flow](release-flow.md) — cutting a release, including the `cargo metadata` step everybody forgets

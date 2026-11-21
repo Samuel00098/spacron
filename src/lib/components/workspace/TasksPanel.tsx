@@ -23,6 +23,22 @@ import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { useStore } from '$lib/react/useStore';
 import TaskEditorModal from './TaskEditorModal';
 import './TasksPanel.css';
+import './tasks/TasksStyles.css';
+import TasksTabHeader, { type TaskPanelTab } from './tasks/TasksTabHeader';
+import TasksIssuesList from './tasks/TasksIssuesList';
+import TasksIssueDetail from './tasks/TasksIssueDetail';
+import TasksPullRequestsList from './tasks/TasksPullRequestsList';
+import TasksPullRequestDetail from './tasks/TasksPullRequestDetail';
+import TasksNewIssueModal from './tasks/TasksNewIssueModal';
+import TasksNewPRModal from './tasks/TasksNewPRModal';
+import {
+  getRepoInfo,
+  listIssues,
+  listPullRequests,
+  type RemoteRepoInfo,
+  type WorkItemIssue,
+  type WorkItemPR,
+} from '$lib/services/work-items';
 
 type StatusRecord<T> = { todo: T; doing: T; done: T };
 
@@ -132,6 +148,63 @@ export default function TasksPanel() {
 
   // Agents that can actually be launched for this project, for "Run with agent".
   const dispatchableAgents = useMemo(() => getDispatchableAgents(projectId), [projectId]);
+
+  // Source Control & Multi-Tab State
+  const [activeTab, setActiveTab] = useState<TaskPanelTab>('board');
+  const [selectedItem, setSelectedItem] = useState<{ type: 'issue' | 'pr'; number: number } | null>(null);
+  const [repoInfo, setRepoInfo] = useState<RemoteRepoInfo | null>(null);
+  const [issues, setIssues] = useState<WorkItemIssue[]>([]);
+  const [prs, setPrs] = useState<WorkItemPR[]>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [itemsError, setItemsError] = useState<string | null>(null);
+  const [isNewIssueModalOpen, setIsNewIssueModalOpen] = useState(false);
+  const [isNewPRModalOpen, setIsNewPRModalOpen] = useState(false);
+
+  const loadRemoteItems = async () => {
+    if (!projectId) return;
+    setLoadingItems(true);
+    setItemsError(null);
+    try {
+      const info = await getRepoInfo(projectId);
+      setRepoInfo(info);
+      const [fetchedIssues, fetchedPRs] = await Promise.all([
+        listIssues(projectId, 'open').catch(() => []),
+        listPullRequests(projectId, 'open').catch(() => []),
+      ]);
+      setIssues(fetchedIssues);
+      setPrs(fetchedPRs);
+    } catch (err) {
+      setItemsError(typeof err === 'string' ? err : 'Could not connect to source control');
+    } finally {
+      setLoadingItems(false);
+    }
+  };
+
+  useEffect(() => {
+    if (projectId) {
+      void loadRemoteItems();
+    }
+  }, [projectId]);
+
+  const dispatchWorkItemToAgent = (
+    type: 'issue' | 'pr',
+    title: string,
+    body: string,
+    number: number
+  ) => {
+    const root = project?.root_path;
+    if (!root || !projectId) return;
+    const prompt =
+      type === 'issue'
+        ? `Work on Issue #${number}: ${title}\n\n${body}`
+        : `Review and verify Pull Request #${number}: ${title}\n\n${body}`;
+    const defaultAgent = dispatchableAgents[0]?.command;
+    void sendChatMessage(projectId, root, prompt, defaultAgent ? { forcedAgent: defaultAgent } : undefined);
+    showToast({
+      title: `Dispatched #${number} to agent`,
+      tone: 'success',
+    });
+  };
 
   // Columns sort by urgency (priority → due date → drag order) — the same rule
   // the agent context uses, so the board and the fleet agree on what matters.
@@ -660,7 +733,53 @@ export default function TasksPanel() {
         </div>
       ) : (
         <>
-          <div className="panel-meta">
+          <TasksTabHeader
+            activeTab={activeTab}
+            onTabChange={(tab) => {
+              setActiveTab(tab);
+              setSelectedItem(null);
+            }}
+            issuesCount={issues.filter((i) => i.state === 'open').length}
+            prsCount={prs.filter((p) => p.state === 'open').length}
+            repoInfo={repoInfo}
+            onRefresh={loadRemoteItems}
+            onOpenNewIssue={() => setIsNewIssueModalOpen(true)}
+            onOpenNewPR={() => setIsNewPRModalOpen(true)}
+          />
+
+          {selectedItem?.type === 'issue' ? (
+            <TasksIssueDetail
+              projectId={projectId}
+              issueNumber={selectedItem.number}
+              onBack={() => setSelectedItem(null)}
+              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('issue', t, b, n)}
+            />
+          ) : selectedItem?.type === 'pr' ? (
+            <TasksPullRequestDetail
+              projectId={projectId}
+              prNumber={selectedItem.number}
+              onBack={() => setSelectedItem(null)}
+              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('pr', t, b, n)}
+            />
+          ) : activeTab === 'issues' ? (
+            <TasksIssuesList
+              issues={issues}
+              loading={loadingItems}
+              error={itemsError}
+              onSelectIssue={(issue) => setSelectedItem({ type: 'issue', number: issue.number })}
+              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('issue', t, b, n)}
+            />
+          ) : activeTab === 'prs' ? (
+            <TasksPullRequestsList
+              pullRequests={prs}
+              loading={loadingItems}
+              error={itemsError}
+              onSelectPR={(pr) => setSelectedItem({ type: 'pr', number: pr.number })}
+              onAssignToAgent={(t, b, n) => dispatchWorkItemToAgent('pr', t, b, n)}
+            />
+          ) : (
+            <>
+              <div className="panel-meta">
             <div className="meta-left">
               <span className="meta-icon">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -849,17 +968,40 @@ export default function TasksPanel() {
               );
             })}
           </div>
-
-          {editingTask && (
-            <TaskEditorModal
-              task={editingTask}
-              agents={dispatchableAgents}
-              onRun={(command) => runTaskWithAgent(editingTask, command)}
-              onClose={() => setEditingTaskId(null)}
-            />
-          )}
         </>
       )}
-    </div>
+
+      {isNewIssueModalOpen && (
+        <TasksNewIssueModal
+          projectId={projectId}
+          onClose={() => setIsNewIssueModalOpen(false)}
+          onCreated={(newIssue) => {
+            setIssues((prev) => [newIssue, ...prev]);
+            setSelectedItem({ type: 'issue', number: newIssue.number });
+          }}
+        />
+      )}
+
+      {isNewPRModalOpen && (
+        <TasksNewPRModal
+          projectId={projectId}
+          defaultBranch={repoInfo?.defaultBranch || 'main'}
+          currentBranch={repoInfo?.currentBranch || ''}
+          onClose={() => setIsNewPRModalOpen(false)}
+          onCreated={loadRemoteItems}
+        />
+      )}
+
+      {editingTask && (
+        <TaskEditorModal
+          task={editingTask}
+          agents={dispatchableAgents}
+          onRun={(command) => runTaskWithAgent(editingTask, command)}
+          onClose={() => setEditingTaskId(null)}
+        />
+      )}
+    </>
+  )}
+</div>
   );
 }

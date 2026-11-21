@@ -525,7 +525,7 @@ pub async fn github_list_repos() -> Result<Vec<GithubRepo>, String> {
     Ok(repos)
 }
 
-fn gh_command() -> Command {
+pub(crate) fn gh_command() -> Command {
     let mut cmd = Command::new("gh");
     #[cfg(windows)]
     {
@@ -538,7 +538,7 @@ fn gh_command() -> Command {
 
 /// The token from `gh auth token`, if gh is installed and signed in. The token
 /// never leaves the backend — it only ever lands in the keychain.
-fn gh_auth_token() -> Result<Option<String>, String> {
+pub(crate) fn gh_auth_token() -> Result<Option<String>, String> {
     let out = match gh_command().args(["auth", "token"]).output() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Failed to run gh: {e}")),
