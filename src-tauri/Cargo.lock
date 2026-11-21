@@ -5700,7 +5700,7 @@ dependencies = [
 
 [[package]]
 name = "spacron"
-version = "5.1.4"
+version = "5.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -5766,11 +5766,11 @@ dependencies = [
 
 [[package]]
 name = "spacron-open"
-version = "5.1.4"
+version = "5.1.5"
 
 [[package]]
 name = "spacron-server"
-version = "5.1.4"
+version = "5.1.5"
 dependencies = [
  "anyhow",
  "spacron",

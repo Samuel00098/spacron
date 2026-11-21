@@ -2,6 +2,23 @@
 
 All notable changes to Spacron will be documented here.
 
+## [v5.1.5] - 2026-11-22
+
+Spacron 5.1.5 keeps long Antigravity turns connected, makes agent chats easier to read in narrow panes, and refreshes workflow progress while the Actions tab is open.
+
+### Changed
+
+- **Source Control settings** now sit under Connections alongside AI Providers. The Code section has been removed.
+- **Agent chat layout** keeps tool activity in the transcript, removes the Background strip above the composer, and moves Jump to latest below the transcript so it leaves messages visible.
+
+### Fixed
+
+- **Long ACP turns** can finish after two minutes, including Antigravity turns that are still running tools or waiting for approval. Setup and configuration requests retain their timeout.
+- **Chat tables** fit the pane without horizontal scrolling. Wide tables switch to labeled rows when space is limited.
+- **Structured chat attachments** appear as clickable thumbnails alongside sent prompts, including Codex image attachments. Pi prompts also support image attachments.
+- **Message timestamps** appear on replies after tool activity when enabled. Structured chats record message times and recover them from journal events where available.
+- **Actions progress** refreshes every five seconds while runs are active and every fifteen seconds while idle. Expanded jobs and steps also refresh during an active run and when it finishes.
+
 ## [v5.1.4] - 2026-11-21
 
 Spacron 5.1.4 introduces a multi-tab Source Control task panel with GitHub and Linear issue tracking, Pull Request management with side-by-side diff views, and integrated CI/CD pipeline monitoring with one-click failure diagnostics. It adds a searchable, project-filtered Agent History tab indexing transcripts across Claude, Codex, and OpenCode, with account-mismatch detection and context handoffs. Persistent Excalidraw sketch rooms bring theme-aware whiteboarding and architectural sketching directly into workspace rooms. Structured chat gains turn, approval, and error notifications with audible cues and read-aloud TTS, streamlined effort-level selection with auto-dismissal, expanded voice models from MiniMax, OpenRouter, and Grok, and a flattened, seamless workspace sidebar.
