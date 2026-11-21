@@ -113,7 +113,7 @@ function update(sessionId: number, patch: Partial<StructuredChatState> | ((s: St
 function upsertItem(sessionId: number, item: TerminalChatItem) {
   update(sessionId, (s) => {
     const at = s.items.findIndex((i) => i.id === item.id);
-    if (at < 0) return { items: [...s.items, item] };
+    if (at < 0) return { items: [...s.items, { ...item, time: item.time ?? new Date().toISOString() }] };
     const items = s.items.slice();
     items[at] = { ...items[at], ...item };
     return { items };
@@ -123,7 +123,7 @@ function upsertItem(sessionId: number, item: TerminalChatItem) {
 function appendText(sessionId: number, itemId: string, kind: TerminalChatItem['kind'], delta: string) {
   update(sessionId, (s) => {
     const at = s.items.findIndex((i) => i.id === itemId);
-    if (at < 0) return { items: [...s.items, { id: itemId, kind, text: delta }] };
+    if (at < 0) return { items: [...s.items, { id: itemId, kind, text: delta, time: new Date().toISOString() }] };
     const items = s.items.slice();
     items[at] = { ...items[at], text: items[at].text + delta };
     return { items };

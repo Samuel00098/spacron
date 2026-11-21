@@ -49,7 +49,7 @@ export class StructuredStateStore {
   upsert(sessionId: number, item: TerminalChatItem): void {
     this.update(sessionId, (state) => {
       const index = state.items.findIndex((candidate) => candidate.id === item.id);
-      if (index < 0) return { items: [...state.items, item] };
+      if (index < 0) return { items: [...state.items, { ...item, time: item.time ?? new Date().toISOString() }] };
       const items = state.items.slice();
       items[index] = { ...items[index], ...item };
       return { items };
@@ -59,7 +59,7 @@ export class StructuredStateStore {
   append(sessionId: number, id: string, kind: TerminalChatItem['kind'], text: string): void {
     this.update(sessionId, (state) => {
       const index = state.items.findIndex((item) => item.id === id);
-      if (index < 0) return { items: [...state.items, { id, kind, text }] };
+      if (index < 0) return { items: [...state.items, { id, kind, text, time: new Date().toISOString() }] };
       const items = state.items.slice();
       items[index] = { ...items[index], text: items[index].text + text };
       return { items };

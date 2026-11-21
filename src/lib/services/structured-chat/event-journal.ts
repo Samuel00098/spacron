@@ -179,11 +179,16 @@ function foldItems(items: TerminalChatItem[], events: readonly StructuredEvent[]
     const item = event.payload.item as TerminalChatItem | undefined;
     if (!item) continue;
     const at = index.get(item.id);
+    const previous = at == null ? undefined : result[at];
+    const recordedAt = new Date(event.at);
+    const time = item.time ?? previous?.time
+      ?? (Number.isFinite(recordedAt.getTime()) ? recordedAt.toISOString() : undefined);
+    const next = { ...previous, ...item, time };
     if (at == null) {
       index.set(item.id, result.length);
-      result.push(item);
+      result.push(next);
     } else {
-      result[at] = { ...result[at], ...item };
+      result[at] = next;
     }
   }
   return result.length > MAX_ITEMS ? result.slice(-MAX_ITEMS) : result;

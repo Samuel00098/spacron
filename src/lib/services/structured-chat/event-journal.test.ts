@@ -74,6 +74,18 @@ describe('StructuredEventJournal', () => {
     expect(journal.since(2).map((e) => e.seq)).toEqual([3, 4]);
   });
 
+  it('preserves when a reply first appeared across streamed updates', () => {
+    const journal = new StructuredEventJournal('s1', 'codex');
+    const [first] = journal.record([
+      { type: 'assistant.text', payload: { item: assistant('a1', 'He') } },
+    ]);
+    journal.record([{ type: 'assistant.text', payload: { item: assistant('a1', 'Hello') } }], first.at + 5000);
+    expect(journal.snapshot().items[0]).toMatchObject({
+      text: 'Hello',
+      time: new Date(first.at).toISOString(),
+    });
+  });
+
   it('rejects duplicate and out-of-order events', () => {
     const journal = new StructuredEventJournal('s1', 'codex');
     const [event] = journal.record([{ type: 'user.message', payload: { item: user('u1', 'hi') } }]);

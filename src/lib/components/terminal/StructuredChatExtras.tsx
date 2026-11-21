@@ -1,23 +1,13 @@
 /**
  * The rest of the chat chrome the live structured view needed: per-pane chat
- * tabs, the background-task panel, the goal mirror, the agent's own mode chip,
+ * tabs, the goal mirror, the agent's own mode chip,
  * answered-card receipts and a sign-in card. They live here so
  * `TerminalChatView` only mounts them; each reads the structured stores
  * directly and renders nothing when it has nothing to say.
  */
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer } from 'react';
 import { useStore } from '$lib/react/useStore';
-import { useStructuredChatUnread, type StructuredChatAgent } from '$lib/services/structured-chat/panes';
-import type { StructuredSubagentSession } from '$lib/services/structured-chat/provider';
-import { groupRunningTools } from '$lib/services/structured-chat/running-tools';
-import {
-  cancelStructuredSubagent,
-  getStructuredChat,
-  getStructuredSubagents,
-  interruptStructuredChat,
-  subscribeStructuredChat,
-  subscribeStructuredSubagents,
-} from '$lib/services/structured-chat/registry';
+import { useStructuredChatUnread } from '$lib/services/structured-chat/panes';
 import {
   approvalReceipts,
   recordHasConversation,
@@ -29,12 +19,6 @@ import {
   useStructuredSessionRecord,
   type ApprovalReceipt,
 } from '$lib/services/structured-chat/session-store';
-
-function useStructuredState(agent: StructuredChatAgent | null, sessionId: number) {
-  const [, bump] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => subscribeStructuredChat(agent, bump), [agent]);
-  return getStructuredChat(agent, sessionId);
-}
 
 /**
  * This pane's conversation tabs: the chat it is showing plus the other
@@ -133,94 +117,6 @@ export function GoalPanel({ sessionId, onCommand }: { sessionId: number; onComma
         {goal.state === 'paused' ? 'Resume' : 'Pause'}
       </button>
       <button type="button" className="tcr-link-btn" onClick={() => onCommand('/goal clear')}>Clear</button>
-    </div>
-  );
-}
-
-/** "1m 5s", from a start time; only ever shown for a task that is running. */
-function elapsedSince(from: number, now: number): string {
-  const seconds = Math.max(0, Math.round((now - from) / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
-function useTicker(on: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!on) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [on]);
-  return now;
-}
-
-/**
- * Running work behind the turn: spawned children (stoppable on their own) and
- * the tool calls still in flight. None of these protocols can stop one tool by
- * itself, so that row's button says **Stop turn** and ends the turn.
- */
-export function BackgroundTaskStrip({ sessionId, agent }: { sessionId: number; agent: StructuredChatAgent | null }) {
-  const state = useStructuredState(agent, sessionId);
-  const [children, setChildren] = useState<StructuredSubagentSession[]>([]);
-  useEffect(() => {
-    if (!agent) return undefined;
-    setChildren(getStructuredSubagents(agent, sessionId));
-    return subscribeStructuredSubagents(sessionId, () => setChildren(getStructuredSubagents(agent, sessionId)));
-  }, [agent, sessionId]);
-
-  const runningChildren = children.filter((child) => ['starting', 'running', 'needs-input'].includes(child.status));
-  const toolGroups = useMemo(() => groupRunningTools(state?.items ?? []), [state?.items]);
-  const now = useTicker(runningChildren.length > 0);
-  if (!runningChildren.length && !toolGroups.length) return null;
-  return (
-    <div className="structured-chat-tasks" role="region" aria-label="Background tasks">
-      <span className="structured-chat-tasks-label">
-        Background · {runningChildren.length + toolGroups.length}
-      </span>
-      {runningChildren.map((child) => (
-        <span key={child.id} className={`structured-chat-task status-${child.status} has-stop`}>
-          <span className={`structured-chat-task-dot status-${child.status}`} aria-hidden="true" />
-          <span className="structured-chat-task-name">{child.agent}</span>
-          <span className="structured-chat-task-detail" title={child.assignment}>{child.assignment}</span>
-          <span className="structured-chat-task-time">{elapsedSince(child.startedAt, now)}</span>
-          <button
-            type="button"
-            className="structured-chat-task-stop"
-            title={`Stop this ${child.agent} task`}
-            onClick={() => { if (agent) void cancelStructuredSubagent(agent, sessionId, child.id); }}
-          >
-            Stop
-          </button>
-        </span>
-      ))}
-      {toolGroups.map((group, index) => {
-        const hasStop = index === 0;
-        return (
-          <span key={group.kind} className={`structured-chat-task status-running ${hasStop ? 'has-stop' : 'no-stop'}`}>
-            <span className="structured-chat-task-dot status-running" aria-hidden="true" />
-            <span className="structured-chat-task-name">
-              {group.label}{group.rows.length > 1 ? ` · ${group.rows.length}` : ''}
-            </span>
-            <span
-              className="structured-chat-task-detail"
-              title={group.rows.map((row) => `${row.name}${row.detail ? `: ${row.detail}` : ''}`).join('\n')}
-            >
-              {group.rows.slice(0, 2).map((row) => row.detail || row.name).join(' · ')}
-              {group.rows.length > 2 ? '…' : ''}
-              {group.rows.some((row) => row.detached) ? ' (detached)' : ''}
-            </span>
-            {hasStop && (
-              <button
-                type="button"
-                className="structured-chat-task-stop"
-                title="These protocols have no per-tool stop, so this stops the turn"
-                onClick={() => { if (agent) void interruptStructuredChat(agent, sessionId); }}
-              >
-                Stop turn
-              </button>
-            )}
-          </span>
-        );
-      })}
     </div>
   );
 }

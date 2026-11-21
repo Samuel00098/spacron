@@ -56,7 +56,7 @@ import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { getSessionVisuals, requestTerminalInput, terminalInputRequest } from '$lib/stores/terminal';
 import { ChatVisual, splitReply } from './ChatVisual';
-import { AgentModeChip, AnswerReceipts, BackgroundTaskStrip, GoalPanel, SignInNotice, looksLikeAuthError } from './StructuredChatExtras';
+import { AgentModeChip, AnswerReceipts, GoalPanel, SignInNotice, looksLikeAuthError } from './StructuredChatExtras';
 import { readChatDraft, writeChatDraft } from '$lib/services/structured-chat/drafts';
 import { parseDroppedPaths } from '$lib/services/structured-chat/attachments';
 import { clearStructuredChatUnread, markStructuredChatUnread } from '$lib/services/structured-chat/panes';
@@ -237,38 +237,29 @@ function useChatState(sessionId: number): { sent: SentCommand[]; live: LiveScree
  */
 type Block =
   | { type: 'user'; item: TerminalChatItem }
-  | { type: 'assistant'; item: TerminalChatItem; leads: boolean }
-  | { type: 'activity'; id: string; items: TerminalChatItem[]; leads: boolean }
+  | { type: 'assistant'; item: TerminalChatItem }
+  | { type: 'activity'; id: string; items: TerminalChatItem[] }
   | { type: 'notice'; item: TerminalChatItem }
   | { type: 'command'; item: TerminalChatItem }
   | { type: 'output'; item: TerminalChatItem };
 
 function toBlocks(items: TerminalChatItem[]): Block[] {
   const blocks: Block[] = [];
-  // Whether the agent has written since the last user turn; its first block
-  // after one carries its name.
-  let agentSpoke = false;
   for (const item of items) {
     if (item.kind === 'user') {
       blocks.push({ type: 'user', item });
-      agentSpoke = false;
     } else if (item.kind === 'notice') {
       blocks.push({ type: 'notice', item });
     } else if (item.kind === 'command') {
       blocks.push({ type: 'command', item });
-      agentSpoke = false;
     } else if (item.kind === 'command-output') {
       blocks.push({ type: 'output', item });
     } else if (item.kind === 'assistant') {
-      blocks.push({ type: 'assistant', item, leads: !agentSpoke });
-      agentSpoke = true;
+      blocks.push({ type: 'assistant', item });
     } else {
       const last = blocks[blocks.length - 1];
       if (last?.type === 'activity') last.items.push(item);
-      else {
-        blocks.push({ type: 'activity', id: item.id, items: [item], leads: !agentSpoke });
-        agentSpoke = true;
-      }
+      else blocks.push({ type: 'activity', id: item.id, items: [item] });
     }
   }
   return blocks;
@@ -1729,7 +1720,7 @@ export default function TerminalChatView({
                   </div>
                   <MessageActions
                     text={block.item.text}
-                    time={block.leads ? itemTime(block.item.time) : null}
+                    time={itemTime(block.item.time)}
                     onFork={canFork && index === lastAssistantIndex && !busy ? () => void forkConversation() : undefined}
                   />
                 </div>
@@ -1889,7 +1880,6 @@ export default function TerminalChatView({
           </div>
         )}
         {structuredMode && <GoalPanel sessionId={sessionId} onCommand={(command) => void runSlashCommand(command)} />}
-        {structuredMode && <BackgroundTaskStrip sessionId={sessionId} agent={structuredAgent} />}
         <div
           className={`terminal-chat-composer${isRunning ? '' : ' exited'}${dropOver ? ' drop-over' : ''}`}
           onDragOver={onComposerDragOver}

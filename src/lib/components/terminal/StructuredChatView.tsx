@@ -72,6 +72,7 @@ import {
   trailingUsageLimit,
   type FileChange,
   type SlashCommand,
+  itemTime,
 } from '$lib/services/terminal-chat-rich';
 import { openFile } from '$lib/stores/editor';
 import { getAgentRoster } from '$lib/stores/runs';
@@ -288,17 +289,6 @@ function withToolData(item: TerminalChatItem): TerminalChatItem {
     }
   }
   return item;
-}
-
-/** When each item was first seen here, for Settings > Chat > timestamps. */
-const itemTimes = new Map<string, number>();
-function timeFor(itemId: string): number {
-  const seen = itemTimes.get(itemId);
-  if (seen != null) return seen;
-  if (itemTimes.size > 800) itemTimes.clear();
-  const now = Date.now();
-  itemTimes.set(itemId, now);
-  return now;
 }
 
 /** A locally added row: command output or an answered approval. */
@@ -1094,7 +1084,7 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
                     <MessageActions
                       align="end"
                       text={block.item.text}
-                      time={timeFor(block.item.id)}
+                      time={itemTime(block.item.time)}
                       onRewind={canRewind && index === lastUserIndex ? () => void rewindTo(block.item) : undefined}
                     />
                   </div>
@@ -1116,7 +1106,7 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
                     </div>
                     <MessageActions
                       text={block.item.text}
-                      time={timeFor(block.item.id)}
+                      time={itemTime(block.item.time)}
                       onFork={canFork && index === lastAssistantIndex ? () => void forkHere() : undefined}
                     />
                   </div>
