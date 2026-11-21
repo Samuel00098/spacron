@@ -10,6 +10,7 @@ export type SidebarTab = 'projects' | 'files' | 'search' | 'git' | 'snapshots' |
 // callers can deep-link one (`openSettings('appearance')`) without importing the
 // modal itself.
 export type SettingsTab =
+  | 'project'
   | 'general'
   | 'appearance'
   | 'models'
@@ -22,6 +23,7 @@ export type SettingsTab =
   | 'mcp'
   | 'stats'
   | 'shortcuts'
+  | 'cleanup'
   | 'about';
 
 export interface LayoutState {

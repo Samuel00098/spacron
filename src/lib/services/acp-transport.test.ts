@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AcpSession } from './acp-transport';
-import { initializeAcp, waitForAcpReplayIdle } from './acp-transport';
+import { initializeAcp, promptAcpNativeSession, waitForAcpReplayIdle } from './acp-transport';
 
 function fakeSession() {
   let handler: ((value: Record<string, unknown>) => void) | undefined;
@@ -14,6 +14,17 @@ function fakeSession() {
 }
 
 describe('ACP session lifecycle', () => {
+  it('returns the agent stop reason to the caller', async () => {
+    const request = vi.fn().mockResolvedValue({ stopReason: 'cancelled' });
+    const session = { request } as unknown as AcpSession;
+    await expect(promptAcpNativeSession(session, 'agent-session', 'Build the project'))
+      .resolves.toEqual({ stopReason: 'cancelled' });
+    expect(request).toHaveBeenCalledWith('session/prompt', {
+      sessionId: 'agent-session',
+      prompt: [{ type: 'text', text: 'Build the project' }],
+    });
+  });
+
   it('waits for replay idle before continuing', async () => {
     const fake = fakeSession();
     const waiting = waitForAcpReplayIdle(fake.session, 1000, 1);

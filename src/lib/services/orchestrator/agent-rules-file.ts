@@ -553,6 +553,11 @@ export interface BriefOptions {
    * exactly the behaviour worktree staging depends on. See below.
    */
   isolated?: boolean;
+  /**
+   * Repository-scoped guidelines, rules, and brief configured in Project Settings.
+   * Injected into the standing rules file as rule #9.
+   */
+  customInstructions?: string;
 }
 
 /**
@@ -582,7 +587,7 @@ export function buildStandingBriefBody(opts?: BriefOptions): string {
     ? '2. **Git (your own worktree)** — Commit your work as you go, with clear messages: committing on your branch is how the work reaches the user for review, and uncommitted edits are the only kind that can be lost. Never run destructive or history-rewriting git: no `reset --hard`, `checkout -- .`, `clean`, `stash`, `rebase`, or force-push. Do not switch branches, merge into or push the base branch, or edit files outside this worktree — moving your work into the main checkout is the user\'s decision, not yours.'
     : '2. **Git (shared tree)** — Never run destructive or history-rewriting git: no `reset --hard`, `checkout -- .`, `clean`, `stash`, `rebase`, branch switches, or force-push. Never revert changes that aren\'t yours. Commit only the files you changed, with a clear message. Don\'t push unless told.';
 
-  return [
+  const rules = [
     '# Spacron agent brief',
     '',
     intro,
@@ -611,7 +616,15 @@ export function buildStandingBriefBody(opts?: BriefOptions): string {
     // commands/chat_visuals.rs). Gated on the env var so an agent the user
     // started by hand, with no folder, simply never offers one.
     '8. **Inline visuals** — When `$SPACRON_CHAT_VISUALS_DIR` is set and a chart, table, diagram, dashboard or mockup would make your answer clearer, show it inline in the user\'s chat: write ONE complete, self-contained HTML file directly in that folder (under 512 KB, a new name each time such as `latency-by-region-7c1e.html`: letters, digits, `.`, `_`, `-`, ending in `.html`), then put this on its own line in your reply, outside any code block: `::spacron-visual{file="latency-by-region-7c1e.html" title="Latency by region"}` — `file` is the bare name, never a path; at most 8 per reply. Inline your data, styles and scripts; libraries may load only from cdn.jsdelivr.net, unpkg.com, cdnjs.cloudflare.com or esm.sh, and the page cannot make network requests. Make it a working tool, not a picture: real controls the user can operate (buttons, +/− steppers, sliders, inputs, toggles, drag to reorder) with every total, chart and summary recalculating live in the page. When the user should be able to hand a result back to you, add a button that calls `window.spacron.compose("<a plain-language request with the chosen values>")`: it puts that text in the user\'s chat box for them to review and send. Don\'t size to `100vh`; the chat fits the frame to your content. Style with the theme variables `--background`, `--foreground`, `--card`, `--muted`, `--muted-foreground`, `--accent`, `--accent-foreground`, `--border`, `--radius`, `--font-sans`, `--font-mono` and `--chart-1`…`--chart-5`, always with a fallback (`var(--foreground,#171717)`), and never redefine them on `:root`. If the variable is unset or the folder isn\'t writable, skip the visual.',
-  ].join('\n');
+  ];
+
+  if (opts?.customInstructions?.trim()) {
+    rules.push(
+      `9. **Project guidelines & instructions** — Always adhere to these repository-specific requirements:\n${opts.customInstructions.trim()}`
+    );
+  }
+
+  return rules.join('\n');
 }
 
 /** The full managed block (sentinels + brief body) written into a rules file.
@@ -717,7 +730,8 @@ function resolveMainCheckout(worktreePath: string): string | null {
  */
 export async function ensureAgentRulesFiles(
   rootPath: string,
-  agentKey?: string | null
+  agentKey?: string | null,
+  options?: { customInstructions?: string }
 ): Promise<boolean> {
   const root = rootPath?.replace(/[\\/]+$/, '');
   if (!root) return false;
@@ -727,9 +741,10 @@ export async function ensureAgentRulesFiles(
   // point back at the main checkout's `.spacron/memory/` so notes survive the
   // worktree, and the brief has to describe isolation rather than a shared tree.
   const mainCheckout = resolveMainCheckout(root);
-  const blockOpts = {
+  const blockOpts: BriefOptions = {
     sharedMemoryDir: mainCheckout ? `${mainCheckout}/.spacron/memory/` : undefined,
     isolated: mainCheckout !== null,
+    customInstructions: options?.customInstructions,
   };
   const block = buildManagedBlock(blockOpts);
 

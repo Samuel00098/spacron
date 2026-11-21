@@ -58,6 +58,8 @@ export interface StructuredSessionRecord {
   nativeSessionId: string | null;
   preset: string | null;
   accountId: string | null;
+  /** Label captured when launched, so later login/selection changes do not rename its owner. */
+  accountLabel?: string | null;
   cwd: string;
   projectId: string | null;
   /** `chat`: opened as a chat. `converted`: a CLI pane switched into chat. */
@@ -337,6 +339,7 @@ function attach(paneId: number, agent: StructuredChatAgent): void {
       nativeSessionId: null,
       preset,
       accountId: accountFor(preset),
+      accountLabel: activeAccount(get(accountsState), agent)?.label ?? null,
       cwd: getSessionRoot(paneId) ?? '.',
       projectId: getActiveTerminalProjectId(),
       origin: info?.agentPreset ? 'converted' : 'chat',
@@ -435,6 +438,14 @@ export function recordForPane(paneId: number): StructuredSessionRecord | null {
   return id ? get(structuredSessions)[id] ?? null : null;
 }
 
+/** Explicit resume ownership overrides the current global account selection. */
+export function bindStructuredAccount(paneId: number, accountId: string, label?: string | null): void {
+  const record = recordForPane(paneId);
+  if (!record) return;
+  const account = get(accountsState).accounts.find((a) => a.provider === record.provider && a.id === accountId);
+  patchRecord(record.id, { accountId, accountLabel: label ?? account?.label ?? null });
+}
+
 export function useStructuredSessionRecord(paneId: number): StructuredSessionRecord | null {
   const all = useStore(structuredSessions);
   const id = paneRecords.get(paneId);
@@ -491,16 +502,12 @@ async function openRecordInPane(paneId: number, record: StructuredSessionRecord)
   const access = record.access ?? structuredAccessFor(record.preset ?? record.provider);
   const journal = journalFor(record);
   setStructuredChatHistory(paneId, journal.snapshot().items);
-  await provider.start(paneId, record.cwd, { resumeId: record.nativeSessionId, access });
+  await provider.start(paneId, record.cwd, { resumeId: record.nativeSessionId, access, accountId: record.accountId ?? 'default' });
   let state = provider.get(paneId);
   if (record.nativeSessionId && (!state || state.status === 'failed')) {
-    // The native conversation is gone (expired, deleted, other account):
-    // start a new one rather than leave the pane dead. The journal still
-    // shows everything said so far as history.
-    await provider.close(paneId).catch(() => {});
-    await provider.start(paneId, record.cwd, { access });
-    state = provider.get(paneId);
-    patchRecord(record.id, { restoredMode: 'journal-only' });
+    // Keep the failed resume visible. A new conversation would lose native context.
+    patchRecord(record.id, { lifecycle: 'failed' });
+    return;
   } else if (record.nativeSessionId && state?.status !== 'failed') {
     patchRecord(record.id, { restoredMode: 'native' });
   } else {

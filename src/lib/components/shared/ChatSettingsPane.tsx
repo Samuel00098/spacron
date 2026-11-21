@@ -26,6 +26,8 @@ import {
   CHAT_FONT_SIZE_RANGE,
   DEFAULT_CHAT_APPEARANCE,
   chatAppearance,
+  chatAutoNames,
+  chatModelNames,
   chatCiLines,
   chatComposerSpellcheck,
   chatInlineVisuals,
@@ -205,6 +207,8 @@ export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () =>
   const inlineVisuals = useStore(chatInlineVisuals);
   const queueFollowUps = useStore(chatQueueFollowUps);
   const markNew = useStore(chatMarkNewMessages);
+  const autoNames = useStore(chatAutoNames);
+  const modelNames = useStore(chatModelNames);
   const timestamps = useStore(chatShowTimestamps);
   const suggested = useStore(chatSuggestedPrompts);
   const turnDiffs = useStore(chatTurnDiffs);
@@ -432,6 +436,12 @@ export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () =>
         </Row>
         <Row title="Mark new messages when returning to a chat" detail="Mark unread messages received while away.">
           <Toggle label="Toggle mark new messages" checked={markNew} onChange={chatMarkNewMessages.set} />
+        </Row>
+        <Row title="Chat names" detail="Name each new chat from its first message. Renaming always wins.">
+          <Toggle label="Toggle automatic chat names" checked={autoNames} onChange={chatAutoNames.set} />
+        </Row>
+        <Row title="Model-written chat names" detail="Ask your AI provider for a short title after the first message. Sends that message to the provider and uses a few credits per chat. Needs Chat names on.">
+          <Toggle label="Toggle model-written chat names" checked={modelNames} onChange={chatModelNames.set} />
         </Row>
         <Row title="Link previews" detail="Show preview cards when hovering web links.">
           <Toggle label="Toggle link previews" checked={linkPreviews} onChange={chatLinkPreviews.set} />

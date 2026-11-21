@@ -91,6 +91,13 @@ describe('terminal chat view', () => {
     expect(permissionArgs('codex', 'ask')).toBe('-a on-request -s read-only -c approvals_reviewer="user"');
     expect(resumeArgs('codex', 'abc')).toBe('resume abc');
     expect(resumeArgs('claude', 'abc')).toBe('--resume abc');
+    expect(resumeArgs('pi', 'abc')).toBe('--session abc');
+    expect(resumeArgs('omp', 'abc')).toBe('--resume abc');
+    expect(resumeArgs('antigravity', 'abc')).toBe('--conversation abc');
+    expect(resumeArgs('copilot', 'abc')).toBe('--resume abc');
+    expect(resumeArgs('cursor', 'abc')).toBe('--resume abc');
+    expect(resumeArgs('claude', 'abc; echo secret')).toBe('');
+    expect(resumeArgs('claude', '--new-session')).toBe('');
   });
 
   it('only takes the pane folder shell prompt as "the CLI has quit"', () => {

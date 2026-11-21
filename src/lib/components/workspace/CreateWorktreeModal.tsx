@@ -4,6 +4,7 @@ import { useStore } from '$lib/react/useStore';
 import { useModalFocus } from '$lib/react/useModalFocus';
 import { showToast } from '$lib/stores/notification';
 import { activeProjectId, projects } from '$lib/stores/workspace';
+import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
 import { getPresetRuns, filterInstalledAgents } from '$lib/stores/runs';
 import { customAgents } from '$lib/stores/customAgents';
 import { usageState, installedAgentCommands, haveAgentDetection } from '$lib/stores/usage';
@@ -98,12 +99,14 @@ export default function CreateWorktreeModal({
   useModalFocus(cardRef, closeCreateWorktree);
 
   const projectMap = useStore(projects);
+  const projectSettings = useStore(allProjectSettings);
   const currentProjectId = useStore(activeProjectId);
   const allWorktrees = useStore(worktreesByProject);
   const $customAgents = useStore(customAgents);
   const $usage = useStore(usageState);
 
   const project = projectMap.get(projectId) ?? null;
+  const preferredBase = project ? projectConfigFor(projectSettings, project.root_path, project.id).worktreeBase : '';
   const worktrees = allWorktrees[projectId] ?? [];
 
   const [bases, setBases] = useState<WorktreeBases | null>(null);
@@ -130,7 +133,6 @@ export default function CreateWorktreeModal({
       .then((result) => {
         if (cancelled) return;
         setBases(result);
-        setBaseRef((current) => current || result.default_base);
       })
       .catch(() => {
         if (!cancelled) setBases({ default_base: 'HEAD', refs: ['HEAD'], local: [] });
@@ -139,6 +141,8 @@ export default function CreateWorktreeModal({
       cancelled = true;
     };
   }, [projectId]);
+
+  const selectedBase = baseRef || (bases?.refs.includes(preferredBase) ? preferredBase : bases?.default_base) || '';
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -224,7 +228,7 @@ export default function CreateWorktreeModal({
         projectId,
         name: trimmed,
         branch: reuse ?? (branch.trim() || null),
-        baseRef: reuse ? null : baseRef || null,
+        baseRef: reuse ? null : selectedBase || null,
         note: issue ? [linearIssueReference(issue), note.trim()].filter(Boolean).join('\n\n') : note,
         parent: parent || null,
       });
@@ -323,7 +327,7 @@ export default function CreateWorktreeModal({
                   aria-expanded={basePickerOpen}
                 >
                   <Icon size={12}>{BranchGlyph}</Icon>
-                  <span>{reuseBranch ?? (baseRef || '…')}</span>
+                  <span>{reuseBranch ?? (selectedBase || '…')}</span>
                   <Icon size={11}>{UpDownGlyph}</Icon>
                 </button>
                 {basePickerOpen && !reuseBranch && (
@@ -350,8 +354,8 @@ export default function CreateWorktreeModal({
                           key={ref}
                           type="button"
                           role="option"
-                          aria-selected={ref === baseRef}
-                          className={`cwt-option${ref === baseRef ? ' selected' : ''}`}
+                          aria-selected={ref === selectedBase}
+                          className={`cwt-option${ref === selectedBase ? ' selected' : ''}`}
                           onClick={() => { setBaseRef(ref); setBasePickerOpen(false); }}
                         >
                           {ref}

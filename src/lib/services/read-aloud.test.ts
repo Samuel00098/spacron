@@ -20,6 +20,29 @@ describe('read aloud', () => {
     expect(long.join(' ')).toBe(`${'word '.repeat(80).trim()}.`);
   });
 
+  it('reads successive completions without interrupting the first announcement', () => {
+    const previous = get(readAloudSettings);
+    class Utterance {
+      onend?: () => void;
+      constructor(readonly text: string) {}
+    }
+    const speak = vi.fn<(utterance: Utterance) => void>();
+    vi.stubGlobal('window', { speechSynthesis: { getVoices: () => [], cancel: vi.fn(), speak } });
+    vi.stubGlobal('SpeechSynthesisUtterance', Utterance);
+    readAloudSettings.set({ ...previous, engine: 'system' });
+    try {
+      speakText('Iris finished.');
+      speakText('Nova finished.');
+      expect(speak.mock.calls.map(([line]) => line.text)).toEqual(['Iris finished.']);
+      speak.mock.calls[0][0].onend?.();
+      expect(speak.mock.calls.map(([line]) => line.text)).toEqual(['Iris finished.', 'Nova finished.']);
+    } finally {
+      stopReadAloud();
+      vi.unstubAllGlobals();
+      readAloudSettings.set(previous);
+    }
+  });
+
   it('uses the selected OpenRouter model and its voice for preview and completion', () => {
     const previous = get(readAloudSettings);
     const model = 'microsoft/mai-voice-2.1';

@@ -345,18 +345,17 @@ describe('watchLeasedAgentTurn', () => {
     if (outcome.kind === 'blocked') expect(outcome.reason.toLowerCase()).toContain('do you want to');
   });
 
-  it('a signalled agent does not idle-rescan and finishes when no prompt is present', async () => {
-    // Hook agents report needs-input via the sentinel; the idle rescan stays
-    // off for them. With no attention prompt anywhere in the buffer, the idle
-    // backstop resolves the turn as finished (no hook signal here → not blocked,
-    // and nothing for the skipped rescan to find).
+  it('keeps a quiet hook-capable agent watched until its completion arrives', async () => {
     __registerChannelForTest(1, 'deadbeef');
     const p = watchLeasedAgentTurn(1, { shouldContinue: () => true, pollMs: 10, idleMs: 50, minWorkChars: 200 });
-    buf = 'working '.repeat(700) + 'all tasks complete';
-    await vi.advanceTimersByTimeAsync(10); // activity
-    await vi.advanceTimersByTimeAsync(80); // idle freeze; rescan is skipped because signalled
-    const outcome = await p;
-    expect(outcome.kind).toBe('finished');
+    const settled = vi.fn();
+    void p.then(settled);
+    buf = 'running a build '.repeat(700);
+    await vi.advanceTimersByTimeAsync(90);
+    expect(settled).not.toHaveBeenCalled();
+    const { deliverTurnSignal } = await import('./agent-hook-signals');
+    expect(deliverTurnSignal(1, { kind: 'finished', detail: 'The build passed.' })).toBe(true);
+    await expect(p).resolves.toEqual({ kind: 'finished', via: 'declared', detail: 'The build passed.' });
   });
 
   it('a non-hook agent that rings a bell then keeps working is not false-completed', async () => {

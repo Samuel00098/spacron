@@ -7,6 +7,15 @@ function normalize(path: string): string {
   return path.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
 }
 
+/** Key for project preferences shared by the sidebar and settings. */
+export function normalizeProjectPath(path: string): string {
+  return path.replace(/\\/g, '/')
+    .replace(/^\/\/\?\/unc\//i, '//')
+    .replace(/^\/\/\?\//, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
 /**
  * Convert an LSP `file://` URI to a filesystem path.
  *

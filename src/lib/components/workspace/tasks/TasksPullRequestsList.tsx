@@ -93,8 +93,8 @@ export default function TasksPullRequestsList({
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Search, Sort, and Filters Bar */}
       <div className="tasks-filter-bar" style={{ flexWrap: 'wrap', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 260 }}>
-          <div className="tasks-search-input-wrap" style={{ flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 240px', minWidth: 0, flexWrap: 'wrap' }}>
+          <div className="tasks-search-input-wrap" style={{ flex: '1 1 180px', minWidth: 140, maxWidth: 'none' }}>
             <SearchIcon size={12} />
             <input
               type="text"
@@ -106,7 +106,7 @@ export default function TasksPullRequestsList({
           </div>
 
           {/* Sort Selector */}
-          <div className="tasks-filter-dropdown-wrap">
+          <div className="tasks-filter-dropdown-wrap" style={{ flexShrink: 0 }}>
             <Dropdown
               options={SORT_OPTIONS}
               value={sortBy}
@@ -117,7 +117,7 @@ export default function TasksPullRequestsList({
 
           {/* Author Filter (if multiple authors exist) */}
           {uniqueAuthors.length > 1 && (
-            <div className="tasks-filter-dropdown-wrap">
+            <div className="tasks-filter-dropdown-wrap" style={{ flexShrink: 0 }}>
               <Dropdown
                 options={authorOptions}
                 value={authorFilter}
@@ -129,7 +129,7 @@ export default function TasksPullRequestsList({
         </div>
 
         {/* State Pills: Open, Merged, Closed, All */}
-        <div className="tasks-filter-pills">
+        <div className="tasks-filter-pills" style={{ flexWrap: 'wrap' }}>
           <button
             type="button"
             className={`tasks-filter-pill ${filter === 'open' ? 'active' : ''}`}

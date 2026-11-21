@@ -116,6 +116,10 @@ export const enableLsp = persistentWritable('enableLsp', true);
 export const showHidden = persistentWritable('showHidden', false);
 export const showSnapshotsTab = persistentWritable('showSnapshotsTab', false);
 
+// Workspace Cleanup
+export type WorkspaceCleanupRule = 'merged_unchanged' | 'merged_only' | 'never';
+export const globalWorkspaceCleanupRule = persistentWritable<WorkspaceCleanupRule>('globalWorkspaceCleanupRule', 'merged_unchanged');
+
 // Preview
 // Where a newly opened Preview lands. See `previewDocked` in zustand/layout.ts.
 export type PreviewPlacement = 'sidebar' | 'room';
@@ -1061,7 +1065,7 @@ export const shortcutActions: ShortcutAction[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  category: 'View' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  category: 'View' },
   { id: 'goToTasks',      label: 'Go to Tasks',        category: 'View' },
-  { id: 'goToFleet',      label: 'Go to Agent Fleet', category: 'View' },
+  { id: 'goToFleet',      label: 'Go to Sessions', category: 'View' },
   { id: 'goToDb',         label: 'Go to Database Explorer', category: 'View' },
   { id: 'goToContainers', label: 'Go to Containers',   category: 'View' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  category: 'View' },
@@ -1096,7 +1100,7 @@ export const defaultShortcuts: KeyboardShortcut[] = [
   { id: 'goToReview',     label: 'Go to Code Review',  keys: 'Ctrl+Shift+R' },
   { id: 'goToHttp',       label: 'Go to HTTP Client',  keys: 'Ctrl+Shift+H' },
   { id: 'goToTasks',      label: 'Go to Tasks',        keys: 'Ctrl+Shift+T' },
-  { id: 'goToFleet',      label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
+  { id: 'goToFleet',      label: 'Go to Sessions', keys: 'Ctrl+Shift+G' },
   { id: 'goToDb',         label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
   { id: 'goToContainers', label: 'Go to Containers',   keys: 'Ctrl+Shift+C' },
   { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  keys: 'Ctrl+Shift+X' },

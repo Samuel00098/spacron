@@ -66,6 +66,16 @@
   flex-shrink: 0;
 }
 
+.dd-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  color: var(--text-secondary);
+}
+
 .dd-menu {
   /* Position (fixed + coordinates) is set inline by Dropdown.tsx and the element
      is portaled to <body>, so it escapes any ancestor `overflow` clipping. */

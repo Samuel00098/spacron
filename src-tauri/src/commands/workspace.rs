@@ -1394,6 +1394,8 @@ pub fn workspace_git_remove_worktree(
     worktree_path: String,
     delete_branch: Option<bool>,
     branch: Option<String>,
+    require_merged: Option<bool>,
+    original_head: Option<String>,
     state: State<AppState>,
 ) -> Result<(), String> {
     let projects = state.workspace_manager.list_projects();
@@ -1413,6 +1415,12 @@ pub fn workspace_git_remove_worktree(
     }
 
     let _repo = lock_repo_write(root_path);
+
+    if require_merged.unwrap_or(false)
+        && !crate::commands::project_worktrees::worktree_merged_into_default(root_path, &cleaned, original_head.as_deref())
+    {
+        return Err("This worktree has not been merged into the project's primary branch.".to_string());
+    }
 
     crate::worktree_snapshot::remove_clean(root_path, &cleaned, git_base)
         .map_err(|e| sanitize_git_error(&e))?;
@@ -2990,11 +2998,14 @@ fn validate_branch_name(name: &str) -> Result<(), String> {
 
 fn get_project_path(project_id: &str, state: &AppState) -> Result<std::path::PathBuf, String> {
     let projects = state.workspace_manager.list_projects();
-    let project = projects
-        .iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
-    Ok(project.root_path.clone())
+    if let Some(project) = projects.iter().find(|p| p.id == project_id) {
+        return Ok(project.root_path.clone());
+    }
+    let p = std::path::PathBuf::from(project_id);
+    if p.is_dir() {
+        return Ok(p);
+    }
+    Err("Project not found".to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -3221,6 +3232,23 @@ pub(crate) fn resolve_repo(
     repo_path: Option<&str>,
     state: &AppState,
 ) -> Result<PathBuf, String> {
+    // If repo_path is explicitly provided and points to a valid git repository or worktree on disk,
+    // allow resolving it directly.
+    if let Some(raw) = repo_path.map(str::trim).filter(|p| !p.is_empty()) {
+        let p = PathBuf::from(raw);
+        if p.join(".git").exists() {
+            if let Ok(candidate) = std::fs::canonicalize(&p).map(crate::commands::clean_path_buf) {
+                return Ok(candidate);
+            }
+            return Ok(p);
+        }
+        if let Ok(candidate) = std::fs::canonicalize(&p).map(crate::commands::clean_path_buf) {
+            if candidate.join(".git").exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
     let root_path = get_project_path(project_id, state)?;
     let Some(raw) = repo_path.map(str::trim).filter(|p| !p.is_empty()) else {
         if !root_path.join(".git").exists() {
@@ -3873,6 +3901,123 @@ pub fn workspace_get_recent_daily_notes(
     }
 
     Ok(summaries)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ProjectInspectResult {
+    pub icon: Option<String>,
+    pub github_owner: Option<String>,
+}
+
+#[tauri::command(async)]
+pub fn project_inspect_any(path: String) -> Result<ProjectInspectResult, String> {
+    let p = PathBuf::from(path.trim());
+    if !p.is_dir() {
+        return Err("Project directory does not exist".to_string());
+    }
+
+    let mut detected_icon = None;
+
+    // 1. Icon files
+    let candidate_rel_paths = [
+        "src-tauri/icons/32x32.png",
+        "src-tauri/icons/64x64.png",
+        "src-tauri/icons/icon.png",
+        "public/favicon.svg",
+        "public/favicon.png",
+        "public/favicon.ico",
+        "public/icon.png",
+        "public/logo.svg",
+        "public/logo.png",
+        "static/favicon.png",
+        "static/favicon.ico",
+        "favicon.svg",
+        "favicon.png",
+        "favicon.ico",
+        "icon.png",
+        "logo.svg",
+        "logo.png",
+    ];
+
+    for rel in candidate_rel_paths {
+        let file_path = p.join(rel);
+        if file_path.is_file() {
+            if let Ok(meta) = file_path.metadata() {
+                if meta.len() > 0 && meta.len() < 500_000 {
+                    if let Ok(bytes) = std::fs::read(&file_path) {
+                        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
+                        let mime = match ext.as_str() {
+                            "svg" => "image/svg+xml",
+                            "png" => "image/png",
+                            "ico" => "image/x-icon",
+                            "webp" => "image/webp",
+                            _ => "image/jpeg",
+                        };
+                        use base64::Engine;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        detected_icon = Some(format!("data:{};base64,{}", mime, b64));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Framework markers
+    if detected_icon.is_none() {
+        if let Ok(entries) = std::fs::read_dir(&p) {
+            let names: std::collections::HashSet<String> = entries
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok().map(|s| s.to_lowercase()))
+                .collect();
+
+            if names.contains("tauri.conf.json") || names.contains("src-tauri") || names.contains("cargo.toml") {
+                detected_icon = Some("🦀".to_string());
+            } else if names.contains("next.config.js") || names.contains("next.config.mjs") || names.contains("next.config.ts") {
+                detected_icon = Some("▲".to_string());
+            } else if names.contains("svelte.config.js") || names.contains("svelte.config.ts") {
+                detected_icon = Some("🧡".to_string());
+            } else if names.contains("vite.config.js") || names.contains("vite.config.ts") || names.contains("vite.config.mjs") {
+                detected_icon = Some("⚡".to_string());
+            } else if names.contains("nuxt.config.ts") || names.contains("vue.config.js") {
+                detected_icon = Some("💚".to_string());
+            } else if names.contains("astro.config.mjs") || names.contains("astro.config.ts") {
+                detected_icon = Some("🚀".to_string());
+            } else if names.contains("go.mod") {
+                detected_icon = Some("🐹".to_string());
+            } else if names.contains("pyproject.toml") || names.contains("requirements.txt") {
+                detected_icon = Some("🐍".to_string());
+            } else if names.contains("dockerfile") || names.contains("docker-compose.yml") {
+                detected_icon = Some("🐳".to_string());
+            }
+        }
+    }
+
+    // 3. GitHub remote owner
+    let mut github_owner = None;
+    if p.join(".git").exists() {
+        let mut remote_url = git_capture(&p, &["remote", "get-url", "origin"]);
+        if remote_url.is_none() {
+            if let Some(remotes) = git_capture(&p, &["remote"]) {
+                for r in remotes.lines().map(str::trim).filter(|s| !s.is_empty()) {
+                    if let Some(url) = git_capture(&p, &["remote", "get-url", r]) {
+                        remote_url = Some(url);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(url) = remote_url {
+            if let Some((_, owner, _)) = crate::commands::source_control::parse_remote_url(&url) {
+                github_owner = Some(owner);
+            }
+        }
+    }
+
+    Ok(ProjectInspectResult {
+        icon: detected_icon,
+        github_owner,
+    })
 }
 
 #[cfg(test)]

@@ -89,10 +89,10 @@ fn permission_mode_for(access_mode: Option<&str>) -> &'static str {
 async fn run_turn(
     cwd: &str,
     model: Option<&str>,
-    system_prompt: &str,
+    _system_prompt: &str,
     user_text: &str,
     images: &[PathBuf],
-    effort: Option<&str>,
+    _effort: Option<&str>,
     access_mode: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<MuseTurnResult, String> {

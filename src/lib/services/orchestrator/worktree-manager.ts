@@ -213,7 +213,8 @@ export async function createTaskWorktree(args: {
 export async function removeTaskWorktree(
   projectId: string,
   worktree: WorktreeInfo,
-  deleteBranch = false
+  deleteBranch = false,
+  requireMerged = false,
 ): Promise<boolean> {
   try {
     await backendInvoke('workspace_git_remove_worktree', {
@@ -221,6 +222,7 @@ export async function removeTaskWorktree(
       worktreePath: worktree.path,
       deleteBranch,
       branch: worktree.branch,
+      ...(requireMerged ? { requireMerged, originalHead: worktree.baseCommit } : {}),
     });
     return true;
   } catch (err) {
@@ -249,7 +251,7 @@ export type ReclaimOutcome =
 export async function reclaimWorktree(
   projectId: string,
   worktree: WorktreeInfo,
-  opts?: { deleteBranch?: boolean; stagePending?: boolean }
+  opts?: { deleteBranch?: boolean; stagePending?: boolean; requireMerged?: boolean }
 ): Promise<ReclaimOutcome> {
   let staged = 0;
   // Advances as we stage, so the final check compares against what the main
@@ -290,7 +292,7 @@ export async function reclaimWorktree(
     };
   }
 
-  if (!await removeTaskWorktree(projectId, worktree, opts?.deleteBranch ?? false)) {
+  if (!await removeTaskWorktree(projectId, worktree, opts?.deleteBranch ?? false, opts?.requireMerged ?? false)) {
     return { removed: false, reason: 'error', pendingFiles: 0, message: 'Git could not remove the worktree; cleanup will be retried.' };
   }
   return { removed: true, staged };

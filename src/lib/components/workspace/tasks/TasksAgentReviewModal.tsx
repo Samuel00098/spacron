@@ -4,6 +4,8 @@ import { getAgentRoster } from '$lib/stores/runs';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import AgentLaunchConfigFields from '$lib/components/shared/AgentLaunchConfigFields';
 import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import { structuredChatAgentFor } from '$lib/services/structured-chat/panes';
+import { cachedModelCatalog } from '$lib/services/structured-chat/model-catalog';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import type { ChatReasoningEffort } from '$lib/types/chat';
 import { AgentSparklesIcon } from './TasksIcons';
@@ -16,6 +18,7 @@ import {
   mainWorktreeRow,
 } from '$lib/stores/projectWorktrees';
 import { get } from '$lib/stores/storeCompat';
+import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
 import '$lib/components/shared/AgentPlacementModal.css';
 import './TasksStyles.css';
 
@@ -32,6 +35,26 @@ function ChatIcon({ size = 15 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function HomeRepoIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <polyline points="9 22 9 12 15 12 15 22" />
+    </svg>
+  );
+}
+
+function GitBranchIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="6" y1="3" x2="6" y2="15" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M18 9a9 9 0 0 1-9 9" />
     </svg>
   );
 }
@@ -75,8 +98,16 @@ export default function TasksAgentReviewModal({
   const backdropRef = useRef<HTMLDivElement | null>(null);
 
   const roster = getAgentRoster();
-  const [selectedAgent, setSelectedAgent] = useState(roster[0] ?? { command: 'codex', name: 'Codex CLI' });
+  const [selectedAgent, setSelectedAgent] = useState(roster[0] ?? { command: 'codex', name: 'Codex' });
   const [launchTarget, setLaunchTarget] = useState<'terminal' | 'chat'>('terminal');
+  const structuredAgent = structuredChatAgentFor(selectedAgent.command);
+  const supportsChat = Boolean(structuredAgent);
+
+  useEffect(() => {
+    if (!supportsChat && launchTarget === 'chat') {
+      setLaunchTarget('terminal');
+    }
+  }, [supportsChat, launchTarget]);
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string>('');
   const [model, setModel] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<ChatReasoningEffort>('default');
@@ -100,8 +131,7 @@ export default function TasksAgentReviewModal({
     if (!command) return;
 
     setLoadingModels(true);
-    setModel(null);
-    setReasoningEffort('default');
+    setModels([]);
 
     loadLiveAgentProviderModels(command)
       .then((m) => {
@@ -122,6 +152,27 @@ export default function TasksAgentReviewModal({
     };
   }, [selectedAgent?.command]);
 
+  const chatModels = useMemo<AgentProviderModel[]>(() => {
+    if (!structuredAgent) return [];
+    const cached = cachedModelCatalog(structuredAgent);
+    if (cached && cached.length > 0) {
+      return cached.map((m) => ({
+        id: m.id,
+        label: m.label,
+        isDefault: m.isDefault,
+        reasoningEfforts: m.efforts as ChatReasoningEffort[] | undefined,
+        defaultReasoningEffort: (m.defaultEffort as ChatReasoningEffort) || null,
+      }));
+    }
+    return [];
+  }, [structuredAgent]);
+
+  // Codex uses one catalogue for both launch modes. A previously connected
+  // chat can supply it while the local probe is still loading.
+  const effectiveModels = structuredAgent === 'codex'
+    ? (models.length ? models : chatModels)
+    : (launchTarget === 'chat' && chatModels.length ? chatModels : models);
+
   // Set prompt & worktree when modal opens
   useEffect(() => {
     if (!isOpen) return;
@@ -131,14 +182,18 @@ export default function TasksAgentReviewModal({
     }
 
     // Default prompt pre-fill
+    const pConfig = projectRoot ? projectConfigFor(get(allProjectSettings), projectRoot, projectId) : null;
+    const customBrief = pConfig?.customInstructions?.trim();
+    const customSuffix = customBrief ? `\n\nProject Instructions & Guidelines:\n${customBrief}` : '';
+
     const initialPrompt =
       itemType === 'pr'
         ? `Review Pull Request #${itemNumber}: ${itemTitle}\nBranch: ${headBranch || 'HEAD'} → ${baseBranch || 'main'}\n\n${
             itemBody ? itemBody.trim() + '\n\n' : ''
-          }Please review the changes in this pull request, inspect code quality and correctness, check for regressions, test coverage, or logic errors, and provide a clear, constructive review.`
+          }Please review the changes in this pull request, inspect code quality and correctness, check for regressions, test coverage, or logic errors, and provide a clear, constructive review.${customSuffix}`
         : `Work on Issue #${itemNumber}: ${itemTitle}\n\n${
             itemBody ? itemBody.trim() + '\n\n' : ''
-          }Please investigate this issue, identify the root cause, implement a fix, and verify with tests.`;
+          }Please investigate this issue, identify the root cause, implement a fix, and verify with tests.${customSuffix}`;
     setPrompt(initialPrompt);
 
     // Default worktree selection:
@@ -184,8 +239,9 @@ export default function TasksAgentReviewModal({
       return [
         {
           value: projectRoot || '',
-          label: `🏠 Main Repository (${baseBranch || 'main'})`,
+          label: `Main Repository (${baseBranch || 'main'})`,
           sublabel: projectRoot || '',
+          icon: <HomeRepoIcon />,
         },
       ];
     }
@@ -194,9 +250,10 @@ export default function TasksAgentReviewModal({
       const isPr = headBranch && (w.branch === headBranch || w.name === headBranch);
       return {
         value: w.path,
-        label: isMain ? `🏠 Main Repository (${w.branch || 'main'})` : `🌿 ${w.name}${isPr ? ' (PR)' : ''}`,
+        label: isMain ? `Main Repository (${w.branch || 'main'})` : `${w.name}${isPr ? ' (PR)' : ''}`,
         sublabel: w.branch ? `branch: ${w.branch}` : w.path,
         tooltip: w.path,
+        icon: isMain ? <HomeRepoIcon /> : <GitBranchIcon />,
       };
     });
   }, [worktreeList, projectRoot, baseBranch, headBranch]);
@@ -275,7 +332,12 @@ export default function TasksAgentReviewModal({
                     key={agent.command}
                     type="button"
                     className={`apm-agent-pill ${isSelected ? 'active' : ''}`}
-                    onClick={() => setSelectedAgent(agent)}
+                    onClick={() => {
+                      if (isSelected) return;
+                      setSelectedAgent(agent);
+                      setModel(null);
+                      setReasoningEffort('default');
+                    }}
                   >
                     <AgentBrandMark command={agent.command} name={agent.name} className="apm-agent-pill-mark" />
                     <span>{agent.name}</span>
@@ -289,7 +351,7 @@ export default function TasksAgentReviewModal({
         {/* Launch Mode: Terminal vs Chat */}
         <div className="tasks-modal-section">
           <span className="tasks-modal-section-label">Launch Mode</span>
-          <div className="tasks-modal-target-grid" role="radiogroup" aria-label="Launch target mode">
+          <div className={`tasks-modal-target-grid ${!supportsChat ? 'single' : ''}`} role="radiogroup" aria-label="Launch target mode">
             <button
               type="button"
               role="radio"
@@ -302,25 +364,32 @@ export default function TasksAgentReviewModal({
               </div>
               <div className="tasks-modal-target-info">
                 <span className="tasks-modal-target-title">Interactive Terminal</span>
-                <span className="tasks-modal-target-desc">Spawns CLI session in terminal pane</span>
+                <span className="tasks-modal-target-desc">CLI session in terminal</span>
               </div>
             </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={launchTarget === 'chat'}
-              className={`tasks-modal-target-card ${launchTarget === 'chat' ? 'selected' : ''}`}
-              onClick={() => setLaunchTarget('chat')}
-            >
-              <div className="tasks-modal-target-icon">
-                <ChatIcon size={15} />
-              </div>
-              <div className="tasks-modal-target-info">
-                <span className="tasks-modal-target-title">Agent Chat</span>
-                <span className="tasks-modal-target-desc">Opens conversational thread with agent</span>
-              </div>
-            </button>
+            {supportsChat && (
+              <button
+                type="button"
+                role="radio"
+                aria-checked={launchTarget === 'chat'}
+                className={`tasks-modal-target-card ${launchTarget === 'chat' ? 'selected' : ''}`}
+                onClick={() => setLaunchTarget('chat')}
+              >
+                <div className="tasks-modal-target-icon">
+                  <ChatIcon size={15} />
+                </div>
+                <div className="tasks-modal-target-info">
+                  <span className="tasks-modal-target-title">Agent Chat</span>
+                  <span className="tasks-modal-target-desc">Conversational chat thread</span>
+                </div>
+              </button>
+            )}
           </div>
+          {!supportsChat && (
+            <div className="tasks-modal-chat-unsupported-note">
+              <span>{selectedAgent?.name || 'This agent'} runs directly in the terminal (chat protocol is not supported for this CLI).</span>
+            </div>
+          )}
         </div>
 
         {/* Working Directory / Worktree Selection */}
@@ -335,6 +404,8 @@ export default function TasksAgentReviewModal({
               value={selectedWorktreePath}
               onChange={(val) => setSelectedWorktreePath(val)}
               boundarySelector=".tasks-agent-modal-card"
+              direction="down"
+              menuMaxHeight={144}
               ariaLabel="Select working worktree"
             />
           </div>
@@ -343,13 +414,14 @@ export default function TasksAgentReviewModal({
         {/* Model and Reasoning Configuration */}
         <div className="tasks-modal-config-wrap">
           <AgentLaunchConfigFields
+            mode={launchTarget === 'chat' ? 'chat' : 'cli'}
             command={selectedAgent?.command || 'codex'}
-            models={models}
+            models={effectiveModels}
             loading={loadingModels}
             model={model}
             reasoningEffort={reasoningEffort}
-            onModelChange={(m) => setModel(m)}
-            onReasoningChange={(effort) => setReasoningEffort(effort)}
+            onModelChange={setModel}
+            onReasoningChange={setReasoningEffort}
             boundarySelector=".tasks-agent-modal-card"
           />
         </div>

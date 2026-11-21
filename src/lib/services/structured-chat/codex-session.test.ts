@@ -2,8 +2,40 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
+vi.mock('$lib/stores/agentAccounts', () => ({ accountEnvFor: vi.fn(async () => ({})) }));
+vi.mock('./visuals', () => ({ prepareStructuredVisuals: vi.fn(async () => ({})) }));
 
-import { accessPolicy, chatItemFor, patchText } from './codex-session';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { accessPolicy, chatItemFor, codexProvider, patchText } from './codex-session';
+
+it('starts the thread and first turn with the chosen model even if the catalog omits it', async () => {
+  vi.mocked(listen).mockResolvedValue(() => {});
+  const responses: Record<string, unknown> = {
+    'model/list': { data: [{ id: 'gpt-default', isDefault: true }] },
+    'thread/start': { thread: { id: 'thread-1' } },
+    'turn/start': { turn: { id: 'turn-1' } },
+  };
+  const requests: Array<{ method: string; params: unknown }> = [];
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === 'codex_app_server_launch') return { command: 'codex', args: [], env: {} };
+    if (command === 'acp_start') return { id: 1 };
+    if (command === 'acp_request' && args && 'method' in args && typeof args.method === 'string') {
+      requests.push({ method: args.method, params: 'params' in args ? args.params : undefined });
+      return { result: responses[args.method] ?? {} };
+    }
+  });
+
+  const model = 'gpt-6.2-astra';
+  await codexProvider.start(123, '/repo', { model, effort: 'high' });
+  expect(codexProvider.get(123)).toMatchObject({ status: 'ready', model, effort: 'high' });
+  await codexProvider.send(123, 'Review this change');
+  expect(requests).toEqual(expect.arrayContaining([
+    { method: 'thread/start', params: expect.objectContaining({ model }) },
+    { method: 'turn/start', params: expect.objectContaining({ model, effort: 'high' }) },
+  ]));
+  await codexProvider.close(123);
+});
 
 // Item shapes from `codex app-server generate-ts` (0.171) and a live run.
 describe('Codex thread items in the chat', () => {

@@ -220,7 +220,7 @@ export async function openFile(path: string) {
   if (currentOpenFiles.includes(path)) {
     activeFile.set(path);
     revealEditor();
-    return;
+    return true;
   }
 
   try {
@@ -228,10 +228,10 @@ export async function openFile(path: string) {
 
     if (isViewerPath(path)) {
       editorFile = await loadViewerFile(path);
-      if (generation !== editorGeneration) { revokeEditorAsset(editorFile); return; }
+      if (generation !== editorGeneration) { revokeEditorAsset(editorFile); return false; }
     } else {
       const content = await invoke<string>('fs_read_file', { path });
-      if (generation !== editorGeneration) return;
+      if (generation !== editorGeneration) return false;
       const language = detectLanguage(path);
       editorFile = {
         path, content, originalContent: content, isDirty: false,
@@ -243,9 +243,11 @@ export async function openFile(path: string) {
     openFiles.update((files) => [...files, path]);
     activeFile.set(path);
     revealEditor();
+    return true;
   } catch (err: any) {
     console.error('Failed to open file:', err);
     showToast(`Failed to open file: ${err?.message || err}`, 'error');
+    return false;
   }
 }
 

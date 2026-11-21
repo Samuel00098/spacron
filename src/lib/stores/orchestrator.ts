@@ -111,7 +111,7 @@ import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, Ch
 import { buildChatContextHandoff, lastDispatchedChatAgent } from '$lib/services/chat-context-handoff';
 import { decideChatProviderTransition } from '$lib/services/chat-provider-transition';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
-import { agentTurnStates, noteAgentTurnEnded, turnEndWasCounted } from '$lib/stores/agentTurnState';
+import { agentTurnStates, noteAgentTurnEnded, turnEndWasCounted, type AgentTurnPhase } from '$lib/stores/agentTurnState';
 import { getSessionHeaderSummary } from '$lib/stores/terminal';
 import { requestAmbientLayout, requestRoomControl, layoutSnapshot } from '$lib/stores/layoutControl';
 import {
@@ -157,7 +157,9 @@ import {
   agentFailoverCrossProvider,
   agentFailoverHeadroomPercent,
   mediaGeneration,
+  globalWorkspaceCleanupRule,
 } from '$lib/stores/settings';
+import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
 import {
   cancelMediaGeneration,
   failureNotice,
@@ -1197,12 +1199,12 @@ async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurn
     const claim = activeClaims(getProjectMailbox(task.projectId)).find((c) => c.taskId === task.id);
     // A guessed finish gets the weaker word here too — this log line is read
     // back by other agents, so "Finished" would launder a guess into a fact.
-    const guessed = outcome.kind === 'finished' && outcome.via === 'inferred';
+    const source = outcome.kind === 'finished' ? outcome.via : undefined;
     await postMailboxMessage(task.projectId, rootPath, {
       from,
       kind: 'done',
       taskId: task.id,
-      text: guessed ? `Went quiet: ${label}` : `Finished: ${label}`,
+      text: source === 'inferred' ? `Went quiet: ${label}` : source === 'exit' ? `Exited: ${label}` : `Finished: ${label}`,
     });
     // Bi-directional handoff: a Builder that just finished hands its work to a
     // Reviewer directly — no user relay. The Reviewer gates it and either merges
@@ -1213,7 +1215,7 @@ async function postAgentTurnToMailbox(task: OrchestratorTask, outcome: AgentTurn
     // "output stopped growing for 90 seconds", which is equally a long compile.
     // Reviewing half-written work is worse than reviewing late: the builder's
     // real finish (declared, or its process exiting) still reaches here.
-    if (task.role === 'builder' && !guessed) {
+    if (task.role === 'builder' && source === 'declared') {
       const reviewer = findTeamReviewer(task.projectId, task.id);
       if (reviewer) {
         // Include the worktree branch so the Reviewer agent can git-diff the
@@ -1428,14 +1430,26 @@ export async function mergeAndApproveMailboxCard(
  * cheap; the checkout and its dependencies are what take disk space.
  */
 const cleanupInFlight = new Set<string>();
+function cleanupRuleForProject(projectId: string) {
+  const root = projectPaths.get(projectId) ?? projectId;
+  const rule = projectConfigFor(get(allProjectSettings), root, projectId).cleanupRule;
+  return rule === 'global' ? get(globalWorkspaceCleanupRule) : rule;
+}
+
 export async function cleanupStaleWorktrees(projectId: string): Promise<number> {
-  if (cleanupInFlight.has(projectId)) return 0;
+  if (cleanupInFlight.has(projectId) || cleanupRuleForProject(projectId) === 'never') return 0;
   cleanupInFlight.add(projectId);
   let attempted = 0;
   try {
     for (const entry of trackedWorktrees().filter((w) => w.projectId === projectId && !w.live)) {
+      const rule = cleanupRuleForProject(projectId);
+      if (rule === 'never') break;
       attempted++;
-      const outcome = await reclaimWorktree(projectId, entry.worktree, { deleteBranch: false, stagePending: false });
+      const outcome = await reclaimWorktree(projectId, entry.worktree, {
+        deleteBranch: false,
+        stagePending: false,
+        requireMerged: rule === 'merged_only',
+      });
       if (!outcome.removed) continue;
       forgetWorktree(entry.worktree.path);
       for (const task of get(orchestratorTasks)) {
@@ -1487,7 +1501,13 @@ export async function reclaimProjectWorktrees(projectId: string): Promise<Reclai
   const outcome: ReclaimAllOutcome = { removed: 0, kept: 0, keptAgents: [] };
 
   for (const entry of tracked) {
-    const result = await reclaimWorktree(projectId, entry.worktree, { deleteBranch: false });
+    const rule = cleanupRuleForProject(projectId);
+    if (rule === 'never') return outcome;
+    const result = await reclaimWorktree(projectId, entry.worktree, {
+      deleteBranch: false,
+      requireMerged: rule === 'merged_only',
+      ...(rule === 'merged_only' ? { stagePending: false } : {}),
+    });
     if (result.removed) {
       outcome.removed += 1;
       forgetWorktree(entry.worktree.path);
@@ -1511,6 +1531,8 @@ export async function reclaimProjectWorktrees(projectId: string): Promise<Reclai
  * cleanup. Runs on project load and periodically via the prune timer.
  */
 export async function sweepOrphanWorktrees(projectId: string): Promise<number> {
+  // An orphan has no saved original head to distinguish merged from unchanged.
+  if (cleanupRuleForProject(projectId) !== 'merged_unchanged') return 0;
   const onDisk = await listWorktreesOnDisk(projectId);
   if (onDisk.length === 0) return 0;
 
@@ -1526,6 +1548,8 @@ export async function sweepOrphanWorktrees(projectId: string): Promise<number> {
   let removed = 0;
   for (const dir of onDisk) {
     if (known.has(dir)) continue;
+    const rule = cleanupRuleForProject(projectId);
+    if (rule !== 'merged_unchanged') break;
     try {
       await backendInvoke('workspace_git_remove_worktree', {
         projectId,
@@ -1561,6 +1585,7 @@ export async function sweepOrphanWorktrees(projectId: string): Promise<number> {
  * deleted.
  */
 export async function sweepAgentBranchesForProject(projectId: string): Promise<number> {
+  if (cleanupRuleForProject(projectId) === 'never') return 0;
   const inUse = trackedWorktrees()
     .filter((w) => w.projectId === projectId)
     .map((w) => w.worktree.branch)
@@ -1579,6 +1604,17 @@ function agentSessionLive(task: OrchestratorTask): boolean {
   const id = task.assignedSessionId ?? task.lastSessionId ?? null;
   if (id == null) return false;
   return sessionIsRunning(task.projectId, id);
+}
+
+function markLinkedTaskDone(task: OrchestratorTask): void {
+  if (!task.panelTaskId) return;
+  const panelTask = get(tasks).find((entry) => entry.id === task.panelTaskId);
+  if (panelTask && panelTask.status !== 'done') {
+    updateTaskStatus(panelTask.id, 'done');
+    const agentType = task.agentPreset ? getAgentDisplayName(task.agentPreset) ?? task.agentPreset : null;
+    const name = task.name?.trim() || agentType || task.agentPreset || 'Agent';
+    showToast(`"${panelTask.title}": ${name} finished and the task was marked done.`, 'success', 6000);
+  }
 }
 
 /**
@@ -1623,6 +1659,7 @@ async function completeLeasedTask(
     // can still read late output if the agent kept printing past its turn end
     // (the CLI process survives lease release). See getTaskTranscript.
     lastSessionId: sessionId,
+    turnEndedBy: outcome.kind === 'finished' ? outcome.via : undefined,
     ...classifyTaskAfterExecution(t, {
       exitCode: opts?.exitCode ?? 0,
       needsHumanInput: blocked,
@@ -1648,15 +1685,17 @@ async function completeLeasedTask(
       logTaskActivity(
         taskId,
         'finished',
-        outcome.kind === 'finished' && outcome.via === 'exit'
-          ? 'Its process exited.'
-          : 'Finished its turn.',
+        outcome.kind === 'finished' && outcome.via === 'inferred'
+          ? 'Went quiet. Completion is unconfirmed.'
+          : outcome.kind === 'finished' && outcome.via === 'exit'
+            ? 'Its process exited.'
+            : 'Finished its turn.',
       );
     }
     const rememberedTask = get(orchestratorTasks).find((t) => t.id === updated.id) ?? updated;
     void rememberTask(updated.projectId, projectPaths.get(updated.projectId), rememberedTask);
     void postAgentTurnToMailbox(updated, outcome);
-    void handleReviewerVerdict(updated);
+    if (updated.turnEndedBy !== 'inferred' && updated.turnEndedBy !== 'exit') void handleReviewerVerdict(updated);
   }
 
   if (!updated) return;
@@ -1670,14 +1709,7 @@ async function completeLeasedTask(
   // state, close the linked board card as well; otherwise every later brain
   // request receives the stale card in its "In progress" context. Blocked and
   // failed runs remain actionable instead of being marked done.
-  if (task.panelTaskId && updated.status === 'complete') {
-    const panelTaskId = task.panelTaskId;
-    const panelTask = get(tasks).find((t) => t.id === panelTaskId);
-    if (panelTask && panelTask.status !== 'done') {
-      updateTaskStatus(panelTaskId, 'done');
-      showToast(`"${panelTask.title}": ${name} finished and the task was marked done.`, 'success', 6000);
-    }
-  }
+  if (updated.status === 'complete' && updated.turnEndedBy === 'declared') markLinkedTaskDone(task);
 
   // The completion card below is the durable record — it must be written even
   // when the toast is suppressed, because the card is what lands in the inbox
@@ -1693,12 +1725,10 @@ async function completeLeasedTask(
     // inbox showing a name and a title and nothing else. When the agent said
     // what it did, that sentence is the message.
     : told?.reason ?? null;
-  // A finish we merely inferred must not be worded as one the agent declared.
-  // The task's own status can outrank the outcome (a non-zero exit makes a
-  // "finished" turn `failed`), and those are observed facts — so only a `done`
-  // card inherits the doubt.
+  // Preserve the evidence for both a finish and a request for input.
+  // A non-zero process exit is independently sufficient to report failure.
   const completionEndedBy: NonNullable<CompletionSummary['endedBy']> =
-    completionStatus === 'done' ? (told?.endedBy ?? 'declared') : 'declared';
+    completionStatus === 'failed' ? 'declared' : (told?.endedBy ?? 'declared');
   // …and an inferred finish NEVER interrupts, whatever channel the agent had.
   //
   // "Output stopped growing for 90 seconds" is not evidence that an agent
@@ -3212,7 +3242,7 @@ function watchChatAgentResponse(
           const settledText = responseText().trim();
           if (settledText) {
             publish(false);
-            logTaskActivity(taskId, 'finished', 'Chat turn went quiet; the session remains ready for follow-up.');
+            logTaskActivity(taskId, 'info', 'Chat turn went quiet. Completion is unconfirmed.');
             return;
           }
         }
@@ -3583,37 +3613,6 @@ function adoptLiveAgentSession(projectId: string, session: LiveTerminalSession, 
 }
 
 /**
- * Minimum buffer growth (chars) between two turn-end notifications for the same
- * adopted session. A cursor-blink redraw or a re-matched prompt produces only a
- * few chars and should not chime again for what the user experiences as one
- * pause.
- */
-const ADOPTED_NUDGE_MIN_GROWTH = 200;
-/**
- * Floor between two cues for the same session, regardless of growth. The
- * watcher re-arms the instant it resolves, so anything that can re-match inside
- * one poll interval would otherwise chime at 400ms intervals. A real turn end
- * never lands within this window of the previous one.
- */
-const ADOPTED_NUDGE_MIN_INTERVAL_MS = 2000;
-const lastAdoptedNudge = new Map<number, { len: number; at: number }>();
-
-/**
- * Whether an adopted session's turn end is distinct enough from the last one to
- * be worth a cue. Applies to blocked as well as finished: "blocked" used to be
- * exempt on the grounds that it always matters, but that made it the one path
- * with no dedupe at all — and the chime, unlike the toast, has no duplicate
- * suppression of its own, so the user heard a cue with nothing to show for it.
- */
-function shouldNudgeAdopted(sessionId: number, bufLen: number): boolean {
-  const last = lastAdoptedNudge.get(sessionId);
-  if (!last) return true;
-  if (Date.now() - last.at < ADOPTED_NUDGE_MIN_INTERVAL_MS) return false;
-  // A shrink means the capped buffer slid, not that output was withdrawn.
-  return bufLen < last.len || bufLen - last.len >= ADOPTED_NUDGE_MIN_GROWTH;
-}
-
-/**
  * Give agents the user launched by hand the same turn-end cue as orchestrated
  * ones — a chime plus a bottom-corner toast that jumps to the terminal — and a
  * lightweight inbox card so the turn survives the user looking away.
@@ -3642,11 +3641,7 @@ function watchAdoptedAgentTurns(taskId: string, sessionId: number): void {
       });
       if (outcome.kind === 'aborted') return;
 
-      const bufLen = getSessionOutputLength(sessionId);
-      if (shouldNudgeAdopted(sessionId, bufLen)) {
-        lastAdoptedNudge.set(sessionId, { len: bufLen, at: Date.now() });
-        notifyAdoptedTurnEnd(task, outcome, sessionId);
-      }
+      notifyAdoptedTurnEnd(task, outcome, sessionId);
     }
   })();
 }
@@ -3676,8 +3671,8 @@ function notifyAdoptedTurnEnd(
 
   logTaskActivity(
     task.id,
-    told.status === 'blocked' ? 'blocked' : told.status === 'failed' ? 'failed' : 'finished',
-    told.reason ?? (told.declared ? 'Finished its turn.' : 'Went quiet, so it is assumed finished.'),
+    told.status === 'blocked' ? 'blocked' : told.status === 'failed' ? 'failed' : told.declared ? 'finished' : 'info',
+    told.reason ?? (told.declared ? 'Finished its turn.' : 'Went quiet. Completion is unconfirmed.'),
   );
 
   // A hand-launched agent gets the same rule as a leased one: an inferred
@@ -3714,8 +3709,7 @@ function notifyAdoptedTurnEnd(
     ? postAgentInputCard(task, sessionId ?? task.assignedSessionId ?? null, told.reason, told.endedBy === 'inferred', threadId)
     : null;
 
-  // The durable trace for this turn. A card lands only when a cue lands, so it
-  // can never outnumber the chimes (shouldNudgeAdopted already deduped this one).
+  // The same counted turn supplies the durable card and any audio cue.
   // Named like the Agent Fleet card: the agent's own header summary, else the
   // task it was sent.
   const summary = getSessionHeaderSummary(sessionId) ?? turn?.task;
@@ -3843,18 +3837,16 @@ export function recordUnwatchedAgentReport(
   // card. A report from an agent that was never given a task has nothing to
   // report on. Only an unattributed report (no session) is filed as-is.
   if (sessionId != null) {
-    if (get(agentTurnStates)[sessionId]?.phase !== 'working') return null;
-    noteAgentTurnEnded(sessionId, signal.kind);
+    const phase = get(agentTurnStates)[sessionId]?.phase;
+    if (phase !== 'working' && phase !== 'quiet') return { kind: 'duplicate' };
+    noteAgentTurnEnded(sessionId, signal.kind, 'declared');
   }
 
-  const task =
-    sessionId == null
-      ? undefined
-      : get(orchestratorTasks).find(
-          (t) =>
-            t.assignedSessionId === sessionId &&
-            (t.status === 'in-progress' || t.status === 'todo'),
-        );
+  const allTasks = get(orchestratorTasks);
+  const task = sessionId == null ? undefined : (
+    allTasks.find((t) => t.assignedSessionId === sessionId && (t.status === 'in-progress' || t.status === 'todo'))
+    ?? allTasks.slice().reverse().find((t) => t.lastSessionId === sessionId && t.status === 'complete' && t.turnEndedBy === 'inferred')
+  );
   const session =
     sessionId == null ? undefined : get(allProjectSessions).find((s) => s.id === sessionId);
   const projectId = task?.projectId ?? session?.projectId ?? getActiveTerminalProjectId();
@@ -3898,6 +3890,10 @@ export function recordUnwatchedAgentReport(
   }
 
   if (task) {
+    if (task.turnEndedBy === 'inferred' && task.status === 'complete' && told.status === 'done') {
+      patchTask(task.id, (current) => ({ ...current, turnEndedBy: 'declared' }));
+      markLinkedTaskDone(task);
+    }
     logTaskActivity(
       task.id,
       told.status === 'blocked' ? 'blocked' : told.status === 'failed' ? 'failed' : 'finished',
@@ -4083,6 +4079,7 @@ function readAgentTranscriptFor(projectId: string, request: string): AgentTransc
 
 /** Recent task state plus terminal output for conversational status/output answers. */
 export function getAgentOutputRefs(projectId: string): AgentOutputRef[] {
+  const turnStates = get(agentTurnStates);
   return get(orchestratorTasks)
     .filter((t) => t.projectId === projectId && t.status !== 'todo')
     .map((t) => {
@@ -4094,15 +4091,15 @@ export function getAgentOutputRefs(projectId: string): AgentOutputRef[] {
       // message, but their latest turn may already be finished. The activity
       // marker is the durable boundary that lets the brain report that state
       // honestly without making the session unavailable for follow-up.
-      const turnState: AgentOutputRef['turnState'] =
-        t.status === 'in-progress' && t.activity?.at(-1)?.kind === 'finished'
-          ? 'ready'
-          : 'working';
+      const phase = turnPhaseForTask(t, turnStates);
+      const turnState: AgentOutputRef['turnState'] = phase === 'finished' || (!phase && t.activity?.at(-1)?.kind === 'finished')
+        ? 'ready'
+        : 'working';
       return {
         name: t.name ?? null,
         agent: t.agentPreset ?? 'agent',
         title: t.goal ? t.title : 'idle',
-        status: t.status as AgentOutputRef['status'],
+        status: agentOutputStatus(t, phase),
         turnState,
         updatedAt,
         reason,
@@ -4112,6 +4109,20 @@ export function getAgentOutputRefs(projectId: string): AgentOutputRef[] {
     })
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 6);
+}
+
+function turnPhaseForTask(task: OrchestratorTask, states: Record<number, { phase: AgentTurnPhase }>): AgentTurnPhase | undefined {
+  return task.assignedSessionId == null ? undefined : states[task.assignedSessionId]?.phase;
+}
+
+function agentOutputStatus(task: OrchestratorTask, phase?: AgentTurnPhase): AgentOutputRef['status'] {
+  if (task.status === 'complete' && task.turnEndedBy === 'exit') return 'exited';
+  if (task.status === 'complete' && task.turnEndedBy === 'inferred') return 'unconfirmed';
+  if (task.status === 'in-progress') {
+    if (phase === 'quiet') return 'unconfirmed';
+    if (phase === 'blocked' || phase === 'failed') return phase;
+  }
+  return task.status as AgentOutputRef['status'];
 }
 
 /** Blocked agents that the assistant can resume naturally in chat. */
@@ -4360,8 +4371,10 @@ function buildProjectTaskMemory(projectId: string): string[] {
       const activities = task.activity ?? [];
       const label = compactInlineText(task.name ?? task.title ?? task.goal, 64);
       const agent = compactInlineText(task.agentPreset ?? 'agent', 48);
-      const turnReady = task.status === 'in-progress' && task.activity?.at(-1)?.kind === 'finished';
-      const displayedStatus = turnReady ? 'ready for a new message' : task.status;
+      const phase = turnPhaseForTask(task, get(agentTurnStates));
+      const displayedStatus = phase === 'finished' && task.status === 'in-progress'
+        ? 'ready for a new message'
+        : agentOutputStatus(task, phase);
       const head = label ? `${label} [${agent}, ${displayedStatus}]` : `[${agent}, ${displayedStatus}]`;
       const activity = activities.slice(-2).map(formatTaskActivity).filter((line) => line.length > 0);
       const freshness = taskFreshness(task);
@@ -5172,10 +5185,15 @@ async function sendNativeAcpChatTurn(
         if (modeState) modeState = { ...modeState, currentModeId: desired };
       }
     }
-    await promptAcpNativeSession(session, nativeSessionId, prompt);
+    const result = await promptAcpNativeSession(session, nativeSessionId, prompt);
     if (exited) throw new Error('ACP agent exited before completing the prompt');
+    const stopReason = result?.stopReason;
+    if (stopReason && stopReason !== 'end_turn' && stopReason !== 'cancelled') {
+      throw new Error(`Turn stopped (${stopReason.replace(/_/g, ' ')}).`);
+    }
+    const cancelled = stopReason === 'cancelled';
     patchChat(projectId, assistantId, {
-      text: responseText || 'The ACP agent completed the turn without returning text.',
+      text: cancelled ? (responseText || 'The turn was cancelled.') : (responseText || 'The ACP agent completed the turn without returning text.'),
       pending: false,
     });
     updateChatThread(thread.id, {
@@ -5184,7 +5202,7 @@ async function sendNativeAcpChatTurn(
       updatedAt: Date.now(),
       lastActivityAt: Date.now(),
     });
-    await notifyChatCompletion(projectId, rootPath, displayName ?? agentCommand, 'done');
+    if (!cancelled) await notifyChatCompletion(projectId, rootPath, displayName ?? agentCommand, 'done');
   } catch (error) {
     patchChat(projectId, assistantId, {
       text: `Native ACP handoff failed: ${error instanceof Error ? error.message : String(error)}${stderrText ? `\n\nAgent output:\n${stderrText}` : ''}`,
@@ -7084,6 +7102,10 @@ export async function sendChatMessage(
               if (hit.status === 'complete') {
                 return { output: `COMPLETE: ${label} finished "${hit.title}". Result tail:\n${tail}` };
               }
+              if (hit.status === 'unconfirmed' || hit.status === 'exited') {
+                const event = hit.status === 'exited' ? 'exited' : 'went quiet';
+                return { output: `${label} ${event}. Completion of "${hit.title}" is unconfirmed. Latest output:\n${tail}` };
+              }
               return { output: `${hit.status.toUpperCase()}: ${label} — "${hit.title}".${hit.reason ? ` Reason: ${hit.reason}.` : ''} Output tail:\n${tail}` };
             }
             const running = getRunningAgentRefs(projectId);
@@ -8840,7 +8862,6 @@ if (typeof window !== 'undefined') {
   onSessionExit(({ sessionId, projectId, code }) => {
     // The session is gone — tear down its agent adapter (clears any poll timers).
     disposeAgentAdapter(sessionId);
-    lastAdoptedNudge.delete(sessionId);
     const task = get(orchestratorTasks).find(
       (t) => t.status === 'in-progress' && t.assignedSessionId === sessionId
     );
@@ -8857,10 +8878,14 @@ if (typeof window !== 'undefined') {
     // still lands so the last turn isn't lost to a transient toast.
     if (task.adopted) {
       captureTaskTranscript(task.id, sessionId);
-      const updated = patchTask(task.id, (t) => ({ ...transitionTask(t, 'complete'), assignedSessionId: null }));
-      if (updated) {
-        void handleReviewerVerdict(updated);
-      }
+      const failed = code != null && code !== 0;
+      const failureReason = failed ? `Agent process exited with code ${code}.` : null;
+      patchTask(task.id, (t) => ({
+        ...transitionTask(t, failed ? 'failed' : 'complete'),
+        assignedSessionId: null,
+        turnEndedBy: 'exit',
+        failureReason,
+      }));
       // An adopted agent's worktree lives on the session, not the task, so make
       // sure the task carries it before the reconciler enumerates tasks — that is
       // what keeps this agent's work visible now that its process is gone.
@@ -8883,8 +8908,8 @@ if (typeof window !== 'undefined') {
           ?? 'Agent',
         // Unknown exit code counts as clean, matching the leased path's
         // `exitCode !== null && exitCode !== 0` convention.
-        code != null && code !== 0 ? 'failed' : 'done',
-        code != null && code !== 0 ? `Agent process exited with code ${code}.` : null,
+        failed ? 'failed' : 'done',
+        failureReason,
         // `exit`, not `declared`: the process ending is an observed fact, but
         // it is NOT a claim that the work is done — a CLI quit with `/exit`
         // exits cleanly too. The card says "exited" rather than "finished".

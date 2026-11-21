@@ -1087,7 +1087,8 @@ input:where(:not([type='range'])):focus {
   .ws-menu-list,
   .sticky-content
 ):not(.toolbox-tabs) {
-  --scroll-edge-shadow: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  /* `--scroll-edge-color` lets a surface turn the recessed edge off (the right drawer does). */
+  --scroll-edge-shadow: var(--scroll-edge-color, color-mix(in srgb, var(--bg-primary) 82%, transparent));
   overscroll-behavior-y: none;
   scrollbar-gutter: stable;
   background-clip: padding-box;

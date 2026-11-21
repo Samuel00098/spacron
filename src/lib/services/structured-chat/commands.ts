@@ -18,12 +18,15 @@ import { spawnStructuredSubagent, structuredChatProvider } from './registry';
 import {
   archiveStructuredRecord,
   archiveStructuredSession,
+  clearStructuredGoal,
+  setStructuredGoal,
   clearStructuredConversation,
   compactStructuredSession,
   listArchivedSessions,
   forkStructuredSession,
   listStructuredSessions,
   recordForPane,
+  recordHasConversation,
   renameStructuredSession,
   resumeStructuredSessionInPane,
   rewindStructuredSession,
@@ -76,6 +79,7 @@ export const STRUCTURED_COMMANDS: SlashCommand[] = [
   { name: '/archived', description: 'List this agent\'s archived chats' },
   { name: '/unarchive', description: 'Bring an archived chat back: /unarchive <number or id>' },
   { name: '/side', description: 'Open a side chat branched from this conversation: /side [first message]' },
+  { name: '/btw', description: 'Same as /side: ask a side question in a branch beside this chat' },
   { name: '/resume', description: 'Resume an earlier chat here: /resume <number or id>' },
   { name: '/terminal', description: 'Continue this conversation in the terminal' },
   { name: '/handoff', description: 'Hand off this conversation to another agent' },
@@ -100,11 +104,12 @@ function ago(ms: number): string {
 }
 
 /** Earlier chats this pane could resume: same provider and project, not open elsewhere. */
-function resumable(paneId: number) {
+export function resumable(paneId: number) {
   const current = recordForPane(paneId);
   if (!current) return [];
   return listStructuredSessions({ projectId: current.projectId, provider: current.provider })
-    .filter((record) => record.id !== current.id && record.lifecycle !== 'starting' && record.lifecycle !== 'working' && record.lifecycle !== 'ready');
+    .filter((record) => record.id !== current.id && record.lifecycle !== 'starting' && record.lifecycle !== 'working' && record.lifecycle !== 'ready')
+    .filter(recordHasConversation);
 }
 
 export async function runStructuredCommand(
@@ -276,6 +281,21 @@ export async function runStructuredCommand(
       const ok = await resumeStructuredSessionInPane(paneId, target.id);
       return ok ? { handled: true, output: `Resumed "${target.title ?? 'Untitled'}".` } : { handled: true, error: `Couldn't resume "${target.title ?? target.id}".` };
     }
+    case '/goal': {
+      // The agent owns `/goal`; this only mirrors the objective so the panel
+      // above the composer can show it, and still passes the command through.
+      const record = recordForPane(paneId);
+      const word = arg.toLowerCase();
+      if (!record || !arg) return { handled: false };
+      if (word === 'pause' || word === 'resume') {
+        if (record.goal) setStructuredGoal(paneId, record.goal.text, word === 'pause' ? 'paused' : 'active');
+      } else if (word === 'clear' || word === 'stop' || word === 'done') {
+        clearStructuredGoal(paneId);
+      } else {
+        setStructuredGoal(paneId, arg, 'active');
+      }
+      return { handled: false };
+    }
     case '/archive': {
       if (state?.status === 'working') return { handled: true, error: 'Stop the running turn before archiving.' };
       const record = recordForPane(paneId);
@@ -302,6 +322,7 @@ export async function runStructuredCommand(
         ? { handled: true, output: `Restored “${target.title ?? 'Untitled'}”. It is in the chat tabs again; /resume ${target.id} opens it here.` }
         : { handled: true, error: 'Could not restore that chat.' };
     }
+    case '/btw':
     case '/side': {
       if (state?.status === 'working') return { handled: true, error: 'Stop the running turn before opening a side chat.' };
       const current = recordForPane(paneId);

@@ -37,11 +37,27 @@ const h = vi.hoisted(() => {
     forkStructuredSession: vi.fn(async (_id, opts) => ({ id: 'fork-1', title: opts?.title ?? 'Chat (fork)', forkMode: 'native' })),
     rewindStructuredSession: vi.fn(async () => true),
     renameStructuredSession: vi.fn(() => true),
+    // A chat opened and never used (id `empty`) holds nothing worth resuming.
+    recordHasConversation: vi.fn((record: { id: string }) => record.id !== 'empty'),
     resumeStructuredSessionInPane: vi.fn(async () => true),
-    recordForPane: vi.fn(() => ({ id: 'cur', projectId: 'p', provider: 'codex', restoredMode: 'native' })),
+    recordForPane: vi.fn(() => ({
+      id: 'cur',
+      projectId: 'p',
+      provider: 'codex',
+      restoredMode: 'native',
+      goal: null as { text: string; state: 'active' | 'paused'; at: number } | null,
+    })),
+    setStructuredGoal: vi.fn(() => true),
+    clearStructuredGoal: vi.fn(() => true),
+    archiveStructuredSession: vi.fn(() => true),
+    archiveStructuredRecord: vi.fn(() => true),
+    listArchivedSessions: vi.fn(() => [
+      { id: 'old', title: 'Old chat', archivedAt: Date.now() - 3_600_000 },
+    ]),
     listStructuredSessions: vi.fn(() => [
       { id: 'cur', title: 'Now', lifecycle: 'ready', updatedAt: Date.now() },
       { id: 'old', title: 'Old chat', lifecycle: 'closed', updatedAt: Date.now() - 3_600_000 },
+      { id: 'empty', title: 'Claude Chat', lifecycle: 'closed', updatedAt: Date.now() - 1000 },
     ]),
   };
   return { state, provider, store };
@@ -74,7 +90,9 @@ describe('structured slash commands', () => {
     expect(h.store.clearStructuredConversation).toHaveBeenCalledWith(1);
     await runStructuredCommand('codex', 1, '/rename Bug hunt');
     expect(h.store.renameStructuredSession).toHaveBeenCalledWith(1, 'Bug hunt');
-    expect((await runStructuredCommand('codex', 1, '/history')).output).toContain('1. Old chat');
+    const history = (await runStructuredCommand('codex', 1, '/history')).output;
+    expect(history).toContain('1. Old chat');
+    expect(history).not.toContain('Claude Chat');
     await runStructuredCommand('codex', 1, '/resume 1');
     expect(h.store.resumeStructuredSessionInPane).toHaveBeenCalledWith(1, 'old');
     await runStructuredCommand('codex', 1, '/retry', { lastUserMessage: 'do it' });
@@ -156,5 +174,38 @@ describe('structured slash commands', () => {
     expect(res.handled).toBe(true);
     expect(res.output).toContain('Added follow-up to message queue');
     (h.provider.capabilities as any).steering = 'inject';
+  });
+
+  it('mirrors a goal while still sending the command to the agent', async () => {
+    expect(await runStructuredCommand('codex', 1, '/goal ship the fix')).toEqual({ handled: false });
+    expect(h.store.setStructuredGoal).toHaveBeenCalledWith(1, 'ship the fix', 'active');
+
+    h.store.recordForPane.mockReturnValueOnce({
+      id: 'cur',
+      projectId: 'p',
+      provider: 'codex',
+      restoredMode: 'native',
+      goal: { text: 'ship the fix', state: 'active', at: 1 },
+    });
+    expect(await runStructuredCommand('codex', 1, '/goal pause')).toEqual({ handled: false });
+    expect(h.store.setStructuredGoal).toHaveBeenCalledWith(1, 'ship the fix', 'paused');
+
+    expect(await runStructuredCommand('codex', 1, '/goal clear')).toEqual({ handled: false });
+    expect(h.store.clearStructuredGoal).toHaveBeenCalledWith(1);
+  });
+
+  it('archives, lists and restores chats, and opens a side chat in its own tab', async () => {
+    (h.provider.capabilities as any).steering = 'inject';
+    expect(await runStructuredCommand('codex', 1, '/archive')).toMatchObject({ handled: true });
+    expect(h.store.archiveStructuredSession).toHaveBeenCalledWith(1);
+
+    expect((await runStructuredCommand('codex', 1, '/archived')).output).toContain('Old chat');
+    expect(await runStructuredCommand('codex', 1, '/unarchive 1')).toMatchObject({ handled: true });
+    expect(h.store.archiveStructuredRecord).toHaveBeenCalledWith('old', false);
+
+    expect(await runStructuredCommand('codex', 1, '/side check the logs')).toMatchObject({ handled: true });
+    expect(h.store.forkStructuredSession).toHaveBeenCalled();
+    expect(h.store.resumeStructuredSessionInPane).toHaveBeenCalledWith(1, 'fork-1');
+    expect(h.provider.steer).toHaveBeenCalledWith(1, 'check the logs');
   });
 });

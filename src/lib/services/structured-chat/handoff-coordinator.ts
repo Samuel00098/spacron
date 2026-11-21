@@ -297,11 +297,12 @@ async function deliverToStructuredChat(request: HandoffRequest, prompt: string, 
       if (Date.now() - startedAt > START_TIMEOUT_MS) throw new HandoffError(`${request.targetName} did not become ready in time.`);
       await sleep(250);
     }
+    const sending = sendStructuredChat(agent, id, prompt);
     setRecord(request.sourceSessionId, { status: 'delivering' });
-    await sendStructuredChat(agent, id, prompt);
+    await sending;
     const after = provider.get(id);
-    if (after?.status === 'failed' || after?.status === 'closed') {
-      throw new HandoffError(after.error || `${request.targetName} rejected the handoff.`);
+    if (!after || after.error || after.status === 'failed' || after.status === 'closed') {
+      throw new HandoffError(after?.error || `${request.targetName} rejected the handoff.`);
     }
     return id;
   } catch (error) {
@@ -362,4 +363,112 @@ export async function retryHandoff(sessionId: number): Promise<boolean> {
   const record = getPaneHandoff(sessionId);
   if (!record || record.status !== 'failed') return false;
   return initiateHandoff(record.request);
+}
+
+// ---------------------------------------------------------------------------
+// Handing over a past session (Agent History)
+// ---------------------------------------------------------------------------
+
+/** A history row has no pane; this id never matches one, so no pane record is touched. */
+const HISTORY_SOURCE_ID = -1;
+
+export interface HistoryHandoffSource {
+  /** The source agent's launch command (`claude`, `codex`, `opencode`). */
+  command: string;
+  agentName: string;
+  /** The CLI's own session id. */
+  sessionId: string;
+  cwd: string;
+  /** The managed account that owns the session; omitted or null = the CLI's own home. */
+  account?: string | null;
+}
+
+export interface HistoryHandoffSnapshot {
+  items: TerminalChatItem[];
+  model: string | null;
+  effort: string | null;
+  access: string | null;
+}
+
+/** Read a past session back from its CLI's transcript, by id. */
+export async function readHistoryHandoffSource(source: HistoryHandoffSource): Promise<HistoryHandoffSnapshot> {
+  const transcriptAgent = transcriptAgentFor(source.command);
+  if (!transcriptAgent) throw new HandoffError(`${source.agentName} sessions cannot be read back yet.`);
+  const transcript = await readTerminalTranscript({
+    sessionId: HISTORY_SOURCE_ID,
+    agent: transcriptAgent,
+    cwd: source.cwd,
+    sinceMs: 0,
+    boundSessionId: source.sessionId,
+    knownRevision: null,
+    account: source.account ?? null,
+  });
+  if (!transcript.messages.length) {
+    throw new HandoffError("Couldn't read that session's conversation. It may be open in a pane right now.");
+  }
+  return {
+    items: transcript.messages,
+    model: transcript.model ?? null,
+    effort: transcript.effort ?? null,
+    access: transcript.permission ?? null,
+  };
+}
+
+function historyRequest(source: HistoryHandoffSource, target: { command: string; name: string }, mode: HandoffMode): HandoffRequest {
+  return {
+    sourceSessionId: HISTORY_SOURCE_ID,
+    sourceAgentName: source.agentName,
+    sourcePreset: source.command,
+    targetCommand: target.command,
+    targetName: target.name,
+    mode,
+  };
+}
+
+/** The context the receiving agent is given, exactly as it will be sent. */
+export function buildHistoryHandoffPrompt(
+  source: HistoryHandoffSource,
+  snapshot: HistoryHandoffSnapshot,
+  target: { command: string; name: string },
+  mode: HandoffMode = 'chat',
+): string {
+  return buildHandoffPrompt(historyRequest(source, target, mode), {
+    items: snapshot.items,
+    unfinishedTurn: false,
+    extras: {
+      cwd: source.cwd,
+      project: get(activeProject)?.name ?? null,
+      model: snapshot.model,
+      effort: snapshot.effort,
+      access: snapshot.access,
+      ...summariseItems(snapshot.items),
+    },
+  });
+}
+
+/**
+ * Hand a past session to another agent. `prompt` is the context to send, as
+ * previewed (and possibly edited) by the person; without it the context is read
+ * and built here. Resolves true only when the target accepted it.
+ */
+export async function handOffFromHistory(
+  source: HistoryHandoffSource,
+  target: { command: string; name: string },
+  mode: HandoffMode,
+  prompt?: string,
+): Promise<boolean> {
+  try {
+    const text = prompt?.trim()
+      ? prompt
+      : buildHistoryHandoffPrompt(source, await readHistoryHandoffSource(source), target, mode);
+    const request = historyRequest(source, target, mode);
+    const effective: HandoffMode = mode === 'chat' && structuredChatAgentFor(target.command) ? 'chat' : 'terminal';
+    if (effective === 'chat') await deliverToStructuredChat(request, text, source.cwd);
+    else await deliverToTerminal(request, text, source.cwd);
+    showToast(`Session handed over to ${target.name}.`, 'info', 5000);
+    return true;
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : `Couldn't hand over to ${target.name}.`, 'error', 7000);
+    return false;
+  }
 }

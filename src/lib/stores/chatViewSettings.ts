@@ -118,6 +118,12 @@ export const chatQueueFollowUps = persisted('spacron_chat_queue_follow_ups', tru
 /** A "New" line above messages that arrived while you were scrolled up or away. */
 export const chatMarkNewMessages = persisted('spacron_chat_mark_new', true, bool(true));
 
+/**
+ * Name a new chat from its first message, so /history and the tab strip show
+ * something recognisable. Off leaves the agent's own name until you rename it.
+ */
+export const chatAutoNames = persisted('spacron_chat_auto_names', true, bool(true));
+
 /** The time beside each message. */
 export const chatShowTimestamps = persisted('spacron_chat_timestamps', false, bool(false));
 
@@ -138,3 +144,10 @@ export const chatSuggestedPrompts = persisted('spacron_chat_suggested_prompts', 
 
 /** A line in the chat when CI finishes on a pull request the agent opened. */
 export const chatCiLines = persisted('spacron_chat_ci_lines', true, bool(true));
+
+/**
+ * Let a model rewrite the first-message name into a short title. Off by
+ * default: it makes one small request to the configured AI provider per new
+ * chat, which spends that provider's credits, so it is only ever opt-in.
+ */
+export const chatModelNames = persisted('spacron_chat_model_names', false, bool(false));

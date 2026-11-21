@@ -86,7 +86,8 @@ export interface StructuredChatProvider {
   readonly capabilities: StructuredProviderCapabilities;
   get(sessionId: number): StructuredChatState | null;
   subscribe(listener: () => void): () => void;
-  start(sessionId: number, cwd: string, options?: { access?: StructuredAccess; resumeId?: string | null }): Promise<void>;
+  /** `accountId` launches under that managed account (or `default` for the CLI's own home) instead of the selected one. */
+  start(sessionId: number, cwd: string, options?: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null }): Promise<void>;
   send(sessionId: number, text: string, images?: string[]): Promise<void>;
   interrupt(sessionId: number): Promise<void>;
   setModel(sessionId: number, model: string): void;

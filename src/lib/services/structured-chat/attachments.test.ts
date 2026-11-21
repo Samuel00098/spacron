@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { acpImageBlocks, imageDataUrlsFor, parseImageDataUrl } from './attachments';
+import { acpImageBlocks, imageDataUrlsFor, parseDroppedPaths, parseImageDataUrl } from './attachments';
+
+describe('paths dropped on the composer', () => {
+  it('reads one path per line and strips the quotes a drag adds', () => {
+    expect(parseDroppedPaths('C:/a/b.md')).toEqual(['C:/a/b.md']);
+    expect(parseDroppedPaths('C:/a/b.md\n"C:/with space/c.png"\n')).toEqual(['C:/a/b.md', 'C:/with space/c.png']);
+  });
+
+  it('ignores blank lines and repeats of the same path', () => {
+    expect(parseDroppedPaths('\n  \nC:/a\nC:/a\n')).toEqual(['C:/a']);
+    expect(parseDroppedPaths('')).toEqual([]);
+  });
+});
 
 describe('image attachments for inline providers', () => {
   it('decodes an image data URL into a base64 block', () => {

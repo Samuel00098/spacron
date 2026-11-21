@@ -180,11 +180,16 @@ export async function accountEnvFor(
   if (!isTauriRuntime()) return {};
   try {
     const invoke = await invoker();
-    return await invoke<Record<string, string>>('usage_account_env', {
-      provider,
+    const env = await invoke<Record<string, string>>('usage_account_env', {
+      provider: accountProviderFor(provider),
       accountId: accountId ?? null,
     });
-  } catch {
+    if (accountId && accountId !== DEFAULT_ACCOUNT_ID && Object.keys(env).length === 0) {
+      throw new Error(`Account ${accountId} is unavailable for ${provider}. Restore that account before resuming.`);
+    }
+    return env;
+  } catch (error) {
+    if (accountId) throw error;
     // A launch must never be blocked by this. Falling back to no patch means
     // the agent uses its default account, which is the pre-existing behaviour.
     return {};
@@ -250,7 +255,12 @@ export function accountsFor(state: AccountsState, provider: string): AgentAccoun
 
 /** The active account for a provider, if that provider supports switching. */
 export function activeAccount(state: AccountsState, provider: string): AgentAccount | null {
-  return state.accounts.find((a) => a.provider === provider && a.active) ?? null;
+  return state.accounts.find((a) => a.provider === accountProviderFor(provider) && a.active) ?? null;
+}
+
+/** CLI aliases and transcript ids share the account provider's namespace. */
+export function accountProviderFor(command: string): string {
+  return command === 'agy' ? 'antigravity' : command === 'cursor-agent' ? 'cursor' : command;
 }
 
 /** Whether a provider gets its numbers from a linked browser session. */

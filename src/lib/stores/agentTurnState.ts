@@ -17,7 +17,7 @@
  */
 import { writable } from '$lib/stores/storeCompat';
 
-export type AgentTurnPhase = 'idle' | 'working' | 'finished' | 'blocked' | 'failed';
+export type AgentTurnPhase = 'idle' | 'working' | 'quiet' | 'finished' | 'blocked' | 'failed';
 
 export interface AgentTurnState {
   phase: AgentTurnPhase;
@@ -102,14 +102,16 @@ export function turnEndWasCounted(sessionId: number): boolean {
 export function noteAgentTurnEnded(
   sessionId: number,
   kind: 'finished' | 'blocked' | 'failed' | 'limited' | 'aborted',
+  source?: 'declared' | 'exit' | 'inferred',
 ): void {
   lastEndCounted.set(sessionId, false);
   agentTurnStates.update((all) => {
     const prev = all[sessionId];
-    if (prev?.phase !== 'working') return all;
+    const confirmsQuietTurn = prev?.phase === 'quiet' && source === 'declared';
+    if (prev?.phase !== 'working' && !confirmsQuietTurn) return all;
     lastEndCounted.set(sessionId, true);
     const phase: AgentTurnPhase =
-      kind === 'finished' ? 'finished'
+      kind === 'finished' ? (source === 'inferred' ? 'quiet' : 'finished')
         : kind === 'blocked' ? 'blocked'
           : kind === 'aborted' ? 'idle'
             : 'failed';

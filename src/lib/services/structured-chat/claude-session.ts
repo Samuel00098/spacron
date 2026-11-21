@@ -23,6 +23,22 @@ import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type { StructuredChatProvider } from './provider';
 import type { StructuredAccess, StructuredModel } from './codex-session';
 import { initialStructuredState, StructuredStateStore } from './state';
+import { answeredInput, isAskUserQuestion, parseAskUserQuestion, type ClaudeQuestion } from './claude-questions';
+import type { StructuredApproval } from './codex-session';
+
+/** One `AskUserQuestion` question as an approval card whose options are the answers. */
+function questionApproval(requestId: string, questions: ClaudeQuestion[], index: number): StructuredApproval {
+  const q = questions[index];
+  const progress = questions.length > 1 ? ` (${index + 1} of ${questions.length})` : '';
+  const described = q.options.filter((option) => option.description).map((option) => `${option.label}: ${option.description}`);
+  return {
+    requestId,
+    kind: 'other',
+    title: `${q.header ? `${q.header}: ` : ''}${q.question}${progress}`,
+    detail: [q.multiSelect ? 'Claude allows several answers; pick the main one here.' : null, ...described].filter(Boolean).join('\n') || null,
+    options: q.options.map((option, i) => ({ id: String(i), label: option.label, kind: 'allow_once' })),
+  };
+}
 
 type Json = Record<string, unknown>;
 const str = (value: unknown): string | null => typeof value === 'string' ? value : null;
@@ -47,6 +63,8 @@ interface Runtime {
   controls: Map<string, { resolve: (frame: Json) => void; reject: (error: Error) => void }>;
   /** Tool input per permission request, echoed back as `updatedInput`. */
   permissionInputs: Map<string, { input: Json; suggestions: unknown }>;
+  /** `AskUserQuestion` requests in progress: answered one question at a time. */
+  questions: Map<string, { input: Json; questions: ClaudeQuestion[]; index: number; answers: Record<string, string> }>;
   stderr: ReturnType<typeof stderrTail>;
   exited: boolean;
 }
@@ -82,6 +100,24 @@ export function claudeArgs(options: { effort?: string | null; resumeId?: string 
   if (options.effort && CLAUDE_EFFORTS.has(options.effort)) args.push('--effort', options.effort);
   if (options.resumeId) args.push('--resume', options.resumeId);
   return args;
+}
+
+/**
+ * Claude's `get_context_usage` control response (seen live, 2026-11-21):
+ * `{ categories: [{ name, tokens, kind: 'used'|'deferred'|'buffer'|'free' }],
+ * totalTokens, maxTokens }`. Only the categories that really occupy the window
+ * are listed; deferred, buffer and free space are not "used".
+ */
+export function contextUsageFrom(response: unknown): { contextUsed: number; contextWindow: number | null; contextBreakdown: { name: string; tokens: number }[] } | null {
+  const r = rec(response);
+  const total = typeof r?.totalTokens === 'number' ? r.totalTokens : null;
+  if (total == null) return null;
+  const categories = Array.isArray(r?.categories) ? r.categories : [];
+  const breakdown = categories.flatMap((entry) => {
+    const c = rec(entry);
+    return c && c.kind === 'used' && typeof c.name === 'string' && typeof c.tokens === 'number' && c.tokens > 0 ? [{ name: c.name, tokens: c.tokens }] : [];
+  });
+  return { contextUsed: total, contextWindow: typeof r?.maxTokens === 'number' ? r.maxTokens : null, contextBreakdown: breakdown };
 }
 
 export function modelFrom(raw: unknown): StructuredModel | null {
@@ -191,15 +227,16 @@ async function control(sessionId: number, subtype: string, request: Json = {}, t
   }
 }
 
-async function start(sessionId: number, cwd: string, options: { access?: StructuredAccess; resumeId?: string | null } = {}): Promise<void> {
+async function start(sessionId: number, cwd: string, options: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null } = {}): Promise<void> {
   if (sessions.has(sessionId)) return;
   const previous = stores.get(sessionId);
   stores.set(sessionId, initialStructuredState(options.access, previous ?? undefined));
   const access = options.access ?? previous?.access ?? 'ask';
+  const targetEffort = options.effort ?? previous?.effort ?? null;
   let runtime: Runtime | null = null;
   try {
-    const accountEnv = await accountEnvFor('claude');
-    const session = await openAgentSession('claude', claudeArgs({ effort: previous?.effort ?? null, resumeId: options.resumeId ?? null, access }), cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
+    const accountEnv = await accountEnvFor('claude', options.accountId ?? null);
+    const session = await openAgentSession('claude', claudeArgs({ effort: targetEffort, resumeId: options.resumeId ?? null, access }), cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
     runtime = {
       session,
       cwd,
@@ -207,6 +244,7 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
       pendingSessionId: options.resumeId ?? null,
       controls: new Map(),
       permissionInputs: new Map(),
+      questions: new Map(),
       stderr: stderrTail(session),
       exited: false,
     };
@@ -227,9 +265,10 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
     const rawModels = initialized.models ?? rec(initialized.modelCatalog)?.models ?? [];
     const models = (Array.isArray(rawModels) ? rawModels : []).map(modelFrom).filter((model): model is StructuredModel => model !== null);
     const defaultModel = models.find((model) => model.isDefault)?.id ?? models[0]?.id ?? null;
-    const chosenModel = previous?.model && models.some((model) => model.id === previous.model) ? previous.model : defaultModel;
+    const targetModel = options.model ?? previous?.model ?? null;
+    const chosenModel = targetModel && models.some((model) => model.id === targetModel) ? targetModel : defaultModel;
     const entry = models.find((model) => model.id === chosenModel);
-    const effort = previous?.effort && entry?.efforts.includes(previous.effort) ? previous.effort : entry?.defaultEffort ?? null;
+    const effort = targetEffort && entry?.efforts.includes(targetEffort) ? targetEffort : entry?.defaultEffort ?? null;
     stores.update(sessionId, {
       status: 'ready',
       error: null,
@@ -239,8 +278,8 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
       access,
       threadId: options.resumeId ?? null,
     });
-    if (previous?.model && chosenModel === previous.model && previous.model !== defaultModel) {
-      void control(sessionId, 'set_model', { model: previous.model }).catch(() => undefined);
+    if (chosenModel && chosenModel !== defaultModel) {
+      void control(sessionId, 'set_model', { model: chosenModel }).catch(() => undefined);
     }
   } catch (error) {
     const reason = runtime?.stderr.text();
@@ -299,8 +338,28 @@ function setAccess(sessionId: number, access: StructuredAccess): void {
   void control(sessionId, 'set_permission_mode', { mode }).catch((error) => stores.update(sessionId, { error: `Claude kept its permission mode: ${error instanceof Error ? error.message : String(error)}` }));
 }
 
-async function answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline'): Promise<void> {
+async function answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string): Promise<void> {
   const runtime = sessions.get(sessionId);
+  const asking = runtime?.questions.get(String(requestId));
+  if (runtime && asking && decision !== 'decline') {
+    const chosen = asking.questions[asking.index].options[Number(optionId)];
+    if (chosen) {
+      asking.answers[asking.questions[asking.index].question] = chosen.label;
+      asking.index += 1;
+      if (asking.index < asking.questions.length) {
+        // Next question replaces this card; the request stays open until the last.
+        stores.update(sessionId, (state) => ({
+          approvals: state.approvals.map((approval) => approval.requestId === requestId ? questionApproval(String(requestId), asking.questions, asking.index) : approval),
+        }));
+        return;
+      }
+      runtime.questions.delete(String(requestId));
+      stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
+      await runtime.session.writeRaw(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: String(requestId), response: { behavior: 'allow', updatedInput: answeredInput(asking.input, asking.answers) } } })}\n`);
+      return;
+    }
+  }
+  runtime?.questions.delete(String(requestId));
   stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
   if (!runtime) return;
   const asked = runtime.permissionInputs.get(String(requestId));
@@ -346,6 +405,15 @@ function onFrame(sessionId: number, frame: AcpNotification | Json): void {
     if (request?.subtype === 'can_use_tool' && requestId) {
       const input = rec(request.input) ?? {};
       const tool = str(request.tool_name) ?? 'a tool';
+      // Never auto-allowed: allowing it blind would answer with nothing.
+      if (isAskUserQuestion(tool) && runtime) {
+        const questions = parseAskUserQuestion(input);
+        if (questions) {
+          runtime.questions.set(requestId, { input, questions, index: 0, answers: {} });
+          stores.update(sessionId, (state) => ({ approvals: [...state.approvals, questionApproval(requestId, questions, 0)] }));
+          return;
+        }
+      }
       const access = stores.get(sessionId)?.access ?? 'ask';
       const autoAnswer = get(chatAutoAnswerInline);
       const isRead = /read|view|list|glob|grep|search/i.test(tool);
@@ -415,11 +483,19 @@ function onFrame(sessionId: number, frame: AcpNotification | Json): void {
     const used = usage ? ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].reduce((sum, key) => sum + (typeof usage[key] === 'number' ? usage[key] as number : 0), 0) : null;
     stores.update(sessionId, {
       status: 'ready',
+      error: value.is_error === true || (str(value.subtype) && str(value.subtype) !== 'success')
+        ? (textFrom(value.result) || (Array.isArray(value.errors) ? value.errors.map(textFrom).join('\n') : '') || 'Claude could not finish this turn.')
+        : null,
       approvals: [],
       // The conversation now exists on disk, so it can be resumed by this id.
       threadId: runtime?.pendingSessionId ?? stores.get(sessionId)?.threadId ?? null,
       ...(used ? { contextUsed: used } : {}),
     });
+    // The CLI can say what fills the window; best effort, the totals above stay.
+    void control(sessionId, 'get_context_usage', {}, 15_000).then((response) => {
+      const usage = contextUsageFrom(response);
+      if (usage) stores.update(sessionId, usage);
+    }).catch(() => undefined);
   }
 }
 

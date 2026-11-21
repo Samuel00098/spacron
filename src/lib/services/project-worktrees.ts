@@ -58,6 +58,18 @@ export function listProjectWorktrees(projectId: string): Promise<ProjectWorktree
   return backendInvoke<ProjectWorktree[]>('project_worktree_list', { projectId });
 }
 
+export interface WorktreeReviewMetadata {
+  size_bytes: number;
+  size_partial: boolean;
+  modified_at: number | null;
+  branch: string | null;
+  git_state: string | null;
+}
+
+export function getWorktreeReviewMetadata(projectId: string, worktreePath?: string): Promise<WorktreeReviewMetadata> {
+  return backendInvoke('project_worktree_review_metadata', { projectId, worktreePath: worktreePath ?? null });
+}
+
 export function getWorktreeBases(projectId: string): Promise<WorktreeBases> {
   return backendInvoke<WorktreeBases>('project_worktree_bases', { projectId });
 }
@@ -85,12 +97,14 @@ export async function deleteProjectWorktree(
   projectId: string,
   worktreePath: string,
   force = false,
+  protectLocalFiles = false,
 ): Promise<DeleteWorktreeResult> {
   try {
     const result = await backendInvoke<{ preserved_branch: string | null }>('project_worktree_delete', {
       projectId,
       worktreePath,
       force,
+      ...(protectLocalFiles ? { protectLocalFiles } : {}),
     });
     return { ok: true, preservedBranch: result?.preserved_branch ?? null };
   } catch (error) {

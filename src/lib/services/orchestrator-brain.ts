@@ -164,7 +164,7 @@ export interface RunningAgentRef {
 export type AgentTurnState = 'working' | 'ready';
 
 export interface AgentOutputRef extends RunningAgentRef {
-  status: 'in-progress' | 'complete' | 'blocked' | 'failed' | 'cancelled';
+  status: 'in-progress' | 'complete' | 'blocked' | 'failed' | 'cancelled' | 'unconfirmed' | 'exited';
   turnState?: AgentTurnState;
   updatedAt?: number | null;
   reason?: string | null;
@@ -932,6 +932,8 @@ function statusPhrase(status: AgentOutputRef['status'], turnState?: AgentOutputR
     case 'blocked': return 'waiting for input';
     case 'failed': return 'failed';
     case 'cancelled': return 'cancelled';
+    case 'unconfirmed': return 'quiet, with completion unconfirmed';
+    case 'exited': return 'closed, with completion unconfirmed';
     default: return status;
   }
 }

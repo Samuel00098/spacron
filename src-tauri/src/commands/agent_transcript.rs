@@ -170,16 +170,29 @@ fn account_base(q: &TranscriptQuery) -> Option<PathBuf> {
     q.account.as_deref().and_then(|account| super::agent_history::account_home(&q.agent, account))
 }
 
+/// History uses the same workspace metadata as the terminal reader.
+pub(super) fn antigravity_history_files(base: Option<PathBuf>) -> Vec<(String, String, PathBuf)> {
+    extra::antigravity_homes(base).into_iter().flat_map(|base| {
+        extra::antigravity_workspaces(&base).into_iter().map(move |(id, cwd)| {
+            let path = base.join("brain").join(&id).join(".system_generated/logs/transcript.jsonl");
+            (id, cwd, path)
+        })
+    }).collect()
+}
+
 fn read_transcript(q: &TranscriptQuery) -> Result<TranscriptResult, String> {
+    if q.account.as_deref().is_some_and(|a| a != "default") && account_base(q).is_none() {
+        return Err("The session's account home is unavailable; restore that account before resuming".into());
+    }
     let mut result = match q.agent.as_str() {
         "claude" => read_file_agent(q, claude_candidates(&q.cwd, account_base(q)), parse_claude),
         "codex" => read_file_agent(q, codex_candidates(&q.cwd, q.since_ms, account_base(q)), parse_codex),
-        "grok" => read_file_agent(q, grok_candidates(&q.cwd), parse_grok),
+        "grok" => read_file_agent(q, grok_candidates(&q.cwd, account_base(q)), parse_grok),
         "opencode" => read_opencode(q),
         "openclaude" => read_file_agent(q, extra::openclaude_candidates(&q.cwd), parse_claude),
         "pi" => read_file_agent(q, extra::pi_candidates(extra::pi_sessions_dir(), &q.cwd), extra::parse_pi),
         "omp" => read_file_agent(q, extra::pi_candidates(extra::omp_sessions_dir(), &q.cwd), extra::parse_pi),
-        "antigravity" => read_file_agent(q, extra::antigravity_candidates(&q.cwd), extra::parse_antigravity),
+        "antigravity" => read_file_agent(q, extra::antigravity_candidates(&q.cwd, account_base(q)), extra::parse_antigravity),
         "copilot" => read_file_agent(q, extra::copilot_candidates(&q.cwd, q.since_ms), extra::parse_copilot),
         "cursor" => read_file_agent(q, extra::cursor_candidates(&q.cwd), extra::parse_cursor),
         other => Err(format!("Chat view does not support {other}")),
@@ -268,6 +281,7 @@ fn pick(q: &TranscriptQuery, candidates: Vec<Candidate>) -> Option<Candidate> {
         if let Some(index) = candidates.iter().position(|c| c.id == bound) {
             return candidates.into_iter().nth(index);
         }
+        return None;
     }
     let since = q.since_ms - SINCE_SLACK_MS;
     candidates
@@ -1145,8 +1159,8 @@ fn encode_uri_component(s: &str) -> String {
     out
 }
 
-fn grok_candidates(cwd: &str) -> Vec<Candidate> {
-    let Some(base) = env_dir("GROK_HOME").or_else(|| home().map(|h| h.join(".grok"))) else {
+fn grok_candidates(cwd: &str, base: Option<PathBuf>) -> Vec<Candidate> {
+    let Some(base) = base.or_else(|| env_dir("GROK_HOME")).or_else(|| home().map(|h| h.join(".grok"))) else {
         return Vec::new();
     };
     let sessions = base.join("sessions");
@@ -1561,5 +1575,6 @@ mod tests {
         assert_eq!(pick(&q(None, vec![]), all()).unwrap().id, "b");
         assert_eq!(pick(&q(None, vec!["b"]), all()).unwrap().id, "a");
         assert_eq!(pick(&q(Some("old"), vec![]), all()).unwrap().id, "old");
+        assert!(pick(&q(Some("missing"), vec![]), all()).is_none());
     }
 }

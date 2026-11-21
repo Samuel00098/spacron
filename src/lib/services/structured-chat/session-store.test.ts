@@ -104,6 +104,7 @@ import {
   resumeStructuredSessionInPane,
   rewindStructuredSession,
   recordForPane,
+  bindStructuredAccount,
   restoreStructuredSessions,
   startSessionStore,
   structuredSessionHistory,
@@ -172,7 +173,7 @@ describe('structured session store', () => {
     expect(await restoreStructuredSessions('proj')).toBe(1);
     const pane = Number(Object.keys(get(panes.structuredChatPanes))[0]);
     expect(recordForPane(pane)?.id).toBe(id);
-    expect(fake.provider.start).toHaveBeenLastCalledWith(pane, '/repo', { resumeId: 'thread-3', access: 'ask' });
+    expect(fake.provider.start).toHaveBeenLastCalledWith(pane, '/repo', { resumeId: 'thread-3', access: 'ask', accountId: 'work' });
     expect((get(panes.structuredChatHistory)[pane] as { text: string }[]).map((i) => i.text)).toEqual(['remember me']);
     // Not restored twice.
     expect(await restoreStructuredSessions('proj')).toBe(0);
@@ -192,6 +193,16 @@ describe('structured session store', () => {
       ['approval.requested', null],
       ['approval.resolved', 'decline'],
     ]);
+  });
+
+  it('persists explicit resume ownership instead of the globally selected account', async () => {
+    fake.set(41, ready({ threadId: 'owned-thread' }));
+    panes.markStructuredChatPane(41, 'codex');
+    bindStructuredAccount(41, 'original', 'original@example.com');
+    await tick();
+    expect(recordForPane(41)).toMatchObject({ accountId: 'original', accountLabel: 'original@example.com' });
+    flushSessionStore();
+    expect(env.data.get('spacron_structured_sessions')).toContain('original@example.com');
   });
 
   it('clears into a new conversation and resumes an earlier record in the same pane', async () => {
@@ -216,7 +227,7 @@ describe('structured session store', () => {
 
     expect(await resumeStructuredSessionInPane(5, second)).toBe(true);
     expect(recordForPane(5)?.id).toBe(second);
-    expect(fake.provider.start).toHaveBeenLastCalledWith(5, '/repo', { resumeId: 'thread-6', access: 'ask' });
+    expect(fake.provider.start).toHaveBeenLastCalledWith(5, '/repo', { resumeId: 'thread-6', access: 'ask', accountId: 'work' });
     expect((get(panes.structuredChatHistory)[5] as { text: string }[]).map((i) => i.text)).toEqual(['second chat']);
     expect(get(structuredSessions)[first].lifecycle).toBe('detached');
   });

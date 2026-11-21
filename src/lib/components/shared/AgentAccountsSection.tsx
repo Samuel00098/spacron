@@ -64,9 +64,8 @@ export default function AgentAccountsSection() {
     }
     closeSettings();
     await runAgentSignIn({
-      // Provider id and launch command are the same string for every CLI in
-      // `ACCOUNT_PROVIDERS` (`agent_accounts.rs`).
-      command: provider,
+      // Provider id and launch command: Antigravity CLI is 'agy', others match provider.
+      command: provider === 'antigravity' ? 'agy' : provider,
       name: providerName,
       cwd,
       projectId,

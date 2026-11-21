@@ -110,7 +110,14 @@ import {
 } from '$lib/services/mcp-servers';
 import { ADD_CURSOR_GESTURE, COLUMN_SELECT_GESTURE } from '$lib/services/editor/multi-cursor';
 import { openChangelogPage } from '$lib/services/changelog';
-import { activeProjectId, resetAllApplicationState } from '$lib/stores/workspace';
+import { activeProjectId, resetAllApplicationState, projects, activeProject, recentWorkspaces } from '$lib/stores/workspace';
+import type { Project } from '$lib/types/workspace';
+import { allProjectSettings, getProjectConfig, updateProjectConfig, projectConfigFor, updateProjectConfigFor, DEFAULT_SOURCE_CONTROL_SETTINGS, autoDetectProjectIcon, projectIconFor, type ProjectSourceControlSettings } from '$lib/stores/projectSettings';
+import { cleanupStaleWorktrees, sweepOrphanWorktrees } from '$lib/stores/orchestrator';
+import { pruneWorktrees, sweepAgentBranches } from '$lib/services/orchestrator/worktree-manager';
+import { globalWorkspaceCleanupRule, type WorkspaceCleanupRule } from '$lib/stores/settings';
+import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import { BRAIN_SKILLS, MAX_CUSTOM_SKILL_CHARS, sanitizeCustomSkills, type CustomSkill } from '$lib/services/orchestrator/skills';
 import { FIRM_RULE_USES, clearLearnedProfile, globalOrchestratorProfile, orchestratorProfile, removeProfileEntry } from '$lib/services/orchestrator/evolve';
 import { clearProviderApiKey, listProviderModels, providerApiKeyExists, saveProviderApiKey } from '$lib/services/ai-keychain';
@@ -122,6 +129,7 @@ import { get } from '$lib/stores/storeCompat';
 import { computerUseSupported } from '$lib/stores/computerUse';
 import ComputerUseDetails from './ComputerUseDetails';
 import BrowserToolsDetails from './BrowserToolsDetails';
+import SettingsDetailsToggle from './SettingsDetailsToggle';
 import { McpCatalog } from './McpCatalog';
 import { ServerIcon } from './McpPlugins';
 import { useStore } from '$lib/react/useStore';
@@ -164,6 +172,10 @@ import {
 } from '$lib/services/orchestrator/agent-rules-file';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
 import ChatSettingsPane from './ChatSettingsPane';
+import ProjectSettingsSection from './ProjectSettingsSection';
+import WorkspaceCleanupSection from './WorkspaceCleanupSection';
+import { ProjectIconBadge } from '$lib/components/shared/ProjectIcons';
+import { normalizeProjectPath } from '$lib/components/workspace/projectListPrefs';
 import { useGithubSignIn } from '$lib/react/useGithubSignIn';
 import { useSourceControlSignIn } from '$lib/react/useSourceControlSignIn';
 import {
@@ -206,6 +218,7 @@ const SHOW_ACP_REGISTRY_SECTION = false;
 const SHOW_CHAT_THREAD_SETTINGS = false;
 
 const tabs: { id: Tab; label: string; kicker: string; description: string }[] = [
+  { id: 'project', label: 'Project', kicker: 'Project workspace', description: 'Per-project configuration, scripts, source control and rules.' },
   { id: 'general', label: 'General', kicker: 'Editor and app', description: 'Editor behaviour and everyday app preferences.' },
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media', description: 'Visual style.' },
   { id: 'models', label: 'AI Providers', kicker: 'Accounts and keys', description: 'Your agent accounts, plus the API keys Spacron’s own AI features use.' },
@@ -218,6 +231,7 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'mcp', label: 'MCP & plugins', kicker: 'Tools and plugins', description: 'Tool servers and plugins available to your agents.' },
   { id: 'stats', label: 'Usage', kicker: 'Model usage and cost', description: 'Token and cost analytics across the agents.' },
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map', description: 'Keyboard shortcuts across the app.' },
+  { id: 'cleanup', label: 'Workspace Cleanup', kicker: 'Workspace Hygiene', description: 'Remove workspaces you’re done with and reclaim stale worktree resources.' },
   { id: 'about', label: 'About', kicker: 'Version and reset', description: 'Version details and resetting Spacron.' },
 ];
 
@@ -228,10 +242,13 @@ const settingsNavGroups: { label?: string; tabs: Tab[] }[] = [
   { label: 'Agents', tabs: ['agents', 'mcp'] },
   { label: 'Code', tabs: ['source-control'] },
   { label: 'Connections', tabs: ['models'] },
+  { label: 'Projects', tabs: ['project'] },
+  { label: 'Workspace', tabs: ['cleanup'] },
   { label: 'Maintenance', tabs: ['about'] },
 ];
 
 const settingsTabIconPaths: Record<Tab, string> = {
+  project: 'M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2Z',
   general: 'M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M8 14v6',
   appearance: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3c0-5.1-4-9.2-9-9.2Z M7.5 10h.01M10 7h.01M15 7.5h.01',
   models: 'M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',
@@ -244,6 +261,7 @@ const settingsTabIconPaths: Record<Tab, string> = {
   mcp: 'M8 7V4M16 7V4M5 7h14v6a7 7 0 0 1-14 0V7ZM12 20v2M9 4h.01M15 4h.01',
   stats: 'M4 19V5M4 19h16M8 15l3-4 3 2 5-7',
   shortcuts: 'M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12H3V6ZM7 8h.01M11 8h.01M15 8h.01M7 12h.01M11 12h.01M15 12h.01M8 16h8',
+  cleanup: 'M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
   about: 'M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
 };
 
@@ -257,6 +275,8 @@ type SettingsSearchEntry = {
 };
 
 const settingsSearchEntries: SettingsSearchEntry[] = [
+  { id: 'cleanup-rules', tab: 'cleanup', section: 'Workspace Cleanup', label: 'Automatic cleanup', keywords: 'worktree prune sweep delete merged' },
+  { id: 'cleanup-manual', tab: 'cleanup', section: 'Workspace Cleanup', label: 'Manual cleanup', keywords: 'review delete workspaces' },
   { id: 'editor-font-size', tab: 'general', section: 'Editor', label: 'Font size', keywords: 'editor text code' },
   { id: 'editor-font-family', tab: 'general', section: 'Editor', label: 'Font family', keywords: 'editor terminal typeface' },
   { id: 'tab-size', tab: 'general', section: 'Editor', label: 'Tab size', keywords: 'spaces indentation' },
@@ -298,8 +318,8 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'stay-awake', tab: 'agents', section: 'Power', label: 'Stay awake while agents work', keywords: 'sleep idle power' },
   { id: 'agent-status-hooks', tab: 'agents', section: 'Local Windows', label: 'Agent status hooks', keywords: 'claude turn status working waiting done' },
   { id: 'auto-agent-titles', tab: 'agents', section: 'Local Windows', label: 'Auto-generate agent titles', keywords: 'first prompt rename tab title' },
-  { id: 'codex-own-server', tab: 'agents', section: 'Codex CLI', label: 'Run each Codex terminal on its own server', keywords: 'daemon shared app-server console windows isolate' },
-  { id: 'codex-shared-server-warning', tab: 'agents', section: 'Codex CLI', label: 'Warn when a Codex tab shares a server', keywords: 'daemon app-server console windows warning' },
+  { id: 'codex-own-server', tab: 'agents', section: 'Codex', label: 'Run each Codex terminal on its own server', keywords: 'daemon shared app-server console windows isolate' },
+  { id: 'codex-shared-server-warning', tab: 'agents', section: 'Codex', label: 'Warn when a Codex tab shares a server', keywords: 'daemon app-server console windows warning' },
   { id: 'browser-tools', tab: 'agents', section: 'Browser', label: 'Browser tools', keywords: 'web agent' },
   { id: 'orchestrator-skills', tab: 'orchestrator', section: 'Built-in skills', label: 'Built-in skills', keywords: 'orchestrator assistant security engineering debugging review git' },
   { id: 'orchestrator-custom-skills', tab: 'orchestrator', section: 'Your skills', label: 'Add a skill', keywords: 'orchestrator custom instructions playbook prompt' },
@@ -341,6 +361,11 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
 
 function settingsSearchKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '-');
+}
+
+function isImageUrl(val: string | null | undefined): boolean {
+  if (!val) return false;
+  return val.startsWith('http://') || val.startsWith('https://') || val.startsWith('data:') || val.startsWith('asset:');
 }
 
 const voiceInputProviders: { id: VoiceInputProviderId; label: string }[] = [
@@ -2080,6 +2105,147 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   );
   const [settingsQuery, setSettingsQuery] = useState('');
 
+  const allProjectsMap = useStore(projects);
+  const rawWorkspaces = useStore(recentWorkspaces);
+  const activeProjId = useStore(activeProjectId);
+  const allProjectConfigs = useStore(allProjectSettings);
+  const openProjectList = useMemo(() => {
+    const list: Project[] = Array.from(allProjectsMap.values());
+    const seenPaths = new Set(list.map((p) => normalizeProjectPath(p.root_path)));
+
+    for (const ws of rawWorkspaces) {
+      const candidatePaths = [
+        ...(ws.project_paths || []),
+        ...(ws.active_project_path ? [ws.active_project_path] : []),
+      ];
+      for (const pPath of candidatePaths) {
+        if (!pPath) continue;
+        const norm = normalizeProjectPath(pPath);
+        if (!seenPaths.has(norm)) {
+          seenPaths.add(norm);
+          const name = pPath.replace(/\\/g, '/').split('/').filter(Boolean).pop() || pPath;
+          list.push({
+            id: pPath,
+            name,
+            root_path: pPath,
+            state: { open_files: [], active_file: null, last_modified: '' },
+          });
+        }
+      }
+    }
+    return list;
+  }, [allProjectsMap, rawWorkspaces]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+
+  const currentSelectedProj = useMemo(() => {
+    if (selectedProjectId) {
+      const match = openProjectList.find(
+        (p) =>
+          p.id === selectedProjectId ||
+          normalizeProjectPath(p.root_path) === normalizeProjectPath(selectedProjectId)
+      );
+      if (match) return match;
+    }
+    if (activeProjId) {
+      const match = openProjectList.find(
+        (p) =>
+          p.id === activeProjId ||
+          normalizeProjectPath(p.root_path) === normalizeProjectPath(activeProjId)
+      );
+      if (match) return match;
+    }
+    return openProjectList[0] || null;
+  }, [selectedProjectId, activeProjId, openProjectList]);
+
+  const roster = useMemo(() => getAgentRoster(), []);
+  const activeScSettings = useMemo(() => {
+    return currentSelectedProj
+      ? projectConfigFor(allProjectConfigs, currentSelectedProj.root_path, currentSelectedProj.id).sourceControl
+      : DEFAULT_SOURCE_CONTROL_SETTINGS;
+  }, [currentSelectedProj, allProjectConfigs]);
+
+  const [scAgentModels, setScAgentModels] = useState<AgentProviderModel[]>([]);
+  const [scLoadingModels, setScLoadingModels] = useState(false);
+
+  useEffect(() => {
+    const agentCmd = activeScSettings.defaultCommitAgent || 'codex';
+    let active = true;
+    setScLoadingModels(true);
+    loadLiveAgentProviderModels(agentCmd)
+      .then((models) => {
+        if (active) setScAgentModels(models || []);
+      })
+      .catch(() => {
+        if (active) setScAgentModels([]);
+      })
+      .finally(() => {
+        if (active) setScLoadingModels(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeScSettings.defaultCommitAgent]);
+
+  const commitAgentOptions: DropdownOption[] = useMemo(
+    () => roster.map((agent) => ({ value: agent.command, label: agent.name })),
+    [roster]
+  );
+
+  const commitModelOptions: DropdownOption[] = useMemo(
+    () => [
+      { value: '', label: 'Default Model' },
+      ...scAgentModels.map((m) => ({ value: m.id, label: m.label || m.id })),
+    ],
+    [scAgentModels]
+  );
+
+  const updateScSettings = useCallback(
+    (patch: Partial<ProjectSourceControlSettings>) => {
+      if (currentSelectedProj) {
+        updateProjectConfigFor(currentSelectedProj.root_path, { sourceControl: patch });
+      } else {
+        updateProjectConfig('__default__', { sourceControl: { ...getProjectConfig('__default__').sourceControl, ...patch } });
+      }
+    },
+    [currentSelectedProj]
+  );
+
+  useEffect(() => {
+    for (const p of openProjectList) {
+      const conf = allProjectConfigs[p.id] || getProjectConfig(p.id);
+      if (!conf.icon || conf.icon === '📁' || conf.icon === '🚀') {
+        void autoDetectProjectIcon(p.id, p.root_path);
+      }
+    }
+  }, [openProjectList, allProjectConfigs]);
+
+  const [cleaningAllWorkspaces, setCleaningAllWorkspaces] = useState(false);
+  async function handleCleanAllWorkspaces() {
+    setCleaningAllWorkspaces(true);
+    let cleanedWorktrees = 0;
+    let sweptBranches = 0;
+    try {
+      for (const p of openProjectList) {
+        try {
+          const c1 = await cleanupStaleWorktrees(p.id);
+          const c2 = await sweepOrphanWorktrees(p.id);
+          const b = await sweepAgentBranches(p.id);
+          await pruneWorktrees(p.id);
+          cleanedWorktrees += c1 + c2;
+          sweptBranches += b.deleted.length;
+        } catch {
+          // ignore individual project failure
+        }
+      }
+      showToast(
+        `Workspace cleanup complete: pruned ${cleanedWorktrees} worktree(s) and swept ${sweptBranches} branch(es) across ${openProjectList.length} project(s)`,
+        'info'
+      );
+    } finally {
+      setCleaningAllWorkspaces(false);
+    }
+  }
+
   const settingsSearchResults = useMemo(() => {
     // A tab hidden from the nav must not be reachable through search either.
     const query = settingsQuery.trim().toLowerCase();
@@ -2409,6 +2575,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentEnableLsp = useStore(enableLsp);
   const currentShowHidden = useStore(showHidden);
   const currentShowSnapshotsTab = useStore(showSnapshotsTab);
+  const currentGlobalWorkspaceCleanupRule = useStore(globalWorkspaceCleanupRule);
   const currentPreviewPlacement = useStore(previewPlacement);
   const currentNotifications = useStore(notificationsEnabled);
   const currentAgentBrowserTools = useStore(agentBrowserTools);
@@ -2422,6 +2589,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   // Null until the backend answers; the row stays disabled until then.
   const [computerUseAvailable, setComputerUseAvailable] = useState<boolean | null>(null);
   const [computerUseExpanded, setComputerUseExpanded] = useState(false);
+  const [browserDetailsOpen, setBrowserDetailsOpen] = useState(false);
+  const [browserDetailsVisited, setBrowserDetailsVisited] = useState(false);
   useEffect(() => {
     let live = true;
     void computerUseSupported().then((ok) => {
@@ -3001,32 +3170,130 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               )}
             </div>
             <nav className="settings-tabs" aria-label="Settings sections">
-              {settingsNavGroups.map((group) => (
-                <div className="settings-nav-group" key={group.label ?? 'general'}>
-                  {group.label && <h3>{group.label}</h3>}
-                  {group.tabs.map((tabId) => {
-                    const tab = tabs.find((item) => item.id === tabId)!;
-                    return (
-                      <button key={tab.id} className={activeTab === tab.id ? 'active' : undefined} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => setActiveTab(tab.id)}>
-                        <svg className="settings-tab-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d={settingsTabIconPaths[tab.id]} />
-                        </svg>
-                        <span>{tab.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
+              {settingsNavGroups.map((group) => {
+                if (group.label === 'Projects') {
+                  return (
+                    <div className="settings-nav-group" key="projects">
+                      <h3>Projects</h3>
+                      {openProjectList.length > 0 ? (
+                        openProjectList.map((p) => {
+                          const pConfig = projectConfigFor(allProjectConfigs, p.root_path, p.id);
+                          const isSelected = activeTab === 'project' && currentSelectedProj && (
+                            currentSelectedProj.id === p.id ||
+                            normalizeProjectPath(currentSelectedProj.root_path) === normalizeProjectPath(p.root_path)
+                          );
+                          const isActive = activeProjId && (
+                            p.id === activeProjId ||
+                            normalizeProjectPath(p.root_path) === normalizeProjectPath(activeProjId)
+                          );
+                          return (
+                            <button
+                              key={p.id}
+                              className={isSelected ? 'active' : undefined}
+                              aria-current={isSelected ? 'page' : undefined}
+                              onClick={() => {
+                                setSelectedProjectId(p.root_path);
+                                setActiveTab('project');
+                              }}
+                              title={p.root_path}
+                            >
+                              <span className="settings-tab-project-icon" aria-hidden="true">
+                                <ProjectIconBadge icon={projectIconFor(allProjectConfigs, p.root_path, p.id)} size={15} />
+                              </span>
+                              <span className="settings-tab-project-name">{pConfig.displayName || p.name}</span>
+                              {isActive && <span className="project-chip-active-dot" title="Active workspace project" />}
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <button
+                          className={activeTab === 'project' ? 'active' : undefined}
+                          aria-current={activeTab === 'project' ? 'page' : undefined}
+                          onClick={() => setActiveTab('project')}
+                        >
+                          <svg
+                            className="settings-tab-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d={settingsTabIconPaths.project} />
+                          </svg>
+                          <span>Project Settings</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="settings-nav-group" key={group.label ?? 'general'}>
+                    {group.label && <h3>{group.label}</h3>}
+                    {group.tabs.map((tabId) => {
+                      const tab = tabs.find((item) => item.id === tabId)!;
+                      return (
+                        <button
+                          key={tab.id}
+                          className={activeTab === tab.id ? 'active' : undefined}
+                          aria-current={activeTab === tab.id ? 'page' : undefined}
+                          onClick={() => setActiveTab(tab.id)}
+                        >
+                          <svg
+                            className="settings-tab-icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d={settingsTabIconPaths[tab.id]} />
+                          </svg>
+                          <span>{tab.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </nav>
           </aside>
 
           <main className="settings-panel" ref={panelRef}>
             <div className="settings-topbar">
-              <div className="settings-breadcrumb"><span>Settings</span><span className="settings-breadcrumb-divider">/</span><strong>{tabs.find((tab) => tab.id === activeTab)?.label}</strong></div>
+              <div className="settings-breadcrumb">
+                <span>Settings</span>
+                <span className="settings-breadcrumb-divider">/</span>
+                {activeTab === 'project' ? (
+                  <>
+                    <span>Projects</span>
+                    <span className="settings-breadcrumb-divider">/</span>
+                    <strong>{currentSelectedProj?.name || 'Project'}</strong>
+                  </>
+                ) : (
+                  <strong>{tabs.find((tab) => tab.id === activeTab)?.label}</strong>
+                )}
+              </div>
               <button className="settings-topbar-close" type="button" onClick={onclose} aria-label="Close settings" title="Close settings (Esc)">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
               </button>
             </div>
+            {activeTab === 'project' && (
+              <ProjectSettingsSection
+                selectedProjectId={currentSelectedProj?.id || null}
+                onSelectProject={setSelectedProjectId}
+                onCloseSettings={onclose}
+              />
+            )}
             {activeTab === 'general' && (
               <>
                 <Section title="Editor">
@@ -3079,6 +3346,28 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   <SettingRow title="Show Workspace Snapshots" detail="Show snapshots tab in the sidebar activity bar">
                     <Toggle label="Toggle workspace snapshots" checked={currentShowSnapshotsTab} onChange={showSnapshotsTab.set} />
+                  </SettingRow>
+                  <SettingRow title="Workspace cleanup" detail="Default rule for automatic worktree cleanup across workspaces">
+                    <StyledSelect<WorkspaceCleanupRule>
+                      value={currentGlobalWorkspaceCleanupRule}
+                      options={[
+                        { id: 'merged_unchanged', label: 'Delete merged, Delete unchanged' },
+                        { id: 'merged_only', label: 'Delete merged' },
+                        { id: 'never', label: 'Never delete' },
+                      ]}
+                      onChange={globalWorkspaceCleanupRule.set}
+                      ariaLabel="Workspace cleanup rule"
+                    />
+                  </SettingRow>
+                  <SettingRow title="Clean workspaces now" detail="Prune stale worktrees, orphan checkouts, and empty agent branches across all open projects">
+                    <button
+                      type="button"
+                      className="settings-action-btn"
+                      onClick={() => void handleCleanAllWorkspaces()}
+                      disabled={cleaningAllWorkspaces || openProjectList.length === 0}
+                    >
+                      {cleaningAllWorkspaces ? 'Cleaning…' : 'Clean all workspaces'}
+                    </button>
                   </SettingRow>
                   <SettingRow title="Open Preview in" detail="Where the browser preview opens. You can move an open Preview from its header.">
                     <StyledSelect<PreviewPlacement>
@@ -3385,6 +3674,61 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       </div>
                     );
                   })}
+                </Section>
+
+                <Section title="AI commit message">
+                  <SettingRow
+                    title="Commit message agent"
+                    detail="The coding CLI agent used to inspect diffs and craft commit messages."
+                  >
+                    <Dropdown
+                      options={commitAgentOptions}
+                      value={activeScSettings.defaultCommitAgent || 'codex'}
+                      onChange={(agentVal) =>
+                        updateScSettings({ defaultCommitAgent: agentVal, defaultCommitModel: '' })
+                      }
+                      ariaLabel="Select commit message agent"
+                    />
+                  </SettingRow>
+
+                  <SettingRow
+                    title="Agent model"
+                    detail={scLoadingModels ? 'Fetching models from CLI…' : 'Specific model used for commit message generation.'}
+                  >
+                    <Dropdown
+                      options={commitModelOptions}
+                      value={activeScSettings.defaultCommitModel || ''}
+                      onChange={(modelVal) => updateScSettings({ defaultCommitModel: modelVal })}
+                      disabled={scLoadingModels}
+                      ariaLabel="Select model"
+                    />
+                  </SettingRow>
+
+                  <SettingRow
+                    title="Default base branch"
+                    detail="Target base branch for diff comparisons and pull requests."
+                  >
+                    <input
+                      type="text"
+                      className="settings-input font-mono"
+                      value={activeScSettings.baseBranch || 'main'}
+                      onChange={(e) => updateScSettings({ baseBranch: e.target.value })}
+                      placeholder="main"
+                    />
+                  </SettingRow>
+
+                  <SettingRow
+                    title="Branch prefix convention"
+                    detail="Default prefix used when creating new agent worktrees or branches."
+                  >
+                    <input
+                      type="text"
+                      className="settings-input font-mono"
+                      value={activeScSettings.branchPrefix || 'feature/'}
+                      onChange={(e) => updateScSettings({ branchPrefix: e.target.value })}
+                      placeholder="feature/ or fix/"
+                    />
+                  </SettingRow>
                 </Section>
               </>
             )}
@@ -4014,13 +4358,17 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     title="Let agents use a browser"
                     detail="Provides dedicated Playwright browser automation."
                   >
-                    <Toggle
-                      label="Toggle agent browser tools"
-                      checked={currentAgentBrowserTools}
-                      onChange={agentBrowserTools.set}
-                    />
+                    <div className="settings-detail-actions">
+                      <SettingsDetailsToggle expanded={browserDetailsOpen} controls="agent-browser-details" onToggle={() => {
+                        setBrowserDetailsVisited(true);
+                        setBrowserDetailsOpen((open) => !open);
+                      }} />
+                      <Toggle label="Toggle agent browser tools" checked={currentAgentBrowserTools} onChange={agentBrowserTools.set} />
+                    </div>
                   </SettingRow>
-                  {currentAgentBrowserTools ? <BrowserToolsDetails /> : null}
+                  <div id="agent-browser-details" hidden={!browserDetailsOpen}>
+                    {browserDetailsVisited && <BrowserToolsDetails />}
+                  </div>
                 </Section>
 
                 <Section title="Computer use">
@@ -4102,7 +4450,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <AgentsPane />
                 </Section>
 
-                <Section title="Codex CLI">
+                <Section title="Codex">
                   <SettingRow
                     title="Run each Codex terminal on its own server"
                     detail="Isolate Codex's app-server within its terminal on Windows."
@@ -4480,6 +4828,10 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   <button className="settings-secondary" onClick={() => userShortcuts.set(defaultShortcuts)}>Reset shortcuts</button>
                 </div>
               </>
+            )}
+
+            {activeTab === 'cleanup' && (
+              <WorkspaceCleanupSection onCloseSettings={onclose} />
             )}
 
             {activeTab === 'about' && (

@@ -249,7 +249,19 @@ pub async fn source_control_repo_info(
     check_git_available()?;
     let repo = resolve_repo(&project_id, repo_path.as_deref(), &state)?;
 
-    let remote_url = run_git(&repo, &["remote", "get-url", "origin"]).unwrap_or_default();
+    let mut remote_url = run_git(&repo, &["remote", "get-url", "origin"]).unwrap_or_default();
+    if remote_url.trim().is_empty() {
+        if let Ok(remotes) = run_git(&repo, &["remote"]) {
+            for r in remotes.lines().map(str::trim).filter(|s| !s.is_empty()) {
+                if let Ok(url) = run_git(&repo, &["remote", "get-url", r]) {
+                    if !url.trim().is_empty() {
+                        remote_url = url;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     let current_branch = run_git(&repo, &["branch", "--show-current"]).unwrap_or_else(|_| "HEAD".to_string());
 
     let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {

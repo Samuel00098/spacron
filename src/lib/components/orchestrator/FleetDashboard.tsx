@@ -300,7 +300,7 @@ function FleetShell({ view, setView, empty }: { view: FleetView; setView: (view:
   );
 }
 
-function FleetEmpty({ title, children }: { title: string; children: React.ReactNode }) {
+function FleetEmpty({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div className="fleet-empty">
       <span className="fleet-empty-icon" aria-hidden="true">
@@ -312,7 +312,7 @@ function FleetEmpty({ title, children }: { title: string; children: React.ReactN
         </svg>
       </span>
       <strong>{title}</strong>
-      <span>{children}</span>
+      {children && <span>{children}</span>}
     </div>
   );
 }
@@ -731,13 +731,7 @@ export default function FleetDashboard() {
       <FleetShell
         view={view}
         setView={setView}
-        empty={
-          <FleetEmpty title="No agents running in this project">
-            Spawn agents and they show up here, whether they take their own branch
-            and checkout or work directly in the main repo. Isolated ones are ready to
-            review, merge or throw away; main-repo ones are ready to read. Past sessions are under History.
-          </FleetEmpty>
-        }
+        empty={<FleetEmpty title="No agents running in this project" />}
       />
     );
   }

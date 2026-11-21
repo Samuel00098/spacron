@@ -16,7 +16,7 @@ import {
 import { activeProject } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { getDispatchableAgents, sendChatMessage } from '$lib/stores/orchestrator';
-import { getAgentDisplayName } from '$lib/stores/terminal';
+import { getAgentDisplayName, setActiveSession } from '$lib/stores/terminal';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import { createVoiceInputSession, mergeVoiceTranscript } from '$lib/services/voice-input';
 import { recordTranscription } from '$lib/stores/voiceHistory';
@@ -243,7 +243,7 @@ export default function TasksPanel() {
     });
   };
 
-  const handleLaunchAgentReview = (config: {
+  const handleLaunchAgentReview = async (config: {
     agentCommand: string;
     agentName: string;
     launchTarget: 'terminal' | 'chat';
@@ -258,56 +258,37 @@ export default function TasksPanel() {
     const targetCwd = config.worktreePath || root;
     const finalPrompt = config.prompt.trim();
 
-    if (config.launchTarget === 'terminal') {
-      void quickSpawnAgent(config.agentCommand, {
-        model: config.model || undefined,
-        reasoningEffort: config.reasoningEffort,
-        prompt: finalPrompt,
-        view: 'terminal',
-        worktreePath: targetCwd,
-      });
-      useLayoutStore.getState().setActiveView('terminal');
-      showToast(
-        `Spawned ${config.agentName} in terminal to ${reviewModalState.itemType === 'pr' ? 'review PR #' + reviewModalState.itemNumber : 'work on issue #' + reviewModalState.itemNumber}`,
-        'success',
-        undefined,
-        true
-      );
-    } else {
-      const thread = createChatThread(projectId, {
-        title:
-          reviewModalState.itemType === 'pr'
-            ? `Review PR #${reviewModalState.itemNumber}: ${reviewModalState.itemTitle}`
-            : `Issue #${reviewModalState.itemNumber}: ${reviewModalState.itemTitle}`,
-        agentPreset: config.agentCommand,
-        agentName: config.agentName,
-        model: config.model ?? null,
-        reasoningEffort: config.reasoningEffort ?? 'default',
-      });
-      if (config.worktreePath) {
-        setChatThreadWorktree(thread.id, sharedWorktreeAt(projectId, config.worktreePath));
-      }
-      selectChatThread(projectId, thread.id);
-      showProjectChat();
+    // Hide Tasks panel so the stage immediately reveals the agent working
+    useLayoutStore.setState({ tasksVisible: false, activeView: 'terminal' });
+    if (config.launchTarget === 'chat') {
       setInteractionMode('chat');
-      void sendChatMessage(projectId, root, finalPrompt, {
-        projectName: project.name,
-        threadId: thread.id,
-        forcedAgent: config.agentCommand,
-        model: config.model || undefined,
-        reasoningEffort: config.reasoningEffort,
-        chatMode: true,
-        conversationalMode: true,
-      }).catch((err) => {
-        showToast(err instanceof Error ? err.message : String(err), 'error');
-      });
-      showToast(
-        `Started ${reviewModalState.itemType === 'pr' ? 'PR review' : 'issue task'} with ${config.agentName} in chat`,
-        'success',
-        undefined,
-        true
-      );
+    } else {
+      setInteractionMode('cli');
+      useLayoutStore.getState().showTerminal();
     }
+
+    const sessionId = await quickSpawnAgent(config.agentCommand, {
+      model: config.model || undefined,
+      reasoningEffort: config.reasoningEffort,
+      prompt: finalPrompt,
+      view: config.launchTarget,
+      worktreePath: targetCwd,
+    });
+
+    if (sessionId !== null) {
+      setActiveSession(sessionId);
+    }
+
+    showToast(
+      `Spawned ${config.agentName} in ${config.launchTarget === 'chat' ? 'chat' : 'terminal'} to ${
+        reviewModalState.itemType === 'pr'
+          ? 'review PR #' + reviewModalState.itemNumber
+          : 'work on issue #' + reviewModalState.itemNumber
+      }`,
+      'success',
+      undefined,
+      true
+    );
   };
 
   // Columns sort by urgency (priority → due date → drag order) — the same rule

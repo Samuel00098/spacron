@@ -1,0 +1,93 @@
+/* The Sketch room body. `.room-content` is a flex column, so the room fills it
+   the same way the old canvas did; Excalidraw needs an explicit height chain
+   all the way down or it collapses to the height of its own toolbar. */
+.excalidraw-room {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary, #121212);
+}
+
+.excalidraw-room > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Match the canvas fill the room asks Excalidraw for, so the loading state and
+   the drawing surface never flash the other theme's colour. */
+.excalidraw-room[data-theme='light'] {
+  background: #ffffff;
+}
+
+.excalidraw-room[data-theme='dark'] {
+  background: #121212;
+}
+
+.excalidraw-room .excalidraw {
+  height: 100%;
+  width: 100%;
+  --ui-font: var(--font-sans, system-ui);
+}
+
+/* global.css sets app typography on every button with !important and adds a
+   spring hover/active transform. Inside the canvas those fight Excalidraw's own
+   toolbar (labels in the app font, controls that scale on hover), so undo both
+   for this subtree only. */
+.excalidraw-room button,
+.excalidraw-room input,
+.excalidraw-room select,
+.excalidraw-room textarea {
+  font-family: inherit !important;
+}
+
+.excalidraw-room button:hover:not(:disabled),
+.excalidraw-room button:active:not(:disabled) {
+  transform: none !important;
+  filter: none !important;
+}
+
+.excalidraw-room button:hover svg {
+  transform: none !important;
+}
+
+/* First-open placeholder. The Excalidraw chunk is several hundred kB, so the
+   room paints this immediately and the canvas replaces it when the module
+   resolves. */
+.excalidraw-room-loading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+  color: var(--text-secondary, #9aa0aa);
+  font-family: var(--font-sans, system-ui);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.excalidraw-room-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border, rgba(255, 255, 255, 0.18));
+  border-top-color: var(--accent, #06b6d4);
+  animation: excalidraw-room-spin 0.7s linear infinite;
+}
+
+@keyframes excalidraw-room-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .excalidraw-room-spinner {
+    animation-duration: 3s;
+  }
+}

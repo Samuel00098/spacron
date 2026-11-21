@@ -84,7 +84,7 @@ pub const ACCOUNT_PROVIDERS: &[AccountProvider] = &[
     },
     AccountProvider {
         provider: "codex",
-        name: "Codex CLI",
+        name: "Codex",
         config_env: "CODEX_HOME",
         home_dir: &[".codex"],
         credential: &["auth.json"],
@@ -97,7 +97,7 @@ pub const ACCOUNT_PROVIDERS: &[AccountProvider] = &[
     },
     AccountProvider {
         provider: "grok",
-        name: "Grok CLI",
+        name: "Grok",
         // Documented in Grok CLI's own README ("Override config directory").
         config_env: "GROK_HOME",
         home_dir: &[".grok"],
@@ -108,6 +108,17 @@ pub const ACCOUNT_PROVIDERS: &[AccountProvider] = &[
         label_file_home: None,
         label_keys: &["email"],
         label_jwt: None,
+    },
+    AccountProvider {
+        provider: "antigravity",
+        name: "Antigravity",
+        config_env: "GEMINI_HOME",
+        home_dir: &[".gemini"],
+        credential: &["antigravity-cli", "antigravity-oauth-token"],
+        label_file: None,
+        label_file_home: None,
+        label_keys: &["id_token_email", "email"],
+        label_jwt: Some("id_token"),
     },
 ];
 
@@ -294,6 +305,20 @@ pub struct AgentAccount {
 /// address on the envelope, and there is no reason to open the former to render
 /// a row.
 fn label_for(spec: &AccountProvider, account_id: &str) -> Option<String> {
+    if spec.provider == "antigravity" && account_id == DEFAULT_ACCOUNT_ID {
+        if let Some(json) = crate::commands::usage::antigravity_credential_json() {
+            if let Some(found) = find_label(&json, spec.label_keys) {
+                return Some(found);
+            }
+            if let Some(field) = spec.label_jwt {
+                if let Some(token) = find_string(&json, field) {
+                    if let Some(lbl) = label_from_jwt(&token, spec.label_keys) {
+                        return Some(lbl);
+                    }
+                }
+            }
+        }
+    }
     let path = label_path(spec, account_id)?;
     let text = std::fs::read_to_string(path).ok()?;
     let json: Value = serde_json::from_str(&text).ok()?;
@@ -505,6 +530,10 @@ pub async fn usage_add_account(provider: String, label: String) -> Result<String
 
     std::fs::create_dir_all(root.join(&id))
         .map_err(|e| format!("Could not create the account directory: {e}"))?;
+    if spec.provider == "antigravity" {
+        let _ = std::fs::create_dir_all(root.join(&id).join("antigravity-cli"));
+        let _ = std::fs::create_dir_all(root.join(&id).join("config"));
+    }
     Ok(id)
 }
 
@@ -576,6 +605,10 @@ pub async fn usage_account_env(
                 spec.config_env.to_string(),
                 dir.to_string_lossy().to_string(),
             );
+            if spec.provider == "antigravity" {
+                env.insert("AGY_ACP_FORCE_FILE_STORAGE".to_string(), "1".to_string());
+                env.insert("AGY_CLI_DISABLE_AUTO_UPDATE".to_string(), "1".to_string());
+            }
         }
     }
     env
@@ -848,6 +881,7 @@ mod tests {
     fn only_clis_with_a_config_dir_override_support_switching() {
         assert!(supports_accounts("claude"));
         assert!(supports_accounts("codex"));
+        assert!(supports_accounts("antigravity"));
         // Grok CLI 1.0.89 documents `GROK_HOME` ("Override config directory",
         // default `~/.grok`, where `auth.json` lives), and `grok login` under
         // an empty `GROK_HOME` wrote its files there, not into `~/.grok`.

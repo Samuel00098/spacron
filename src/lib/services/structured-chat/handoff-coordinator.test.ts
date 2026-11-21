@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ spawn: vi.fn(), ready: vi.fn(), send: vi.fn(), kill: vi.fn() }));
+const state = vi.hoisted(() => ({
+  spawn: vi.fn(),
+  ready: vi.fn(),
+  send: vi.fn(),
+  kill: vi.fn(),
+  createChat: vi.fn(),
+  sendChat: vi.fn(),
+  getChat: vi.fn(),
+}));
 
 vi.mock('$lib/stores/notification', () => ({ showToast: vi.fn() }));
 vi.mock('$lib/stores/workspace', async () => {
@@ -13,7 +21,7 @@ vi.mock('$lib/stores/terminal', async () => {
     sessions: writable([]),
     getSessionRoot: () => '/repo',
     getAgentDisplayName: (preset: string) => (preset === 'claude' ? 'Claude Code' : null),
-    createTerminalSession: vi.fn(),
+    createTerminalSession: state.createChat,
     killSession: state.kill,
     sendAgentPromptDirect: state.send,
     spawnAgentPreset: state.spawn,
@@ -34,17 +42,19 @@ vi.mock('$lib/services/terminal-screen', () => ({ readTerminalScreen: () => null
 vi.mock('./panes', () => ({
   markStructuredChatPane: vi.fn(),
   forgetStructuredChatPane: vi.fn(),
-  structuredChatAgentFor: () => null,
+  structuredChatAgentFor: (command: string) => command === 'cursor-agent' ? 'cursor' : null,
 }));
 vi.mock('./session-store', () => ({ linkHandoffLineage: vi.fn() }));
 vi.mock('./registry', () => ({
-  closeStructuredChat: vi.fn(),
+  closeStructuredChat: vi.fn(async () => {}),
   getStructuredChat: () => null,
-  sendStructuredChat: vi.fn(),
-  structuredChatProvider: () => null,
+  sendStructuredChat: state.sendChat,
+  structuredChatProvider: (agent: string) => agent === 'cursor'
+    ? { label: 'Cursor', start: vi.fn(), get: state.getChat }
+    : null,
 }));
 
-import { getPaneHandoff, initiateHandoff, isHandoffInProgress, retryHandoff } from './handoff-coordinator';
+import { buildHistoryHandoffPrompt, getPaneHandoff, handOffFromHistory, initiateHandoff, isHandoffInProgress, readHistoryHandoffSource, retryHandoff } from './handoff-coordinator';
 
 const request = {
   sourceSessionId: 1,
@@ -94,5 +104,72 @@ describe('initiateHandoff', () => {
     expect(await initiateHandoff(request)).toBe(false);
     expect(getPaneHandoff(1)?.error).toMatch(/did not start/);
     expect(state.send).not.toHaveBeenCalled();
+  });
+
+  it('signals chat dispatch while the response is pending and preserves a send error for retry', async () => {
+    state.createChat.mockResolvedValueOnce(12);
+    state.getChat.mockReturnValueOnce({ status: 'ready' });
+    let finishSend!: () => void;
+    state.sendChat.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      finishSend = resolve;
+    }));
+    const handoff = initiateHandoff({
+      ...request,
+      targetCommand: 'cursor-agent',
+      targetName: 'Cursor',
+      mode: 'chat',
+    });
+    await vi.waitFor(() => expect(getPaneHandoff(1)?.status).toBe('delivering'));
+    expect(state.sendChat).toHaveBeenCalledWith('cursor', 12, expect.any(String));
+
+    state.getChat.mockReturnValueOnce({ status: 'ready', error: 'Prompt rejected' });
+    finishSend();
+    await expect(handoff).resolves.toBe(false);
+    expect(getPaneHandoff(1)).toMatchObject({ status: 'failed', error: 'Prompt rejected' });
+  });
+});
+
+describe('handing over a past session from Agent History', () => {
+  const source = { command: 'claude', agentName: 'Claude', sessionId: 'abc-123', cwd: '/repo' };
+  const target = { command: 'gemini', name: 'Gemini' };
+
+  beforeEach(() => {
+    state.spawn.mockReset();
+    state.ready.mockReset();
+    state.send.mockReset();
+    state.kill.mockReset();
+    state.kill.mockResolvedValue(undefined);
+  });
+
+  it('reads the conversation back and previews the context for the chosen agent', async () => {
+    const snapshot = await readHistoryHandoffSource(source);
+    expect(snapshot.items.map((i) => i.text)).toEqual(['fix the bug', 'working']);
+    const prompt = buildHistoryHandoffPrompt(source, snapshot, target, 'terminal');
+    expect(prompt).toContain('fix the bug');
+    expect(prompt).toContain('Previous agent: Claude (Claude Code)');
+  });
+
+  it('sends the text the person approved, not a rebuilt one', async () => {
+    state.spawn.mockResolvedValue(9);
+    state.ready.mockResolvedValue('ready');
+    state.send.mockResolvedValue(true);
+    expect(await handOffFromHistory(source, target, 'terminal', 'EDITED CONTEXT')).toBe(true);
+    expect(state.send.mock.calls[0][1]).toBe('EDITED CONTEXT');
+  });
+
+  it('builds the context itself when none is supplied, and leaves no pane record', async () => {
+    state.spawn.mockResolvedValue(9);
+    state.ready.mockResolvedValue('ready');
+    state.send.mockResolvedValue(true);
+    expect(await handOffFromHistory(source, target, 'terminal')).toBe(true);
+    expect(state.send.mock.calls[0][1]).toContain('fix the bug');
+    expect(getPaneHandoff(-1)).toBeNull();
+  });
+
+  it('reports failure when the target never starts', async () => {
+    state.spawn.mockResolvedValue(9);
+    state.ready.mockResolvedValue('timeout');
+    expect(await handOffFromHistory(source, target, 'terminal', 'ctx')).toBe(false);
+    expect(state.kill).toHaveBeenCalled();
   });
 });

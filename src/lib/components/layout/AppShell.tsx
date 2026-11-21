@@ -174,7 +174,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   review: 'Review',
   http: 'HTTP',
   tasks: 'Tasks',
-  fleet: 'Fleet',
+  fleet: 'Sessions',
   db: 'Database',
   containers: 'Containers',
   toolbox: 'Toolbox',
@@ -306,9 +306,11 @@ const PANEL_VISIBILITY_KEYS: Record<AuxPanelId, keyof ShellLayoutState> = {
 const EditorPanel = lazy(() => import('$lib/components/editor/EditorPanel.tsx'));
 const FleetDashboard = lazy(() => import('$lib/components/orchestrator/FleetDashboard.tsx'));
 const EnvManager = lazy(() => import('$lib/components/shared/EnvManager.tsx'));
-// Code-split: the sketch canvas is a large, self-contained surface, so it
-// should not sit in the shell's initial bundle.
-const SketchPanel = lazy(() => import('$lib/components/sketch/SketchPanel.tsx'));
+// Code-split: the sketch room is a large, self-contained surface, so it should
+// not sit in the shell's initial bundle. The room body is Excalidraw; the old
+// canvas (SketchPanel.tsx) stays on disk as the reference for the v4 -> scene
+// conversion but is no longer imported, so it costs the bundle nothing.
+const SketchPanel = lazy(() => import('$lib/components/sketch/ExcalidrawPanel.tsx'));
 const DeepSeekPanel = lazy(() => import('$lib/components/deepseek/DeepSeekPanel.tsx'));
 const LibraryPanel = lazy(() => import('$lib/components/library/LibraryPanel.tsx'));
 
@@ -325,7 +327,7 @@ function Icon({ children }: { children: React.ReactNode }) {
 // both places.
 const DRAWER_TOOL_META: Record<RightDrawerTool, { title: string; icon: React.ReactNode }> = {
   fleet: {
-    title: 'Agent Fleet',
+    title: 'Sessions',
     icon: <Icon><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></Icon>,
   },
   toolbox: {
@@ -2300,9 +2302,12 @@ export default function AppShell() {
               <PreviewPanel />
             </div>
           )}
-          {projectSwitching
-            ? <div role="status">Loading project tools…</div>
-            : rightTabs.length === 0
+          {projectSwitching ? (
+            <div className="right-sidebar-loading-tools" role="status">
+              <div className="right-sidebar-loading-spinner" />
+              <span>Loading project tools…</span>
+            </div>
+          ) : rightTabs.length === 0
             ? renderRightSurfacePicker()
             : rightTabs.map(renderRightTabPane)}
         </div>

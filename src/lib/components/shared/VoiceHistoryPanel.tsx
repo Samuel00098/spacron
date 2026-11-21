@@ -323,7 +323,7 @@ export default function VoiceHistoryPanel() {
     if (total === 0) {
       return showingTranscriptions
         ? 'No dictations yet. Press the transcription hotkey and speak, and everything you dictate lands here.'
-        : 'No conversations yet. Tap left Alt (or use dictation) to start a voice call, and each one is logged here.';
+        : 'No saved voice conversations.';
     }
     return query.trim()
       ? 'Nothing matches that search in this time period.'

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ChatUnreadDot, ProjectChatUnreadDot, SessionChatChildren } from './SessionChatChildren';
 import { createPortal } from 'react-dom';
 import { get } from 'svelte/store';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
@@ -71,6 +72,16 @@ import { mainWorktreeRow, openCreateWorktree, setActiveWorktree, worktreesByProj
 import { worktreeForPath } from '$lib/services/project-worktrees';
 import AgentQuickAdd from '$lib/components/shared/AgentQuickAdd';
 import { showProjectChat } from '$lib/stores/chatNavigation';
+import {
+  allProjectSettings,
+  projectIconFor,
+  projectConfigFor,
+  isProjectHidden,
+  updateProjectConfigFor,
+  isImageUrl,
+  autoDetectProjectIcon,
+} from '$lib/stores/projectSettings';
+import { ProjectIconBadge } from '$lib/components/shared/ProjectIcons';
 
 function getFilename(path: string): string {
   const normalized = path.replace(/\\/g, '/');
@@ -273,6 +284,7 @@ export default function ProjectHUD() {
   const activeProjId = useWorkspaceStore((s) => s.activeProjectId);
   const projectsMap = useWorkspaceStore((s) => s.projects);
   const allWorktreeLists = useStore(worktreesByProject);
+  const allProjectConfigs = useStore(allProjectSettings);
 
   const [search, setSearch] = useState('');
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
@@ -356,7 +368,7 @@ export default function ProjectHUD() {
     }
   });
 
-  const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => loadPathSet(HIDDEN_PROJECTS_KEY));
+  const [legacyHiddenProjects] = useState(() => loadPathSet(HIDDEN_PROJECTS_KEY));
   const [pinnedProjects, setPinnedProjects] = useState<Set<string>>(() => loadPathSet(PINNED_PROJECTS_KEY));
   // Per-project "Archived" thread group; collapsed unless opened this session.
   const [openArchivedGroups, setOpenArchivedGroups] = useState<Set<string>>(new Set());
@@ -366,17 +378,13 @@ export default function ProjectHUD() {
   const [openSnoozedGroups, setOpenSnoozedGroups] = useState<Set<string>>(new Set());
 
   function setProjectHidden(path: string, hidden: boolean) {
-    setHiddenProjects((prev) => {
-      const next = togglePath(prev, path, hidden);
-      savePathSet(HIDDEN_PROJECTS_KEY, next);
-      return next;
-    });
+    updateProjectConfigFor(path, { hideFromSidebar: hidden });
   }
 
   function unhideAllProjects() {
-    const next = new Set<string>();
-    savePathSet(HIDDEN_PROJECTS_KEY, next);
-    setHiddenProjects(next);
+    for (const item of hiddenProjectItems) {
+      updateProjectConfigFor(item.path, { hideFromSidebar: false });
+    }
   }
 
   function setProjectPinned(path: string, pinned: boolean) {
@@ -630,25 +638,52 @@ export default function ProjectHUD() {
     return items;
   }, [rawWorkspaces, activeWsId, activeProjPath]);
 
+  // Auto-detect project icons for projects without custom icons
+  useEffect(() => {
+    for (const item of projectItems) {
+      if (!item.path) continue;
+      const pId = projectIdByPath.get(item.path);
+      if (pId) {
+        if (!projectIconFor(allProjectConfigs, item.path, pId)) {
+          void autoDetectProjectIcon(pId, item.path);
+        }
+      }
+    }
+  }, [projectItems, projectIdByPath, allProjectConfigs]);
+
   // Filtered and sorted list
   const query = search.toLowerCase().trim();
 
+  const hiddenProjectsWithConfig = useMemo(() => {
+    const set = new Set<string>();
+    for (const item of projectItems) {
+      if (!item.path) continue;
+      const pId = projectIdByPath.get(item.path);
+      const path = normalizeProjectPath(item.path);
+      if (isProjectHidden(allProjectConfigs, item.path, pId, legacyHiddenProjects.has(path))) set.add(path);
+    }
+    return set;
+  }, [legacyHiddenProjects, projectItems, projectIdByPath, allProjectConfigs]);
+
   const filteredProjects = useMemo(() => {
-    let list = projectItems;
+    let list = projectItems.map((item) => ({
+      ...item,
+      name: projectConfigFor(allProjectConfigs, item.path, projectIdByPath.get(item.path)).displayName || item.name,
+    }));
     if (query) {
       list = list.filter(
         (p) => p.name.toLowerCase().includes(query) || p.path.toLowerCase().includes(query)
       );
     }
-    return applyProjectPrefs(sortItems(list, projectSort), hiddenProjects, pinnedProjects);
-  }, [projectItems, query, projectSort, hiddenProjects, pinnedProjects]);
+    return applyProjectPrefs(sortItems(list, projectSort), hiddenProjectsWithConfig, pinnedProjects);
+  }, [projectItems, query, projectSort, hiddenProjectsWithConfig, pinnedProjects, allProjectConfigs, projectIdByPath]);
 
   // Hidden projects that are still in the list, for the Projects menu's
   // "Hidden Projects" section. A hidden path since removed from the list simply
   // has nothing to show.
   const hiddenProjectItems = useMemo(
-    () => projectItems.filter((item) => item.path && hiddenProjects.has(normalizeProjectPath(item.path))),
-    [projectItems, hiddenProjects],
+    () => projectItems.filter((item) => item.path && hiddenProjectsWithConfig.has(normalizeProjectPath(item.path))),
+    [projectItems, hiddenProjectsWithConfig],
   );
 
   // Popovers stay open only while the user is interacting with that popover.
@@ -889,6 +924,7 @@ export default function ProjectHUD() {
   // Render a project card
   function renderProjectCard(p: ProjectItem) {
     const projectId = p.path ? projectIdByPath.get(p.path) ?? null : null;
+    const projectIcon = projectIconFor(allProjectConfigs, p.path, projectId);
     const projectSessions = projectId ? sessionsByProject.get(projectId) ?? [] : [];
     const projectRooms = projectId ? openRoomsByProject.get(projectId) ?? [] : [];
     const previewIsRunning = projectRooms.includes('preview');
@@ -1355,10 +1391,19 @@ export default function ProjectHUD() {
       const hover = [name, agentType, task && task !== name ? task : null, state]
         .filter(Boolean)
         .join(': ');
-      return renderOpenRoomRow(
+      const row = renderOpenRoomRow(
         isAgent ? `agent:${session.id}` : 'terminal', name,
-        isAgent ? <AgentBrandMark command={session.agentPreset} name={name} /> : ROOM_GLYPHS.terminal,
+        isAgent
+          ? <><AgentBrandMark command={session.agentPreset} name={name} /><ChatUnreadDot sessionId={session.id} /></>
+          : ROOM_GLYPHS.terminal,
         detail !== name ? detail : null, hover, String(session.id), session.isExecuting,
+      );
+      if (!isAgent) return row;
+      return (
+        <Fragment key={`agent-group-${session.id}`}>
+          {row}
+          <SessionChatChildren sessionId={session.id} />
+        </Fragment>
       );
     };
 
@@ -1396,10 +1441,8 @@ export default function ProjectHUD() {
             </button>
           )}
 
-          <div className="project-sidebar-card-avatar">
-            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className="project-code-icon" aria-hidden="true">
-              <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-            </svg>
+          <div className="project-sidebar-card-avatar" title={p.name}>
+            <ProjectIconBadge icon={projectIcon} size={18} />
           </div>
 
           <div className="project-sidebar-card-info">
@@ -1429,6 +1472,7 @@ export default function ProjectHUD() {
               {isPinnedProject && (
                 <PinIcon variant="mark" size={12} className="project-pin-mark" label="Pinned project" />
               )}
+              {!isExpanded && <ProjectChatUnreadDot sessionIds={projectSessions.map((session) => session.id)} />}
               {p.isActive && (
                 <span className="project-active-badge">
                   <span className="project-active-dot" />

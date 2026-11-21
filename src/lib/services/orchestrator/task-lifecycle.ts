@@ -92,6 +92,8 @@ export interface OrchestratorTask {
    * printing after its turn was marked done (the CLI process stays alive).
    */
   lastSessionId?: number | null;
+  /** Evidence for the latest completed run. */
+  turnEndedBy?: 'declared' | 'exit' | 'inferred';
   blockedReason?: string | null;
   failureReason?: string | null;
   /** Most recent prompt delivery for the current run; null until the agent has work. */

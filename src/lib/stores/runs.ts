@@ -24,7 +24,7 @@ function load(): QuickRun[] {
 export const quickRuns = writable<QuickRun[]>(load());
 
 const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
-  { name: 'Codex CLI', command: 'codex', isPreset: true, isAgent: true },
+  { name: 'Codex', command: 'codex', isPreset: true, isAgent: true },
   { name: 'Claude Code', command: 'claude', isPreset: true, isAgent: true },
   { name: 'Antigravity', command: 'agy', isPreset: true, isAgent: true },
   { name: 'OpenCode', command: 'opencode', isPreset: true, isAgent: true },
@@ -35,7 +35,7 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
   // the Cursor tile. `cursor-agent` is unambiguous.
   { name: 'Cursor', command: 'cursor-agent', isPreset: true, isAgent: true },
   { name: 'Hermes Agent', command: 'hermes', isPreset: true, isAgent: true },
-  { name: 'Grok CLI', command: 'grok', isPreset: true, isAgent: true },
+  { name: 'Grok', command: 'grok', isPreset: true, isAgent: true },
   { name: 'Cody', command: 'cody', isPreset: true, isAgent: true },
   // The wider registry. Adding a row here is only part of the job: the
   // rules-file answer must be mirrored into `RULES_FILE_AGENTS`
@@ -44,9 +44,9 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
   // entry — otherwise the row shows "Not detected" for an installed CLI, or
   // the agent silently gets the wrong brief channel — see
   // [[standing-brief-sources]] and [[agent-usage-meters]].
-  { name: 'Gemini CLI', command: 'gemini', isPreset: true, isAgent: true },
+  { name: 'Gemini', command: 'gemini', isPreset: true, isAgent: true },
   { name: 'Factory Droid', command: 'droid', isPreset: true, isAgent: true },
-  { name: 'GitHub Copilot CLI', command: 'copilot', isPreset: true, isAgent: true },
+  { name: 'GitHub Copilot', command: 'copilot', isPreset: true, isAgent: true },
   { name: 'Qwen Code', command: 'qwen', isPreset: true, isAgent: true },
   { name: 'Cline', command: 'cline', isPreset: true, isAgent: true },
   // No terminal UI: the picker opens it as a web panel and delegation runs it
@@ -55,7 +55,7 @@ const AI_AGENT_PRESETS: Omit<QuickRun, 'id' | 'projectId'>[] = [
   { name: 'DeepSeek Harness', command: 'dsh', isPreset: true, isAgent: true },
   { name: 'Amp', command: 'amp', isPreset: true, isAgent: true },
   { name: 'Goose', command: 'goose', isPreset: true, isAgent: true },
-  { name: 'Kimi CLI', command: 'kimi', isPreset: true, isAgent: true },
+  { name: 'Kimi', command: 'kimi', isPreset: true, isAgent: true },
   { name: 'Crush', command: 'crush', isPreset: true, isAgent: true },
   { name: 'Aider', command: 'aider', isPreset: true, isAgent: true },
   // The wider registry, continued — agent CLIs ported from Orca's agent

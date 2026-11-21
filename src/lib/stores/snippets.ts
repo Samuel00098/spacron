@@ -1,5 +1,6 @@
 import { writable, get, derived } from '$lib/stores/storeCompat';
 import { backendInvoke } from '$lib/services/backend';
+import { allProjectSettings, projectConfigFor, type ProjectHooks } from '$lib/stores/projectSettings';
 
 export interface ShellSnippet {
   id: string;
@@ -69,6 +70,56 @@ export async function loadProjectSnippets(project: { id: string; root_path: stri
     ...all.filter(s => s.projectId !== project.id), // keep other projects and global snippets
     ...loaded,
   ]);
+
+  const pConfig = projectConfigFor(get(allProjectSettings), project.root_path, project.id);
+  if (pConfig?.hooks) {
+    syncProjectHooksToSnippets(project.id, pConfig.hooks, project.root_path);
+  }
+}
+
+/**
+ * Synchronize project lifecycle hooks (setup, dev, build, test, clean) into
+ * project shell snippets so they show up directly in the right sidebar's Shell Snippets panel.
+ */
+export function syncProjectHooksToSnippets(
+  projectId: string,
+  hooks: Partial<ProjectHooks> | Record<string, string>,
+  rootPath?: string
+): void {
+  if (rootPath) {
+    projectPaths.set(projectId, rootPath);
+  }
+  const hookDefs: Array<{ key: keyof ProjectHooks; label: string; desc: string }> = [
+    { key: 'setup', label: 'Setup', desc: 'Project setup / bootstrap command' },
+    { key: 'dev', label: 'Dev', desc: 'Local development server command' },
+    { key: 'build', label: 'Build', desc: 'Production build verification script' },
+    { key: 'test', label: 'Test', desc: 'Test runner' },
+    { key: 'clean', label: 'Clean', desc: 'Clean build caches or worktree' },
+  ];
+
+  snippets.update((all) => {
+    // Retain global snippets, snippets for other projects, and non-hook project snippets
+    const nonHookSnippets = all.filter(
+      (s) => s.projectId !== projectId || !s.id.startsWith(`hook_${projectId}_`)
+    );
+    const newHookSnippets: ShellSnippet[] = [];
+    const hooksRecord = hooks as Record<string, string | undefined>;
+    for (const def of hookDefs) {
+      const cmd = hooksRecord[def.key]?.trim();
+      if (cmd) {
+        newHookSnippets.push({
+          id: `hook_${projectId}_${def.key}`,
+          name: def.label,
+          command: cmd,
+          description: def.desc,
+          projectId,
+        });
+      }
+    }
+    return [...nonHookSnippets, ...newHookSnippets];
+  });
+
+  void flushProjectSnippets(projectId);
 }
 
 // Save project-specific snippets

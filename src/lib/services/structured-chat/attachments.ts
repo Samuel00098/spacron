@@ -56,3 +56,16 @@ export function acpImageBlocks(dataUrls: readonly string[]): InlineImage[] {
     .map(parseImageDataUrl)
     .filter((image): image is InlineImage => image !== null);
 }
+
+/**
+ * Paths from a drop: one per line, trimmed, with the quotes a file manager or
+ * the explorer adds around paths that contain spaces.
+ */
+export function parseDroppedPaths(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const value = raw.trim().replace(/^"(.*)"$/, '$1').trim();
+    if (value && !out.includes(value)) out.push(value);
+  }
+  return out;
+}

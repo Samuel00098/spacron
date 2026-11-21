@@ -44,7 +44,7 @@ export function subscribeStructuredChat(agent: string | null | undefined, listen
   return structuredChatProvider(agent)?.subscribe(listener) ?? (() => {});
 }
 
-export async function startStructuredChat(agent: string, sessionId: number, cwd: string, options?: { access?: StructuredAccess; resumeId?: string | null }): Promise<void> {
+export async function startStructuredChat(agent: string, sessionId: number, cwd: string, options?: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null }): Promise<void> {
   const provider = structuredChatProvider(agent);
   if (!provider) throw new Error(`No structured chat provider for ${agent}`);
   await provider.start(sessionId, cwd, options);

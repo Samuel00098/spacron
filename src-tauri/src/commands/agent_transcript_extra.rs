@@ -63,7 +63,20 @@ pub(super) fn pi_dir_name(cwd: &str) -> String {
 
 pub(super) fn pi_candidates(root: Option<PathBuf>, cwd: &str) -> Vec<Candidate> {
     let Some(root) = root else { return Vec::new() };
-    jsonl_candidates_in(&root, &pi_dir_name(cwd))
+    jsonl_candidates_in(&root, &pi_dir_name(cwd)).into_iter().map(|mut c| {
+        // The filename includes a timestamp; resume uses the session header's id.
+        if let Ok(file) = fs::File::open(&c.path) {
+            for line in BufReader::new(file).lines().map_while(Result::ok).take(8) {
+                if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    if v.get("type").and_then(Value::as_str) == Some("session") {
+                        if let Some(id) = str_of(&v, "id") { c.id = id; }
+                        break;
+                    }
+                }
+            }
+        }
+        c
+    }).collect()
 }
 
 fn pi_text(content: &Value) -> (String, Vec<String>) {
@@ -169,15 +182,15 @@ pub(super) fn parse_pi(path: &Path) -> Parsed {
 // <home>/history.jsonl naming each conversation's workspace
 // ---------------------------------------------------------------------------
 
-fn antigravity_homes() -> Vec<PathBuf> {
+pub(super) fn antigravity_homes(base: Option<PathBuf>) -> Vec<PathBuf> {
     let Some(h) = home() else { return Vec::new() };
-    let gemini = env_dir("GEMINI_HOME").unwrap_or_else(|| h.join(".gemini"));
+    let gemini = base.or_else(|| env_dir("GEMINI_HOME")).unwrap_or_else(|| h.join(".gemini"));
     vec![gemini.join("antigravity-cli"), gemini.join("antigravity")]
 }
 
-pub(super) fn antigravity_candidates(cwd: &str) -> Vec<Candidate> {
+pub(super) fn antigravity_candidates(cwd: &str, base: Option<PathBuf>) -> Vec<Candidate> {
     let mut out = Vec::new();
-    for base in antigravity_homes() {
+    for base in antigravity_homes(base) {
         let workspaces = antigravity_workspaces(&base);
         for (id, workspace) in workspaces {
             if !same_dir(&workspace, cwd) {
@@ -197,7 +210,7 @@ pub(super) fn antigravity_candidates(cwd: &str) -> Vec<Candidate> {
 }
 
 /// Conversation id → workspace, from history.jsonl and ACP's `conversations/<id>.meta`.
-fn antigravity_workspaces(base: &Path) -> HashMap<String, String> {
+pub(super) fn antigravity_workspaces(base: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in read_lines(&base.join("history.jsonl")) {
         if let (Some(id), Some(ws)) = (str_of(&line, "conversationId"), str_of(&line, "workspace")) {
@@ -287,6 +300,13 @@ pub(super) fn parse_antigravity(path: &Path) -> Parsed {
                     + line.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
                 if used > 0 {
                     parsed.context_used = Some(used);
+                }
+                // The CLI can log the settled answer again with a new step
+                // index. Never merge across tools or user turns.
+                let has_calls = line.get("tool_calls").and_then(Value::as_array).is_some_and(|calls| !calls.is_empty());
+                if !content.is_empty() && !has_calls && parsed.items.last().is_some_and(|last|
+                    last.kind == "assistant" && last.text == clip(&content, MAX_TEXT_CHARS)) {
+                    continue;
                 }
                 if let Some(thinking) = str_of(&line, "thinking") {
                     parsed.push_text("reasoning", format!("{id}:think"), thinking, time.clone());
@@ -523,6 +543,17 @@ mod tests {
     }
 
     #[test]
+    fn pi_candidates_use_the_native_id_instead_of_the_timestamped_filename() {
+        let root = std::env::temp_dir().join(format!("spacron-pi-history-{}", std::process::id()));
+        let dir = root.join(pi_dir_name("C:/repo"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-11-21_uuid.jsonl"), "{\"type\":\"session\",\"id\":\"native-session\",\"cwd\":\"C:/repo\"}\n").unwrap();
+        let candidates = pi_candidates(Some(root), "C:/repo");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, "native-session");
+    }
+
+    #[test]
     fn reads_pi_sessions() {
         let path = write_temp("pi.jsonl", &[
             r#"{"type":"session","version":3,"id":"s1","cwd":"C:\\x"}"#,
@@ -551,6 +582,20 @@ mod tests {
         let map = antigravity_workspaces(&base);
         assert_eq!(map.get("abc-123").map(String::as_str), Some("C:\\work\\app"));
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn antigravity_deduplicates_settled_replies_without_hiding_later_turns() {
+        let path = write_temp("ag-settled.jsonl", &[
+            r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"first"}"#,
+            r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Finished."}"#,
+            r#"{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","thinking":"settled","content":"Finished."}"#,
+            r#"{"step_index":3,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"second"}"#,
+            r#"{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Finished."}"#,
+        ]);
+        let parsed = parse_antigravity(&path);
+        assert_eq!(parsed.items.iter().map(|item| item.kind.as_str()).collect::<Vec<_>>(), ["user", "assistant", "user", "assistant"]);
+        assert_eq!(parsed.busy, Some(false));
     }
 
     #[test]

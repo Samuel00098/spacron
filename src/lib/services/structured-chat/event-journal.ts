@@ -140,7 +140,7 @@ export function diffStructuredState(prev: StructuredChatState | null, next: Stru
   }
 
   if (prev?.status === 'working' && next.status !== 'working') {
-    out.push({ type: next.status === 'ready' ? 'turn.completed' : 'turn.interrupted', payload: { status: next.status } });
+    out.push({ type: next.status === 'ready' && !next.error ? 'turn.completed' : 'turn.interrupted', payload: { status: next.status } });
   }
   if (next.error && next.error !== prev?.error) out.push({ type: 'error', payload: { message: next.error } });
 

@@ -19,6 +19,30 @@ export const structuredChatPanes = writable<Record<number, StructuredChatAgent>>
 const panePresets = new Map<number, string>();
 /** The conversation before the chat took over (from the CLI's transcript). */
 export const structuredChatHistory = writable<Record<number, TerminalChatItem[]>>({});
+/** A chat that finished while its window was hidden, for the tab's dot. */
+export const structuredChatUnread = writable<Record<number, boolean>>({});
+
+function setUnread(sessionId: number, unread: boolean): void {
+  structuredChatUnread.update((all) => {
+    if (Boolean(all[sessionId]) === unread) return all;
+    const next = { ...all };
+    if (unread) next[sessionId] = true;
+    else delete next[sessionId];
+    return next;
+  });
+}
+
+export function markStructuredChatUnread(sessionId: number): void {
+  setUnread(sessionId, true);
+}
+
+export function clearStructuredChatUnread(sessionId: number): void {
+  setUnread(sessionId, false);
+}
+
+export function useStructuredChatUnread(sessionId: number): boolean {
+  return Boolean(useStore(structuredChatUnread)[sessionId]);
+}
 
 export function markStructuredChatPane(sessionId: number, agent: StructuredChatAgent, preset?: string): void {
   if (preset) panePresets.set(sessionId, preset);
@@ -39,6 +63,7 @@ export function useStructuredChatHistory(sessionId: number): TerminalChatItem[] 
 const EMPTY: TerminalChatItem[] = [];
 
 export function forgetStructuredChatPane(sessionId: number): void {
+  setUnread(sessionId, false);
   structuredChatHistory.update((all) => {
     if (!(sessionId in all)) return all;
     const next = { ...all };

@@ -410,12 +410,48 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  max-width: 20px;
+  max-height: 20px;
+  border-radius: 4px;
   border: none;
   background: transparent;
   color: var(--accent);
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.project-sidebar-card-icon-img {
+  width: 100%;
+  height: 100%;
+  max-width: 20px;
+  max-height: 20px;
+  border-radius: 3px;
+  object-fit: cover;
+  display: block;
+}
+
+.project-sidebar-card-avatar svg {
+  width: 16px;
+  height: 16px;
+  max-width: 16px;
+  max-height: 16px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.project-sidebar-card-emoji {
+  font-size: 13.5px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 20px;
+  max-height: 20px;
+  overflow: hidden;
 }
 
 .project-sidebar-card.active .project-sidebar-card-avatar {
@@ -1753,4 +1789,75 @@
 /* Keep a row's + visible while the launcher it opened is up. */
 .project-worktree-actions:has([aria-expanded='true']) {
   opacity: 1;
+}
+
+/* Structured-chat agent rows: unread dot and indented child agents. */
+.project-process-icon { position: relative; }
+
+.project-process-unread {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #4f8cff);
+}
+
+.project-process-children {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 2px 18px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.25));
+}
+
+.project-process-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 5px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-process-child:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.project-process-child-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.project-process-child.status-running .project-process-child-dot,
+.project-process-child.status-starting .project-process-child-dot { background: var(--accent, #4f8cff); }
+.project-process-child.status-needs-input .project-process-child-dot { background: #e0a030; }
+.project-process-child.status-completed .project-process-child-dot { background: #3fb27f; }
+.project-process-child.status-failed .project-process-child-dot,
+.project-process-child.status-lost .project-process-child-dot { background: #e5484d; }
+.project-process-child:not(.status-running):not(.status-starting):not(.status-needs-input) { opacity: 0.7; }
+
+.project-process-child-name { flex: 0 0 auto; font-weight: 500; }
+
+.project-process-child-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-unread {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #4f8cff);
 }

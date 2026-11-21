@@ -15,6 +15,7 @@
  * State is kept per pane in this module, not in the view: the view unmounts
  * when its room is hidden, and the conversation must be there on return.
  */
+import { parseCodexQuestions, codexAnswers, type CodexQuestion } from './codex-questions';
 import { invoke } from '@tauri-apps/api/core';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { openAcpSession, stderrTail, type AcpNotification, type AcpServerRequest, type AcpSession } from '$lib/services/acp-transport';
@@ -72,6 +73,8 @@ export interface StructuredChatState {
   restoredMode?: 'native' | 'journal-only' | 'fresh' | null;
   contextUsed: number | null;
   contextWindow: number | null;
+  /** Per-category tokens, only where the agent reports them (Claude's `get_context_usage`). */
+  contextBreakdown?: { name: string; tokens: number }[] | null;
 }
 
 interface Runtime {
@@ -234,7 +237,7 @@ export function accessPolicy(access: StructuredAccess, cwd: string): { approvalP
 // â”€â”€ Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Start (or reuse) the Codex app server behind a structured chat pane. */
-export async function startCodexChat(sessionId: number, cwd: string, opts: { access?: StructuredAccess; resumeId?: string | null } = {}): Promise<void> {
+export async function startCodexChat(sessionId: number, cwd: string, opts: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null } = {}): Promise<void> {
   const existing = states.get(sessionId);
   if (existing && existing.status !== 'failed' && existing.status !== 'closed') return;
   states.set(sessionId, {
@@ -242,8 +245,8 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
     error: null,
     items: existing?.items ?? [],
     models: existing?.models ?? [],
-    model: existing?.model ?? null,
-    effort: existing?.effort ?? null,
+    model: opts.model ?? existing?.model ?? null,
+    effort: opts.effort ?? existing?.effort ?? null,
     access: opts.access ?? existing?.access ?? 'ask',
     threadId: null,
     approvals: [],
@@ -258,7 +261,7 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
   runtimes.set(sessionId, runtime);
   try {
     const launch = await invoke<{ command: string; args: string[]; env: Record<string, string> }>('codex_app_server_launch');
-    const accountEnv = await accountEnvFor('codex');
+    const accountEnv = await accountEnvFor('codex', opts.accountId ?? null);
     const session = await openAcpSession(launch.command, launch.args, cwd, { ...launch.env, ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
     runtime.session = session;
     const tail = stderrTail(session);
@@ -274,13 +277,17 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
     void tail.dispose.then((off) => runtime.unlisten.push(off));
     await session.request('initialize', { clientInfo: { name: 'spacron', title: 'Spacron', version: '5.1.3' } });
     await session.notify('initialized', {});
-    const listed = await session.request<{ data?: Json[] }>('model/list', {});
+    const listed = await session.request<{ data?: Json[] }>('model/list', { limit: 100, includeHidden: false });
     const models = (listed.data ?? []).map(toModel).filter((m): m is StructuredModel => m != null);
     const chosen = states.get(sessionId)?.model;
     const fallback = models.find((m) => m.isDefault) ?? models[0] ?? null;
-    const model = chosen && models.some((m) => m.id === chosen) ? chosen : fallback?.id ?? null;
+    // An explicit launch selection should reach Codex even when its visible
+    // catalogue is incomplete. The thread request can report a rejected model.
+    const model = opts.model ?? (chosen && models.some((m) => m.id === chosen) ? chosen : fallback?.id ?? null);
     const current = models.find((m) => m.id === model);
-    const effort = states.get(sessionId)?.effort ?? current?.defaultEffort ?? null;
+    const requestedEffort = states.get(sessionId)?.effort ?? null;
+    const effort = opts.effort
+      ?? (requestedEffort && current?.efforts.includes(requestedEffort) ? requestedEffort : current?.defaultEffort ?? null);
     const { approvalPolicy, sandboxPolicy } = accessPolicy(states.get(sessionId)!.access, cwd);
     // A conversation that ran in the terminal resumes by its thread id.
     const started = await session.request<{ thread?: Json }>(opts.resumeId ? 'thread/resume' : 'thread/start', {
@@ -292,7 +299,7 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
     });
     const threadId = str(started.thread?.id);
     if (!threadId) throw new Error('Codex did not start a conversation.');
-    update(sessionId, { status: 'ready', models, model, effort: current?.efforts.includes(effort ?? '') ? effort : current?.defaultEffort ?? null, threadId });
+    update(sessionId, { status: 'ready', models, model, effort, threadId });
   } catch (error) {
     update(sessionId, { status: 'failed', error: error instanceof Error ? error.message : String(error) });
   }
@@ -368,8 +375,47 @@ export function setStructuredAccess(sessionId: number, access: StructuredAccess)
   update(sessionId, { access });
 }
 
-export async function answerStructuredApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline'): Promise<void> {
+const pendingQuestions = new Map<string, { questions: CodexQuestion[]; index: number; answers: Record<string, string> }>();
+const questionKey = (sessionId: number, requestId: string | number) => `${sessionId}:${requestId}`;
+
+/** One `request_user_input` question as an approval card whose options are the answers. */
+function codexQuestionApproval(requestId: string | number, questions: CodexQuestion[], index: number): StructuredApproval {
+  const q = questions[index];
+  const progress = questions.length > 1 ? ` (${index + 1} of ${questions.length})` : '';
+  return {
+    requestId,
+    kind: 'other',
+    title: `${q.header ? `${q.header}: ` : ''}${q.question}${progress}`,
+    detail: q.options.filter((option) => option.description).map((option) => `${option.label}: ${option.description}`).join('\n') || null,
+    options: q.options.map((option, i) => ({ id: String(i), label: option.label, kind: 'allow_once' })),
+  };
+}
+
+export async function answerStructuredApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string): Promise<void> {
   const runtime = runtimes.get(sessionId);
+  const key = questionKey(sessionId, requestId);
+  const asking = pendingQuestions.get(key);
+  if (asking) {
+    const q = asking.questions[asking.index];
+    const chosen = decision === 'decline' ? undefined : q.options[Number(optionId)];
+    if (chosen) {
+      asking.answers[q.id] = chosen.label;
+      asking.index += 1;
+      if (asking.index < asking.questions.length) {
+        update(sessionId, (s) => ({ approvals: s.approvals.map((a) => a.requestId === requestId ? codexQuestionApproval(requestId, asking.questions, asking.index) : a) }));
+        return;
+      }
+      pendingQuestions.delete(key);
+      update(sessionId, (s) => ({ approvals: s.approvals.filter((a) => a.requestId !== requestId) }));
+      await runtime?.session?.respond(requestId, codexAnswers(asking.answers));
+      return;
+    }
+    // Declined (or no usable option): tell Codex no answer is coming.
+    pendingQuestions.delete(key);
+    update(sessionId, (s) => ({ approvals: s.approvals.filter((a) => a.requestId !== requestId) }));
+    await runtime?.session?.respond(requestId, {}, { code: -32000, message: 'The user declined to answer.' });
+    return;
+  }
   update(sessionId, (s) => ({ approvals: s.approvals.filter((a) => a.requestId !== requestId) }));
   await runtime?.session?.respond(requestId, { decision });
 }
@@ -553,6 +599,14 @@ function onServerRequest(sessionId: number, r: AcpServerRequest) {
       approvals: [...s.approvals, { requestId: r.requestId, kind: 'fileChange', title: 'Apply these file changes?', detail: str(p.reason) }],
     }));
     return;
+  }
+  if (r.method === 'item/tool/requestUserInput') {
+    const questions = parseCodexQuestions(p);
+    if (questions) {
+      pendingQuestions.set(questionKey(sessionId, r.requestId), { questions, index: 0, answers: {} });
+      update(sessionId, (s) => ({ approvals: [...s.approvals, codexQuestionApproval(r.requestId, questions, 0)] }));
+      return;
+    }
   }
   // Requests the chat can't answer yet are declined, so Codex never waits forever.
   void runtimes.get(sessionId)?.session?.respond(r.requestId, {}, { code: -32601, message: `Spacron can't answer ${r.method} yet` });

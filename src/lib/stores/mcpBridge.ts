@@ -23,6 +23,8 @@ import { agentExecutable } from '$lib/services/orchestrator/agent-rules-file';
 import { isDeepSeekHarness, isDeepSeekWorkerSession } from '$lib/services/deepseek-harness';
 import { deliverTurnSignal } from '$lib/services/orchestrator/agent-hook-signals';
 import { showToast } from './notification';
+import { shouldUseSystemNotification } from './zustand/notification';
+import { agentTurnStates, noteAgentPrompted } from './agentTurnState';
 import { ASSISTANT_NAMES, pickAssistantName } from '$lib/services/orchestrator/agent-names';
 import {
   applyOrchestratorAgentName,
@@ -127,7 +129,12 @@ export async function handleAgentReport(report: AgentReportEvent): Promise<void>
   // "working" is a progress ping, not a turn boundary. It is deliberately not
   // surfaced: an agent that says "still going" every few minutes must not
   // produce a notification each time.
-  if (report.state === 'working') return;
+  if (report.state === 'working') {
+    if (report.sessionId !== null && get(agentTurnStates)[report.sessionId]?.phase === 'quiet') {
+      noteAgentPrompted(report.sessionId);
+    }
+    return;
+  }
 
   // One state, one outcome. Collapsing `failed` into `blocked` here (which an
   // earlier cut of this did) makes an error arrive as "needs your input" — the
@@ -169,7 +176,7 @@ export async function handleAgentReport(report: AgentReportEvent): Promise<void>
   // inbox work removed. A report belonging to a *background* project would
   // otherwise be silent until the user switched to it, which is the wrong
   // failure for a "needs input", so that one still interrupts.
-  if (filedUnder && filedUnder === getActiveTerminalProjectId()) return;
+  if (filedUnder && (filedUnder === getActiveTerminalProjectId() || shouldUseSystemNotification())) return;
 
   const what =
     report.state === 'done'

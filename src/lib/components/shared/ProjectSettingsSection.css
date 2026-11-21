@@ -1,0 +1,901 @@
+/* ─── Project Settings Styling (Orca Theme) ─── */
+
+.project-settings-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  gap: 12px;
+}
+
+.project-settings-empty-icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+.project-settings-empty p {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+  max-width: 380px;
+}
+
+/* ─── Settings Card Subtitles & Inner Padding ─── */
+.settings-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 0 14px 16px;
+}
+
+.settings-card-header h3 {
+  margin: 0 !important;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.settings-card-subtitle {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* ─── Projects In Workspace Card ─── */
+.project-items-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.project-workspace-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--settings-divider);
+  transition: background 0.12s ease;
+}
+
+.project-workspace-item-row:last-child {
+  border-bottom: none;
+}
+
+.project-workspace-item-row:hover {
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+.project-workspace-item-row.viewing {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.project-workspace-item-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1;
+}
+
+.project-workspace-item-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 6%, transparent));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+}
+
+.project-workspace-item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.project-workspace-item-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-workspace-item-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.project-status-pill.active {
+  background: color-mix(in srgb, #3fb950 16%, transparent);
+  color: #3fb950;
+  border: 1px solid color-mix(in srgb, #3fb950 30%, transparent);
+}
+
+.project-status-pill.viewing {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.project-status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.project-workspace-item-path {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-workspace-item-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.project-active-badge {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.project-activate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.project-activate-btn:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ─── Inactive Project Notice Bar ─── */
+.project-inactive-notice-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  margin: 12px 16px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  border: 1px solid var(--settings-divider);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.project-inactive-notice-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-inactive-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ─── Project Icon Picker Layout ─── */
+.project-icon-picker-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  width: 100%;
+}
+
+.project-icon-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 6%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--accent);
+}
+
+.project-icon-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+}
+
+.project-icon-subtab {
+  background: transparent;
+  border: none;
+  padding: 4px 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s ease;
+}
+
+.project-icon-subtab:hover {
+  color: var(--text-primary);
+}
+
+.project-icon-subtab.active {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.project-icon-subtab.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -7px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+.project-icon-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.project-svg-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 6px;
+}
+
+.project-svg-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.project-svg-btn:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.1));
+}
+
+.project-svg-btn.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.project-icon-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.project-icon-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.project-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 6%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.18));
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.project-action-btn:hover:not(:disabled) {
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 12%, transparent));
+  border-color: var(--accent);
+}
+
+.project-action-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.project-icon-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.project-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  font-size: 15px;
+  background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 5%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.project-icon-btn:hover {
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 12%, transparent));
+  transform: scale(1.08);
+}
+
+.project-icon-btn.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+}
+
+.project-icon-custom-input {
+  width: 100%;
+}
+
+.project-path-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.project-path-text {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 4%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  border-radius: 6px;
+  padding: 6px 10px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Lifecycle Scripts ─── */
+.script-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.script-input-group .settings-input {
+  flex: 1;
+}
+
+.script-run-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 6%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.script-run-btn:hover {
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 12%, transparent));
+  border-color: var(--accent);
+}
+
+.project-instructions-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* ─── Default Worktree Base (Orca) ─── */
+.worktree-base-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--settings-divider);
+}
+
+.worktree-base-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.worktree-base-name {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+}
+
+.worktree-base-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.worktree-branch-search-container {
+  padding: 14px 20px;
+  position: relative;
+}
+
+.worktree-branch-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--bg-secondary, var(--bg-primary));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.18));
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
+.worktree-search-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.worktree-branch-search-input {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 8px 0 !important;
+  font-size: 13px !important;
+  width: 100%;
+}
+
+.worktree-branch-dropdown {
+  position: absolute;
+  top: calc(100% - 6px);
+  left: 20px;
+  right: 20px;
+  background: rgb(var(--bg-secondary-rgb));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+  max-height: 144px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  z-index: 100;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.worktree-branch-dropdown-item {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.worktree-branch-dropdown-item > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-branch-dropdown-item:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.worktree-branch-dropdown-item.selected {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-primary);
+}
+
+.branch-selected-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ─── Worktree Location (Orca) ─── */
+.worktree-location-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 20px;
+  width: 100%;
+}
+
+.worktree-location-input {
+  width: 100%;
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+}
+
+.worktree-location-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ─── MCP Configs Card (Orca) ─── */
+.mcp-card-inner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.mcp-scan-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--settings-divider);
+}
+
+.mcp-scan-summary-text {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.section-refresh-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.section-refresh-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.section-refresh-btn .spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.mcp-configs-list {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+  gap: 16px;
+}
+
+.mcp-configs-list[hidden] {
+  display: none;
+}
+
+.mcp-file-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--settings-divider);
+}
+
+.mcp-file-block:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.mcp-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mcp-file-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-check-icon {
+  color: #3fb950;
+  flex-shrink: 0;
+}
+
+.mcp-file-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+}
+
+.mcp-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.mcp-badge.count {
+  background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 8%, transparent));
+  color: var(--text-muted);
+  border: 1px solid var(--settings-divider);
+}
+
+.mcp-badge.transport {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  text-transform: uppercase;
+}
+
+.mcp-open-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid var(--settings-divider);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.mcp-open-btn:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: var(--accent);
+}
+
+.mcp-server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 24px;
+}
+
+.mcp-server-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.mcp-server-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mcp-server-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-server-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mcp-server-target {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-status-pill {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.mcp-status-pill.enabled {
+  color: #3fb950;
+}
+
+.mcp-status-pill.disabled {
+  color: var(--text-muted);
+}
+
+.mcp-empty-notice {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.mcp-checked-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--settings-divider);
+}
+
+.mcp-checked-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mcp-checked-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mcp-checked-tag {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  border: 1px solid var(--settings-divider);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* ─── Danger Remove Project Card (Orca) ─── */
+.remove-project-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  width: 100%;
+}
+
+.remove-project-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.remove-project-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.remove-project-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.remove-project-sub {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.settings-danger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--error, #ef4444);
+  border: 1px solid color-mix(in srgb, var(--error, #ef4444) 35%, transparent);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.settings-danger-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error, #ef4444) 15%, transparent);
+  border-color: var(--error, #ef4444);
+}
+
+/* ─── Project Instructions Textarea ─── */
+.project-instructions-textarea {
+  min-height: 160px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.5;
+  font-size: 12.5px;
+  resize: vertical;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}

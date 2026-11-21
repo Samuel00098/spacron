@@ -3,6 +3,7 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
   /* Transparent so the frosted glass aux panel shows through (premium look) */
   background: transparent;
 }

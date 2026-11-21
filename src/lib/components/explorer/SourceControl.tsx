@@ -28,6 +28,10 @@ import { useGithubSignIn } from '$lib/react/useGithubSignIn';
 import { useStore } from '$lib/react/useStore';
 import { useGitStatusCache, type GitStatusData as GitStatus, type GitLogEntry } from '$lib/stores/zustand/gitStatus';
 import { cleanupStaleWorktrees } from '$lib/stores/orchestrator';
+import { getAgentRoster } from '$lib/stores/runs';
+import { allProjectSettings, getProjectConfig, projectConfigFor, DEFAULT_SOURCE_CONTROL_SETTINGS } from '$lib/stores/projectSettings';
+import { get } from '$lib/stores/storeCompat';
+import { openSettings } from '$lib/stores/layout';
 import { IssueIcon } from '../workspace/tasks/TasksIcons';
 import HunkDiffView from '../review/HunkDiffView.tsx';
 import './SourceControl.css';
@@ -122,6 +126,7 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
   const [deleteConfirmBranch, setDeleteConfirmBranch] = useState<string | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
 
+  const roster = useMemo(() => getAgentRoster(), []);
   const selectAllRef = useRef<HTMLInputElement | null>(null);
   const refreshGenerationRef = useRef(0);
   const statusRequestGenerationRef = useRef(0);
@@ -637,33 +642,92 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
         return;
       }
 
-      const currentProvider = providerRef.current;
-      const local = isLocalProvider(currentProvider);
-      const baseUrl = local ? getProviderBaseUrl(currentProvider) : '';
-      if (!local && !isProviderApiKeyConfiguredLocal(currentProvider)) {
-        showToast(`Add your ${getProviderDef(currentProvider).label} API key in Settings -> Models to generate commit messages.`, 'warning');
-        return;
-      }
+      const currentBranch = branchesRef.current?.current ?? '(detached)';
+      const changedSummary = allChangedFiles.length > 0 ? allChangedFiles.join('\n') : 'Modified project files';
+      const prompt = [
+        'You are generating a single concise git commit message for this repository.',
+        'Return ONLY the commit message text. Do not include markdown formatting preamble, explanation, quotes, or code fences.',
+        '',
+        'Rules:',
+        '- First line: imperative mood, <= 72 characters, no trailing period.',
+        '- Optional body: blank line after first line, then concise bullet points explaining WHY.',
+        '- Focus on the primary developer-visible change.',
+        '',
+        `Branch: ${currentBranch}`,
+        '',
+        'Changed files:',
+        changedSummary,
+        '',
+        'Diff patch:',
+        '```diff',
+        context.slice(0, 16_000),
+        '```'
+      ].join('\n');
 
-      const message = await invoke<string>('ai_generate_commit_message', {
-        diff: context,
-        provider: currentProvider,
-        model: modelRef.current,
-        apiKey: '',
-        baseUrl: baseUrl || undefined,
-      });
-      setCommitMessage(message);
-      commitMessageRef.current = message;
-    } catch (err) {
-      const msg = String(err);
-      const currentProvider = providerRef.current;
-      if (msg.includes('API key is not set')) {
-        showToast(`Add your ${getProviderDef(currentProvider).label} API key in Settings -> Models to generate commit messages.`, 'warning');
-      } else if (msg.includes('Server URL is not set')) {
-        showToast(`Set your ${getProviderDef(currentProvider).label} server URL in Settings -> Models to generate commit messages.`, 'warning');
-      } else {
-        showToast(msg || 'Failed to generate commit message.', 'error');
+      const projConfig = project ? projectConfigFor(get(allProjectSettings), project.root_path, id) : null;
+      const defaultCfg = getProjectConfig('__default__');
+      const scSettings =
+        projConfig?.sourceControl?.defaultCommitAgent
+          ? projConfig.sourceControl
+          : defaultCfg?.sourceControl || DEFAULT_SOURCE_CONTROL_SETTINGS;
+
+      const targetAgentCmd = scSettings.defaultCommitAgent || 'codex';
+      const targetModel = scSettings.defaultCommitModel || null;
+      const targetAgentObj = roster.find((a) => a.command === targetAgentCmd) ?? { command: targetAgentCmd, name: targetAgentCmd };
+
+      try {
+        const message = await invoke<string>('agent_cli_generate_commit_message', {
+          projectId: id,
+          worktreePath: projectRef.current?.root_path || null,
+          agent: targetAgentCmd,
+          model: targetModel,
+          prompt,
+        });
+
+        if (message && message.trim()) {
+          setCommitMessage(message.trim());
+          commitMessageRef.current = message.trim();
+          showToast(
+            `Generated commit message with ${targetAgentObj.name}${targetModel ? ` (${targetModel})` : ''}`,
+            'success'
+          );
+          return;
+        }
+      } catch (cliErr) {
+        console.warn('CLI commit message generation failed, checking for provider fallback', cliErr);
+        const currentProvider = providerRef.current;
+        const local = isLocalProvider(currentProvider);
+        const baseUrl = local ? getProviderBaseUrl(currentProvider) : '';
+        if (local || isProviderApiKeyConfiguredLocal(currentProvider)) {
+          try {
+            const fallbackMsg = await invoke<string>('ai_generate_commit_message', {
+              diff: context,
+              provider: currentProvider,
+              model: modelRef.current,
+              apiKey: '',
+              baseUrl: baseUrl || undefined,
+            });
+            if (fallbackMsg && fallbackMsg.trim()) {
+              setCommitMessage(fallbackMsg.trim());
+              commitMessageRef.current = fallbackMsg.trim();
+              showToast(
+                `Generated commit message with ${getProviderDef(currentProvider).label}`,
+                'success'
+              );
+              return;
+            }
+          } catch {
+            // If fallback also fails, throw original CLI error
+          }
+        }
+        throw cliErr;
       }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(
+        `Failed to generate commit message: ${msg}. Configure your agent in Settings → Source Control.`,
+        'error'
+      );
     } finally {
       setIsGeneratingMsg(false);
     }
@@ -1107,9 +1171,24 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
                       setCommitMessage(event.target.value);
                     }}
                     onKeyDown={handleInputKeyDown}
-                    rows={5}
+                    rows={4}
                   />
-                  <button className="ai-gen-btn" onClick={() => void generateCommitMessage()} disabled={isGeneratingMsg} title="Generate commit message with AI">
+                  <button
+                    className="ai-gen-btn"
+                    onClick={(e) => {
+                      if (e.altKey) {
+                        openSettings('source-control');
+                        return;
+                      }
+                      void generateCommitMessage();
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      openSettings('source-control');
+                    }}
+                    disabled={isGeneratingMsg}
+                    title="Generate commit message with AI · Alt+Click or right-click to configure in Settings → Source Control"
+                  >
                     {isGeneratingMsg ? <Spinner /> : (
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z" />

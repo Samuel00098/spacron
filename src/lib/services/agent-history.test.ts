@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+import { invoke } from '@tauri-apps/api/core';
 
 import {
   filterHistory,
+  detectHistoryAgents,
+  withHistoryOwners,
+  resolveHistoryFolders,
+  historyAccountIssue,
+  historyAgentOptions,
+  selectedHistoryAgents,
   folderName,
   groupHistory,
   isInside,
@@ -42,6 +49,35 @@ const base: HistoryFilter = {
 };
 
 describe('agent history', () => {
+  it('forces fresh CLI detection without requesting usage meters', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([]);
+    await expect(detectHistoryAgents()).resolves.toEqual([]);
+    expect(invoke).toHaveBeenLastCalledWith('usage_detect_agents', { force: true });
+  });
+  it('lists every installed and custom agent, including agents without a reader', () => {
+    const options = historyAgentOptions([
+      { command: 'agy', name: 'Antigravity', installed: true },
+      { command: 'gemini', name: 'Gemini', installed: true },
+      { command: 'codex', name: 'Codex', installed: false },
+    ], [{ command: 'my-agent --chat', name: 'My agent' }], [row({ agent: 'codex' })]);
+    expect(options.map((a) => a.id)).toEqual(['antigravity', 'codex', 'gemini', 'my-agent --chat']);
+    expect(options[0]).toMatchObject({ command: 'agy', indexed: true, installed: true });
+    expect(options[1]).toMatchObject({ installed: false, indexed: true });
+    expect(options[2]).toMatchObject({ indexed: false, installed: true });
+  });
+
+  it('automatically includes a newly installed agent while keeping existing exclusions', () => {
+    const before = historyAgentOptions([{ command: 'claude', name: 'Claude', installed: true }], [], []);
+    const excluded = before.map((a) => a.id);
+    const after = historyAgentOptions([
+      { command: 'claude', name: 'Claude', installed: true },
+      { command: 'cursor-agent', name: 'Cursor', installed: true },
+    ], [], []);
+    expect(selectedHistoryAgents(before, excluded)).toEqual([]);
+    expect(selectedHistoryAgents(after, excluded)).toEqual(['cursor']);
+    expect(filterHistory([row({ agent: 'cursor' })], { ...base, agents: selectedHistoryAgents(after, excluded) })).toHaveLength(1);
+  });
+
   it('matches paths regardless of slash style, case or trailing slash', () => {
     expect(isInside('C:/Users/me/proj', ['c:\\users\\me\\PROJ\\'])).toBe(true);
     expect(isInside('C:\\Users\\me\\proj\\sub', ['C:/Users/me/proj'])).toBe(true);
@@ -104,7 +140,7 @@ describe('agent history', () => {
     expect(groupHistory([], 'folder')).toEqual([]);
   });
 
-  it('resolves account label only for agents that support it', () => {
+  it('resolves recorded account labels for any provider without guessing an owner', () => {
     const accounts = [
       { provider: 'claude', id: 'default', label: 'claude-user@gmail.com' },
       { provider: 'codex', id: 'work', label: 'codex-work@corp.com' },
@@ -114,7 +150,7 @@ describe('agent history', () => {
     expect(sessionAccountLabel(row({ agent: 'claude', accountLabel: 'direct@domain.com' }), accounts)).toBe('direct@domain.com');
 
     // Claude default account looked up from store
-    expect(sessionAccountLabel(row({ agent: 'claude', account: null, accountLabel: null }), accounts)).toBe('claude-user@gmail.com');
+    expect(sessionAccountLabel(row({ agent: 'claude', account: null, accountLabel: 'Default account' }), accounts)).toBe('claude-user@gmail.com');
 
     // Codex managed account looked up from store
     expect(sessionAccountLabel(row({ agent: 'codex', account: 'work' }), accounts)).toBe('codex-work@corp.com');
@@ -122,14 +158,42 @@ describe('agent history', () => {
     // Codex fallback to account id when not in known accounts
     expect(sessionAccountLabel(row({ agent: 'codex', account: 'custom-id' }), [])).toBe('custom-id');
 
-    // OpenCode does NOT support accounts - must return null even if account set
-    expect(sessionAccountLabel(row({ agent: 'opencode', account: 'some-acct', accountLabel: 'some-acct' }), accounts)).toBeNull();
+    // Explicit owner metadata is preserved for any current or future provider.
+    expect(sessionAccountLabel(row({ agent: 'opencode', account: 'some-acct', accountLabel: 'some-acct' }), accounts)).toBe('some-acct');
+    expect(sessionAccountLabel(row({ agent: 'future-agent', accountLabel: 'old@company.com' }), accounts)).toBe('old@company.com');
+    expect(sessionAccountLabel(row({ agent: 'claude', account: null, accountLabel: null }), accounts)).toBeNull();
   });
 
   it('builds the resume command each CLI uses', () => {
     expect(resumeCommand(row({ agent: 'claude', id: 'abc' }))).toBe('claude --resume abc');
     expect(resumeCommand(row({ agent: 'codex', id: 'abc' }))).toBe('codex resume abc');
     expect(resumeCommand(row({ agent: 'opencode', id: 'ses_1' }))).toBe('opencode --session ses_1');
+    for (const [agent, expected] of [
+      ['pi', 'pi --session abc'], ['omp', 'omp --resume abc'], ['antigravity', 'agy --conversation abc'],
+      ['copilot', 'copilot --resume abc'], ['cursor', 'cursor-agent --resume abc'],
+    ]) expect(resumeCommand(row({ agent, id: 'abc' }))).toBe(expected);
+  });
+
+  it('preserves historical account snapshots and separates equal ids across accounts', () => {
+    const rows = [row({ account: 'work', accountLabel: 'current@example.com' }), row({ account: 'personal' })];
+    const owners = [{ provider: 'claude', nativeSessionId: 's1', cwd: 'c:/users/me/proj', accountId: 'work', accountLabel: 'original@example.com' }];
+    expect(withHistoryOwners(rows, owners).map((r) => r.accountLabel)).toEqual(['original@example.com', null]);
+    expect(withHistoryOwners(rows, [{ ...owners[0], cwd: '/other' }])[0].accountLabel).toBe('current@example.com');
+  });
+
+  it('blocks reuse of a recorded owner profile after its login has changed', () => {
+    const session = row({ agent: 'grok', account: 'work', accountLabel: 'original@example.com', accountLabelRecorded: true });
+    const accounts = [{ provider: 'grok', id: 'work', label: 'other@example.com' }];
+    expect(historyAccountIssue(session, accounts)).toContain('Restore the original login');
+    expect(historyAccountIssue(session, [{ ...accounts[0], label: 'original@example.com' }])).toBeNull();
+    expect(historyAccountIssue({ ...session, accountLabelRecorded: false }, accounts)).toBeNull();
+  });
+
+  it('recovers Cursor folders only when the transcript path has a unique known match', () => {
+    const session = row({ agent: 'cursor', cwd: null, logPath: 'C:/Users/me/.cursor/projects/C-work-app/agent-transcripts/abc.jsonl' });
+    expect(resolveHistoryFolders([session], ['C:/work/app'])[0].cwd).toBe('C:/work/app');
+    expect(resolveHistoryFolders([session], ['C:/work/app', 'C:/work-app'])[0].cwd).toBeNull();
+    expect(resolveHistoryFolders([session], ['D:/other'])[0].cwd).toBeNull();
   });
 
   it('shows relative times and folder names', () => {

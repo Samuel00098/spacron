@@ -13,6 +13,16 @@ import {
 const phase = (id: number) => get(agentTurnStates)[id]?.phase;
 
 describe('agent turn state', () => {
+  it('keeps a quiet turn unconfirmed until the agent reports its result', () => {
+    noteAgentPrompted(99, 'Run the build');
+    noteAgentTurnEnded(99, 'finished', 'inferred');
+    expect(get(agentTurnStates)[99]?.phase).toBe('quiet');
+    noteAgentTurnEnded(99, 'finished', 'declared');
+    expect(get(agentTurnStates)[99]?.phase).toBe('finished');
+    expect(turnEndWasCounted(99)).toBe(true);
+    noteAgentTurnEnded(99, 'finished', 'declared');
+    expect(turnEndWasCounted(99)).toBe(false);
+  });
   beforeEach(() => agentTurnStates.set({}));
 
   it('starts a turn on a prompt and ends it the way the watcher reports', () => {

@@ -362,34 +362,58 @@
 
 .tcr-rail {
   position: absolute;
-  top: 14px;
-  bottom: 14px;
-  right: 3px;
-  width: 10px;
+  top: 12px;
+  bottom: 12px;
+  right: 12px;
+  width: 20px;
   z-index: 4;
   pointer-events: none;
 }
 .terminal-chat-view button.tcr-rail-mark {
   position: absolute;
   right: 0;
-  width: 10px;
-  height: 4px;
+  width: 20px;
+  height: 18px;
+  margin-top: -9px;
   padding: 0;
   border: 0;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--text-primary) 28%, transparent);
+  background: transparent;
   box-shadow: none !important;
   pointer-events: auto;
   cursor: pointer;
-  transition: background var(--dur-fast, 120ms), width var(--dur-fast, 120ms);
+  transition: color var(--dur-fast, 120ms);
 }
-.terminal-chat-view button.tcr-rail-mark:hover { background: var(--accent); width: 14px; }
+.terminal-chat-view button.tcr-rail-mark::after {
+  content: '';
+  display: block;
+  width: 10px;
+  height: 3px;
+  margin: 0 auto;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 35%, transparent);
+}
+.terminal-chat-view button.tcr-rail-mark:hover::after,
+.terminal-chat-view button.tcr-rail-mark[aria-current]::after { background: var(--accent); }
+.terminal-chat-view button.tcr-rail-mark:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.tcr-rail-viewport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  pointer-events: none;
+}
 
 .terminal-chat-view button.tcr-jump {
   position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  transform: translateX(-50%);
+  /* Centred with margins, not translateX(-50%): global.css sets `transform: scale(0.96) !important`
+     on every pressed button, which replaced the centring and threw the pill to the right on click. */
+  left: 0;
+  right: 0;
+  width: max-content;
+  margin: 0 auto;
+  bottom: 12px;
   z-index: 5;
   display: inline-flex;
   align-items: center;

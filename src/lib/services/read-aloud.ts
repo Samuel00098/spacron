@@ -130,27 +130,36 @@ if (readAloudSupported()) window.speechSynthesis.getVoices();
 
 let session = 0;
 let playing: HTMLAudioElement | null = null;
+const pendingAnnouncements: string[] = [];
 
 export function stopReadAloud(): void {
+  pendingAnnouncements.length = 0;
   session += 1;
   if (readAloudSupported()) window.speechSynthesis.cancel();
   if (playing) { playing.pause(); playing = null; }
   readAloudMessageId.set(null);
 }
 
+function finishReadAloud(mine: number): void {
+  if (mine !== session) return;
+  const next = pendingAnnouncements.shift();
+  if (next) playReadAloud('__completion__', next);
+  else readAloudMessageId.set(null);
+}
+
 function readSystem(chunks: string[], mine: number): void {
-  if (!readAloudSupported()) { readAloudMessageId.set(null); return; }
+  if (!readAloudSupported()) { finishReadAloud(mine); return; }
   const voice = pickVoice();
   let index = 0;
   const next = (): void => {
     if (mine !== session) return;
-    if (index >= chunks.length) { readAloudMessageId.set(null); return; }
+    if (index >= chunks.length) { finishReadAloud(mine); return; }
     const utterance = new SpeechSynthesisUtterance(chunks[index++]);
     if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
     utterance.onend = next;
     utterance.onerror = (event) => {
       // `interrupted`/`canceled` are our own Stop; anything else ends the read.
-      if (mine === session && event.error !== 'interrupted' && event.error !== 'canceled') stopReadAloud();
+      if (event.error !== 'interrupted' && event.error !== 'canceled') finishReadAloud(mine);
     };
     window.speechSynthesis.speak(utterance);
   };
@@ -179,8 +188,8 @@ async function readCloud(engine: CloudReadAloudEngine, model: string, voice: str
       clip = await pending;
     } catch (error) {
       if (mine === session) {
-        stopReadAloud();
         showToast(String(error ?? 'Read aloud failed'), 'error', 7000);
+        finishReadAloud(mine);
       }
       return;
     }
@@ -197,9 +206,10 @@ async function readCloud(engine: CloudReadAloudEngine, model: string, voice: str
     });
     URL.revokeObjectURL(url);
     if (playing === audio) playing = null;
-    if (!finished || mine !== session) return;
+    if (mine !== session) return;
+    if (!finished) break;
   }
-  if (mine === session) readAloudMessageId.set(null);
+  finishReadAloud(mine);
 }
 
 /** Read `markdown` aloud as message `messageId`; pressing it again stops. */
@@ -218,19 +228,22 @@ export function previewReadAloud(): void {
   playReadAloud('__preview__', 'Hi! This is how I will sound when I read replies or announce agent completions.');
 }
 
-/** Speak `markdown` aloud using the current read-aloud settings (engine + voice).
- * Used to read agent completion responses back to the user after a turn finishes.
- * Safe to call multiple times — each call interrupts the previous one. */
+/** Announce agent results in arrival order with the current read-aloud voice. */
 export function speakText(markdown: string): void {
-  stopReadAloud();
   const text = speakableText(markdown);
   if (!text) return;
+  if (get(readAloudMessageId) === '__completion__') {
+    pendingAnnouncements.push(text);
+    return;
+  }
+  stopReadAloud();
   playReadAloud('__completion__', text);
 }
 
 function playReadAloud(messageId: string, text: string): void {
+  const mine = ++session;
   readAloudMessageId.set(messageId);
   const settings = get(readAloudSettings);
-  if (settings.engine === 'system') readSystem(speechChunks(text), session);
-  else void readCloud(settings.engine, readAloudModelFor(settings), readAloudVoiceFor(settings), text, session);
+  if (settings.engine === 'system') readSystem(speechChunks(text), mine);
+  else void readCloud(settings.engine, readAloudModelFor(settings), readAloudVoiceFor(settings), text, mine);
 }

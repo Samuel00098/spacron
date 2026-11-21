@@ -112,13 +112,13 @@ export default function TasksIssueDetail({
   return (
     <div className="work-item-detail-view">
       {/* Top action bar */}
-      <div className="work-item-detail-topbar">
+      <div className="work-item-detail-topbar" style={{ flexWrap: 'wrap', gap: 8 }}>
         <button type="button" className="work-item-back-btn" onClick={onBack}>
           <ArrowLeftIcon size={13} />
           <span>Back to Issues</span>
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             className="tasks-action-btn primary"

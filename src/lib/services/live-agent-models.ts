@@ -93,9 +93,10 @@ export function loadLiveAgentProviderModels(command: string): Promise<AgentProvi
  * that stays open (the chat composer's) also needs the fresh probe, or it
  * keeps offering models the account no longer has.
  */
-export function freshLiveAgentProviderModels(command: string): Promise<AgentProviderModel[]> {
-  void loadLiveAgentProviderModels(command);
+export function freshLiveAgentProviderModels(command: string, force = false): Promise<AgentProviderModel[]> {
   const key = catalogueKey(getAgentProviderCapabilities(command).provider);
+  if (force) catalogueCache.delete(key);
+  void loadLiveAgentProviderModels(command);
   return catalogueCache.get(key)?.models ?? Promise.resolve([]);
 }
 

@@ -533,38 +533,64 @@ export function FindBar({ root, onClose, revision }: { root: HTMLElement | null;
  */
 export function MessageRail({ scroller, turns, revision }: { scroller: HTMLElement | null; turns: { id: string; text: string }[]; revision: unknown }) {
   const [marks, setMarks] = useState<{ id: string; top: number; text: string }[]>([]);
+  const [viewport, setViewport] = useState({ top: 0, height: 1 });
   useEffect(() => {
     if (!scroller) return;
+    let frame = 0;
+    const updateViewport = () => {
+      const height = Math.max(1, scroller.scrollHeight);
+      setViewport({ top: scroller.scrollTop / height, height: scroller.clientHeight / height });
+    };
     const measure = () => {
       const height = scroller.scrollHeight || 1;
+      const origin = scroller.getBoundingClientRect().top;
       const next = turns
         .map((turn) => {
           const el = scroller.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(turn.id)}"]`);
-          return el ? { id: turn.id, top: el.offsetTop / height, text: turn.text } : null;
+          // offsetTop can be relative to a card or pane rather than this scroll
+          // container. Rects plus scrollTop stay correct in every chat layout.
+          return el ? { id: turn.id, top: (el.getBoundingClientRect().top - origin + scroller.scrollTop) / height, text: turn.text } : null;
         })
         .filter((m): m is { id: string; top: number; text: string } => m != null);
       setMarks(next);
+      updateViewport();
+    };
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; updateViewport(); });
     };
     measure();
     const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
     observer.observe(scroller.firstElementChild ?? scroller);
-    return () => observer.disconnect();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      scroller.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(frame);
+    };
   }, [scroller, turns, revision]);
-  if (marks.length < 2) return null;
+  if (marks.length < 2 || viewport.height >= 1) return null;
+  const current = marks.filter((mark) => mark.top <= viewport.top + viewport.height * 0.3).at(-1)?.id ?? marks[0]?.id;
   return (
-    <div className="tcr-rail tcr-skip-find" aria-label="Your messages">
+    <nav className="tcr-rail tcr-skip-find" aria-label="Your messages">
+      <span className="tcr-rail-viewport" aria-hidden="true" style={{ top: `${viewport.top * 100}%`, height: `${viewport.height * 100}%` }} />
       {marks.map((mark) => (
         <button
           key={mark.id}
           type="button"
           className="tcr-rail-mark"
-          style={{ top: `${Math.min(98, mark.top * 100)}%` }}
+          style={{ top: `clamp(9px, ${Math.min(100, Math.max(0, mark.top * 100))}%, calc(100% - 9px))` }}
+          aria-current={current === mark.id ? 'location' : undefined}
           title={mark.text.slice(0, 120)}
           aria-label={`Jump to: ${mark.text.slice(0, 60)}`}
-          onClick={() => scroller?.querySelector(`[data-turn-id="${CSS.escape(mark.id)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })}
+          onClick={() => {
+            const target = scroller?.querySelector(`[data-turn-id="${CSS.escape(mark.id)}"]`);
+            if (scroller && target) scroller.scrollTo({ top: target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 16, behavior: 'smooth' });
+          }}
         />
       ))}
-    </div>
+    </nav>
   );
 }
 
@@ -689,18 +715,30 @@ export function QueueCards({
   onDelete,
   onMove,
   onSendNow,
+  paused = false,
+  onResume,
 }: {
   queue: QueuedMessage[];
   onEdit: (id: number, text: string) => void;
   onDelete: (id: number) => void;
   onMove: (id: number, delta: -1 | 1) => void;
   onSendNow: (id: number) => void;
+  /** The last turn failed, so nothing is sent until Resume. */
+  paused?: boolean;
+  onResume?: () => void;
 }) {
   const [editing, setEditing] = useState<number | null>(null);
   const [text, setText] = useState('');
   return (
     <div className="tcr-queue" aria-label="Queued messages">
-      <div className="tcr-queue-title">{queue.length === 1 ? '1 message waits for this turn to end' : `${queue.length} messages wait for this turn to end`}</div>
+      <div className="tcr-queue-title">
+        {paused
+          ? `${queue.length === 1 ? '1 message is' : `${queue.length} messages are`} on hold because the last turn failed`
+          : queue.length === 1 ? '1 message waits for this turn to end' : `${queue.length} messages wait for this turn to end`}
+        {paused && onResume && (
+          <button type="button" className="tcr-link-btn" onClick={onResume} style={{ marginLeft: 8 }}>Resume</button>
+        )}
+      </div>
       {queue.map((message, index) => (
         <div key={message.id} className="tcr-queue-card">
           {editing === message.id ? (

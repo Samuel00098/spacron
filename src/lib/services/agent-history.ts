@@ -6,8 +6,9 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { resumeArgs, type TranscriptAgent } from '$lib/services/terminal-chat';
+import type { DetectedAgent } from '$lib/stores/usage';
 
-export type HistoryAgent = 'claude' | 'codex' | 'opencode';
+export type HistoryAgent = string;
 
 export interface HistoryRow {
   agent: HistoryAgent;
@@ -27,13 +28,96 @@ export interface HistoryRow {
   account: string | null;
   /** Human label / email for the account that ran this session, when known. */
   accountLabel?: string | null;
+  accountLabelRecorded?: boolean;
 }
 
 export const HISTORY_AGENTS: { id: HistoryAgent; label: string; command: string }[] = [
   { id: 'claude', label: 'Claude', command: 'claude' },
   { id: 'codex', label: 'Codex', command: 'codex' },
   { id: 'opencode', label: 'OpenCode', command: 'opencode' },
+  { id: 'grok', label: 'Grok', command: 'grok' },
+  { id: 'openclaude', label: 'OpenClaude', command: 'openclaude' },
+  { id: 'pi', label: 'Pi AI Agent', command: 'pi' },
+  { id: 'omp', label: 'OMP', command: 'omp' },
+  { id: 'antigravity', label: 'Antigravity', command: 'agy' },
+  { id: 'copilot', label: 'GitHub Copilot', command: 'copilot' },
+  { id: 'cursor', label: 'Cursor', command: 'cursor-agent' },
 ];
+
+export interface HistoryAgentOption {
+  id: string;
+  label: string;
+  command: string;
+  indexed: boolean;
+  installed: boolean;
+}
+
+/** Installed agents, user-added agents, and owners of older sessions all remain visible. */
+export function historyAgentOptions(
+  detected: readonly { command: string; name: string; installed: boolean }[],
+  custom: readonly { command: string; name: string }[],
+  rows: readonly HistoryRow[],
+): HistoryAgentOption[] {
+  const options = new Map<string, HistoryAgentOption>();
+  for (const agent of [...detected.filter((a) => a.installed), ...custom]) {
+    const reader = HISTORY_AGENTS.find((a) => a.command === agent.command);
+    const id = reader?.id ?? agent.command;
+    options.set(id, { id, command: agent.command, label: agent.name, indexed: Boolean(reader), installed: true });
+  }
+  for (const row of rows) {
+    if (options.has(row.agent)) continue;
+    const reader = HISTORY_AGENTS.find((a) => a.id === row.agent);
+    options.set(row.agent, { id: row.agent, command: reader?.command ?? row.agent, label: reader?.label ?? row.agent, indexed: Boolean(reader), installed: false });
+  }
+  return [...options.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** Exclusions make a newly discovered agent selected automatically, even after Clear. */
+export function selectedHistoryAgents(options: readonly HistoryAgentOption[], excluded: readonly string[]): string[] {
+  return options.filter((a) => !excluded.includes(a.id)).map((a) => a.id);
+}
+
+/** Match persisted launch ownership by provider, native id and folder, never by active login. */
+export function withHistoryOwners(
+  rows: readonly HistoryRow[],
+  owners: readonly { provider: string; nativeSessionId: string | null; cwd: string; accountId: string | null; accountLabel?: string | null }[],
+): HistoryRow[] {
+  return rows.map((row) => {
+    const candidates = owners.filter((o) => o.provider === row.agent && o.nativeSessionId === row.id
+      && row.cwd && normalizePath(o.cwd) === normalizePath(row.cwd)
+      && (o.accountId ?? 'default') === (row.account ?? 'default'));
+    const labels = new Set(candidates.map((o) => o.accountLabel?.trim())
+      .filter((label) => label && label !== 'Default account' && !label.includes('(profile)') && !label.includes('(account not recorded)')));
+    // Conflicting snapshots cannot establish who owned an old session.
+    return labels.size === 1 ? { ...row, accountLabel: [...labels][0], accountLabelRecorded: true } : row;
+  });
+}
+
+/** A reused profile can contain a different login even though its account id is unchanged. */
+export function historyAccountIssue(row: HistoryRow, accounts: readonly { provider: string; id: string; label: string }[]): string | null {
+  if (!row.accountLabelRecorded || !row.accountLabel || row.accountLabel === 'Default account' || row.accountLabel.includes('(account not recorded)')) return null;
+  const current = accounts.find((a) => a.provider === row.agent && a.id === (row.account ?? 'default'));
+  if (!current || current.label === 'Default account' || current.label.trim().toLowerCase() === row.accountLabel.trim().toLowerCase()) return null;
+  return `This session belongs to ${row.accountLabel}, but its account profile now contains ${current.label}. Restore the original login in that profile before resuming.`;
+}
+
+/** Cursor omits cwd in some transcripts. Only a unique known folder is safe to recover. */
+export function resolveHistoryFolders(rows: readonly HistoryRow[], roots: readonly string[]): HistoryRow[] {
+  return rows.map((row) => {
+    if (row.agent !== 'cursor' || row.cwd || !row.logPath) return row;
+    const parts = row.logPath.replace(/\\/g, '/').split('/');
+    const index = parts.lastIndexOf('agent-transcripts');
+    if (index < 2 || parts[index - 2] !== 'projects') return row;
+    const encoded = parts[index - 1].toLowerCase();
+    const matches = new Map<string, string>();
+    for (const root of roots) {
+      const dashed = root.replace(/[\\/]+$/, '').replace(/[^a-zA-Z0-9]/g, '-');
+      const names = [dashed, dashed.replace(/^-+/, ''), dashed.split('-').filter(Boolean).join('-')];
+      if (names.some((name) => name.toLowerCase() === encoded)) matches.set(normalizePath(root), root);
+    }
+    return matches.size === 1 ? { ...row, cwd: [...matches.values()][0] } : row;
+  });
+}
 
 export type HistoryScope = 'project' | 'all';
 export type HistoryGroup = 'project' | 'folder' | 'agent' | 'account';
@@ -53,6 +137,11 @@ export async function loadAgentHistory(limit = 400): Promise<HistoryRow[]> {
   return invoke<HistoryRow[]>('agent_history_list', { query: { limit } });
 }
 
+/** Recheck CLI availability without fetching remote usage meters. */
+export async function detectHistoryAgents(): Promise<DetectedAgent[]> {
+  return invoke<DetectedAgent[]>('usage_detect_agents', { force: true });
+}
+
 function normalizePath(path: string): string {
   // Windows paths are case-insensitive and may use either slash; the CLIs
   // disagree about both (Claude writes `C:\x`, OpenCode `C:/x`).
@@ -70,16 +159,12 @@ export function isInside(path: string | null, roots: readonly string[]): boolean
 
 /**
  * Best human-facing label for the account that ran this session.
- * Returns the account email or label for agents that support accounts (Claude, Codex).
- * Returns null for agents that do not support accounts (e.g. OpenCode) or when unknown.
+ * Works for every provider. A missing owner stays unknown; the active login is not evidence.
  */
 export function sessionAccountLabel(
   row: HistoryRow,
   knownAccounts?: readonly { provider: string; id: string; label: string }[],
 ): string | null {
-  // Only agents that support accounts
-  if (row.agent !== 'claude' && row.agent !== 'codex') return null;
-
   // 1. Backend-resolved label (e.g. email)
   if (row.accountLabel && row.accountLabel.trim()) {
     const trimmed = row.accountLabel.trim();
@@ -87,7 +172,7 @@ export function sessionAccountLabel(
   }
 
   // 2. Lookup in known frontend accounts
-  if (knownAccounts && knownAccounts.length > 0) {
+  if (knownAccounts && knownAccounts.length > 0 && (row.account || row.accountLabel)) {
     const targetId = row.account ?? 'default';
     const match = knownAccounts.find((a) => a.provider === row.agent && a.id === targetId);
     if (match?.label && match.label.trim() && match.label.trim() !== 'Default account') {

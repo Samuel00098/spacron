@@ -74,7 +74,7 @@ function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] 
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
+    { id: 'goToFleet', label: 'Go to Sessions', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -257,6 +257,7 @@ function createSettingsState() {
     // See the note on `terminalRenderer` in stores/settings.ts for why canvas.
     terminalRenderer: persistentValue<'webgl' | 'canvas' | 'dom'>('terminalRenderer', 'canvas'),
     showSnapshotsTab: persistentValue('showSnapshotsTab', false),
+    globalWorkspaceCleanupRule: persistentValue<'merged_unchanged' | 'merged_only' | 'never'>('globalWorkspaceCleanupRule', 'merged_unchanged'),
     // Where a newly opened Preview lands: docked in the right sidebar, or as a
     // room on the stage. Either can be moved to the other from its own header.
     previewPlacement: persistentValue<'sidebar' | 'room'>('previewPlacement', 'sidebar'),
@@ -376,7 +377,7 @@ const defaults: SettingsValues = {
     { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
     { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
     { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Agent Fleet', keys: 'Ctrl+Shift+G' },
+    { id: 'goToFleet', label: 'Go to Sessions', keys: 'Ctrl+Shift+G' },
     { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
     { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
     { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
@@ -416,6 +417,7 @@ const defaults: SettingsValues = {
   terminalFontSize: 14,
   terminalRenderer: 'canvas',
   showSnapshotsTab: false,
+  globalWorkspaceCleanupRule: 'merged_unchanged',
   previewPlacement: 'sidebar',
   agentPermissionMode: 'yolo',
   agentCmdOverrides: {},
@@ -501,6 +503,7 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       terminalFontSize: 'terminalFontSize',
       terminalRenderer: 'terminalRenderer',
       showSnapshotsTab: 'showSnapshotsTab',
+      globalWorkspaceCleanupRule: 'globalWorkspaceCleanupRule',
       previewPlacement: 'previewPlacement',
       agentPermissionMode: 'agentPermissionMode',
       agentCmdOverrides: 'agentCmdOverrides',

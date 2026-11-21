@@ -420,6 +420,31 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   transition: color var(--dur-base) var(--ease-out) !important;
 }
 
+.settings-tabs button .settings-tab-project-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  font-size: 14px;
+  margin-right: 10px;
+  line-height: 1;
+}
+
+.settings-tabs button .settings-tab-project-icon .settings-tab-project-img {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: cover;
+  display: block;
+}
+
+.settings-tabs button .settings-tab-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-tabs button:is(:hover, .active) .settings-tab-icon { color: inherit; }
 
 .settings-tabs button small {
@@ -449,14 +474,24 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   /* Keep the room full width, with a comfortable content width inside it. */
   padding: 0 0 24px;
   overflow-y: auto;
+  overflow-x: hidden !important;
   overscroll-behavior: none;
+  box-sizing: border-box;
 }
 
 .settings-panel > :not(.settings-topbar) {
-  margin-inline: max(20px, calc((100% - 1160px) / 2));
+  width: min(calc(100% - 40px), 1160px);
+  margin-inline: auto;
+  max-width: calc(100% - 40px);
+  box-sizing: border-box;
 }
 
 .settings-panel > .settings-topbar + * { margin-top: 36px; }
+
+.settings-panel::-webkit-scrollbar:horizontal {
+  display: none !important;
+  height: 0 !important;
+}
 
 .settings-panel::-webkit-scrollbar,
 .settings-tabs::-webkit-scrollbar {
@@ -517,7 +552,11 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   background: transparent;
 }
 
-.settings-card > h3 + .settings-card-body {
+.settings-card > h3 + .settings-card-body,
+.settings-card > .settings-card-header + .settings-card-body,
+.settings-card > .cleanup-section-header-row + .settings-card-body,
+.settings-card > .cleanup-card-top-row + .settings-card-body,
+.settings-card > .settings-card-body {
   margin: 0;
   border: 0;
   box-shadow: inset 0 0 0 1px var(--settings-divider);
@@ -527,12 +566,20 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
      and last rows round their own hover fill instead. */
 }
 
-.settings-card > h3 + .settings-card-body > :first-child {
+.settings-card > h3 + .settings-card-body > :first-child,
+.settings-card > .settings-card-header + .settings-card-body > :first-child,
+.settings-card > .cleanup-section-header-row + .settings-card-body > :first-child,
+.settings-card > .cleanup-card-top-row + .settings-card-body > :first-child,
+.settings-card > .settings-card-body > :first-child {
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
 }
 
-.settings-card > h3 + .settings-card-body > :last-child {
+.settings-card > h3 + .settings-card-body > :last-child,
+.settings-card > .settings-card-header + .settings-card-body > :last-child,
+.settings-card > .cleanup-section-header-row + .settings-card-body > :last-child,
+.settings-card > .cleanup-card-top-row + .settings-card-body > :last-child,
+.settings-card > .settings-card-body > :last-child {
   border-bottom-left-radius: 16px;
   border-bottom-right-radius: 16px;
 }

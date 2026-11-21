@@ -3096,7 +3096,8 @@ it('keeps the assistant offer in the next turn context', async () => {
 
     const updated = get(mod.orchestratorTasks)[0];
     expect(updated.status).toBe('complete');
-    expect(get(reloadedTasks.tasks).find((entry) => entry.id === panelTask.id)?.status).toBe('done');
+    expect(mod.getAgentOutputRefs('project-1')[0]?.status).toBe('exited');
+    expect(get(reloadedTasks.tasks).find((entry) => entry.id === panelTask.id)?.status).toBe('doing');
 
     const chat = get(mod.chatMessages)['project-1'] ?? [];
     const card = chat.find((m) => !!m.completion);
@@ -3104,9 +3105,9 @@ it('keeps the assistant offer in the next turn context', async () => {
     expect(card?.completion).toMatchObject({ status: 'done', agentName: 'claude', taskTitle: 'Exit with results' });
 
     // notify: false still suppresses the generic orchestrator completion cue;
-    // the linked board's own "marked done" confirmation is separate.
+    // a bare process exit does not declare completion, so the linked task stays 'doing' and no toast fires.
     await Promise.resolve(); // let any void async chains settle before asserting
-    expect(showToast).toHaveBeenCalledWith('"Exit with results": claude finished and the task was marked done.', 'success', 6000);
+    expect(showToast).not.toHaveBeenCalled();
 
     if (previousWindow === undefined) delete g.window;
     else g.window = previousWindow;
@@ -3798,13 +3799,13 @@ describe('recordUnwatchedAgentReport', () => {
     // ...then the agent's own report_status for the same finish arrives.
     const filedUnder = recordUnwatchedAgentReport(14, { kind: 'finished', detail: 'Done.' }, 'Agent');
 
-    expect(filedUnder).toBeNull();
+    expect(filedUnder).toEqual({ kind: 'duplicate' });
     expect(get(chatMessages)['project-3'] ?? []).toHaveLength(0);
   });
 
   it('files nothing for an agent that was never given a task', () => {
     allSessionsValue.push({ id: 15, projectId: 'project-3', agentName: 'Idle', taskSummary: null });
-    expect(recordUnwatchedAgentReport(15, { kind: 'finished' }, 'Agent')).toBeNull();
+    expect(recordUnwatchedAgentReport(15, { kind: 'finished' }, 'Agent')).toEqual({ kind: 'duplicate' });
   });
 
   it('files an unattributed report under the open project', () => {

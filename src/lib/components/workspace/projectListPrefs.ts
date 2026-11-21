@@ -1,3 +1,6 @@
+import { normalizeProjectPath } from '$lib/utils/paths';
+export { normalizeProjectPath } from '$lib/utils/paths';
+
 // Which projects the sidebar hides and which it pins to the top. Both are
 // display preferences for this machine, keyed by the project's normalized root
 // path (the same identity the rest of the project tree uses), so they survive
@@ -6,17 +9,13 @@
 export const HIDDEN_PROJECTS_KEY = 'spacron.hud.hiddenProjects';
 export const PINNED_PROJECTS_KEY = 'spacron.hud.pinnedProjects';
 
-/** Compare separator- and case-insensitively, so a Windows path spelled either
- *  way is the same project. */
-export function normalizeProjectPath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-}
-
 export function loadPathSet(key: string): Set<string> {
   try {
     const raw = localStorage.getItem(key);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : []);
+    return new Set(Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string').map(normalizeProjectPath)
+      : []);
   } catch {
     return new Set();
   }

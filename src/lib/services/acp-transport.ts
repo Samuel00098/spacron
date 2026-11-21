@@ -276,12 +276,12 @@ export async function promptAcpNativeSession(
   sessionId: string,
   text: string,
   images: readonly AcpPromptImage[] = [],
-): Promise<void> {
+): Promise<{ stopReason?: string } | undefined> {
   const prompt: Record<string, unknown>[] = [];
   if (text.trim()) prompt.push({ type: 'text', text });
   for (const image of images) prompt.push({ type: 'image', mimeType: image.mimeType, data: image.data });
   if (!prompt.length) return;
-  await session.request('session/prompt', { sessionId, prompt });
+  return session.request<{ stopReason?: string }>('session/prompt', { sessionId, prompt });
 }
 
 export async function setAcpSessionModel(

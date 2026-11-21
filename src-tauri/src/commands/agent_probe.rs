@@ -336,28 +336,60 @@ pub fn which(program: &str) -> Option<PathBuf> {
     let dirs = search_dirs();
 
     #[cfg(windows)]
-    let extensions: Vec<String> = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
-        .split(';')
-        .filter(|e| !e.is_empty())
-        .map(|e| e.to_ascii_lowercase())
-        .collect();
-    #[cfg(not(windows))]
-    let extensions: Vec<String> = Vec::new();
-
-    for dir in dirs {
-        let direct = dir.join(program);
-        if direct.is_file() {
-            return Some(direct);
+    {
+        // If caller already gave an extension, check candidate paths directly
+        let p = std::path::Path::new(program);
+        if p.extension().is_some() {
+            if p.is_file() {
+                return Some(p.to_path_buf());
+            }
+            for dir in &dirs {
+                let candidate = dir.join(program);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+            return None;
         }
+
+        let extensions: Vec<String> = std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_ascii_lowercase())
+            .collect();
+
+        // Pass 1: Extension-bearing candidates outrank bare bash scripts
+        // across the entire search path (see windows-pathext-shims.md)
         for ext in &extensions {
-            let candidate = dir.join(format!("{program}{ext}"));
-            if candidate.is_file() {
-                return Some(candidate);
+            for dir in &dirs {
+                let candidate = dir.join(format!("{program}{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
             }
         }
+
+        // Pass 2: Bare name fallback
+        for dir in &dirs {
+            let direct = dir.join(program);
+            if direct.is_file() {
+                return Some(direct);
+            }
+        }
+        None
     }
-    None
+
+    #[cfg(not(windows))]
+    {
+        for dir in dirs {
+            let direct = dir.join(program);
+            if direct.is_file() {
+                return Some(direct);
+            }
+        }
+        None
+    }
 }
 
 /// Directories from the current registry `Path` — machine (HKLM) first, then

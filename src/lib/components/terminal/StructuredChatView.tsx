@@ -1056,8 +1056,9 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
         } as React.CSSProperties}
       >
         {findOpen && <FindBar root={threadEl} revision={items} onClose={() => { setFindOpen(false); textareaRef.current?.focus(); }} />}
-        <MessageRail scroller={scrollEl} turns={userTurns} revision={items} />
         <SelectionQuote container={scrollEl} onQuote={quoteIntoComposer} />
+        <div className="terminal-chat-transcript">
+        <MessageRail scroller={scrollEl} turns={userTurns} revision={items} />
         <div
           className="terminal-chat-scroll"
           ref={(el) => { scrollRef.current = el; if (el !== scrollEl) setScrollEl(el); }}
@@ -1353,8 +1354,9 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
             )}
           </div>
         </div>
+          {!atBottom && items.length > 0 && <JumpToLatest unread={unread} onClick={jumpToLatest} />}
+        </div>
         <div className="terminal-chat-dock">
-          {!atBottom && unread > 0 && <JumpToLatest unread={unread} onClick={jumpToLatest} />}
           {showTodos && todos && <TodoDock todos={todos} />}
           {state?.error && state.status !== 'failed' && (
             <div className="terminal-chat-error" role="alert"><span>{state.error}</span></div>

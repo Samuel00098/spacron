@@ -65,6 +65,7 @@ import {
 import { attachTurnSignals, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
 import { readTerminalScreen } from '$lib/services/terminal-screen';
 import { getActiveWorktreePath } from '$lib/stores/projectWorktrees';
+import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
 import { chatInlineVisuals } from '$lib/stores/chatViewSettings';
 
 export type TerminalSessionInfo = {
@@ -103,7 +104,7 @@ export type TerminalSessionInfo = {
 // few natural-name aliases kept so display names resolve whether code passes the
 // command id ("agy") or the spoken name ("antigravity").
 const AGENT_DISPLAY_NAMES: Record<string, string> = {
-  codex: 'Codex CLI',
+  codex: 'Codex',
   claude: 'Claude Code',
   aider: 'Aider',
   agy: 'Antigravity',
@@ -119,7 +120,7 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   agent: 'Cursor',
   cursor: 'Cursor',
   hermes: 'Hermes Agent',
-  grok: 'Grok CLI',
+  grok: 'Grok',
 };
 
 export type GridLayout = 'single' | '2h' | '2v' | '3h' | '3v' | '4' | '9';
@@ -2223,7 +2224,10 @@ async function autoBriefSession(id: number, preset: string) {
     // returns false for non-members, so the paste fallback below still fires.
     if (agentReadsRulesFile(preset) || agentHasNativeExtras(preset)) {
       const root = resolveSessionRoot(id);
-      if (root && (await ensureAgentRulesFiles(root, preset))) {
+      const owner = terminalSessionProjects.get(id);
+      const projectRoot = owner ? terminalProjectRoots.get(owner) ?? root : root;
+      const config = projectRoot ? projectConfigFor(get(allProjectSettings), projectRoot, owner) : null;
+      if (root && (await ensureAgentRulesFiles(root, preset, { customInstructions: config?.customInstructions }))) {
         logAgentSend(id, 'briefed-via-rules-file', { preset, root });
         markSessionBriefed(id, true);
         return;
@@ -2831,7 +2835,10 @@ export async function spawnAgentPreset(
   const briefRoot = cwd ?? resolveSessionRoot(sessionId);
   if (briefRoot) {
     if (agentReadsRulesFile(command) || agentHasNativeExtras(command)) {
-      try { rulesBriefed = await ensureAgentRulesFiles(briefRoot, command); }
+      const owner = terminalSessionProjects.get(sessionId);
+      const projectRoot = owner ? terminalProjectRoots.get(owner) ?? briefRoot : briefRoot;
+      const { customInstructions } = projectConfigFor(get(allProjectSettings), projectRoot, owner);
+      try { rulesBriefed = await ensureAgentRulesFiles(briefRoot, command, { customInstructions }); }
       catch (err) { console.error('Failed to ensure agent rules files:', err); }
     }
     // Deliberately NOT gated on `agentReadsRulesFile`: the orchestrator protocol

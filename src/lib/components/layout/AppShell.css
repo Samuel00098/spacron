@@ -194,6 +194,12 @@
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.18);
 }
 
+/* The right drawer is flat: the global scroll-edge shadow drew a recessed, 3D-looking lip
+   under every tab's scroll areas. Transparent here covers all its tabs, present and future. */
+.app-shell .right-utility-panel {
+  --scroll-edge-color: transparent;
+}
+
 /* Right panel — frosted glass. Mirrors the left panel exactly. */
 .app-shell .right-utility-panel {
   background:
@@ -4019,7 +4025,7 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .right-sidebar .drawer-body {
-  padding: 7px 0 12px;
+  padding: 7px 0 0;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 28%);
 }
@@ -4115,4 +4121,31 @@ html.is-webkitgtk .app-shell .composer-strip {
   font-size: 11px;
   font-weight: 600;
   text-align: center;
+}
+
+.right-sidebar-loading-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 240px;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  user-select: none;
+  text-align: center;
+}
+
+.right-sidebar-loading-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: right-sidebar-spin 0.75s linear infinite;
+}
+
+@keyframes right-sidebar-spin {
+  to { transform: rotate(360deg); }
 }

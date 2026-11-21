@@ -1669,11 +1669,12 @@ export default function TerminalChatView({
         onHandOff={(target) => void handOffToAgent(target)}
         onCopyContext={() => void copyChatContext()}
       />
-      <MessageRail scroller={scrollEl} turns={userTurns} revision={items} />
       {hoverLink && linkPreviews && (
         <LinkHoverCard url={hoverLink.url} rect={hoverLink.rect} onEnter={keepHoverCard} onLeave={() => onLinkHover(hoverLink.url, null)} />
       )}
       <SelectionQuote container={scrollEl} onQuote={quoteIntoComposer} />
+      <div className="terminal-chat-transcript">
+      <MessageRail scroller={scrollEl} turns={userTurns} revision={items} />
       <div
         className="terminal-chat-scroll"
         ref={attachScroller}
@@ -1808,8 +1809,9 @@ export default function TerminalChatView({
         </div>
       </div>
 
-      <div className="terminal-chat-dock">
         {!atBottom && blocks.length > 0 && <JumpToLatest unread={unread} onClick={jumpToLatest} />}
+      </div>
+      <div className="terminal-chat-dock">
         {showTodos && todos && <TodoDock todos={todos} />}
         {usageLimit && (
           <UsageLimitRow

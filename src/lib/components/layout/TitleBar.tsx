@@ -16,6 +16,7 @@ import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import InboxBell from '$lib/components/orchestrator/InboxBell';
 import { useAppIcon } from '$lib/react/useAppIcon';
 import './TitleBar.css';
+import Automations from '$lib/components/automations/Automations';
 
 export default function TitleBar() {
   const win = useMemo(() => (isTauriRuntime() ? getCurrentWindow() : null), []);
@@ -139,6 +140,7 @@ export default function TitleBar() {
 
       {/* Right side: Mode switcher + Settings + Window controls */}
       <div className="titlebar-right" data-tauri-drag-region>
+        <Automations />
 
         {showWorkspaceTools && (
           <>

@@ -225,6 +225,8 @@ export async function readTerminalTranscript(args: {
   sinceMs: number;
   boundSessionId: string | null;
   knownRevision: string | null;
+  /** Managed account whose home holds the session (Agent History); omitted = the CLI's own home. */
+  account?: string | null;
 }): Promise<TranscriptResult> {
   const exclude = [...boundTranscripts.entries()]
     .filter(([pane]) => pane !== args.sessionId)
@@ -237,6 +239,7 @@ export async function readTerminalTranscript(args: {
       sessionId: args.boundSessionId,
       exclude,
       knownRevision: args.knownRevision,
+      account: args.account ?? null,
     },
   });
 }
@@ -409,12 +412,19 @@ export function permissionArgs(agent: TranscriptAgent, mode: ChatPermissionMode)
 }
 
 export function resumeArgs(agent: TranscriptAgent, providerSessionId: string): string {
+  // Session ids come from files; they are interpolated into a terminal command.
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/.test(providerSessionId)) return '';
   switch (agent) {
     case 'claude':
-    case 'openclaude': return `--resume ${providerSessionId}`;
+    case 'openclaude':
+    case 'cursor':
+    case 'copilot': return `--resume ${providerSessionId}`;
     case 'codex': return `resume ${providerSessionId}`;
     case 'grok': return `-r ${providerSessionId}`;
     case 'opencode': return `--session ${providerSessionId}`;
+    case 'pi': return `--session ${providerSessionId}`;
+    case 'omp': return `--resume ${providerSessionId}`;
+    case 'antigravity': return `--conversation ${providerSessionId}`;
     default: return '';
   }
 }
@@ -665,6 +675,8 @@ export interface ContextUsage {
   window: number | null;
   /** The window is inferred from the model rather than reported by the CLI. */
   estimated: boolean;
+  /** Per-category tokens, when the agent reports them. */
+  breakdown?: { name: string; tokens: number }[] | null;
 }
 
 /**

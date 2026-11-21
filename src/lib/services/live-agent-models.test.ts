@@ -15,9 +15,17 @@ vi.mock('$lib/stores/remoteWorkspace', () => ({
   },
 }));
 
-import { loadLiveAgentProviderModels, resetLiveAgentModelCacheForTests } from './live-agent-models';
+import { loadLiveAgentProviderModels, freshLiveAgentProviderModels, resetLiveAgentModelCacheForTests } from './live-agent-models';
 
 describe('live agent models', () => {
+  it('refreshes the current model catalog instead of returning a persisted list', async () => {
+    invoke.mockResolvedValueOnce({ exitCode: 0, output: '', models: [{ id: 'old-model', label: 'Old', reasoningEfforts: ['high'] }] });
+    await loadLiveAgentProviderModels('codex');
+    invoke.mockResolvedValueOnce({ exitCode: 0, output: '', models: [{ id: 'new-model', label: 'New', reasoningEfforts: ['low'] }] });
+    const models = await freshLiveAgentProviderModels('codex', true);
+    expect(models.map(model => model.id)).toEqual(['new-model']);
+    expect(models[0].reasoningEfforts).toEqual(['low']);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     remoteState.value = null;

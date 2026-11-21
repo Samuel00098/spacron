@@ -19,6 +19,7 @@ import { openFile } from '$lib/stores/editor';
 import { useStore } from '$lib/react/useStore';
 import FileIcon from '$lib/components/explorer/FileIcon.tsx';
 import { useProjectPanelState } from '$lib/react/useProjectPanelState';
+import { tokenizeDiffLine } from './diffTokenize';
 import './ReviewPanel.css';
 
 interface ChangedFile {
@@ -103,63 +104,7 @@ function parseDiff(diffText: string): DiffLine[] {
   return parsed;
 }
 
-function tokenize(text: string, filePath: string): Token[] {
-  const ext = filePath.split('.').pop()?.toLowerCase() || '';
-  let commentRegex = /\/\/.*|#.*/;
-  if (['rs', 'js', 'ts', 'tsx', 'jsx', 'json', 'css', 'svelte'].includes(ext)) {
-    commentRegex = /\/\/.*|\/\*[\s\S]*?\*\//;
-  } else if (['toml', 'yaml', 'yml', 'py', 'sh'].includes(ext)) {
-    commentRegex = /#.*/;
-  } else if (ext === 'html') {
-    commentRegex = /<!--[\s\S]*?-->/;
-  }
-  let keywords = /\b(break|case|catch|class|const|continue|default|else|for|function|if|import|new|return|switch|this|throw|try|while|async|await|let|export|from|type|interface|implements|extends)\b/;
-  if (ext === 'rs') {
-    keywords = /\b(as|async|await|break|const|continue|crate|dyn|else|enum|extern|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|type|union|unsafe|use|where|while|macro_rules)\b/;
-  }
-  const types = /\b(String|str|Option|Result|Vec|HashMap|number|string|boolean|any|void|unknown|never|Record|Promise|ReactNode|ReactElement)\b/;
-  const isHtmlSvelte = ext === 'html' || ext === 'svelte';
-  const tagRule = /(<\/?[\w:\-]+)/;
-  const attrRule = /\b([\w\-]+)(?=\s*=)/;
-  const tokenRegex = new RegExp(
-    `(${commentRegex.source})|` +
-    `("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\`(?:\\\\.|[^\`\\\\])*\`)|` +
-    `(\\b\\d+(?:\\.\\d+)?\\b)|` +
-    (isHtmlSvelte ? `(${tagRule.source})|(${attrRule.source})|` : '') +
-    `(${keywords.source})|` +
-    `(${types.source})|` +
-    `(\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\())|` +
-    `([+\\-*/%&|^!=<>~?:]+)|` +
-    `([a-zA-Z_][a-zA-Z0-9_]*)|` +
-    `(\\s+)|` +
-    `(.)`,
-    'g'
-  );
-  const tokens: Token[] = [];
-  let match;
-  while ((match = tokenRegex.exec(text)) !== null) {
-    if (match[1]) tokens.push({ type: 'comment', text: match[1] });
-    else if (match[2]) tokens.push({ type: 'string', text: match[2] });
-    else if (match[3]) tokens.push({ type: 'number', text: match[3] });
-    else {
-      let idx = 4;
-      if (isHtmlSvelte) {
-        if (match[idx]) { tokens.push({ type: 'tag', text: match[idx] }); continue; }
-        idx++;
-        if (match[idx]) { tokens.push({ type: 'attribute', text: match[idx] }); continue; }
-        idx++;
-      }
-      if (match[idx]) tokens.push({ type: 'keyword', text: match[idx] });
-      else if (match[idx + 1]) tokens.push({ type: 'type', text: match[idx + 1] });
-      else if (match[idx + 2]) tokens.push({ type: 'function', text: match[idx + 2] });
-      else if (match[idx + 3]) tokens.push({ type: 'operator', text: match[idx + 3] });
-      else if (match[idx + 4]) tokens.push({ type: 'variable', text: match[idx + 4] });
-      else if (match[idx + 5]) tokens.push({ type: 'text', text: match[idx + 5] });
-      else if (match[idx + 6]) tokens.push({ type: 'text', text: match[idx + 6] });
-    }
-  }
-  return tokens;
-}
+const tokenize = tokenizeDiffLine;
 
 function makeSplitRows(lines: DiffLine[]): SplitRow[] {
   const rows: SplitRow[] = [];

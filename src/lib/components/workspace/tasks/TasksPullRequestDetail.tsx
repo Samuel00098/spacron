@@ -167,13 +167,13 @@ export default function TasksPullRequestDetail({
   return (
     <div className="work-item-detail-view">
       {/* Top action bar */}
-      <div className="work-item-detail-topbar">
+      <div className="work-item-detail-topbar" style={{ flexWrap: 'wrap', gap: 8 }}>
         <button type="button" className="work-item-back-btn" onClick={onBack}>
           <ArrowLeftIcon size={13} />
           <span>Back to Pull Requests</span>
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             className="tasks-action-btn primary"
@@ -187,8 +187,8 @@ export default function TasksPullRequestDetail({
       </div>
 
       {/* Header Info */}
-      <div style={{ padding: '16px 24px 12px', borderBottom: '1px solid var(--border, rgba(127, 127, 127, 0.15))', background: 'var(--bg-secondary, var(--app-surface))' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+      <div style={{ padding: '14px 18px 12px', borderBottom: '1px solid var(--border, rgba(127, 127, 127, 0.15))', background: 'var(--bg-secondary, var(--app-surface))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
           <span className={`work-item-badge ${pr.state}`}>
             {pr.state === 'merged' ? (
               <>
@@ -215,7 +215,7 @@ export default function TasksPullRequestDetail({
 
         <h2 className="work-item-detail-title">{pr.title}</h2>
 
-        <div className="work-item-detail-sub" style={{ marginTop: 6 }}>
+        <div className="work-item-detail-sub" style={{ marginTop: 6, flexWrap: 'wrap' }}>
           {pr.author.avatarUrl && (
             <img src={pr.author.avatarUrl} alt="" className="work-item-avatar" />
           )}

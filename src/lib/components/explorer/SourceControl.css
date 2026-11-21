@@ -903,6 +903,11 @@
   cursor: pointer;
 }
 
+.source-control .ai-gen-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .source-control .sc-action-btn {
   display: flex;
   align-items: center;

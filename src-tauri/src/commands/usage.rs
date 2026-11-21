@@ -268,7 +268,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         provider: "codex",
         command: "codex",
         aliases: &[],
-        name: "Codex CLI",
+        name: "Codex",
         auth_path: Some(&[".codex", "auth.json"]),
         probe: None,
         supports_usage: true,
@@ -277,7 +277,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         provider: "gemini",
         command: "gemini",
         aliases: &[],
-        name: "Gemini CLI",
+        name: "Gemini",
         auth_path: Some(&[".gemini", "oauth_creds.json"]),
         probe: None,
         supports_usage: true,
@@ -286,7 +286,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         provider: "grok",
         command: "grok",
         aliases: &[],
-        name: "Grok CLI",
+        name: "Grok",
         auth_path: Some(&[".grok", "auth.json"]),
         probe: None,
         supports_usage: true,
@@ -331,7 +331,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         provider: "copilot",
         command: "copilot",
         aliases: &[],
-        name: "GitHub Copilot CLI",
+        name: "GitHub Copilot",
         // Deliberately None. Copilot CLI keeps its token in the OS keychain —
         // `~/.copilot/` holds no credential file. Sign-in is read from the
         // login record it keeps in `~/.copilot/config.json` instead (see
@@ -466,7 +466,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         provider: "kimi",
         command: "kimi",
         aliases: &[],
-        name: "Kimi CLI",
+        name: "Kimi",
         // `~/.kimi/` also holds config.toml, device_id, kimi.json (work dirs),
         // logs and sessions — none of which are credentials. Only the
         // credentials directory means signed in, and it is absent until the
@@ -990,7 +990,7 @@ fn antigravity_credential_present() -> bool {
 /// Google's Cloud Code API, which the token was minted for, and nothing from it
 /// is logged or returned to the webview (rule 2). The refresh token is never
 /// used (rule 1) — `agy` rotates its own login.
-fn antigravity_credential_json() -> Option<Value> {
+pub(crate) fn antigravity_credential_json() -> Option<Value> {
     #[cfg(windows)]
     {
         use windows::core::PCWSTR;
@@ -1048,6 +1048,9 @@ fn rfc3339_to_epoch_secs(text: &str) -> Option<i64> {
 /// Shares [`keychain_credential`]'s memo, so the accounts list and the meters
 /// between them raise at most one consent prompt rather than one each.
 pub(crate) fn keychain_has_credential(provider: &str) -> bool {
+    if provider == "antigravity" {
+        return antigravity_credential_json().is_some();
+    }
     matches!(keychain_credential(provider), Credential::Json(_))
 }
 

@@ -1,5 +1,5 @@
 /**
- * Agent History: past sessions of Claude, Codex and OpenCode, read from each
+ * Agent History: installed agents and past sessions, read from each supported
  * CLI's own transcripts (Orca's "Agent Session History"). It lists, resumes and
  * hands over; it never edits or deletes the CLI's files. Lives as a tab of the
  * Fleet dashboard, whose Live tab keeps the review/merge/discard workflow.
@@ -8,13 +8,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject, projects as projectsStore, switchToProject } from '$lib/stores/workspace';
 import { worktreesByProject } from '$lib/stores/projectWorktrees';
-import { accountsState, refreshAccounts, selectAccount } from '$lib/stores/agentAccounts';
+import { accountsState, refreshAccounts } from '$lib/stores/agentAccounts';
+import { usageState } from '$lib/stores/usage';
+import { structuredSessions } from '$lib/services/structured-chat/session-store';
+import { customAgents } from '$lib/stores/customAgents';
+import { resumeArgs, type TranscriptAgent } from '$lib/services/terminal-chat';
 import { showToast } from '$lib/stores/notification';
 import { quickSpawnAgent } from '$lib/services/quick-spawn';
 import HistoryBrand from './HistoryBrand.tsx';
 import HandoffHistoryModal from './HandoffHistoryModal.tsx';
 import {
-  HISTORY_AGENTS,
+  historyAgentOptions,
+  historyAccountIssue,
+  withHistoryOwners,
+  resolveHistoryFolders,
+  detectHistoryAgents,
+  selectedHistoryAgents,
   filterHistory,
   folderName,
   groupHistory,
@@ -37,14 +46,14 @@ interface Prefs {
   scope: HistoryScope;
   group: HistoryGroup;
   sort: HistorySort;
-  agents: HistoryAgent[];
+  excludedAgents: HistoryAgent[];
   hideEmpty: boolean;
 }
 
 // Kept across tab switches within a run; the panel remounts when Fleet's tab changes.
-let lastPrefs: Prefs = { scope: 'project', group: 'project', sort: 'updated', agents: HISTORY_AGENTS.map((a) => a.id), hideEmpty: true };
+let lastPrefs: Prefs = { scope: 'project', group: 'project', sort: 'updated', excludedAgents: [], hideEmpty: true };
 
-const rowKey = (row: HistoryRow) => `${row.agent}:${row.id}`;
+const rowKey = (row: HistoryRow) => `${row.agent}:${row.account ?? "default"}:${row.id}:${row.logPath ?? ""}`;
 
 const COLLAPSED_KEY = 'spacron_history_collapsed_groups';
 
@@ -80,7 +89,13 @@ export default function AgentHistoryTab() {
   const allProjects = useStore(projectsStore);
   const worktrees = useStore(worktreesByProject);
   const accounts = useStore(accountsState);
-  const [rows, setRows] = useState<HistoryRow[] | null>(null);
+  const usage = useStore(usageState);
+  const custom = useStore(customAgents);
+  const [nativeRows, setRows] = useState<HistoryRow[] | null>(null);
+  const ownership = useStore(structuredSessions);
+  const rows = useMemo(() => nativeRows ? withHistoryOwners(resolveHistoryFolders(nativeRows,
+    [...allProjects.values()].flatMap((p) => [p.root_path, ...(worktrees[p.id] ?? []).map((w) => w.path)]).filter(Boolean),
+  ), Object.values(ownership)) : null, [nativeRows, ownership, allProjects, worktrees]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [prefs, setPrefsState] = useState<Prefs>(lastPrefs);
@@ -90,11 +105,28 @@ export default function AgentHistoryTab() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [handoffRow, setHandoffRow] = useState<HistoryRow | null>(null);
+  const refreshing = useRef(false);
+  const detecting = useRef(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const setPrefs = (patch: Partial<Prefs>) => setPrefsState((current) => (lastPrefs = { ...current, ...patch }));
 
+  const refreshDetection = useCallback(async () => {
+    if (detecting.current) return;
+    detecting.current = true;
+    try {
+      const detected = await detectHistoryAgents();
+      usageState.update((state) => ({ ...state, detected }));
+    } catch (e) {
+      console.warn('[history] Agent detection failed', e);
+    } finally {
+      detecting.current = false;
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
+    if (refreshing.current) return;
+    refreshing.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -102,13 +134,35 @@ export default function AgentHistoryTab() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      refreshing.current = false;
       setLoading(false);
     }
   }, []);
   useEffect(() => {
     void refresh();
     void refreshAccounts();
-  }, [refresh]);
+    void refreshDetection();
+  }, [refresh, refreshDetection]);
+
+  // Recheck PATH while this panel is visible, including after an external install.
+  useEffect(() => {
+    const scan = () => {
+      if (document.hidden) return;
+      void refreshDetection();
+      void refresh();
+    };
+    const timer = window.setInterval(scan, 60_000);
+    window.addEventListener('focus', scan);
+    document.addEventListener('visibilitychange', scan);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', scan);
+      document.removeEventListener('visibilitychange', scan);
+    };
+  }, [refresh, refreshDetection]);
+
+  const agentOptions = useMemo(() => historyAgentOptions(usage.detected, custom, rows ?? []), [usage.detected, custom, rows]);
+  const selectedAgents = useMemo(() => selectedHistoryAgents(agentOptions, prefs.excludedAgents), [agentOptions, prefs.excludedAgents]);
 
   // The view-options menu closes on an outside click or Escape.
   useEffect(() => {
@@ -142,8 +196,8 @@ export default function AgentHistoryTab() {
   const owningProject = (row: HistoryRow) => projectList.find((p) => isInside(row.cwd, p.roots)) ?? null;
 
   const shown = useMemo(
-    () => filterHistory(rows ?? [], { scope: prefs.scope, roots, agents: prefs.agents, query, hideEmpty: prefs.hideEmpty, sort: prefs.sort }),
-    [rows, prefs, roots, query],
+    () => filterHistory(rows ?? [], { scope: prefs.scope, roots, agents: selectedAgents, query, hideEmpty: prefs.hideEmpty, sort: prefs.sort }),
+    [rows, prefs, roots, query, selectedAgents],
   );
   const groups = useMemo(
     () => groupHistory(shown, prefs.group, projectList, accounts.accounts),
@@ -170,7 +224,7 @@ export default function AgentHistoryTab() {
   }
 
   async function resume(row: HistoryRow, view: 'terminal' | 'chat') {
-    const agent = HISTORY_AGENTS.find((a) => a.id === row.agent);
+    const agent = agentOptions.find((a) => a.id === row.agent);
     if (!agent) return;
     if (!row.cwd) {
       showToast('This session has no folder recorded, so it cannot be resumed here.', 'warning');
@@ -180,42 +234,36 @@ export default function AgentHistoryTab() {
       showToast("This session's folder is outside the open project. Open that project to resume it.", 'warning');
       return;
     }
-    const activeAcct = accounts.accounts.find((a) => a.provider === row.agent && a.active);
-    const currentActiveId = activeAcct?.id ?? 'default';
-    const sessionAccountId = row.account ?? 'default';
-    if ((row.agent === 'claude' || row.agent === 'codex') && sessionAccountId !== currentActiveId) {
-      const sessionAcctName = sessionAccountLabel(row, accounts.accounts) ?? sessionAccountId;
-      const activeAcctName = activeAcct?.label ?? currentActiveId;
-      showToast(
-        `This session is in account "${sessionAcctName}", but the active account is "${activeAcctName}". Switch accounts to resume it.`,
-        'warning',
-      );
+    if (!agent.installed || !resumeArgs(row.agent as TranscriptAgent, row.id)) {
+      showToast('This agent is unavailable or cannot resume this session.', 'warning');
+      return;
+    }
+    const accountIssue = historyAccountIssue(row, accounts.accounts);
+    if (accountIssue) {
+      showToast(accountIssue, 'warning');
       return;
     }
     setBusy(rowKey(row));
     try {
       // A session only exists in the home of the account that wrote it, so it resumes under that account.
-      await quickSpawnAgent(agent.command, { view, resumeId: row.id, worktreePath: row.cwd, accountId: row.account ?? 'default', title: view === 'chat' ? rowTitle(row) : undefined });
+      await quickSpawnAgent(agent.command, { view, resumeId: row.id, worktreePath: row.cwd, accountId: row.account ?? 'default', accountLabel: row.accountLabel, title: view === 'chat' ? rowTitle(row) : undefined });
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), 'error');
     } finally {
       setBusy(null);
     }
   }
 
   function toggleAgent(id: HistoryAgent) {
-    setPrefs({ agents: prefs.agents.includes(id) ? prefs.agents.filter((a) => a !== id) : [...prefs.agents, id] });
+    setPrefs({ excludedAgents: prefs.excludedAgents.includes(id) ? prefs.excludedAgents.filter((a) => a !== id) : [...prefs.excludedAgents, id] });
   }
 
   function renderRow(row: HistoryRow) {
     const key = rowKey(row);
     const expanded = open === key;
-    const agent = HISTORY_AGENTS.find((a) => a.id === row.agent);
-    const accountText = sessionAccountLabel(row, accounts.accounts);
-    const activeAcct = accounts.accounts.find((a) => a.provider === row.agent && a.active);
-    const currentActiveId = activeAcct?.id ?? 'default';
-    const sessionAccountId = row.account ?? 'default';
-    const isDifferentAccount = (row.agent === 'claude' || row.agent === 'codex') && sessionAccountId !== currentActiveId;
-    const sessionAcctName = accountText ?? sessionAccountId;
-    const activeAcctName = activeAcct?.label ?? currentActiveId;
+    const agent = agentOptions.find((a) => a.id === row.agent);
+    const accountText = sessionAccountLabel(row, accounts.accounts) ?? 'Account not recorded';
+    const accountIssue = historyAccountIssue(row, accounts.accounts);
     return (
       <li key={key} className={`ah-row${expanded ? ' is-open' : ''}`}>
         <div className="ah-row-main">
@@ -277,64 +325,33 @@ export default function AgentHistoryTab() {
                 )}
               </div>
             )}
-            {isDifferentAccount && (
-              <div className="ah-account-warning" role="note">
-                <div className="ah-account-warning-text">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="12" />
-                    <line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
-                  <span>
-                    This session was recorded under account &quot;{sessionAcctName}&quot;, but the currently active account is &quot;{activeAcctName}&quot;. It will not open in chat or terminal because it is in a different account.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="ah-btn ah-btn-sm"
-                  title={`Switch active ${agent?.label ?? row.agent} account to ${sessionAcctName}`}
-                  onClick={async () => {
-                    const ok = await selectAccount(row.agent, sessionAccountId);
-                    if (ok) {
-                      showToast(`Switched active ${agent?.label ?? row.agent} account to ${sessionAcctName}`, 'success');
-                    }
-                  }}
-                >
-                  Switch to {sessionAcctName}
-                </button>
-              </div>
+            {accountIssue && <div className="ah-account-warning" role="note">{accountIssue}</div>}
+            {!resumeArgs(row.agent as TranscriptAgent, row.id) && (
+              <div className="ah-outside" role="note">Direct resume is not available for this agent yet. You can hand off its conversation instead.</div>
             )}
             <div className="ah-detail-actions">
               <button
                 type="button"
                 className="ah-btn"
-                disabled={busy === key || !resumable(row) || isDifferentAccount}
+                disabled={busy === key || !resumable(row) || !agent?.installed || Boolean(accountIssue) || !resumeArgs(row.agent as TranscriptAgent, row.id)}
                 onClick={() => void resume(row, 'terminal')}
-                title={
-                  isDifferentAccount
-                    ? `Cannot open: this session is in account "${sessionAcctName}", but the active account is "${activeAcctName}". Switch accounts to resume.`
-                    : `Continue this session in a new ${agent?.label ?? ''} terminal`
-                }
+                title={accountIssue ?? `Continue this session in a new ${agent?.label ?? ''} terminal using its recorded account`}
               >
                 Resume in terminal
               </button>
               <button
                 type="button"
                 className="ah-btn"
-                disabled={busy === key || !resumable(row) || isDifferentAccount}
+                disabled={busy === key || !resumable(row) || !agent?.installed || Boolean(accountIssue) || !resumeArgs(row.agent as TranscriptAgent, row.id)}
                 onClick={() => void resume(row, 'chat')}
-                title={
-                  isDifferentAccount
-                    ? `Cannot open: this session is in account "${sessionAcctName}", but the active account is "${activeAcctName}". Switch accounts to resume.`
-                    : 'Continue this session in a new native chat'
-                }
+                title={accountIssue ?? "Continue this session in chat using its recorded account"}
               >
                 Resume in chat
               </button>
               <button type="button" className="ah-btn" disabled={!resumable(row)} onClick={() => setHandoffRow(row)}>Hand off to another agent</button>
             </div>
             <div className="ah-detail-actions">
-              <button type="button" className="ah-btn" onClick={() => copy(resumeCommand(row), 'resume command')}>Copy resume command</button>
+              <button type="button" className="ah-btn" disabled={!resumeArgs(row.agent as TranscriptAgent, row.id)} onClick={() => copy(resumeCommand(row), 'resume command')}>Copy resume command</button>
               <button type="button" className="ah-btn" onClick={() => copy(row.id, 'session ID')}>Copy session ID</button>
               {accountText && <button type="button" className="ah-btn" onClick={() => copy(accountText, 'account')}>Copy account</button>}
               {row.logPath && <button type="button" className="ah-btn" onClick={() => copy(row.logPath!, 'log path')}>Copy log path</button>}
@@ -347,7 +364,7 @@ export default function AgentHistoryTab() {
   }
 
   const total = rows?.length ?? 0;
-  const allSelected = prefs.agents.length === HISTORY_AGENTS.length;
+  const allSelected = selectedAgents.length === agentOptions.length;
   return (
     <div className="ah-root">
       <div className="ah-toolbar">
@@ -359,7 +376,7 @@ export default function AgentHistoryTab() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button type="button" className="ah-icon-btn" onClick={() => void refresh()} disabled={loading} title="Refresh session history" aria-label="Refresh session history">
+        <button type="button" className="ah-icon-btn" onClick={() => { void refreshDetection(); void refresh(); }} disabled={loading} title="Refresh session history" aria-label="Refresh session history">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={loading ? 'ah-spin' : ''}>
             <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 4v5h-5" />
           </svg>
@@ -375,15 +392,16 @@ export default function AgentHistoryTab() {
               <div className="ah-menu-head">
                 <span>Agents</span>
                 <span className="ah-menu-links">
-                  <button type="button" disabled={allSelected} onClick={() => setPrefs({ agents: HISTORY_AGENTS.map((a) => a.id) })}>Select all</button>
-                  <button type="button" disabled={prefs.agents.length === 0} onClick={() => setPrefs({ agents: [] })}>Clear</button>
+                  <button type="button" disabled={allSelected} onClick={() => setPrefs({ excludedAgents: [] })}>Select all</button>
+                  <button type="button" disabled={selectedAgents.length === 0} onClick={() => setPrefs({ excludedAgents: agentOptions.map((a) => a.id) })}>Clear</button>
                 </span>
               </div>
-              {HISTORY_AGENTS.map((a) => (
-                <button key={a.id} type="button" role="menuitemcheckbox" aria-checked={prefs.agents.includes(a.id)} className="ah-menu-item" onClick={() => toggleAgent(a.id)}>
-                  <span className="ah-menu-tick">{prefs.agents.includes(a.id) && <Check />}</span>
+              {agentOptions.map((a) => (
+                <button key={a.id} type="button" role="menuitemcheckbox" aria-checked={selectedAgents.includes(a.id)} className="ah-menu-item" onClick={() => toggleAgent(a.id)}>
+                  <span className="ah-menu-tick">{selectedAgents.includes(a.id) && <Check />}</span>
                   <HistoryBrand command={a.command} name={a.label} />
                   <span>{a.label}</span>
+                  <span className="ah-agent-status">{!a.installed ? 'Past sessions' : !a.indexed ? 'No reader yet' : 'Installed'}</span>
                 </button>
               ))}
               <div className="ah-menu-sep" />
@@ -432,7 +450,7 @@ export default function AgentHistoryTab() {
         {error && <div className="ah-note ah-error">Couldn't read session history: {error}</div>}
         {!error && rows && !shown.length && (
           <div className="ah-note">
-            {total === 0 ? 'No sessions found yet. Claude, Codex and OpenCode sessions appear here once they have run.' : prefs.agents.length === 0 ? 'No agents selected.' : 'No sessions match these filters.'}
+            {total === 0 ? 'No sessions found yet. Installed agents appear in View options; supported transcripts appear here after a session runs.' : selectedAgents.length === 0 ? 'No agents selected.' : 'No sessions match these filters.'}
           </div>
         )}
         {!rows && !error && <div className="ah-note">Scanning transcripts…</div>}

@@ -10,6 +10,29 @@ const codexLive = [
 ] as const;
 
 describe('launchFieldOptions', () => {
+  it('uses only the selected model’s reported reasoning in reported-only mode', () => {
+    const options = launchFieldOptions('codex', [
+      { id: 'model-a', label: 'A', reasoningEfforts: ['high', 'low'], defaultReasoningEffort: 'high' },
+      { id: 'model-b', label: 'B', reasoningEfforts: ['ultra'] },
+    ], 'model-a', true);
+    expect(options.reasoning).toEqual([{ effort: 'high', disabled: false }, { effort: 'low', disabled: false }]);
+    expect(options.defaultReasoning).toBe('high');
+  });
+  it('does not invent reasoning when model metadata is missing', () => {
+    expect(launchFieldOptions('codex', [{ id: 'model-a', label: 'A' }], 'model-a', true).reasoning).toEqual([]);
+    expect(launchFieldOptions('claude', [], 'default', true).reasoning).toEqual([]);
+  });
+  it('does not insert a saved model missing from the agent catalog', () => {
+    const options = launchFieldOptions('codex', [{ id: 'current-model', label: 'Current' }], 'removed-model', true);
+    expect(options.models.map(model => model.id)).toEqual(['current-model']);
+    expect(options.reasoning).toEqual([]);
+  });
+  it('uses the reported default model without guessing a default or effort', () => {
+    const reported = [{ id: 'model-a', label: 'A', isDefault: true, reasoningEfforts: ['medium' as const], defaultReasoningEffort: 'high' as const }];
+    expect(launchFieldOptions('codex', reported, 'default', true).reasoning).toEqual([{ effort: 'medium', disabled: false }]);
+    expect(launchFieldOptions('codex', reported, 'default', true).defaultReasoning).toBeNull();
+    expect(launchFieldOptions('codex', [{ id: 'model-a', label: 'A', reasoningEfforts: ['high'] }], 'default', true).reasoning).toEqual([]);
+  });
   it('lists the CLI-reported models and resolves the CLI default', () => {
     const options = launchFieldOptions('codex', [...codexLive] as never, 'default');
     expect(options.models.map((m) => m.id)).toEqual(['gpt-6-astra', 'gpt-5.5']);

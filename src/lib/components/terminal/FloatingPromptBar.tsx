@@ -1216,10 +1216,7 @@ export default function FloatingPromptBar({
                           <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
                         </svg>
                         <span>
-                          <kbd>{transcribeKey}</kbd> or mic = dictate into the
-                          text input
-                          {' · '}
-                          <kbd>Alt</kbd> = voice conversation
+                          <kbd>{transcribeKey}</kbd> toggles dictation. Tap <kbd>Left Alt</kbd> or click the mic to start.
                         </span>
                       </div>
                     )}

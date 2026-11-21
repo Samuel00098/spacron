@@ -9,6 +9,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+use tauri::State;
+use crate::state::AppState;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// `opencode models` refreshes its provider registry before printing, which
@@ -165,13 +167,9 @@ fn capture(program: &str, args: &[&str], timeout: Duration) -> AgentModelProbe {
     }
 }
 
-/// The catalogue Codex itself caches after every model refresh. Reading it is
-/// instant, where a cold `codex app-server` start costs 4-10s, so it is tried
-/// first; a missing or unreadable cache falls through to the app server.
+/// Fall back to the selected account's own cache if a live model request fails.
 fn codex_cached_models() -> Option<AgentModelProbe> {
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
+    let codex_home = super::agent_accounts::selected_codex_home()?;
     let text = std::fs::read_to_string(codex_home.join("models_cache.json")).ok()?;
     let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
     let configured = std::fs::read_to_string(codex_home.join("config.toml"))
@@ -260,10 +258,19 @@ fn parse_codex_cache(value: &serde_json::Value, configured: Option<&str>) -> Opt
 }
 
 fn codex_models() -> AgentModelProbe {
-    if let Some(cached) = codex_cached_models() {
-        return cached;
+    let live = codex_live_models();
+    if live.exit_code == Some(0) {
+        return live;
     }
-    let mut child = match provider_command("codex", &["app-server", "--stdio"])
+    codex_cached_models().unwrap_or(live)
+}
+
+fn codex_live_models() -> AgentModelProbe {
+    let mut command = provider_command("codex", &["app-server", "--stdio"]);
+    if let Some(home) = super::agent_accounts::selected_codex_home() {
+        command.env("CODEX_HOME", home);
+    }
+    let mut child = match command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -568,6 +575,219 @@ pub async fn agent_list_models(command: String) -> AgentModelProbe {
     tauri::async_runtime::spawn_blocking(move || probe(&command))
         .await
         .unwrap_or_else(|error| AgentModelProbe::failed(format!("Model probe failed: {error}")))
+}
+
+fn clean_commit_output(raw: &str) -> String {
+    let mut text = raw.trim().to_string();
+    // Strip <think>...</think> reasoning blocks if present
+    while let Some(start) = text.find("<think>") {
+        if let Some(end) = text.find("</think>") {
+            let before = text[..start].trim().to_string();
+            let after = text[end + 8..].trim().to_string();
+            text = format!("{before}\n{after}").trim().to_string();
+        } else {
+            break;
+        }
+    }
+    // Strip markdown code fences if wrapped in ```git, ```diff, or ```
+    if text.starts_with("```") {
+        let lines: Vec<&str> = text.lines().collect();
+        if lines.len() >= 2 && lines.last().map(|l| l.trim() == "```").unwrap_or(false) {
+            text = lines[1..lines.len() - 1].join("\n").trim().to_string();
+        }
+    }
+    // Strip common leading chatter prefixes
+    let lower = text.to_lowercase();
+    if lower.starts_with("here is a suggested commit message:")
+        || lower.starts_with("here is the commit message:")
+        || lower.starts_with("here's a suggested commit message:")
+        || lower.starts_with("here's the commit message:")
+        || lower.starts_with("suggested commit message:")
+        || lower.starts_with("commit message:")
+    {
+        if let Some(idx) = text.find('\n') {
+            text = text[idx + 1..].trim().to_string();
+        }
+    }
+    text
+}
+
+#[tauri::command]
+pub async fn agent_cli_generate_commit_message(
+    project_id: Option<String>,
+    worktree_path: Option<String>,
+    agent: String,
+    model: Option<String>,
+    prompt: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let root_path = if let Some(ref wp) = worktree_path {
+        let p = std::path::PathBuf::from(wp);
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
+    } else if let Some(ref pid) = project_id {
+        state
+            .workspace_manager
+            .list_projects()
+            .iter()
+            .find(|p| &p.id == pid)
+            .map(|p| p.root_path.clone())
+    } else {
+        None
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let norm_agent = agent.trim().to_lowercase();
+        let program = match norm_agent.as_str() {
+            "antigravity" | "agy" => "agy",
+            "cursor" | "cursor-agent" => "cursor-agent",
+            "deepseek" | "dsh" => "dsh",
+            "copilot" | "github-copilot" => "copilot",
+            other => other,
+        };
+
+        let (args, use_stdin): (Vec<String>, bool) = match program {
+            "claude" => {
+                let mut a = vec!["-p".to_string(), "--output-format".to_string(), "text".to_string()];
+                if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty()) {
+                    a.push("--model".to_string());
+                    a.push(m.to_string());
+                }
+                (a, true)
+            }
+            "codex" => {
+                let mut a = vec![
+                    "exec".to_string(),
+                    "--ephemeral".to_string(),
+                    "--skip-git-repo-check".to_string(),
+                    "-s".to_string(),
+                    "read-only".to_string(),
+                ];
+                if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty()) {
+                    a.push("--model".to_string());
+                    a.push(m.to_string());
+                }
+                (a, true)
+            }
+            "agy" => {
+                let mut a = vec!["--print=".to_string(), "--sandbox".to_string()];
+                if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty() && s.as_str() != "default") {
+                    a.push("--model".to_string());
+                    a.push(m.to_string());
+                }
+                (a, true)
+            }
+            "opencode" => {
+                let mut a = vec!["run".to_string()];
+                if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty()) {
+                    a.push("--model".to_string());
+                    a.push(m.to_string());
+                }
+                (a, true)
+            }
+            "cursor-agent" => {
+                let mut a = vec![
+                    "--print".to_string(),
+                    "--mode".to_string(),
+                    "ask".to_string(),
+                    "--trust".to_string(),
+                    "--output-format".to_string(),
+                    "text".to_string(),
+                ];
+                if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty()) {
+                    a.push("--model".to_string());
+                    a.push(m.to_string());
+                }
+                (a, true)
+            }
+            _ => {
+                let mut a = vec!["-p".to_string()];
+                if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty()) {
+                    a.push("--model".to_string());
+                    a.push(m.to_string());
+                }
+                (a, true)
+            }
+        };
+
+        let arg_slices: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let mut cmd = provider_command(program, &arg_slices);
+        if let Some(ref dir) = root_path {
+            cmd.current_dir(dir);
+        }
+
+        if use_stdin {
+            cmd.stdin(Stdio::piped());
+        } else {
+            cmd.stdin(Stdio::null());
+        }
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| format!("Could not start {program}: {e}"))?;
+
+        if use_stdin {
+            if let Some(mut stdin) = child.stdin.take() {
+                let prompt_bytes = prompt.as_bytes().to_vec();
+                std::thread::spawn(move || {
+                    let _ = stdin.write_all(&prompt_bytes);
+                });
+            }
+        }
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let out_handle = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(pipe) = stdout {
+                let _ = pipe.take(MAX_OUTPUT_BYTES).read_to_end(&mut bytes);
+            }
+            bytes
+        });
+        let err_handle = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(pipe) = stderr {
+                let _ = pipe.take(MAX_OUTPUT_BYTES).read_to_end(&mut bytes);
+            }
+            bytes
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let exit_code = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status.code(),
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                Ok(None) => {
+                    terminate(&mut child);
+                    return Err(format!("{program} did not return a commit message within 60s"));
+                }
+                Err(e) => {
+                    terminate(&mut child);
+                    return Err(format!("Error waiting for {program}: {e}"));
+                }
+            }
+        };
+
+        let raw_stdout = String::from_utf8_lossy(&out_handle.join().unwrap_or_default()).into_owned();
+        let raw_stderr = String::from_utf8_lossy(&err_handle.join().unwrap_or_default()).into_owned();
+
+        if exit_code == Some(0) && !raw_stdout.trim().is_empty() {
+            Ok(clean_commit_output(&raw_stdout))
+        } else if !raw_stdout.trim().is_empty() {
+            Ok(clean_commit_output(&raw_stdout))
+        } else {
+            Err(if !raw_stderr.trim().is_empty() {
+                format!("{program} failed: {}", raw_stderr.trim())
+            } else {
+                format!("{program} produced no output (exit code: {:?})", exit_code)
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("Task execution failed: {e}"))?
 }
 
 #[cfg(test)]

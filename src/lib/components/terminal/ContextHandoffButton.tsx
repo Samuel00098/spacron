@@ -44,10 +44,16 @@ export default function ContextHandoffButton({ sessionId, sourceAgentName, sourc
   const [mode, setMode] = useState<HandoffMode>(chatActive ? 'chat' : 'terminal');
   const record = usePaneHandoff(sessionId);
   const busy = isHandoffInProgress(sessionId);
+  // Some chat providers resolve their send only after the whole reply.
+  const dialogVisible = open && !(record?.request.mode === 'chat' && record.status === 'delivering');
   const pickerRequest = useHandoffPickerRequest(sessionId);
   useEffect(() => {
     if (pickerRequest) setOpen(true);
   }, [pickerRequest]);
+
+  useEffect(() => {
+    if (record?.status === 'delivered') setOpen(false);
+  }, [record]);
 
   const agents = useMemo(
     () => (open ? getAgentRoster().filter((agent) => agent.command !== sourcePreset) : []),
@@ -61,13 +67,13 @@ export default function ContextHandoffButton({ sessionId, sourceAgentName, sourc
   const effectiveMode: HandoffMode = mode === 'chat' && chosen && chatCapable(chosen.command) ? 'chat' : 'terminal';
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!dialogVisible) return undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+  }, [dialogVisible]);
 
   function start() {
     if (!chosen || busy) return;
@@ -78,8 +84,6 @@ export default function ContextHandoffButton({ sessionId, sourceAgentName, sourc
       targetCommand: chosen.command,
       targetName: chosen.name,
       mode: effectiveMode,
-    }).then((ok) => {
-      if (ok) setOpen(false);
     });
   }
 
@@ -104,7 +108,7 @@ export default function ContextHandoffButton({ sessionId, sourceAgentName, sourc
           <path d="M4 8h14m-4-4 4 4-4 4M20 16H6m4 4-4-4 4-4" />
         </svg>
       </button>
-      {open && createPortal(
+      {dialogVisible && createPortal(
         <div className="chh-backdrop" onMouseDown={() => setOpen(false)}>
           <div
             className="chh-dialog"

@@ -30,6 +30,7 @@ use super::workspace::{
 use crate::state::AppState;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::State;
 
 /// Folder under `.spacron/` that holds user worktrees.
@@ -93,6 +94,102 @@ pub struct WorktreeBases {
     pub refs: Vec<String>,
     /// Local branches only — the ones that can be opened in a worktree as-is.
     pub local: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct WorktreeReviewMetadata {
+    size_bytes: u64,
+    size_partial: bool,
+    modified_at: Option<u64>,
+    branch: Option<String>,
+    git_state: Option<&'static str>,
+}
+
+fn scan_review_folder(root: &Path) -> (u64, bool, Option<u64>) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut folders = vec![root.to_path_buf()];
+    let mut size = 0u64;
+    let mut partial = false;
+    let mut modified = None;
+    'scan: while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            partial = true;
+            continue;
+        };
+        for entry in entries {
+            if Instant::now() >= deadline {
+                partial = true;
+                break 'scan;
+            }
+            let Ok(entry) = entry else {
+                partial = true;
+                continue;
+            };
+            let Ok(metadata) = entry.metadata() else {
+                partial = true;
+                continue;
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                // Do not count files in junction targets or hydrate placeholders.
+                if metadata.file_attributes() & 0x400 != 0 {
+                    continue;
+                }
+            }
+            if let Some(ms) = metadata.modified().ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .and_then(|age| u64::try_from(age.as_millis()).ok())
+            {
+                modified = Some(modified.map_or(ms, |current: u64| current.max(ms)));
+            }
+            if metadata.is_dir() {
+                folders.push(entry.path());
+            } else if metadata.is_file() {
+                size = size.saturating_add(metadata.len());
+            }
+        }
+    }
+    (size, partial, modified)
+}
+
+pub(crate) fn review_metadata(root: &Path, worktree_path: Option<&str>) -> Result<WorktreeReviewMetadata, String> {
+    let dir = match worktree_path {
+        Some(path) => {
+            let path = canon(&require_user_worktree(root, path)?.0);
+            if !is_under(&path, &canon(root))
+                || !path.parent().is_some_and(|parent| same_dir(parent, &canon(&trees_area(root))))
+            {
+                return Err("Worktree folder is outside the managed project area.".to_string());
+            }
+            path
+        }
+        None => root.to_path_buf(),
+    };
+    if !dir.is_dir() {
+        return Err("Workspace folder is unavailable.".to_string());
+    }
+    let (size_bytes, size_partial, modified_at) = scan_review_folder(&dir);
+    let (branch, git_state) = if dir.join(".git").exists() {
+        let branch = git_out(&dir, &["symbolic-ref", "--short", "-q", "HEAD"]);
+        let state = git_out(&dir, &["--no-optional-locks", "status", "--porcelain", "--ignored=matching"]).map(|status| {
+            let changes = status.lines().any(|line| !line.starts_with("!!"));
+            let ignored = status.lines().any(|line| line.starts_with("!!"));
+            match (changes, ignored) {
+                (true, true) => "Local changes and ignored files",
+                (true, false) => "Local changes",
+                (false, true) => "Ignored files",
+                (false, false) => "Clean",
+            }
+        });
+        (branch, state)
+    } else {
+        (None, None)
+    };
+    Ok(WorktreeReviewMetadata { size_bytes, size_partial, modified_at, branch, git_state })
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -248,6 +345,16 @@ fn default_base(root: &Path) -> String {
         Some(b) if !b.is_empty() && b != "HEAD" => b,
         _ => "HEAD".to_string(),
     }
+}
+
+pub(crate) fn worktree_merged_into_default(root: &Path, worktree: &Path, original_head: Option<&str>) -> bool {
+    // Resolve the actual checkout tip. A supplied branch label may be stale
+    // or unrelated to the worktree being removed.
+    let Some(head) = git_out(worktree, &["rev-parse", "--verify", "HEAD^{commit}"]) else {
+        return false;
+    };
+    original_head.is_some_and(|original| !original.is_empty() && original != head)
+        && git_ok(root, &["merge-base", "--is-ancestor", &head, &default_base(root)])
 }
 
 /// When `base` names a remote-tracking branch (`origin/x`), its remote and branch.
@@ -551,6 +658,15 @@ fn require_user_worktree(root: &Path, worktree_path: &str) -> Result<(PathBuf, S
 }
 
 pub(crate) fn delete_worktree(root: &Path, worktree_path: &str, force: bool) -> Result<DeletedWorktree, String> {
+    delete_worktree_with_protection(root, worktree_path, force, false)
+}
+
+pub(crate) fn delete_worktree_with_protection(
+    root: &Path,
+    worktree_path: &str,
+    force: bool,
+    protect_local_files: bool,
+) -> Result<DeletedWorktree, String> {
     let (path, folder) = require_user_worktree(root, worktree_path)?;
     let _repo = lock_repo_write(root);
 
@@ -559,10 +675,21 @@ pub(crate) fn delete_worktree(root: &Path, worktree_path: &str, force: bool) -> 
         .find(|e| folder_name(&trees_area(root), &native_path(&e.path)).as_deref() == Some(folder.as_str()))
         .and_then(|e| e.branch);
 
+    if protect_local_files {
+        if branch.is_none() || !path.is_dir() {
+            return Err("Could not verify the workspace branch and folder.".to_string());
+        }
+        let status = git_run(&path, &["status", "--porcelain", "--untracked-files=all", "--ignored=matching"])
+            .map_err(|_| "Could not check workspace files.".to_string())?;
+        if !status.is_empty() {
+            return Err("DIRTY: This workspace contains uncommitted, untracked, or ignored files.".to_string());
+        }
+    }
+
     let path_str = path.to_string_lossy().to_string();
     if path.exists() {
         let mut args = vec!["worktree", "remove"];
-        if force {
+        if force && !protect_local_files {
             args.push("--force");
         }
         args.push(&path_str);
@@ -660,6 +787,14 @@ fn project_root(state: &State<AppState>, project_id: &str) -> Result<PathBuf, St
         .into_iter()
         .find(|p| p.id == project_id)
         .map(|p| p.root_path.clone())
+        .or_else(|| {
+            let p = PathBuf::from(project_id);
+            if p.is_dir() {
+                Some(p)
+            } else {
+                None
+            }
+        })
         .ok_or_else(|| "Project not found".to_string())?;
     if !root.join(".git").exists() {
         return Err("This project is not a Git repository.".to_string());
@@ -671,6 +806,25 @@ fn project_root(state: &State<AppState>, project_id: &str) -> Result<PathBuf, St
 #[tauri::command(async)]
 pub fn project_worktree_list(project_id: String, state: State<AppState>) -> Result<Vec<ProjectWorktree>, String> {
     list_worktrees(&project_root(&state, &project_id)?)
+}
+
+#[tauri::command(async)]
+pub fn project_worktree_review_metadata(
+    project_id: String,
+    worktree_path: Option<String>,
+    state: State<AppState>,
+) -> Result<WorktreeReviewMetadata, String> {
+    let candidate = Path::new(&project_id);
+    let root = state.workspace_manager.list_projects().into_iter()
+        .find(|p| p.id == project_id || (candidate.is_absolute() && same_path(&p.root_path, candidate)))
+        .map(|p| p.root_path)
+        .or_else(|| {
+            state.workspace_manager.get_recent_projects().into_iter()
+                .find(|p| p.id == project_id || (candidate.is_absolute() && same_path(&p.root_path, candidate)))
+                .map(|p| p.root_path)
+        })
+        .ok_or_else(|| "Workspace is not registered.".to_string())?;
+    review_metadata(&root, worktree_path.as_deref())
 }
 
 #[tauri::command(async)]
@@ -698,10 +852,15 @@ pub fn project_worktree_delete(
     project_id: String,
     worktree_path: String,
     force: Option<bool>,
+    protect_local_files: Option<bool>,
     state: State<AppState>,
 ) -> Result<DeletedWorktree, String> {
     let root = project_root(&state, &project_id)?;
-    delete_worktree(&root, &worktree_path, force.unwrap_or(false))
+    if protect_local_files.unwrap_or(false) {
+        delete_worktree_with_protection(&root, &worktree_path, false, true)
+    } else {
+        delete_worktree(&root, &worktree_path, force.unwrap_or(false))
+    }
 }
 
 #[tauri::command(async)]
@@ -763,6 +922,58 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert!(list[0].is_main);
         assert_eq!(list[0].branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn review_cleanup_keeps_worktrees_containing_ignored_files() {
+        let dir = repo();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "local.env\n").unwrap();
+        run(root, &["add", ".gitignore"]);
+        run(root, &["commit", "-qm", "Ignore local configuration"]);
+        let created = create(root, "review");
+        let path = Path::new(&created.worktree.path);
+        std::fs::write(path.join("local.env"), "local test data").unwrap();
+
+        let error = delete_worktree_with_protection(root, &created.worktree.path, false, true).unwrap_err();
+        assert!(error.starts_with("DIRTY:"));
+        assert!(path.join("local.env").is_file());
+    }
+
+    #[test]
+    fn review_metadata_sums_file_sizes_and_reports_git_changes() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::create_dir(folder.path().join("nested")).unwrap();
+        std::fs::write(folder.path().join("one"), b"abc").unwrap();
+        std::fs::write(folder.path().join("nested/two"), b"12345").unwrap();
+        let metadata = review_metadata(folder.path(), None).unwrap();
+        assert_eq!(metadata.size_bytes, 8);
+        assert!(!metadata.size_partial);
+        assert!(metadata.modified_at.is_some());
+        assert_eq!(metadata.git_state, None);
+
+        let repo = repo();
+        let created = create(repo.path(), "review");
+        let path = Path::new(&created.worktree.path);
+        std::fs::write(path.join("draft"), b"draft").unwrap();
+        let metadata = review_metadata(repo.path(), Some(&created.worktree.path)).unwrap();
+        assert_eq!(metadata.branch.as_deref(), Some("review"));
+        assert_eq!(metadata.git_state, Some("Local changes"));
+    }
+
+    #[test]
+    fn merged_cleanup_requires_a_changed_tip_reachable_from_the_primary_branch() {
+        let dir = repo();
+        let root = dir.path();
+        let created = create(root, "agent-work");
+        let path = Path::new(&created.worktree.path);
+        let original = run(path, &["rev-parse", "HEAD"]);
+        assert!(!worktree_merged_into_default(root, path, Some(&original)));
+
+        run(path, &["commit", "--allow-empty", "-qm", "Agent work"]);
+        assert!(!worktree_merged_into_default(root, path, Some(&original)));
+        run(root, &["merge", "--ff-only", "agent-work"]);
+        assert!(worktree_merged_into_default(root, path, Some(&original)));
     }
 
     #[test]

@@ -17,7 +17,8 @@ import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { get } from '$lib/stores/storeCompat';
 import { chatAutoAnswerInline } from '$lib/stores/settings';
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
-import type { StructuredAccess, StructuredApprovalOption, StructuredChatState, StructuredModel } from './codex-session';
+import type { StructuredAccess, StructuredApproval, StructuredApprovalOption, StructuredChatState, StructuredModel } from './codex-session';
+import { acpAskAnswer, acpAskSkip, askKindFor, parseAcpQuestions, type AcpAskKind, type AcpAskQuestion } from './acp-questions';
 import { acpImageBlocks, imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
 import type { StructuredChatProvider } from './provider';
@@ -272,8 +273,23 @@ function makeProvider(agent: string): StructuredChatProvider {
   const sessions = new Map<number, { session: AcpSession; sessionId: string; cwd: string; modes?: string[] }>();
   const activeAssistantIds = new Map<number, string>();
   const activeReasoningIds = new Map<number, string>();
+  let segmentSequence = 0;
   /** The options each pending permission request offered. */
   const permissionOptions = new Map<string, Json[]>();
+  /** Extension questions (Grok, Cursor) being answered one card at a time. */
+  const pendingAsks = new Map<string, { kind: AcpAskKind; questions: AcpAskQuestion[]; title: string | null; index: number; answers: Record<string, string> }>();
+  const askKey = (sessionId: number, requestId: string | number) => `${sessionId}:${requestId}`;
+  const askApproval = (requestId: string | number, ask: { questions: AcpAskQuestion[]; title: string | null; index: number }): StructuredApproval => {
+    const q = ask.questions[ask.index];
+    const progress = ask.questions.length > 1 ? ` (${ask.index + 1} of ${ask.questions.length})` : '';
+    return {
+      requestId,
+      kind: 'other',
+      title: `${q.header ?? ask.title ? `${q.header ?? ask.title}: ` : ''}${q.text}${progress}`,
+      detail: [q.multiple ? 'This agent allows several answers; pick the main one here.' : null, ...q.options.filter((o) => o.description).map((o) => `${o.label}: ${o.description}`)].filter(Boolean).join('\n') || null,
+      options: q.options.map((o) => ({ id: o.id, label: o.label, kind: 'allow_once' })),
+    };
+  };
 
   function applyConfigOptions(sessionId: number, value: unknown): void {
     const record = rec(value);
@@ -294,13 +310,13 @@ function makeProvider(agent: string): StructuredChatProvider {
     }));
   }
 
-  async function start(sessionId: number, cwd: string, options: { access?: StructuredAccess; resumeId?: string | null } = {}): Promise<void> {
+  async function start(sessionId: number, cwd: string, options: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null } = {}): Promise<void> {
     if (sessions.has(sessionId)) return;
     stores.set(sessionId, initialStructuredState(options.access, stores.get(sessionId) ?? undefined));
     let stderr: ReturnType<typeof stderrTail> | null = null;
     let exited = false;
     try {
-      const accountEnv = await accountEnvFor(agent);
+      const accountEnv = await accountEnvFor(agent, options.accountId);
       const session = await openAgentSession(launch.command, launch.args, cwd, { ...(launch.env ?? {}), ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
       stderr = stderrTail(session);
       const tail = stderr;
@@ -332,13 +348,8 @@ function makeProvider(agent: string): StructuredChatProvider {
         const message = error instanceof Error ? error.message : String(error);
         if (exited) throw error;
         if (resumeId) {
-          // The conversation can't be reloaded (Cursor answers "Session … not
-          // found" for one it never saved, or the id came from the terminal
-          // and means something else to the protocol). Open a new session;
-          // the earlier messages still show as history.
-          resumeId = null;
-          options = { ...options, resumeId: null };
-          created = await open();
+          // An explicit resume must keep the native conversation and its owner.
+          throw new Error(`Could not resume ${launch.label} session ${resumeId}: ${message}`);
         } else {
           // An agent that wants sign-in first says so on session/new; sign in
           // with the method it offers that reuses its saved login, then retry.
@@ -359,13 +370,20 @@ function makeProvider(agent: string): StructuredChatProvider {
       // Best effort: a mode the agent doesn't have must never stop the chat.
       await applyAccessMode(sessionId, stores.get(sessionId)?.access ?? 'ask');
       const models = modelsFrom(createdRecord).length ? modelsFrom(createdRecord) : modelsFrom(initialized);
-      const selected = currentConfigValue(createdRecord, 'model')
+      const selected = (options.model && models.some((m) => m.id === options.model) ? options.model : null)
+        ?? currentConfigValue(createdRecord, 'model')
         ?? str(rec(createdRecord.models)?.currentModelId)
         ?? str(createdRecord.currentModelId)
         ?? models.find((model) => model.isDefault)?.id
         ?? models[0]?.id
         ?? null;
-      stores.update(sessionId, { status: 'ready', error: null, models, model: selected, mode: currentConfigValue(createdRecord, 'mode') ?? stores.get(sessionId)?.mode ?? null, threadId: nativeId });
+      stores.update(sessionId, { status: 'ready', error: null, models, model: selected, mode: currentConfigValue(createdRecord, 'mode') ?? stores.get(sessionId)?.mode ?? null, threadId: nativeId, effort: options.effort ?? null });
+      if (options.model && selected === options.model && runtime) {
+        void setAcpSessionModel(runtime.session, runtime.sessionId, options.model);
+      }
+      if (options.effort && runtime) {
+        void runtime.session.request<Json>('session/set_config_option', { sessionId: runtime.sessionId, configId: 'effort', value: options.effort }).catch(() => undefined);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const reason = stderr?.text();
@@ -387,8 +405,13 @@ function makeProvider(agent: string): StructuredChatProvider {
     stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text, images: dataUrls.length ? dataUrls : undefined });
     stores.update(sessionId, { status: 'working', error: null });
     try {
-      await promptAcpNativeSession(runtime.session, runtime.sessionId, text, acpImageBlocks(dataUrls));
-      stores.update(sessionId, { status: 'ready', approvals: [] });
+      const result = await promptAcpNativeSession(runtime.session, runtime.sessionId, text, acpImageBlocks(dataUrls));
+      const stopReason = result?.stopReason;
+      stores.update(sessionId, {
+        status: 'ready',
+        approvals: [],
+        ...(stopReason && stopReason !== 'end_turn' ? { error: `Turn stopped (${stopReason.replace(/_/g, ' ')}).` } : {}),
+      });
     } catch (error) {
       stores.update(sessionId, { status: 'ready', error: error instanceof Error ? error.message : String(error) });
     }
@@ -444,6 +467,23 @@ function makeProvider(agent: string): StructuredChatProvider {
 
   async function answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string): Promise<void> {
     const runtime = sessions.get(sessionId);
+    const ask = pendingAsks.get(askKey(sessionId, requestId));
+    if (ask) {
+      const chosen = decision !== 'decline' ? ask.questions[ask.index].options.find((o) => o.id === optionId) : undefined;
+      if (chosen) {
+        ask.answers[ask.questions[ask.index].key] = chosen.id;
+        ask.index += 1;
+        if (ask.index < ask.questions.length) {
+          // The next question replaces this card; the request stays open until the last.
+          stores.update(sessionId, (state) => ({ approvals: state.approvals.map((approval) => approval.requestId === requestId ? askApproval(requestId, ask) : approval) }));
+          return;
+        }
+      }
+      pendingAsks.delete(askKey(sessionId, requestId));
+      stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
+      await runtime?.session.respond(requestId, chosen ? acpAskAnswer(ask.kind, ask.questions, ask.answers) : acpAskSkip(ask.kind));
+      return;
+    }
     stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
     if (!runtime) return;
     await runtime.session.respond(requestId, permissionOutcome(permissionOptions.get(String(requestId)) ?? [], decision, optionId));
@@ -474,6 +514,14 @@ function makeProvider(agent: string): StructuredChatProvider {
       const offered = approvalOptions(options);
       stores.update(sessionId, (state) => ({ approvals: [...state.approvals, { requestId: request.requestId, kind: 'other', title: str(toolCall?.title) ?? 'Allow this agent action?', detail: str(params.title) ?? str(params.description) ?? str(params.command) ?? str(toolCall?.kind), ...(offered.length ? { options: offered } : {}) }] }));
     } else {
+      const kind = askKindFor(request.method);
+      const parsed = kind ? parseAcpQuestions(kind, params) : null;
+      if (kind && parsed) {
+        const ask = { kind, questions: parsed.questions, title: parsed.title, index: 0, answers: {} as Record<string, string> };
+        pendingAsks.set(askKey(sessionId, request.requestId), ask);
+        stores.update(sessionId, (state) => ({ approvals: [...state.approvals, askApproval(request.requestId, ask)] }));
+        return;
+      }
       void sessions.get(sessionId)?.session.respond(request.requestId, {}, { code: -32601, message: `Spacron cannot answer ${request.method}` });
     }
   }
@@ -485,24 +533,28 @@ function makeProvider(agent: string): StructuredChatProvider {
     const kind = String(update.sessionUpdate ?? update.type ?? '').toLowerCase().replace(/[-\s]/g, '_');
     const isAssistantChunk = kind === 'agent_message_chunk' || kind === 'assistant_message_chunk' || kind === 'text_delta' || kind === 'message_chunk';
     const isReasoningChunk = kind === 'agent_thought_chunk' || kind === 'assistant_thought_chunk' || kind === 'thought_chunk' || kind === 'reasoning_chunk';
+    // A reply after tools is a new message, even when the provider reuses its
+    // transport id. Appending it to earlier commentary moves the answer above
+    // the tools and makes the activity appear to arrive after the final reply.
+    if (isAssistantChunk) activeReasoningIds.delete(sessionId);
+    else if (isReasoningChunk || kind.includes('tool_call') || kind.includes('tool_result') || kind.includes('user_message')) {
+      activeAssistantIds.delete(sessionId);
+      if (!isReasoningChunk) activeReasoningIds.delete(sessionId);
+    }
     const fallbackId = isAssistantChunk
-      ? (activeAssistantIds.get(sessionId) ?? `acp-${sessionId}-assistant-${Date.now()}`)
+      ? (activeAssistantIds.get(sessionId) ?? `acp-${sessionId}-assistant-${++segmentSequence}`)
       : isReasoningChunk
-        ? (activeReasoningIds.get(sessionId) ?? `acp-${sessionId}-reasoning-${Date.now()}`)
-        : undefined;
+        ? (activeReasoningIds.get(sessionId) ?? `acp-${sessionId}-reasoning-${++segmentSequence}`)
+        : `acp-${sessionId}-event-${++segmentSequence}`;
     if (isAssistantChunk && fallbackId) activeAssistantIds.set(sessionId, fallbackId);
     if (isReasoningChunk && fallbackId) activeReasoningIds.set(sessionId, fallbackId);
     const item = chatItemForAcpUpdate(agent, notification, fallbackId);
     if (item) {
-      if ((isAssistantChunk || isReasoningChunk) && (item.kind === 'assistant' || item.kind === 'reasoning')) stores.append(sessionId, item.id, item.kind, item.text);
+      if ((isAssistantChunk || isReasoningChunk) && (item.kind === 'assistant' || item.kind === 'reasoning')) stores.append(sessionId, fallbackId!, item.kind, item.text);
       else stores.upsert(sessionId, item);
     }
-    if (isAssistantChunk || isReasoningChunk || kind.includes('tool_call')) stores.update(sessionId, { status: 'working' });
-    if (kind.includes('complete') || kind.includes('end') || kind.includes('idle') || kind === 'turn_completed' || kind === 'response_completed') {
-      activeAssistantIds.delete(sessionId);
-      activeReasoningIds.delete(sessionId);
-      stores.update(sessionId, { status: 'ready', approvals: [] });
-    }
+    // A session update can be tool progress or replayed history. The prompt
+    // request owns the working state and its result settles the turn.
     if (kind.includes('usage')) {
       const usage = rec(update.usage) ?? update;
       const used = typeof usage.used === 'number'
@@ -515,7 +567,7 @@ function makeProvider(agent: string): StructuredChatProvider {
         : typeof usage.modelContextWindow === 'number' ? usage.modelContextWindow : null;
       stores.update(sessionId, { contextUsed: used, contextWindow: window });
     }
-    if (kind.includes('error')) stores.update(sessionId, { status: 'ready', error: textFrom(update.error ?? update.message ?? update) || 'The agent reported an error.' });
+    if (kind.includes('error')) stores.update(sessionId, { error: textFrom(update.error ?? update.message ?? update) || 'The agent reported an error.' });
   }
 
   return {

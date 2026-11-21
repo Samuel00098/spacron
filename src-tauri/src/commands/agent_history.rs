@@ -26,7 +26,7 @@ const HEAD_LINES: usize = 800;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRow {
-    /// `claude`, `codex` or `opencode`.
+    /// Transcript reader id (see `AGENTS`).
     pub agent: String,
     /// The id the CLI resumes by.
     pub id: String,
@@ -46,6 +46,8 @@ pub struct HistoryRow {
     pub account: Option<String>,
     /// Human label (e.g. email) for the account that ran this session, when known.
     pub account_label: Option<String>,
+    /// True only for identity stored in session metadata, rather than the current profile.
+    pub account_label_recorded: bool,
     /// OpenCode names its own sessions; empty for the others.
     pub title: String,
 }
@@ -90,7 +92,7 @@ pub fn account_id_is_safe(id: &str) -> bool {
 
 /// The managed home of `account` for `agent` (`claude` or `codex`), when it exists.
 pub fn account_home(agent: &str, account: &str) -> Option<PathBuf> {
-    if !matches!(agent, "claude" | "codex") || !account_id_is_safe(account) {
+    if super::agent_accounts::provider_spec(agent).is_none() || !account_id_is_safe(account) {
         return None;
     }
     let dir = app_config_dir()?.join("agent-accounts").join(agent).join(account);
@@ -195,11 +197,12 @@ fn parse_claude(path: &Path, times: &Times, account: Option<String>) -> Option<H
     let id = path.file_stem()?.to_string_lossy().to_string();
     let file = fs::File::open(path).ok()?;
     let head_only = times.len > FULL_SCAN_BYTES;
-    let account_label = Some(crate::commands::agent_accounts::account_label("claude", account.as_deref().unwrap_or("default")));
+    let account_label = Some(profile_account_label("claude", account.as_deref()));
     let mut row = HistoryRow {
         agent: "claude".into(),
         account,
         account_label,
+        account_label_recorded: false,
         id,
         first_prompt: String::new(),
         cwd: None,
@@ -313,11 +316,12 @@ fn codex_message_text(payload: &Value, block_type: &str) -> Option<String> {
 fn parse_codex(path: &Path, times: &Times, account: Option<String>) -> Option<HistoryRow> {
     let file = fs::File::open(path).ok()?;
     let head_only = times.len > FULL_SCAN_BYTES;
-    let account_label = Some(crate::commands::agent_accounts::account_label("codex", account.as_deref().unwrap_or("default")));
+    let account_label = Some(profile_account_label("codex", account.as_deref()));
     let mut row = HistoryRow {
         agent: "codex".into(),
         account,
         account_label,
+        account_label_recorded: false,
         id: String::new(),
         first_prompt: String::new(),
         cwd: None,
@@ -488,6 +492,7 @@ fn scan_opencode(limit: usize) -> Vec<HistoryRow> {
                 agent: "opencode".into(),
                 account: None,
                 account_label: None,
+                account_label_recorded: false,
                 id,
                 first_prompt,
                 cwd: directory.filter(|d| !d.is_empty()),
@@ -505,7 +510,194 @@ fn scan_opencode(limit: usize) -> Vec<HistoryRow> {
 
 // ---------------------------------------------------------------------------
 
-pub const AGENTS: [&str; 3] = ["claude", "codex", "opencode"];
+
+/// Walk only known transcript roots. Never follow directory symlinks into unrelated trees.
+fn collect_extra(dir: &Path, depth: usize, out: &mut Vec<Found>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(kind) = entry.file_type() else { continue };
+        let path = entry.path();
+        if kind.is_dir() && depth > 0 {
+            collect_extra(&path, depth - 1, out);
+        } else if kind.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
+            if let Some(times) = file_times(&path) {
+                out.push(Found { path, times, account: None });
+            }
+        }
+    }
+}
+
+fn content_text(value: &Value) -> String {
+    if let Some(s) = value.as_str() { return s.to_string() }
+    value.as_array().map(|blocks| blocks.iter()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"))
+        .unwrap_or_default()
+}
+
+fn tag_text(text: String, tag: &str) -> String {
+    let start = format!("<{tag}>");
+    let end = format!("</{tag}>");
+    text.split_once(&start).and_then(|(_, rest)| rest.split_once(&end)).map(|(body, _)| body.trim().to_string()).unwrap_or(text)
+}
+
+fn parse_extra(agent: &str, path: &Path, times: &Times) -> Option<HistoryRow> {
+    // OpenClaude uses the Claude format but must never inherit Claude's account.
+    if agent == "openclaude" {
+        let mut row = parse_claude(path, times, None)?;
+        row.agent = agent.into();
+        row.account_label = None;
+        return Some(row);
+    }
+    let file = fs::File::open(path).ok()?;
+    let mut row = HistoryRow {
+        agent: agent.into(), id: path.file_stem()?.to_string_lossy().into_owned(),
+        title: String::new(), first_prompt: String::new(), cwd: None, branch: None,
+        model: None, message_count: 0, created_ms: times.created, updated_ms: times.modified,
+        log_path: Some(path.to_string_lossy().into_owned()), account: None, account_label: None, account_label_recorded: false,
+    };
+    if matches!(agent, "copilot" | "grok" | "antigravity") {
+        row.id = path.parent()?.file_name()?.to_string_lossy().into_owned();
+    }
+    if agent == "grok" {
+        // Grok encodes the original working directory as a URI component.
+        if let Some(folder) = path.parent().and_then(Path::parent).and_then(Path::file_name).and_then(|s| s.to_str()) {
+            let bytes = folder.as_bytes();
+            let mut decoded = Vec::new();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%' && i + 2 < bytes.len() {
+                    if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                        decoded.push(byte); i += 3; continue;
+                    }
+                }
+                decoded.push(bytes[i]); i += 1;
+            }
+            row.cwd = String::from_utf8(decoded).ok();
+        }
+    }
+    let head_only = times.len > FULL_SCAN_BYTES;
+    for (index, line) in BufReader::new(file).lines().map_while(Result::ok).enumerate() {
+        if head_only && index >= HEAD_LINES { break }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(kind, "session" | "session.start" | "session_meta") {
+            let metadata = v.get("data").or_else(|| v.get("payload")).unwrap_or(&v);
+            if let Some(label) = str_of(metadata, "accountLabel").or_else(|| str_of(metadata, "accountEmail")) {
+                row.account_label = Some(label);
+                row.account_label_recorded = true;
+            }
+        }
+        row.cwd = row.cwd.or_else(|| str_of(&v, "cwd"));
+        let (role, text) = match agent {
+            "pi" | "omp" => {
+                if kind == "session" { row.id = str_of(&v, "id").unwrap_or(row.id); }
+                if kind == "model_change" { row.model = str_of(&v, "modelId"); }
+                let message = v.get("message").unwrap_or(&Value::Null);
+                row.model = str_of(message, "model").or(row.model);
+                (message.get("role").and_then(Value::as_str).unwrap_or(""), content_text(&message["content"]))
+            }
+            "copilot" => {
+                let data = &v["data"];
+                if kind == "session.start" {
+                    row.id = str_of(data, "sessionId").unwrap_or(row.id);
+                    row.cwd = data.pointer("/context/cwd").and_then(Value::as_str).map(str::to_string).or(row.cwd);
+                }
+                row.model = str_of(data, "model").or(row.model);
+                (match kind { "user.message" => "user", "assistant.message" => "assistant", _ => "" }, content_text(&data["content"]))
+            }
+            "grok" => {
+                row.model = str_of(&v, "model_id").or(row.model);
+                let role = if kind == "user" && v.get("prompt_index").is_none() { "" } else { kind };
+                (role, tag_text(content_text(&v["content"]), "user_query"))
+            }
+            "cursor" => {
+                let content = v.pointer("/message/content").unwrap_or(&v["content"]);
+                (v.get("role").and_then(Value::as_str).unwrap_or(""), tag_text(content_text(content), "user_query"))
+            }
+            "antigravity" => {
+                row.model = str_of(&v, "model").or(row.model);
+                let source = v.get("source").and_then(Value::as_str).unwrap_or("");
+                let role = match (source, kind) {
+                    ("USER_EXPLICIT" | "USER", "USER_INPUT" | "REQUEST") => "user",
+                    ("MODEL", "PLANNER_RESPONSE") => "assistant", _ => "",
+                };
+                (role, tag_text(content_text(&v["content"]), "USER_REQUEST"))
+            }
+            _ => ("", String::new()),
+        };
+        if matches!(role, "user" | "assistant") && !text.trim().is_empty() {
+            row.message_count += 1;
+            if role == "user" && row.first_prompt.is_empty() { row.first_prompt = clip(&text, PROMPT_CHARS); }
+        }
+    }
+    if head_only { row.message_count = 0; }
+    Some(row)
+}
+
+fn profile_account_label(agent: &str, account: Option<&str>) -> String {
+    match account {
+        Some(id) if id != "default" => format!("{} (profile)", super::agent_accounts::account_label(agent, id)),
+        _ => "Default profile (account not recorded)".into(),
+    }
+}
+
+fn apply_account(row: &mut HistoryRow, account: Option<String>) {
+    row.account = account;
+    if row.account_label.is_none() && super::agent_accounts::provider_spec(&row.agent).is_some() {
+        row.account_label = Some(profile_account_label(&row.agent, row.account.as_deref()));
+    }
+}
+
+fn scan_extra(agent: &str, limit: usize) -> Vec<HistoryRow> {
+    if agent == "antigravity" {
+        let mut files: Vec<_> = session_homes(agent, env_dir("GEMINI_HOME").or_else(|| home().map(|h| h.join(".gemini"))))
+            .into_iter().flat_map(|(account, base)| super::agent_transcript::antigravity_history_files(Some(base)).into_iter()
+                .map(move |(id, cwd, path)| (account.clone(), id, cwd, path)))
+            .filter_map(|(account, id, cwd, path)| Some((account, id, cwd, file_times(&path)?, path))).collect();
+        files.sort_by(|a, b| b.3.modified.cmp(&a.3.modified));
+        return files.into_iter().take(limit).filter_map(|(account, id, cwd, times, path)| {
+            let mut row = cached(&path, &times, || parse_extra(agent, &path, &times))?;
+            row.id = id; row.cwd = Some(cwd); apply_account(&mut row, account); Some(row)
+        }).collect();
+    }
+    let Some(h) = home() else { return Vec::new() };
+    let (root, depth) = match agent {
+        "openclaude" => (env_dir("OPENCLAUDE_CONFIG_DIR").unwrap_or_else(|| h.join(".openclaude")).join("projects"), 1),
+        "pi" => (env_dir("PI_CODING_AGENT_DIR").unwrap_or_else(|| h.join(".pi/agent")).join("sessions"), 1),
+        "omp" => (env_dir("OMP_CODING_AGENT_DIR").unwrap_or_else(|| h.join(".omp/agent")).join("sessions"), 1),
+        "copilot" => (env_dir("COPILOT_HOME").unwrap_or_else(|| h.join(".copilot")).join("session-state"), 1),
+        "grok" => (env_dir("GROK_HOME").unwrap_or_else(|| h.join(".grok")).join("sessions"), 2),
+        "cursor" => (h.join(".cursor/projects"), 2),
+        _ => return Vec::new(),
+    };
+    let mut files = Vec::new();
+    if super::agent_accounts::provider_spec(agent).is_some() {
+        let base = root.parent().map(Path::to_path_buf);
+        let folder = root.file_name().unwrap_or_default();
+        for (account, base) in session_homes(agent, base) {
+            let start = files.len();
+            collect_extra(&base.join(folder), depth, &mut files);
+            for file in &mut files[start..] { file.account = account.clone(); }
+        }
+    } else {
+        collect_extra(&root, depth, &mut files);
+    }
+    files.retain(|f| match agent {
+        "copilot" => f.path.file_name().is_some_and(|s| s == "events.jsonl"),
+        "grok" => f.path.file_name().is_some_and(|s| s == "chat_history.jsonl"),
+        "cursor" => f.path.parent().and_then(Path::file_name).is_some_and(|s| s == "agent-transcripts"),
+        _ => true,
+    });
+    newest(files, limit).into_iter().filter_map(|f| {
+        let mut row = cached(&f.path, &f.times, || parse_extra(agent, &f.path, &f.times))?;
+        apply_account(&mut row, f.account);
+        Some(row)
+    }).collect()
+}
+
+pub const AGENTS: [&str; 10] = ["claude", "codex", "opencode", "grok", "openclaude", "pi", "omp", "antigravity", "copilot", "cursor"];
+
 
 /// Every requested agent's recent sessions, newest first.
 pub fn list_history(agents: &[String], limit: usize) -> Vec<HistoryRow> {
@@ -520,6 +712,9 @@ pub fn list_history(agents: &[String], limit: usize) -> Vec<HistoryRow> {
     }
     if wants("opencode") {
         rows.extend(scan_opencode(limit));
+    }
+    for agent in &AGENTS[3..] {
+        if wants(agent) { rows.extend(scan_extra(agent, limit)); }
     }
     rows.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
     rows
@@ -605,6 +800,65 @@ mod tests {
         assert!(!account_id_is_safe("a/b"));
         assert!(account_home("opencode", "x").is_none());
         assert!(account_home("codex", "../etc").is_none());
+    }
+
+    #[test]
+    fn extra_readers_extract_native_ids_prompts_and_models() {
+        for agent in ["pi", "omp"] {
+            let (path, t) = tmp(&format!("{agent}.jsonl"), concat!(
+                "{\"type\":\"session\",\"id\":\"native-id\",\"cwd\":\"C:/work\"}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Fix it\"}]}}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"model\":\"m\",\"content\":\"Done\"}}\n"));
+            let row = parse_extra(agent, &path, &t).unwrap();
+            assert_eq!(row.id, "native-id");
+            assert_eq!(row.first_prompt, "Fix it");
+            assert_eq!(row.cwd.as_deref(), Some("C:/work"));
+            assert_eq!(row.model.as_deref(), Some("m"));
+            assert_eq!(row.message_count, 2);
+        }
+        let (path, t) = tmp("copilot.jsonl", concat!(
+            "{\"type\":\"session.start\",\"data\":{\"sessionId\":\"cp-id\",\"context\":{\"cwd\":\"C:/p\"}}}\n",
+            "{\"type\":\"user.message\",\"data\":{\"content\":\"Hello\"}}\n"));
+        let row = parse_extra("copilot", &path, &t).unwrap();
+        assert_eq!(row.id, "cp-id");
+        assert_eq!(row.cwd.as_deref(), Some("C:/p"));
+        assert_eq!(row.first_prompt, "Hello");
+    }
+
+    #[test]
+    fn owner_identity_comes_from_session_metadata_not_message_content() {
+        let (path, t) = tmp("owner.jsonl", concat!(
+            "{\"type\":\"session\",\"id\":\"owned\",\"accountEmail\":\"original@example.com\"}\n",
+            "{\"type\":\"message\",\"accountEmail\":\"unrelated@example.com\",\"message\":{\"role\":\"user\",\"content\":\"Hello\"}}\n"));
+        let mut row = parse_extra("pi", &path, &t).unwrap();
+        apply_account(&mut row, Some("work".into()));
+        assert_eq!(row.account_label.as_deref(), Some("original@example.com"));
+        assert!(row.account_label_recorded);
+        assert_eq!(row.account.as_deref(), Some("work"));
+        assert_eq!(profile_account_label("claude", None), "Default profile (account not recorded)");
+    }
+
+    #[test]
+    fn extra_readers_skip_tools_and_unwrap_user_prompts() {
+        let (path, t) = tmp("cursor.jsonl", concat!(
+            "bad json\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"noise\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":\"<user_query>Fix Cursor</user_query>\"}}\n"));
+        let row = parse_extra("cursor", &path, &t).unwrap();
+        assert_eq!(row.first_prompt, "Fix Cursor");
+        assert_eq!(row.message_count, 1);
+        assert!(row.cwd.is_none()); // An encoded directory name cannot safely be reversed.
+        let (path, t) = tmp("grok.jsonl", concat!(
+            "{\"type\":\"user\",\"content\":\"injected instructions\"}\n",
+            "{\"type\":\"user\",\"prompt_index\":0,\"content\":\"<user_query>Fix Grok</user_query>\"}\n"));
+        assert_eq!(parse_extra("grok", &path, &t).unwrap().first_prompt, "Fix Grok");
+        let (path, t) = tmp("antigravity.jsonl", "{\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"<USER_REQUEST>Fix AG</USER_REQUEST>metadata\"}\n");
+        assert_eq!(parse_extra("antigravity", &path, &t).unwrap().first_prompt, "Fix AG");
+        let (path, t) = tmp("openclaude.jsonl", "{\"type\":\"user\",\"cwd\":\"C:/oc\",\"message\":{\"content\":\"Hello OC\"}}\n");
+        let row = parse_extra("openclaude", &path, &t).unwrap();
+        assert_eq!(row.agent, "openclaude");
+        assert!(row.account_label.is_none());
+        assert_eq!(row.first_prompt, "Hello OC");
     }
 
     #[test]

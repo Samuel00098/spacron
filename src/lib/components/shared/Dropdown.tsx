@@ -12,6 +12,7 @@ export type DropdownOption = {
   /** Hover text explaining the option (shown on the item and on the trigger while selected). */
   tooltip?: string;
   color?: string;
+  icon?: React.ReactNode;
   disabled?: boolean;
 };
 
@@ -212,7 +213,7 @@ export default function Dropdown({
 
   useEffect(() => {
     if (!open) return;
-    const handlePointer = (e: MouseEvent) => {
+    const handlePointer = (e: PointerEvent) => {
       const target = e.target as Node;
       // The menu is portaled outside `rootEl`, so it must be checked separately —
       // otherwise clicking an option would register as an outside click and close
@@ -222,11 +223,11 @@ export default function Dropdown({
       setOpen(false);
     };
     const reposition = () => updatePlacement();
-    window.addEventListener('mousedown', handlePointer);
+    document.addEventListener('pointerdown', handlePointer, true);
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition);
     return () => {
-      window.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('pointerdown', handlePointer, true);
       window.removeEventListener('scroll', reposition, true);
       window.removeEventListener('resize', reposition);
     };
@@ -246,6 +247,7 @@ export default function Dropdown({
         onKeyDown={onKeydown}
       >
         {selected?.color && <span className="dd-dot" style={{ background: selected.color }}></span>}
+        {selected?.icon && <span className="dd-icon">{selected.icon}</span>}
         <span className={`dd-value${!selected ? ' placeholder' : ''}`}>
           {selected?.label ?? placeholder}
         </span>
@@ -272,6 +274,13 @@ export default function Dropdown({
             role="listbox"
             aria-label={ariaLabel}
             style={menuStyle}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(false);
+              rootEl.current?.querySelector('button')?.focus();
+            }}
           >
             {options.map((option) => (
               <button
@@ -285,6 +294,7 @@ export default function Dropdown({
                 onClick={() => choose(option)}
               >
                 {option.color && <span className="dd-dot" style={{ background: option.color }}></span>}
+                {option.icon && <span className="dd-icon">{option.icon}</span>}
                 <span className="dd-item-label">{option.label}</span>
                 {option.sublabel && <span className="dd-item-sub">{option.sublabel}</span>}
                 {option.value === value && (

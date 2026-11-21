@@ -12,7 +12,7 @@ import {
 const model = (id: string, efforts: string[] = ['low', 'high']): StructuredModel => ({ id, label: id, description: null, efforts, defaultEffort: null, isDefault: false });
 
 function state(patch: Partial<StructuredChatState>): StructuredChatState {
-  return { status: 'ready', error: null, items: [], models: [], model: null, effort: null, access: 'ask', threadId: null, approvals: [], contextUsed: null, contextWindow: null, ...patch };
+  return { status: 'ready', error: null, items: [], models: [], model: null, effort: null, access: 'ask', threadId: null, approvals: [], subagents: [], contextUsed: null, contextWindow: null, ...patch };
 }
 
 describe('model catalog status', () => {

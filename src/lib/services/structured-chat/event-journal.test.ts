@@ -14,6 +14,7 @@ function state(patch: Partial<StructuredChatState> = {}): StructuredChatState {
     access: 'ask',
     threadId: null,
     approvals: [],
+    subagents: [],
     contextUsed: null,
     contextWindow: null,
     ...patch,

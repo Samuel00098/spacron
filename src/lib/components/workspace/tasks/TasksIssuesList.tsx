@@ -40,8 +40,8 @@ export default function TasksIssuesList({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Search and state filters */}
-      <div className="tasks-filter-bar">
-        <div className="tasks-search-input-wrap">
+      <div className="tasks-filter-bar" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <div className="tasks-search-input-wrap" style={{ flex: '1 1 180px', minWidth: 140, maxWidth: 'none' }}>
           <SearchIcon size={12} />
           <input
             type="text"
@@ -52,7 +52,7 @@ export default function TasksIssuesList({
           />
         </div>
 
-        <div className="tasks-filter-pills">
+        <div className="tasks-filter-pills" style={{ flexWrap: 'wrap' }}>
           <button
             type="button"
             className={`tasks-filter-pill ${filter === 'open' ? 'active' : ''}`}

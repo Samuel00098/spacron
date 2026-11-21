@@ -87,10 +87,10 @@ fn permission_mode_for(access_mode: Option<&str>) -> &'static str {
 async fn run_turn(
     cwd: &str,
     model: Option<&str>,
-    system_prompt: &str,
+    _system_prompt: &str,
     user_text: &str,
     images: &[PathBuf],
-    effort: Option<&str>,
+    _effort: Option<&str>,
     access_mode: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<CursorTurnResult, String> {
@@ -104,18 +104,13 @@ async fn run_turn(
 
     let args = build_args(model, permission_mode, session_id);
 
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        // applied below
-    }
-
     let mut command = Command::new("cursor-agent");
     command.args(args).current_dir(cwd).stdout(Stdio::piped()).stderr(Stdio::piped());
 
     #[cfg(windows)]
     {
-        command.creation_flags(0x0800_0000);
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
 
     let mut child = command

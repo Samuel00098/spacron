@@ -537,6 +537,9 @@ fn handle_control(
                 "workspace_git_diff" => git_diff(args, &state.workspace),
                 "workspace_git_create_worktree" => git_create_worktree(args, &state.workspace),
                 "project_worktree_list" => project_worktree_list(&state.workspace),
+                "project_worktree_review_metadata" => crate::commands::project_worktrees::review_metadata(
+                    &state.workspace, str_arg(&args, "worktreePath").as_deref(),
+                ).and_then(|metadata| serde_json::to_value(metadata).map_err(|e| e.to_string())),
                 "project_worktree_bases" => project_worktree_bases(&state.workspace),
                 "project_worktree_create" => project_worktree_create(args, &state.workspace),
                 "project_worktree_delete" => project_worktree_delete(args, &state.workspace),
@@ -972,7 +975,10 @@ fn project_worktree_delete(args: Value, workspace: &Path) -> Result<Value, Strin
     require_git_repo(workspace)?;
     let path = str_arg(&args, "worktreePath").ok_or_else(|| "Missing 'worktreePath' argument".to_string())?;
     let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
-    let deleted = crate::commands::project_worktrees::delete_worktree(workspace, &path, force)?;
+    let protect_local_files = args.get("protectLocalFiles").and_then(|v| v.as_bool()).unwrap_or(false);
+    let deleted = crate::commands::project_worktrees::delete_worktree_with_protection(
+        workspace, &path, force, protect_local_files,
+    )?;
     serde_json::to_value(deleted).map_err(|e| e.to_string())
 }
 
@@ -1065,6 +1071,13 @@ fn git_remove_worktree(args: Value, workspace: &Path) -> Result<Value, String> {
         return Err("Refusing to remove a path outside the managed worktree area.".to_string());
     }
 
+    if args.get("requireMerged").and_then(|v| v.as_bool()).unwrap_or(false)
+        && !crate::commands::project_worktrees::worktree_merged_into_default(
+            workspace, &cleaned, args.get("originalHead").and_then(Value::as_str),
+        )
+    {
+        return Err("This worktree has not been merged into the project's primary branch.".to_string());
+    }
     crate::worktree_snapshot::remove_clean(workspace, &cleaned, || std::process::Command::new("git"))?;
 
     let delete_branch = args.get("deleteBranch").and_then(|v| v.as_bool()).unwrap_or(false);

@@ -117,8 +117,9 @@ export const piProvider: StructuredChatProvider = {
     stores.set(sessionId, initialStructuredState(options.access, stores.get(sessionId) ?? undefined));
     let tail: ReturnType<typeof stderrTail> | null = null;
     try {
-      const accountEnv = await accountEnvFor('pi');
-      const session = await openAgentSession('pi', ['--mode', 'rpc'], cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
+      const accountEnv = await accountEnvFor('pi', options.accountId);
+      const args = ['--mode', 'rpc', ...(options.resumeId ? ['--session', options.resumeId] : [])];
+      const session = await openAgentSession('pi', args, cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
       tail = stderrTail(session);
       const stderr = tail;
       const runtime = { session, requestId: 0, responses: new Map<string, (frame: Json) => void>() };
@@ -197,7 +198,7 @@ export const piProvider: StructuredChatProvider = {
         // The catalog is optional; the current model still shows.
       }
       if (current && !models.some((model) => model.id === current.id)) models.unshift(current);
-      stores.update(sessionId, { status: 'ready', error: null, models, model: current?.id ?? models[0]?.id ?? null, effort: str(rec(state.data)?.thinkingLevel) ?? null });
+      stores.update(sessionId, { status: 'ready', error: null, threadId: str(rec(state.data)?.sessionId) ?? options.resumeId ?? null, models, model: current?.id ?? models[0]?.id ?? null, effort: str(rec(state.data)?.thinkingLevel) ?? null });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const reason = tail?.text();
@@ -247,6 +248,6 @@ export const piProvider: StructuredChatProvider = {
   },
   async close(sessionId) { const runtime = sessions.get(sessionId); sessions.delete(sessionId); activeAssistantIds.delete(sessionId); stores.delete(sessionId); await runtime?.session.close().catch(() => undefined); },
   models: (sessionId) => stores.get(sessionId)?.models ?? [],
-  conversationId: () => null,
+  conversationId: (sessionId) => stores.get(sessionId)?.threadId ?? null,
   subagents: (sessionId) => stores.get(sessionId)?.subagents ?? [],
 };

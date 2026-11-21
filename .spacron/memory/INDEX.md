@@ -12,6 +12,7 @@ short enough that it says what the note is *about*, never what it says.
 ## Agents, delegation & review
 
 - [agent-history-persistence](agent-history-persistence.md) — spacron persists agent structure not content; Orca indexer model + two viable approaches
+- [agent-history-index](agent-history-index.md) — the read-only Fleet History index over Claude/Codex/OpenCode transcripts, and the traps in their file formats
 - [orca-chat-view](orca-chat-view.md) — how Orca's per-terminal chat toggle reads transcripts and writes the PTY, vs our chat mode
 - [structured-chat](structured-chat.md) — Orca-style structured chat tabs (agent over its own protocol, no terminal): how a pane hosts one, the bridge, what was verified live
 - [structured-chat-attachments](structured-chat-attachments.md) — attachments cross as paths and each adapter inlines or not; the visuals folder for chats with no PTY
@@ -48,6 +49,7 @@ short enough that it says what the note is *about*, never what it says.
 - [room-liveness-invariant](room-liveness-invariant.md) — why closing a terminal room ends its shells, and the single close gate that keeps it true
 - [split-maximize-zoom-layout](split-maximize-zoom-layout.md) — the `expandedRoom` invariants, and why Split must switch `ambientLayout`
 - [per-project-persistence](per-project-persistence.md) — how a project remembers its stage, and what the sanitiser must learn
+- [excalidraw-sketch-room](excalidraw-sketch-room.md) — Sketch room's Excalidraw body: theme truth, canvas fill, and the file/cache ordering
 - [preview-iframe-bridge](preview-iframe-bridge.md) — the preview iframe is cross-origin; the postMessage contract
 - [preview-room-is-persistent](preview-room-is-persistent.md) — preview is hidden, not unmounted, so the page survives a room switch
 - [preview-responsive-viewport](preview-responsive-viewport.md) — phone/tablet preview is a scaled viewport, with no device chassis

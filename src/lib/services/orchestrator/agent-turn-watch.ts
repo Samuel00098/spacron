@@ -258,7 +258,7 @@ export async function watchLeasedAgentTurn(
     const outcome = await watchTurnUntilDone(sessionId, opts);
     if (outcome.kind !== 'aborted') recordTurnEnd(sessionId, outcome.kind);
     // The same end the notification card reports, for the Agent Fleet's state.
-    noteAgentTurnEnded(sessionId, outcome.kind);
+    noteAgentTurnEnded(sessionId, outcome.kind, outcome.kind === 'aborted' ? undefined : outcome.via);
     return outcome;
   } finally {
     agentTurnEnded(sessionId);
@@ -490,6 +490,12 @@ async function watchTurnUntilDone(
         if (decision === 'working') {
           lastGrowthAt = Date.now();
           lastBellAt = null;
+          return null;
+        }
+        // A reporting hook can still arrive after a long quiet tool call.
+        // Keep the watcher attached so it can deliver that declaration.
+        if (signalled) {
+          lastGrowthAt = Date.now();
           return null;
         }
         if (decision === 'waiting_for_approval' || decision === 'asking_question') {

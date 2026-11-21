@@ -120,15 +120,23 @@ function ProviderRow({
           </span>
           <span className="usage-row-name">{provider.name}</span>
           {provider.plan && <span className="usage-row-plan">{provider.plan}</span>}
-          {reporting && (
+          {reporting ? (
             <span className="usage-row-summary" data-severity={headline ? severityOf(headline.usedPercent) : undefined}>
               <span className="usage-row-reset" title={reset ? `Resets in ${reset}` : 'Reset time unavailable'}>{reset ?? '—'}</span>
               <span className="usage-row-mini-track" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, percent ?? 0))}%` }} /></span>
               <span className="usage-row-percent">{display === 'used' ? percent : Math.max(0, 100 - (percent ?? 0))}%</span>
             </span>
+          ) : (
+            <span className="usage-row-summary unpopulated" aria-hidden="true">
+              <span className="usage-row-reset">—</span>
+              <span className="usage-row-mini-track"><span style={{ width: '0%' }} /></span>
+              <span className="usage-row-percent">—%</span>
+            </span>
           )}
         </button>
-        <AccountSwitcher provider={provider.provider} accounts={accounts} />
+        <div className="usage-row-account-slot">
+          <AccountSwitcher provider={provider.provider} accounts={accounts} />
+        </div>
       </div>
 
       {/* The switcher already names the active account; repeating it here
