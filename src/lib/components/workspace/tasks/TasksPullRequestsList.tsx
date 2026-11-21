@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import type { WorkItemPR } from '$lib/services/work-items';
+import {
+  SearchIcon,
+  PullRequestIcon,
+  GitMergeIcon,
+  XCircleIcon,
+  GitBranchIcon,
+} from './TasksIcons';
 
 export default function TasksPullRequestsList({
   pullRequests,
   loading,
   error,
   onSelectPR,
-  onAssignToAgent,
 }: {
   pullRequests: WorkItemPR[];
   loading: boolean;
@@ -24,7 +30,8 @@ export default function TasksPullRequestsList({
       return (
         item.title.toLowerCase().includes(q) ||
         item.number.toString().includes(q) ||
-        item.headBranch.toLowerCase().includes(q)
+        item.headBranch.toLowerCase().includes(q) ||
+        item.baseBranch.toLowerCase().includes(q)
       );
     }
     return true;
@@ -34,13 +41,16 @@ export default function TasksPullRequestsList({
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Search and state filters */}
       <div className="tasks-filter-bar">
-        <input
-          type="text"
-          className="tasks-search-input"
-          placeholder="Filter pull requests..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        <div className="tasks-search-input-wrap">
+          <SearchIcon size={12} />
+          <input
+            type="text"
+            className="tasks-search-input"
+            placeholder="Filter pull requests..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
 
         <div className="tasks-filter-pills">
           <button
@@ -83,14 +93,25 @@ export default function TasksPullRequestsList({
         )}
 
         {error && (
-          <div style={{ padding: 12, borderRadius: 6, background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', fontSize: 11.5 }}>
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 6,
+              background: 'color-mix(in srgb, var(--error, #ef4444) 12%, transparent)',
+              color: 'var(--error, #dc2626)',
+              border: '1px solid color-mix(in srgb, var(--error, #ef4444) 25%, transparent)',
+              fontSize: 11.5,
+            }}
+          >
             {error}
           </div>
         )}
 
         {!loading && !error && filteredPRs.length === 0 && (
           <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-            <div style={{ fontSize: 24, marginBottom: 8 }}>🔀</div>
+            <div style={{ fontSize: 24, marginBottom: 8 }}>
+              <PullRequestIcon size={24} style={{ color: 'var(--text-muted)' }} />
+            </div>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>No pull requests found</div>
             <div style={{ fontSize: 11.5, marginTop: 4 }}>
               {search ? 'Try clearing your search query.' : 'There are no pull requests matching this filter.'}
@@ -108,7 +129,19 @@ export default function TasksPullRequestsList({
               <div className="work-item-card-top">
                 <div className="work-item-title-group">
                   <span className={`work-item-badge ${pr.state}`}>
-                    {pr.state === 'merged' ? '⚑ Merged' : pr.state === 'closed' ? '✕ Closed' : '● Open'}
+                    {pr.state === 'merged' ? (
+                      <>
+                        <GitMergeIcon size={11} /> Merged
+                      </>
+                    ) : pr.state === 'closed' ? (
+                      <>
+                        <XCircleIcon size={11} /> Closed
+                      </>
+                    ) : (
+                      <>
+                        <PullRequestIcon size={11} /> Open
+                      </>
+                    )}
                   </span>
                   <span className="work-item-number">#{pr.number}</span>
                   <span className="work-item-title">{pr.title}</span>
@@ -123,17 +156,19 @@ export default function TasksPullRequestsList({
                     onSelectPR(pr);
                   }}
                 >
-                  Review & Merge →
+                  <span>Review & Merge</span>
+                  <span style={{ fontSize: 11 }}>→</span>
                 </button>
               </div>
 
               <div className="work-item-card-meta">
                 <div className="work-item-meta-left">
                   <span className="work-item-branch-pill">
-                    {pr.headBranch} → {pr.baseBranch}
+                    <GitBranchIcon size={10} />
+                    <span>{pr.headBranch} → {pr.baseBranch}</span>
                   </span>
                   <span>
-                    Opened by <strong>{pr.author.login}</strong> ·{' '}
+                    Opened by <strong style={{ color: 'var(--text-primary)' }}>{pr.author.login}</strong> ·{' '}
                     {new Date(pr.createdAt).toLocaleDateString(undefined, {
                       month: 'short',
                       day: 'numeric',

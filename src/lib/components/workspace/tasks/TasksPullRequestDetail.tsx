@@ -12,6 +12,17 @@ import {
 } from '$lib/services/work-items';
 import MarkdownPreview from '$lib/components/preview/MarkdownPreview';
 import { showToast } from '$lib/stores/notification';
+import {
+  ArrowLeftIcon,
+  AgentSparklesIcon,
+  PullRequestIcon,
+  GitMergeIcon,
+  XCircleIcon,
+  GitBranchIcon,
+  MessageSquareIcon,
+  CheckCircleIcon,
+  FileCodeIcon,
+} from './TasksIcons';
 
 export default function TasksPullRequestDetail({
   projectId,
@@ -132,9 +143,10 @@ export default function TasksPullRequestDetail({
     return (
       <div className="work-item-detail-view" style={{ padding: 24 }}>
         <button type="button" className="work-item-back-btn" onClick={onBack}>
-          ← Back to Pull Requests
+          <ArrowLeftIcon size={13} />
+          <span>Back to Pull Requests</span>
         </button>
-        <p style={{ color: 'var(--error, #f87171)', marginTop: 16, fontSize: 12 }}>
+        <p style={{ color: 'var(--error, #dc2626)', marginTop: 16, fontSize: 12 }}>
           {error || 'Pull request not found'}
         </p>
       </div>
@@ -146,7 +158,8 @@ export default function TasksPullRequestDetail({
       {/* Top action bar */}
       <div className="work-item-detail-topbar">
         <button type="button" className="work-item-back-btn" onClick={onBack}>
-          ← Back to Pull Requests
+          <ArrowLeftIcon size={13} />
+          <span>Back to Pull Requests</span>
         </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -156,22 +169,36 @@ export default function TasksPullRequestDetail({
             onClick={() => onAssignToAgent(pr.title, pr.body, pr.number)}
             title="Create an isolated worktree branch and dispatch an agent to review or edit this PR"
           >
-            🚀 Review with Agent
+            <AgentSparklesIcon size={12} />
+            <span>Review with Agent</span>
           </button>
         </div>
       </div>
 
       {/* Header Info */}
-      <div style={{ padding: '16px 24px 12px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.05)' }}>
+      <div style={{ padding: '16px 24px 12px', borderBottom: '1px solid var(--border, rgba(127, 127, 127, 0.15))', background: 'var(--bg-secondary, var(--app-surface))' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <span className={`work-item-badge ${pr.state}`}>
-            {pr.state === 'merged' ? '⚑ Merged' : pr.state === 'closed' ? '✕ Closed' : '● Open'}
+            {pr.state === 'merged' ? (
+              <>
+                <GitMergeIcon size={11} /> Merged
+              </>
+            ) : pr.state === 'closed' ? (
+              <>
+                <XCircleIcon size={11} /> Closed
+              </>
+            ) : (
+              <>
+                <PullRequestIcon size={11} /> Open
+              </>
+            )}
           </span>
-          <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600 }}>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600, fontFamily: 'var(--font-mono, monospace)' }}>
             #{pr.number}
           </span>
           <span className="work-item-branch-pill">
-            {pr.headBranch} → {pr.baseBranch}
+            <GitBranchIcon size={10} />
+            <span>{pr.headBranch} → {pr.baseBranch}</span>
           </span>
         </div>
 
@@ -182,14 +209,14 @@ export default function TasksPullRequestDetail({
             <img src={pr.author.avatarUrl} alt="" className="work-item-avatar" />
           )}
           <span>
-            <strong>{pr.author.login}</strong> wants to merge into <code>{pr.baseBranch}</code>
+            <strong style={{ color: 'var(--text-primary)' }}>{pr.author.login}</strong> wants to merge into <code>{pr.baseBranch}</code>
           </span>
           <span>·</span>
           <span>{files.length} files changed</span>
           {checks && (
             <>
               <span>·</span>
-              <span style={{ color: checks.failed > 0 ? '#f87171' : checks.passed > 0 ? '#4ade80' : 'var(--text-muted)' }}>
+              <span style={{ color: checks.failed > 0 ? 'var(--error, #dc2626)' : checks.passed > 0 ? 'var(--success, #16a34a)' : 'var(--text-muted)' }}>
                 {checks.failed > 0 ? `✕ ${checks.failed} checks failed` : `✓ ${checks.passed} checks passed`}
               </span>
             </>
@@ -204,7 +231,8 @@ export default function TasksPullRequestDetail({
           className={`pr-tab-btn ${activeTab === 'conversation' ? 'active' : ''}`}
           onClick={() => setActiveTab('conversation')}
         >
-          💬 Conversation
+          <MessageSquareIcon size={13} />
+          <span>Conversation</span>
           {comments.length > 0 && <span className="pr-tab-count">{comments.length}</span>}
         </button>
 
@@ -213,7 +241,8 @@ export default function TasksPullRequestDetail({
           className={`pr-tab-btn ${activeTab === 'checks' ? 'active' : ''}`}
           onClick={() => setActiveTab('checks')}
         >
-          ⚙ Checks
+          <CheckCircleIcon size={13} />
+          <span>Checks</span>
           {checks && <span className="pr-tab-count">{checks.total}</span>}
         </button>
 
@@ -222,7 +251,8 @@ export default function TasksPullRequestDetail({
           className={`pr-tab-btn ${activeTab === 'files' ? 'active' : ''}`}
           onClick={() => setActiveTab('files')}
         >
-          📄 Files Changed
+          <FileCodeIcon size={13} />
+          <span>Files Changed</span>
           {files.length > 0 && <span className="pr-tab-count">{files.length}</span>}
         </button>
       </div>
@@ -233,7 +263,7 @@ export default function TasksPullRequestDetail({
         {activeTab === 'conversation' && (
           <>
             {/* PR Description */}
-            <div style={{ background: 'rgba(255,255,255,0.02)', padding: 16, borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
+            <div className="work-item-detail-box">
               <MarkdownPreview content={pr.body || '_No description provided._'} />
             </div>
 
@@ -272,7 +302,7 @@ export default function TasksPullRequestDetail({
               <div className="pr-merge-container">
                 <div className="pr-merge-header">
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 16 }}>🔀</span>
+                    <GitMergeIcon size={18} style={{ color: 'var(--accent)' }} />
                     <div>
                       <div className="pr-merge-status-text">Ready to merge</div>
                       <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
@@ -305,16 +335,23 @@ export default function TasksPullRequestDetail({
                     disabled={merging}
                     onClick={handleMerge}
                   >
-                    {merging ? 'Merging...' : `Merge Pull Request (${mergeMethod})`}
+                    <GitMergeIcon size={13} />
+                    <span>{merging ? 'Merging...' : `Merge Pull Request (${mergeMethod})`}</span>
                   </button>
                 </div>
               </div>
             ) : pr.state === 'merged' ? (
-              <div className="pr-merge-container" style={{ background: 'rgba(147, 51, 234, 0.1)', borderColor: 'rgba(147, 51, 234, 0.3)' }}>
+              <div
+                className="pr-merge-container"
+                style={{
+                  background: 'color-mix(in srgb, #a855f7 12%, transparent)',
+                  borderColor: 'color-mix(in srgb, #a855f7 28%, transparent)',
+                }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 16 }}>✓</span>
+                  <GitMergeIcon size={18} style={{ color: '#a855f7' }} />
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#c084fc' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#9333ea' }}>
                       Pull request successfully merged and closed
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
@@ -360,17 +397,13 @@ export default function TasksPullRequestDetail({
               checks.checks.map((check) => (
                 <div key={check.id} className="check-item-row">
                   <div className="check-item-left">
-                    <span
-                      className={
-                        check.conclusion === 'success'
-                          ? 'check-glyph-success'
-                          : check.conclusion === 'failure'
-                          ? 'check-glyph-failed'
-                          : 'check-glyph-running'
-                      }
-                    >
-                      {check.conclusion === 'success' ? '✓' : check.conclusion === 'failure' ? '✕' : '●'}
-                    </span>
+                    {check.conclusion === 'success' ? (
+                      <CheckCircleIcon size={14} className="check-glyph-success" />
+                    ) : check.conclusion === 'failure' ? (
+                      <XCircleIcon size={14} className="check-glyph-failed" />
+                    ) : (
+                      <span className="check-glyph-running">●</span>
+                    )}
                     <strong style={{ color: 'var(--text-primary)' }}>{check.name}</strong>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -382,7 +415,7 @@ export default function TasksPullRequestDetail({
                         href={check.htmlUrl}
                         target="_blank"
                         rel="noreferrer"
-                        style={{ color: 'var(--accent, #6366f1)', fontSize: 10.5, textDecoration: 'none' }}
+                        style={{ color: 'var(--accent)', fontSize: 10.5, textDecoration: 'none' }}
                       >
                         Details ↗
                       </a>

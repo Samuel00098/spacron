@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createIssue, type WorkItemIssue } from '$lib/services/work-items';
 import { showToast } from '$lib/stores/notification';
+import { CloseIcon, PlusIcon } from './TasksIcons';
 
 export default function TasksNewIssueModal({
   projectId,
@@ -60,34 +61,12 @@ export default function TasksNewIssueModal({
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        background: 'rgba(0, 0, 0, 0.65)',
-        backdropFilter: 'blur(4px)',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 20,
-      }}
+      className="tasks-modal-backdrop"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 520,
-          background: 'var(--surface-modal, #18181b)',
-          border: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.1))',
-          borderRadius: 12,
-          padding: 20,
-          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-        }}
-      >
+      <div className="tasks-modal-dialog">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
             New GitHub Issue
@@ -95,15 +74,11 @@ export default function TasksNewIssueModal({
           <button
             type="button"
             onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--text-muted)',
-              cursor: 'pointer',
-              fontSize: 16,
-            }}
+            className="tasks-action-btn"
+            style={{ padding: 4, background: 'transparent', border: 'none' }}
+            title="Close dialog"
           >
-            ✕
+            <CloseIcon size={14} />
           </button>
         </div>
 
@@ -115,7 +90,15 @@ export default function TasksNewIssueModal({
             ref={inputRef}
             type="text"
             className="tasks-search-input"
-            style={{ width: '100%', maxWidth: 'none', padding: '6px 10px', fontSize: 12 }}
+            style={{
+              width: '100%',
+              maxWidth: 'none',
+              padding: '6px 10px',
+              fontSize: 12,
+              background: 'var(--input-bg, var(--bg-primary))',
+              border: '1px solid var(--input-border, var(--border))',
+              borderRadius: 6,
+            }}
             placeholder="Issue title..."
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -142,7 +125,15 @@ export default function TasksNewIssueModal({
           <input
             type="text"
             className="tasks-search-input"
-            style={{ width: '100%', maxWidth: 'none', padding: '6px 10px', fontSize: 12 }}
+            style={{
+              width: '100%',
+              maxWidth: 'none',
+              padding: '6px 10px',
+              fontSize: 12,
+              background: 'var(--input-bg, var(--bg-primary))',
+              border: '1px solid var(--input-border, var(--border))',
+              borderRadius: 6,
+            }}
             placeholder="e.g. bug, frontend, high-priority"
             value={labels}
             onChange={(e) => setLabels(e.target.value)}
@@ -159,7 +150,8 @@ export default function TasksNewIssueModal({
             disabled={!title.trim() || submitting}
             onClick={handleSubmit}
           >
-            {submitting ? 'Creating...' : 'Create Issue'}
+            <PlusIcon size={12} />
+            <span>{submitting ? 'Creating...' : 'Create Issue'}</span>
           </button>
         </div>
       </div>

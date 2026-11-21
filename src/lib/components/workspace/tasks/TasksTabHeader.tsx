@@ -1,4 +1,12 @@
 import type { RemoteRepoInfo } from '$lib/services/work-items';
+import {
+  BoardIcon,
+  IssueIcon,
+  PullRequestIcon,
+  GitBranchIcon,
+  RefreshIcon,
+  PlusIcon,
+} from './TasksIcons';
 
 export type TaskPanelTab = 'board' | 'issues' | 'prs';
 
@@ -29,8 +37,9 @@ export default function TasksTabHeader({
           type="button"
           className={`tasks-nav-btn ${activeTab === 'board' ? 'active' : ''}`}
           onClick={() => onTabChange('board')}
+          title="Local Task Board"
         >
-          <span>📋</span>
+          <BoardIcon size={14} />
           <span>Board</span>
         </button>
 
@@ -38,8 +47,9 @@ export default function TasksTabHeader({
           type="button"
           className={`tasks-nav-btn ${activeTab === 'issues' ? 'active' : ''}`}
           onClick={() => onTabChange('issues')}
+          title="Remote Repository Issues"
         >
-          <span>🐙</span>
+          <IssueIcon size={14} />
           <span>Issues</span>
           {issuesCount > 0 && <span className="tasks-nav-count">{issuesCount}</span>}
         </button>
@@ -48,8 +58,9 @@ export default function TasksTabHeader({
           type="button"
           className={`tasks-nav-btn ${activeTab === 'prs' ? 'active' : ''}`}
           onClick={() => onTabChange('prs')}
+          title="Remote Repository Pull Requests"
         >
-          <span>🔀</span>
+          <PullRequestIcon size={14} />
           <span>Pull Requests</span>
           {prsCount > 0 && <span className="tasks-nav-count">{prsCount}</span>}
         </button>
@@ -59,22 +70,13 @@ export default function TasksTabHeader({
       <div className="tasks-actions-bar">
         {repoInfo && (
           <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '3px 8px',
-              borderRadius: 6,
-              background: 'rgba(0, 0, 0, 0.25)',
-              fontSize: 11,
-              color: 'var(--text-muted)',
-              fontFamily: 'var(--font-mono, monospace)',
-            }}
+            className="tasks-repo-chip"
             title={`Remote: ${repoInfo.remoteUrl}`}
           >
-            <span style={{ color: 'var(--text-secondary)' }}>{repoInfo.owner}/{repoInfo.repo}</span>
-            <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: 'var(--accent, #6366f1)' }}>{repoInfo.currentBranch}</span>
+            <GitBranchIcon size={12} />
+            <span className="tasks-repo-name">{repoInfo.owner}/{repoInfo.repo}</span>
+            <span style={{ opacity: 0.4 }}>·</span>
+            <span className="tasks-repo-branch">{repoInfo.currentBranch}</span>
           </div>
         )}
 
@@ -84,7 +86,7 @@ export default function TasksTabHeader({
           onClick={onRefresh}
           title="Refresh issues and pull requests"
         >
-          ↻
+          <RefreshIcon size={13} />
         </button>
 
         {activeTab === 'issues' && (
@@ -93,7 +95,8 @@ export default function TasksTabHeader({
             className="tasks-action-btn primary"
             onClick={onOpenNewIssue}
           >
-            + New Issue
+            <PlusIcon size={12} />
+            <span>New Issue</span>
           </button>
         )}
 
@@ -103,7 +106,8 @@ export default function TasksTabHeader({
             className="tasks-action-btn primary"
             onClick={onOpenNewPR}
           >
-            + New PR
+            <PlusIcon size={12} />
+            <span>New PR</span>
           </button>
         )}
       </div>

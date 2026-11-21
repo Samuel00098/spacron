@@ -8,6 +8,12 @@ import {
 } from '$lib/services/work-items';
 import MarkdownPreview from '$lib/components/preview/MarkdownPreview';
 import { showToast } from '$lib/stores/notification';
+import {
+  ArrowLeftIcon,
+  AgentSparklesIcon,
+  IssueIcon,
+  CheckCircleIcon,
+} from './TasksIcons';
 
 export default function TasksIssueDetail({
   projectId,
@@ -64,7 +70,7 @@ export default function TasksIssueDetail({
         title: targetState === 'closed' ? 'Issue closed' : 'Issue reopened',
         tone: 'success',
       });
-    } catch (err) {
+    } catch {
       showToast({
         title: 'Failed to update issue',
         tone: 'error',
@@ -101,9 +107,10 @@ export default function TasksIssueDetail({
     return (
       <div className="work-item-detail-view" style={{ padding: 24 }}>
         <button type="button" className="work-item-back-btn" onClick={onBack}>
-          ← Back to Issues
+          <ArrowLeftIcon size={13} />
+          <span>Back to Issues</span>
         </button>
-        <p style={{ color: 'var(--error, #f87171)', marginTop: 16, fontSize: 12 }}>{error || 'Issue not found'}</p>
+        <p style={{ color: 'var(--error, #dc2626)', marginTop: 16, fontSize: 12 }}>{error || 'Issue not found'}</p>
       </div>
     );
   }
@@ -113,7 +120,8 @@ export default function TasksIssueDetail({
       {/* Top action bar */}
       <div className="work-item-detail-topbar">
         <button type="button" className="work-item-back-btn" onClick={onBack}>
-          ← Back to Issues
+          <ArrowLeftIcon size={13} />
+          <span>Back to Issues</span>
         </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -123,7 +131,8 @@ export default function TasksIssueDetail({
             onClick={() => onAssignToAgent(issue.title, issue.body, issue.number)}
             title="Create an isolated worktree branch and dispatch an agent to work on this issue"
           >
-            🚀 Assign to Agent
+            <AgentSparklesIcon size={12} />
+            <span>Assign to Agent</span>
           </button>
 
           <button
@@ -142,9 +151,17 @@ export default function TasksIssueDetail({
         <div className="work-item-header-block">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span className={`work-item-badge ${issue.state}`}>
-              {issue.state === 'open' ? '● Open' : '✓ Closed'}
+              {issue.state === 'open' ? (
+                <>
+                  <IssueIcon size={11} /> Open
+                </>
+              ) : (
+                <>
+                  <CheckCircleIcon size={11} /> Closed
+                </>
+              )}
             </span>
-            <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600 }}>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600, fontFamily: 'var(--font-mono, monospace)' }}>
               #{issue.number}
             </span>
           </div>
@@ -156,7 +173,7 @@ export default function TasksIssueDetail({
               <img src={issue.author.avatarUrl} alt="" className="work-item-avatar" />
             )}
             <span>
-              <strong>{issue.author.login}</strong> opened this on{' '}
+              <strong style={{ color: 'var(--text-primary)' }}>{issue.author.login}</strong> opened this on{' '}
               {new Date(issue.createdAt).toLocaleDateString(undefined, {
                 month: 'short',
                 day: 'numeric',
@@ -188,7 +205,7 @@ export default function TasksIssueDetail({
         </div>
 
         {/* Issue Markdown Description */}
-        <div style={{ background: 'rgba(255,255,255,0.02)', padding: 16, borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
+        <div className="work-item-detail-box">
           <MarkdownPreview content={issue.body || '_No description provided._'} />
         </div>
 
