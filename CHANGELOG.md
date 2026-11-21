@@ -2,6 +2,37 @@
 
 All notable changes to Spacron will be documented here.
 
+## [v5.1.4] - 2026-11-21
+
+Spacron 5.1.4 introduces a multi-tab Source Control task panel with GitHub and Linear issue tracking, Pull Request management with side-by-side diff views, and integrated CI/CD pipeline monitoring with one-click failure diagnostics. It adds a searchable, project-filtered Agent History tab indexing transcripts across Claude, Codex, and OpenCode, with account-mismatch detection and context handoffs. Persistent Excalidraw sketch rooms bring theme-aware whiteboarding and architectural sketching directly into workspace rooms. Structured chat gains turn, approval, and error notifications with audible cues and read-aloud TTS, streamlined effort-level selection with auto-dismissal, expanded voice models from MiniMax, OpenRouter, and Grok, and a flattened, seamless workspace sidebar.
+
+### Added
+
+- **Multi-tab Source Control tasks panel** — a unified tasks workspace with dedicated tabs for Issues, Pull Requests, Diffs, and CI/CD Actions.
+- **GitHub & Linear issue tracking** — browse, filter, inspect, and create issues from both GitHub and Linear; start new git worktrees linked directly to Linear issues from the issue view or Project HUD.
+- **Pull Request management & diff views** — inspect PR timelines, view merged PR listings, create PRs, and review changes using split or unified side-by-side diff views with syntax tokenization.
+- **CI/CD pipeline monitoring** — track GitHub Actions and GitLab CI workflows directly within the Actions tab, showing active run timers, job statuses, and a one-click button to copy complete failure details for fast debugging.
+- **Review agent launcher** — trigger AI code review agents into a terminal or structured chat pane with a worktree selector, editable review prompts, and custom configuration presets.
+- **Agent History tab** — read-only archive that indexes Claude, Codex, and OpenCode transcripts with project filtering, chronological grouping, search, chat replay, and session resumption.
+- **Account awareness and warnings in history** — surfaces account email and label tags in agent history and handoff sheets, displaying a compact warning banner when attempting to resume a session created under a different account.
+- **Excalidraw sketch rooms** — create persistent Sketch rooms powered by Excalidraw for diagrams, wireframes, and design notes, featuring theme-matched canvas backgrounds, responsive sizing, and automatic `.sketch` persistence with legacy scene migration.
+- **Structured chat notifications & TTS read-aloud** — turn completions, approval requests, and agent errors trigger desktop notifications, audible chime nudges, and optional read-aloud speech.
+- **Expanded read-aloud voice models** — added MiniMax, OpenRouter, and Grok voices to read-aloud TTS, complete with a voice catalog refresh button in Settings.
+- **Effort-level selection prompt** — after selecting a reasoning-capable model in chat, an effort-level picker (low, medium, high) immediately appears with a 20-second auto-close timeout.
+
+### Changed
+
+- **Flattened workspace sidebar** — removed horizontal seams and borders across the left workspace sidebar for a clean, unified surface matching `--app-surface`.
+- **Streamlined chat tool pills** — condensed secondary tool pill rows down to 3–4 side-by-side badges with responsive wrapping to prevent vertical clutter.
+- **Theme-aware task surfaces** — task cards, headers, and modal dialogs adopt flat, shadowless surfaces with custom Dropdown components and crisp vector icons.
+
+### Fixed
+
+- **Image attachment transcript matching** — resolved an issue where sent messages with image attachments were duplicated because the CLI prepended `[Image #N]` markers to the transcript row.
+- **Notification completion groupings** — grouped agent completion notifications by their termination source (`declared`, `exit`, `inferred`) to avoid misleading completion cards.
+- **Responsive chat & history banners** — made background task indicators, running tool strips, and the history account mismatch warning banner fully responsive across narrow panels and mobile viewports.
+- **Source Control branch stability** — stabilized branch selection dropdowns and eliminated toast React child rendering errors when reviewing task items.
+
 ## [v5.1.3] - 2026-11-19
 
 Spacron 5.1.3 makes Spacron open source and puts a chat on every agent pane. The project is now under the MIT License. Each Claude Code, Codex, OpenCode or Grok pane can flip between its terminal and a chat view of the same session, read from the CLI's own transcript and typed into the same PTY, with model, effort and permission changes made in place, images both ways, question and approval cards, and live interactive pages the agent writes for you. Projects now list their git worktrees in the sidebar with every agent grouped under the one it works in, Markdown opens in a rich editor, media plays in editor tabs, the Mobile Emulator becomes a Device panel with real tools, usage stats are rebuilt around cost, and Settings > MCP grows into a 100-server catalog with plugins for every agent.

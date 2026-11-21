@@ -275,7 +275,7 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
       }),
     );
     void tail.dispose.then((off) => runtime.unlisten.push(off));
-    await session.request('initialize', { clientInfo: { name: 'spacron', title: 'Spacron', version: '5.1.3' } });
+    await session.request('initialize', { clientInfo: { name: 'spacron', title: 'Spacron', version: '5.1.4' } });
     await session.notify('initialized', {});
     const listed = await session.request<{ data?: Json[] }>('model/list', { limit: 100, includeHidden: false });
     const models = (listed.data ?? []).map(toModel).filter((m): m is StructuredModel => m != null);

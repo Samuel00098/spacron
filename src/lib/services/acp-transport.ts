@@ -143,7 +143,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, message: string)
   });
 }
 
-const ACP_CLIENT_INFO = { name: 'spacron', version: '5.1.3' };
+const ACP_CLIENT_INFO = { name: 'spacron', version: '5.1.4' };
 /**
  * ACP v1 `clientCapabilities`: `fs.readTextFile`, `fs.writeTextFile` and
  * `terminal` are booleans. `terminal` used to be sent as an object, which
