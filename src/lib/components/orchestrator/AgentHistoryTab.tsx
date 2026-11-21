@@ -292,6 +292,7 @@ export default function AgentHistoryTab() {
                 <button
                   type="button"
                   className="ah-btn ah-btn-sm"
+                  title={`Switch active ${agent?.label ?? row.agent} account to ${sessionAcctName}`}
                   onClick={async () => {
                     const ok = await selectAccount(row.agent, sessionAccountId);
                     if (ok) {
