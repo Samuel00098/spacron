@@ -918,11 +918,17 @@ export default function SourceControl() {
           <span className="sc-title">Source Control</span>
           <div className="sc-header-actions">
             <button className="header-btn" onClick={() => void triggerGitFetch()} title="Fetch from Remote" disabled={isFetching}>
-              <svg className={isFetching ? 'spin' : undefined} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
+              {isFetching ? (
+                <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              )}
             </button>
             <button className="header-btn" onClick={() => void refreshAll()} title="Refresh Status & History" disabled={isFetchingStatus || isFetchingHistory}>
               <svg className={isFetchingStatus || isFetchingHistory ? 'spin' : undefined} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -938,7 +944,7 @@ export default function SourceControl() {
             <div className="branch-bar">
               <BranchIcon className="branch-icon" />
               <button className="branch-name-btn" onClick={() => { setBranchPickerOpen((open) => !open); setBranchSearch(''); }} title="Switch branch">
-                {branches?.current || 'no branch'}
+                <span className="branch-name-text">{branches?.current || 'no branch'}</span>
               </button>
               {branches?.has_remote && (
                 isUnpublished ? (
@@ -969,7 +975,7 @@ export default function SourceControl() {
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         )}
-                        {branch}
+                        <span className="branch-label">{branch}</span>
                       </button>
                       {branch !== branches?.current && (
                         deleteConfirmBranch === branch ? (
@@ -992,7 +998,9 @@ export default function SourceControl() {
                       <div className="branch-section-label">Remote</div>
                       {filteredRemoteBranches.map((branch) => (
                         <div key={branch} className="branch-item remote">
-                          <button className="branch-item-name" onClick={() => void createFromRemote(branch)}>{branch}</button>
+                          <button className="branch-item-name" onClick={() => void createFromRemote(branch)}>
+                            <span className="branch-label">{branch}</span>
+                          </button>
                         </div>
                       ))}
                     </>

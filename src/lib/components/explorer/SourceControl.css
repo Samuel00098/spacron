@@ -86,6 +86,9 @@
   padding: 6px 10px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .source-control .branch-icon {
@@ -96,6 +99,8 @@
 .source-control .branch-name-btn {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
   text-align: left;
   font-size: 11.5px;
   font-weight: 500;
@@ -103,10 +108,16 @@
   background: transparent;
   border: none;
   cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+}
+
+.source-control .branch-name-text {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0;
 }
 
 .source-control .branch-name-btn:hover,
@@ -157,6 +168,9 @@
 .source-control .branch-picker {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .source-control .branch-search,
@@ -180,16 +194,23 @@
 .source-control .branch-list {
   max-height: 180px;
   overflow-y: auto;
+  overflow-x: hidden;
   /* Never bounces past its ends (the webview's elastic overscroll). */
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
+  touch-action: pan-y;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .source-control .branch-item {
   display: flex;
   align-items: center;
   padding: 1px 4px;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .source-control .branch-item.current {
@@ -198,9 +219,10 @@
 
 .source-control .branch-item-name {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 5px 8px;
   font-size: 11.5px;
   color: var(--text-secondary);
@@ -209,6 +231,16 @@
   cursor: pointer;
   text-align: left;
   border-radius: 4px;
+  overflow: hidden;
+}
+
+.source-control .branch-item-name svg {
+  flex-shrink: 0;
+}
+
+.source-control .branch-item-name .branch-label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

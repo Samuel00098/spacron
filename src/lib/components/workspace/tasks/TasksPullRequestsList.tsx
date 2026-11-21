@@ -7,7 +7,6 @@ import {
   GitMergeIcon,
   XCircleIcon,
   GitBranchIcon,
-  AgentSparklesIcon,
 } from './TasksIcons';
 
 const SORT_OPTIONS: DropdownOption[] = [
@@ -228,20 +227,6 @@ export default function TasksPullRequestsList({
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                  <button
-                    type="button"
-                    className="tasks-action-btn"
-                    style={{ fontSize: 10, padding: '3px 8px' }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAssignToAgent(pr.title, pr.body, pr.number, pr.headBranch, pr.baseBranch);
-                    }}
-                    title="Review with an Agent"
-                  >
-                    <AgentSparklesIcon size={11} />
-                    <span>Review with Agent</span>
-                  </button>
-
                   <button
                     type="button"
                     className="tasks-action-btn primary"

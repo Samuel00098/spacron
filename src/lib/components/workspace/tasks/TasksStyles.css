@@ -363,6 +363,40 @@
   color: var(--accent);
 }
 
+/* ─── Actions Responsive Toolbar ─── */
+.tasks-actions-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tasks-actions-search-wrap {
+  flex: 1 1 180px;
+  max-width: 320px;
+  min-width: 140px;
+}
+
+.tasks-actions-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 580px) {
+  .tasks-actions-search-wrap {
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .tasks-actions-filter-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
 /* ─── Dropdown Wrappers in Tasks Header & Merge Bar ─── */
 .tasks-filter-dropdown-wrap .dropdown {
   min-width: 140px;

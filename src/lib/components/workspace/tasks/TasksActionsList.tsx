@@ -198,19 +198,19 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Search and Filters Bar */}
-      <div className="tasks-filter-bar" style={{ flexWrap: 'wrap', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 260 }}>
-          <div className="tasks-search-input-wrap" style={{ flex: 1 }}>
-            <SearchIcon size={12} />
-            <input
-              type="text"
-              className="tasks-search-input"
-              placeholder="Filter workflow runs by title, branch, #number..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
+      <div className="tasks-filter-bar tasks-actions-filter-bar">
+        <div className="tasks-search-input-wrap tasks-actions-search-wrap">
+          <SearchIcon size={12} />
+          <input
+            type="text"
+            className="tasks-search-input"
+            placeholder="Filter actions by title, branch, #number..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
 
+        <div className="tasks-actions-filter-group">
           {/* Status Dropdown */}
           <div className="tasks-filter-dropdown-wrap">
             <Dropdown
@@ -232,19 +232,19 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
               />
             </div>
           )}
-        </div>
 
-        {/* Refresh Button */}
-        <button
-          type="button"
-          className="tasks-action-btn"
-          onClick={() => void loadRuns(true)}
-          disabled={loading || refreshing}
-          title="Refresh GitHub Actions"
-        >
-          <RefreshIcon size={12} className={refreshing ? 'spin-icon' : ''} />
-          <span>Refresh</span>
-        </button>
+          {/* Refresh Button */}
+          <button
+            type="button"
+            className="tasks-action-btn"
+            onClick={() => void loadRuns(true)}
+            disabled={loading || refreshing}
+            title="Refresh CI/CD runs"
+          >
+            <RefreshIcon size={12} className={refreshing ? 'spin-icon' : ''} />
+            <span>Refresh</span>
+          </button>
+        </div>
       </div>
 
       {/* Main Workflow Runs Container */}
@@ -315,8 +315,8 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                 onClick={() => void handleToggleJobs(run.id)}
               >
                 {/* Top Row: Status, Name, Run #, Display Title */}
-                <div className="work-item-card-top">
-                  <div className="work-item-title-group">
+                <div className="work-item-card-top" style={{ flexWrap: 'wrap', gap: 8 }}>
+                  <div className="work-item-title-group" style={{ flexWrap: 'wrap', flex: '1 1 200px', minWidth: 0 }}>
                     {/* Status Glyph */}
                     <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
                       {isSuccess ? (
@@ -350,7 +350,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                   </div>
 
                   {/* Right Header: Status Badge & Quick Actions */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
                     <span
                       className={`work-item-badge ${
                         isSuccess ? 'open' : isFailed ? 'closed' : 'draft'
@@ -418,8 +418,8 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                 </div>
 
                 {/* Bottom Meta Row */}
-                <div className="work-item-card-meta">
-                  <div className="work-item-meta-left">
+                <div className="work-item-card-meta" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  <div className="work-item-meta-left" style={{ flexWrap: 'wrap', gap: 6, minWidth: 0, flex: 1 }}>
                     {/* Event Pill */}
                     <span
                       style={{
