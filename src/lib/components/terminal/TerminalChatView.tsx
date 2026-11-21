@@ -56,7 +56,10 @@ import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { getSessionVisuals, requestTerminalInput, terminalInputRequest } from '$lib/stores/terminal';
 import { ChatVisual, splitReply } from './ChatVisual';
-import { AgentModeChip, BackgroundTaskStrip, ChatTabStrip, SignInNotice, looksLikeAuthError } from './StructuredChatExtras';
+import { AgentModeChip, AnswerReceipts, BackgroundTaskStrip, GoalPanel, SignInNotice, looksLikeAuthError } from './StructuredChatExtras';
+import { readChatDraft, writeChatDraft } from '$lib/services/structured-chat/drafts';
+import { parseDroppedPaths } from '$lib/services/structured-chat/attachments';
+import { clearStructuredChatUnread, markStructuredChatUnread } from '$lib/services/structured-chat/panes';
 import PromptCard from './PromptCard';
 import { answerScreenPrompt, dismissScreenPrompt, promptKey, readScreenPrompt, type ScreenPrompt } from '$lib/services/terminal-prompt';
 import { codexFooterModel, startCommandCapture } from '$lib/services/terminal-command-output';
@@ -107,6 +110,7 @@ import {
   trailingUsageLimit,
   type FileChange,
 } from '$lib/services/terminal-chat-rich';
+import { foldUserText } from '$lib/services/chat-fold';
 import { enqueue, moveQueued, removeQueued, shiftQueue, updateQueued, useQueue, type QueuedMessage } from '$lib/services/terminal-chat-queue';
 import { highlightCodeElement } from '$lib/services/chat-highlight';
 import {
@@ -344,6 +348,32 @@ export default function TerminalChatView({
   const [truncated, setTruncated] = useState(false);
   const [pending, setPending] = useState<PendingSend[]>([]);
   const [draft, setDraft] = useState('');
+  const [historyAt, setHistoryAt] = useState<number | null>(null);
+  // The unsent message (and its attachments) stays with the pane across a
+  // reload, as Orca keeps it across a reconnect.
+  const restoredDraftRef = useRef(false);
+  useEffect(() => {
+    if (restoredDraftRef.current) return;
+    restoredDraftRef.current = true;
+    const saved = readChatDraft(sessionId);
+    if (!saved) return;
+    if (saved.text) setDraft(saved.text);
+    if (!saved.attachments.length) return;
+    const restored = saved.attachments.map((attachment) => ({
+      id: ++attachmentIdRef.current,
+      path: attachment.path,
+      name: attachment.name,
+      preview: null as string | null,
+    }));
+    setAttachments(restored);
+    for (const attachment of restored) {
+      if (!/\.(png|jpe?g|gif|webp|bmp)$/i.test(attachment.path)) continue;
+      void invoke<string>('chat_image_preview', { path: attachment.path })
+        .then((preview) => setAttachments((list) => list.map((a) => (a.id === attachment.id ? { ...a, preview } : a))))
+        .catch(() => undefined);
+    }
+  }, [sessionId]);
+
   const appearance = useStore(chatAppearance);
   const spellcheck = useStore(chatComposerSpellcheck);
   const [sending, setSending] = useState(false);
@@ -357,6 +387,14 @@ export default function TerminalChatView({
   const [answering, setAnswering] = useState<number | null>(null);
   const promptKeyRef = useRef<string | null>(null);
   const attachmentIdRef = useRef(0);
+  // Save the draft (and its attachment paths) with the pane, debounced.
+  useEffect(() => {
+    const timer = setTimeout(() => writeChatDraft(sessionId, {
+      text: draft,
+      attachments: attachments.map((a) => ({ path: a.path, name: a.name })),
+    }), 300);
+    return () => clearTimeout(timer);
+  }, [draft, attachments, sessionId]);
   const picks = useSessionPicks(sessionId);
   const [relaunching, setRelaunching] = useState(false);
   // Why a model/effort/permission change didn't apply, shown at the pill (Orca's
@@ -423,6 +461,10 @@ export default function TerminalChatView({
   const revisionRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
+  const attachScroller = useCallback((el: HTMLDivElement | null) => {
+    scrollRef.current = el;
+    setScrollEl(el);
+  }, []);
   const textareaRef = textareaRefEarly;
   const pendingIdRef = useRef(0);
   // The started-at time is fixed for this agent run; read it once per mount.
@@ -688,12 +730,34 @@ export default function TerminalChatView({
   // focus, resize and clicks, and the pane's output-based `isExecuting` blinked
   // "Working" on with every one of them. Orca reads the same turn records.
   const busy = isRunning && (structuredMode ? structuredState?.status === 'working' : transcriptBusy === true || pending.length > 0);
+  // Up/Down in an empty draft walks back through the prompts this chat sent.
+  const prompts = useMemo(() => items.filter((item) => item.kind === 'user').map((item) => item.text).filter(Boolean), [items]);
+  // A turn that finishes while the window is hidden leaves a dot on the chat
+  // tab; focusing the composer clears it.
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    const was = wasBusyRef.current;
+    wasBusyRef.current = busy;
+    if (structuredMode && was && !busy && typeof document !== 'undefined' && document.hidden) {
+      markStructuredChatUnread(sessionId);
+    }
+  }, [busy, structuredMode, sessionId]);
 
   // Follow the conversation while the reader is at the bottom.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [items, pending, busy, queue.length]);
+
+  useLayoutEffect(() => {
+    if (!scrollEl || !threadEl) return;
+    const resize = new ResizeObserver(() => {
+      if (stickToBottomRef.current) scrollEl.scrollTop = scrollEl.scrollHeight;
+    });
+    resize.observe(scrollEl);
+    resize.observe(threadEl);
+    return () => resize.disconnect();
+  }, [scrollEl, threadEl]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -708,7 +772,8 @@ export default function TerminalChatView({
     const el = scrollRef.current;
     if (!el) return;
     stickToBottomRef.current = true;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
+    setAtBottom(true);
     setUnread(0);
   }
 
@@ -912,15 +977,22 @@ export default function TerminalChatView({
     else await deliver(text, images);
   }
 
+  // A structured turn that failed holds the queue (Orca pauses it too): firing
+  // the next message straight into the same failure helps nobody. Resume lifts
+  // the hold for that error; a different error pauses again.
+  const turnError = structuredMode ? structuredState?.error ?? null : null;
+  const [resumedError, setResumedError] = useState<string | null>(null);
+  const queuePaused = Boolean(turnError) && turnError !== resumedError && queue.length > 0;
+
   // Send the next queued message once the turn ends and nothing waits on the user.
   useEffect(() => {
-    if (busy || sending || !isRunning || screenPrompt || liveScreen || relaunching || !queue.length) return undefined;
+    if (queuePaused || busy || sending || !isRunning || screenPrompt || liveScreen || relaunching || !queue.length) return undefined;
     const timer = setTimeout(() => {
       const next = shiftQueue(sessionId);
       if (next) void dispatchRef.current(next);
     }, 700);
     return () => clearTimeout(timer);
-  }, [busy, sending, isRunning, screenPrompt, liveScreen, relaunching, queue.length, sessionId]);
+  }, [queuePaused, busy, sending, isRunning, screenPrompt, liveScreen, relaunching, queue.length, sessionId]);
 
   function sendQueuedNow(id: number) {
     const message = removeQueued(sessionId, id);
@@ -1138,6 +1210,30 @@ export default function TerminalChatView({
         return;
       }
     }
+    // Up/Down in an empty draft walks back through the prompts this chat sent.
+    if (event.key === 'ArrowUp' && (historyAt != null || (!draft.trim() && !attachments.length)) && prompts.length) {
+      event.preventDefault();
+      const next = historyAt == null ? prompts.length - 1 : Math.max(0, historyAt - 1);
+      setHistoryAt(next);
+      setDraft(prompts[next]);
+      setCaret(prompts[next].length);
+      requestAnimationFrame(() => textareaRef.current?.setSelectionRange(prompts[next].length, prompts[next].length));
+      return;
+    }
+    if (event.key === 'ArrowDown' && historyAt != null) {
+      event.preventDefault();
+      const next = historyAt + 1;
+      if (next >= prompts.length) {
+        setHistoryAt(null);
+        setDraft('');
+        setCaret(0);
+      } else {
+        setHistoryAt(next);
+        setDraft(prompts[next]);
+        setCaret(prompts[next].length);
+      }
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       const now = event.ctrlKey || event.metaKey;
@@ -1278,16 +1374,22 @@ export default function TerminalChatView({
   const effortApply: SessionOptionApply = structuredMode
     ? { kind: 'command', build: (value) => value }
     : agent ? effortApplyFor(agent) : { kind: 'none' };
-  const currentModelId = picks.model ?? liveModel;
+  const currentModelId = structuredMode ? liveModel : picks.model ?? liveModel;
   // Until the CLI answers with its own list (or if it can't), Claude Code still
   // takes its aliases, so a model can be picked before any conversation.
   // A structured chat shows only what its provider reported, never hard-coded aliases.
-  const menuModels: AgentProviderModel[] = models.length ? models : agent === 'claude' && !structuredMode ? CLAUDE_ALIAS_MODELS : [];
-  const currentModel = menuModels.find((m) => currentModelId && sameModel(currentModelId, m.id)) ?? null;
+  const catalogModels: AgentProviderModel[] = models.length ? models : agent === 'claude' && !structuredMode ? CLAUDE_ALIAS_MODELS : [];
+  const catalogModel = catalogModels.find((model) => model.id === currentModelId)
+    ?? (!structuredMode ? catalogModels.find((model) => currentModelId && sameModel(currentModelId, model.id)) : undefined);
+  const unlistedModel: AgentProviderModel | null = structuredMode && currentModelId && !catalogModel
+    ? { id: currentModelId, label: prettyModel(currentModelId) }
+    : null;
+  const menuModels = unlistedModel ? [unlistedModel, ...catalogModels] : catalogModels;
+  const currentModel = catalogModel ?? unlistedModel;
   const modelLabel = currentModel?.label ?? (currentModelId ? prettyModel(currentModelId) : 'Default model');
   const efforts = (currentModel?.reasoningEfforts ?? (agent === 'claude' && !structuredMode ? CLAUDE_EFFORTS : []))
     .filter((e) => e !== 'default');
-  const currentEffort = picks.effort ?? liveEffort;
+  const currentEffort = structuredMode ? liveEffort : picks.effort ?? liveEffort;
   const catalogStatus = structuredMode && structuredAgent ? modelCatalogStatus(structuredAgent, structuredState) : null;
   const catalogNote = catalogStatus
     ? modelCatalogNote(agentLabel, catalogStatus, selectedModelIssue(catalogStatus, currentModelId ?? null, currentEffort ?? null))
@@ -1295,7 +1397,7 @@ export default function TerminalChatView({
   const permissionMode: ChatPermissionMode = picks.permission ?? reported.permission ?? sessionPermissionMode(sessionId);
   const context = structuredMode
     ? structuredState?.contextUsed != null
-      ? { used: structuredState.contextUsed, window: structuredState.contextWindow, estimated: false }
+      ? { used: structuredState.contextUsed, window: structuredState.contextWindow, estimated: false, breakdown: structuredState.contextBreakdown ?? null }
       : null
     : agent ? contextUsageFor(agent, currentModelId, reported.used, reported.window) : null;
   // A slash command typed mid-turn would queue as prompt text, so options
@@ -1439,6 +1541,67 @@ export default function TerminalChatView({
     }
   }
 
+  // Files dropped on the composer: a real path from the explorer (or a text
+  // drag) becomes an attachment chip or a quoted path in the draft; an image
+  // file dropped from a plain-browser session is saved and attached like a
+  // pasted one.
+  const [dropOver, setDropOver] = useState(false);
+
+  function onComposerDragOver(event: React.DragEvent) {
+    const types = Array.from(event.dataTransfer?.types ?? []);
+    if (!types.includes('Files') && !types.includes('application/x-spacron-path') && !types.includes('text/plain')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDropOver(true);
+  }
+
+  function onComposerDragLeave(event: React.DragEvent) {
+    if (event.currentTarget === event.target) setDropOver(false);
+  }
+
+  async function attachDroppedPaths(paths: string[]) {
+    if (!paths.length) return;
+    const images = paths.filter((path) => IMAGE_EXTENSIONS.test(path));
+    const others = paths.filter((path) => !IMAGE_EXTENSIONS.test(path));
+    for (const path of images) {
+      const name = path.split(/[\\/]/).pop() ?? path;
+      let preview: string | null = null;
+      try { preview = await invoke<string>('chat_image_preview', { path }); } catch { /* chip without a thumbnail */ }
+      addAttachment({ path, name, preview });
+    }
+    if (!others.length) return;
+    const quoted = others.map((path) => (/\s/.test(path) ? `"${path}"` : path)).join(' ');
+    setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, '')} ${quoted} ` : `${quoted} `));
+  }
+
+  async function onComposerDrop(event: React.DragEvent) {
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    const hint = event.dataTransfer?.getData('application/x-spacron-path')?.trim()
+      || event.dataTransfer?.getData('text/plain')?.trim()
+      || '';
+    if (!files.length && !hint) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDropOver(false);
+    if (!files.length) {
+      await attachDroppedPaths(parseDroppedPaths(hint));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      try {
+        const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+        const name = file.name && IMAGE_EXTENSIONS.test(file.name) ? file.name : `dropped-image-${Date.now()}.${ext}`;
+        const path = await invoke<string>('save_pasted_image', { name, data: Array.from(new Uint8Array(await file.arrayBuffer())) });
+        const url = URL.createObjectURL(file);
+        addAttachment({ path, name, preview: url, revoke: url });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
   // Previews are blob: URLs; release them when the view goes away.
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -1513,10 +1676,10 @@ export default function TerminalChatView({
       <SelectionQuote container={scrollEl} onQuote={quoteIntoComposer} />
       <div
         className="terminal-chat-scroll"
-        ref={(el) => { scrollRef.current = el; if (el !== scrollEl) setScrollEl(el); }}
+        ref={attachScroller}
         onScroll={onScroll}
       >
-        <div className="terminal-chat-thread" ref={(el) => { if (el !== threadEl) setThreadEl(el); }}>
+        <div className="terminal-chat-thread" ref={setThreadEl}>
           {truncated && <div className="terminal-chat-notice">Earlier messages are in the terminal history</div>}
           {!loaded && <div className="terminal-chat-loading"><Dots /></div>}
           {empty && isRunning && suggestedPrompts && !structuredMode && (
@@ -1616,6 +1779,7 @@ export default function TerminalChatView({
               )}
             </div>
           ))}
+          {structuredMode && <AnswerReceipts sessionId={sessionId} />}
           {liveScreen && (
             <LiveScreenCard
               key={liveScreen.sentId}
@@ -1645,7 +1809,6 @@ export default function TerminalChatView({
       </div>
 
       <div className="terminal-chat-dock">
-        {structuredMode && <ChatTabStrip sessionId={sessionId} />}
         {!atBottom && blocks.length > 0 && <JumpToLatest unread={unread} onClick={jumpToLatest} />}
         {showTodos && todos && <TodoDock todos={todos} />}
         {usageLimit && (
@@ -1663,6 +1826,8 @@ export default function TerminalChatView({
             onDelete={(id) => removeQueued(sessionId, id)}
             onMove={(id, delta) => moveQueued(sessionId, id, delta)}
             onSendNow={sendQueuedNow}
+            paused={queuePaused}
+            onResume={() => setResumedError(turnError)}
           />
         )}
         {!structuredMode && commandInTerminal && !screenPrompt && (
@@ -1721,8 +1886,17 @@ export default function TerminalChatView({
             <button type="button" onClick={openTerminalView}>Open terminal</button>
           </div>
         )}
+        {structuredMode && <GoalPanel sessionId={sessionId} onCommand={(command) => void runSlashCommand(command)} />}
         {structuredMode && <BackgroundTaskStrip sessionId={sessionId} agent={structuredAgent} />}
-        <div className={`terminal-chat-composer${isRunning ? '' : ' exited'}`}>
+        <div
+          className={`terminal-chat-composer${isRunning ? '' : ' exited'}${dropOver ? ' drop-over' : ''}`}
+          onDragOver={onComposerDragOver}
+          onDragLeave={onComposerDragLeave}
+          onDrop={(event) => void onComposerDrop(event)}
+        >
+          {dropOver && (
+            <div className="terminal-chat-drop-overlay" aria-hidden="true">Drop files to attach</div>
+          )}
           {suggestions.length > 0 && (
             <ComposerMenu
               items={suggestions}
@@ -1778,10 +1952,14 @@ export default function TerminalChatView({
               ? busy && queueFollowUps ? `Queue a follow-up (Ctrl+Enter sends it now)` : `Message ${agentLabel}  ·  / for commands, @ for files`
               : `${agentLabel} has exited`}
             disabled={!isRunning}
-            onChange={(e) => { setDraft(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); }}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setCaret(e.target.selectionStart ?? e.target.value.length);
+              if (historyAt != null && e.target.value !== prompts[historyAt]) setHistoryAt(null);
+            }}
             onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
             onBlur={() => setMenuDismissed(menuKey)}
-            onFocus={() => setMenuDismissed(null)}
+            onFocus={() => { setMenuDismissed(null); clearStructuredChatUnread(sessionId); }}
             onKeyDown={onKeyDown}
           />
           <div className="terminal-chat-composer-bar">
@@ -2242,6 +2420,20 @@ export function ModelMenu({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearAutoClose = useCallback(() => {
+    if (autoCloseTimerRef.current) {
+      clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) clearAutoClose();
+    return clearAutoClose;
+  }, [open, clearAutoClose]);
+
   useDismiss(open, setOpen, rootRef);
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   useEffect(() => {
@@ -2302,6 +2494,24 @@ export function ModelMenu({
     };
   }, [open]);
 
+  const handlePickModel = useCallback((value: string) => {
+    if (value !== model) onModel(value);
+    if (efforts.length > 0) {
+      clearAutoClose();
+      autoCloseTimerRef.current = setTimeout(() => {
+        setOpen(false);
+      }, 20_000);
+    } else {
+      setOpen(false);
+    }
+  }, [model, onModel, efforts.length, clearAutoClose]);
+
+  const handlePickEffort = useCallback((value: string) => {
+    clearAutoClose();
+    setOpen(false);
+    if (value !== effort) onEffort(value);
+  }, [effort, onEffort, clearAutoClose]);
+
   const needle = query.trim().toLowerCase();
   const matches = needle
     ? models.filter((m) => `${m.label} ${m.value} ${m.hint ?? ''}`.toLowerCase().includes(needle))
@@ -2355,8 +2565,7 @@ export function ModelMenu({
                   onKeyDown={(e) => {
                     e.stopPropagation();
                     if (e.key === 'Enter' && visible[0]) {
-                      setOpen(false);
-                      if (visible[0].value !== model) onModel(visible[0].value);
+                      handlePickModel(visible[0].value);
                     }
                   }}
                 />
@@ -2372,10 +2581,12 @@ export function ModelMenu({
                 }}
               >
                 {visible.map((option) => (
-                  <MenuItem key={option.value} option={option} selected={option.value === model} onPick={() => {
-                    setOpen(false);
-                    if (option.value !== model) onModel(option.value);
-                  }} />
+                  <MenuItem
+                    key={option.value}
+                    option={option}
+                    selected={option.value === model}
+                    onPick={() => handlePickModel(option.value)}
+                  />
                 ))}
                 {!visible.length && <div className="terminal-chat-menu-empty">No models match</div>}
               </div>
@@ -2392,10 +2603,7 @@ export function ModelMenu({
                     role="menuitemradio"
                     aria-checked={option.value === effort}
                     className={option.value === effort ? 'selected' : ''}
-                    onClick={() => {
-                      setOpen(false);
-                      if (option.value !== effort) onEffort(option.value);
-                    }}
+                    onClick={() => handlePickEffort(option.value)}
                   >
                     {option.label}
                   </button>
@@ -2440,8 +2648,11 @@ export function ContextRing({ usage }: { usage: ContextUsage }) {
   const title = usage.window
     ? `Context: ${formatTokens(usage.used)} of ${formatTokens(usage.window)} tokens (${Math.round(percent ?? 0)}%)${usage.estimated ? ', window estimated' : ''}`
     : `Context: ${formatTokens(usage.used)} tokens`;
+  const detail = usage.breakdown?.length
+    ? `${title}\n${usage.breakdown.map((row) => `${row.name}: ${formatTokens(row.tokens)}`).join('\n')}`
+    : title;
   return (
-    <div className={`terminal-chat-context${tone}`} title={title} aria-label={title}>
+    <div className={`terminal-chat-context${tone}`} title={detail} aria-label={title}>
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <circle cx="9" cy="9" r={r} className="track" />
         {percent != null && (
@@ -2479,6 +2690,8 @@ export function UserTurn({
   // Codex and Claude write an "[Image #1]" marker for each attachment; the
   // thumbnails stand in for it.
   const words = images.length ? text.replace(/\[Image #\d+\]\s*/g, '').trim() : text;
+  const [expanded, setExpanded] = useState(false);
+  const fold = useMemo(() => foldUserText(words), [words]);
   return (
     <div className={`terminal-chat-user${pending ? ' pending' : ''}`}>
       {images.length > 0 && (
@@ -2490,7 +2703,16 @@ export function UserTurn({
           ))}
         </div>
       )}
-      {words && <div className="terminal-chat-user-bubble">{words}</div>}
+      {words && (
+        <div className="terminal-chat-user-bubble">
+          {fold.long && !expanded ? fold.preview : words}
+          {fold.long && (
+            <button type="button" className="terminal-chat-user-fold" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
+              {expanded ? 'Show less' : fold.hiddenLines > 0 ? `Show more (${fold.hiddenLines} more lines)` : 'Show more'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
