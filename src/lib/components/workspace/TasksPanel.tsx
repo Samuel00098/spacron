@@ -22,6 +22,10 @@ import { recordTranscription } from '$lib/stores/voiceHistory';
 import { refineVoicePrompt } from '$lib/services/voice-refinement';
 import { useStore } from '$lib/react/useStore';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
+import { quickSpawnAgent } from '$lib/services/quick-spawn';
+import { createChatThread, setChatThreadWorktree, sharedWorktreeAt, selectChatThread } from '$lib/stores/chatThreads';
+import { showProjectChat } from '$lib/stores/chatNavigation';
+import { setInteractionMode } from '$lib/stores/interactionMode';
 import TaskEditorModal from './TaskEditorModal';
 import './TasksPanel.css';
 import './tasks/TasksStyles.css';
@@ -229,25 +233,68 @@ export default function TasksPanel() {
   const handleLaunchAgentReview = (config: {
     agentCommand: string;
     agentName: string;
-    placement: AgentPlacement;
+    launchTarget: 'terminal' | 'chat';
+    worktreePath: string | null;
     model: string | null;
     reasoningEffort: ChatReasoningEffort;
+    prompt: string;
   }) => {
     const root = project?.root_path;
     if (!root || !projectId) return;
 
-    const { itemType, itemNumber, itemTitle, itemBody, headBranch, baseBranch } = reviewModalState;
-    const prompt =
-      itemType === 'issue'
-        ? `Work on Issue #${itemNumber}: ${itemTitle}\n\n${itemBody}`
-        : `Review and verify Pull Request #${itemNumber}: ${itemTitle}\n\nBranch: ${headBranch || 'HEAD'} → ${baseBranch || 'main'}\n\n${itemBody}`;
+    const targetCwd = config.worktreePath || root;
+    const finalPrompt = config.prompt.trim();
 
-    void sendChatMessage(projectId, root, prompt, {
-      forcedAgent: config.agentCommand,
-      model: config.model || undefined,
-    });
-    useLayoutStore.getState().setActiveView('terminal');
-    showToast(`${itemType === 'pr' ? 'Review' : 'Task'} dispatched to ${config.agentName}`, 'success');
+    if (config.launchTarget === 'terminal') {
+      void quickSpawnAgent(config.agentCommand, {
+        model: config.model || undefined,
+        reasoningEffort: config.reasoningEffort,
+        prompt: finalPrompt,
+        view: 'terminal',
+        worktreePath: targetCwd,
+      });
+      useLayoutStore.getState().setActiveView('terminal');
+      showToast(
+        `Spawned ${config.agentName} in terminal to ${reviewModalState.itemType === 'pr' ? 'review PR #' + reviewModalState.itemNumber : 'work on issue #' + reviewModalState.itemNumber}`,
+        'success',
+        undefined,
+        true
+      );
+    } else {
+      const thread = createChatThread(projectId, {
+        title:
+          reviewModalState.itemType === 'pr'
+            ? `Review PR #${reviewModalState.itemNumber}: ${reviewModalState.itemTitle}`
+            : `Issue #${reviewModalState.itemNumber}: ${reviewModalState.itemTitle}`,
+        agentPreset: config.agentCommand,
+        agentName: config.agentName,
+        model: config.model ?? null,
+        reasoningEffort: config.reasoningEffort ?? 'default',
+      });
+      if (config.worktreePath) {
+        setChatThreadWorktree(thread.id, sharedWorktreeAt(projectId, config.worktreePath));
+      }
+      selectChatThread(projectId, thread.id);
+      showProjectChat();
+      setInteractionMode('chat');
+      void sendChatMessage(projectId, root, finalPrompt, {
+        projectName: project.name,
+        threadId: thread.id,
+        forcedAgent: config.agentCommand,
+        model: config.model || undefined,
+        reasoningEffort: config.reasoningEffort,
+        chatMode: true,
+        conversationalMode: true,
+      }).catch((err) => {
+        showToast(err instanceof Error ? err.message : String(err), 'error');
+      });
+      showToast(
+        `Started ${reviewModalState.itemType === 'pr' ? 'PR review' : 'issue task'} with ${config.agentName} in chat`,
+        'success',
+        undefined,
+        true
+      );
+    }
   };
 
   // Columns sort by urgency (priority → due date → drag order) — the same rule
@@ -1033,6 +1080,8 @@ export default function TasksPanel() {
         itemBody={reviewModalState.itemBody}
         headBranch={reviewModalState.headBranch}
         baseBranch={reviewModalState.baseBranch}
+        projectId={projectId}
+        projectRoot={project?.root_path}
         onLaunch={handleLaunchAgentReview}
       />
     </>

@@ -1244,3 +1244,183 @@
   padding: 0;
   background: transparent;
 }
+
+/* ---- Tasks Agent Review Modal ---- */
+.tasks-agent-modal-card {
+  width: 530px !important;
+  max-width: calc(100vw - 32px) !important;
+  max-height: 88vh !important;
+  background: var(--app-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 13px !important;
+  padding: 0 0 14px 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+.tasks-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 0 20px;
+}
+
+.tasks-modal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tasks-modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tasks-modal-close-btn:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.tasks-modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 20px;
+}
+
+.tasks-modal-section-label {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tasks-modal-section-sub {
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  color: var(--text-muted);
+  letter-spacing: normal;
+}
+
+.tasks-modal-target-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.tasks-modal-target-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--app-surface-soft, rgba(255, 255, 255, 0.03));
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.tasks-modal-target-card:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--app-surface));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.tasks-modal-target-card.selected {
+  background: color-mix(in srgb, var(--accent) 15%, var(--app-surface));
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.tasks-modal-target-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.tasks-modal-target-card.selected .tasks-modal-target-icon {
+  background: var(--accent);
+  color: var(--button-text, #ffffff);
+}
+
+.tasks-modal-target-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tasks-modal-target-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tasks-modal-target-desc {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tasks-modal-prompt-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  font-family: var(--font-sans, inherit);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--app-surface-soft, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+  min-height: 80px;
+  max-height: 180px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tasks-modal-prompt-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 59, 130, 246), 0.2);
+}
+
+.tasks-modal-worktree-wrap {
+  width: 100%;
+}
+
+.tasks-modal-worktree-wrap .dd-trigger {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tasks-modal-config-wrap {
+  padding: 0 20px;
+}
+
