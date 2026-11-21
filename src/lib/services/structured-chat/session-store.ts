@@ -37,6 +37,7 @@ import { structuredChatProvider } from './registry';
 import { structuredAccessFor } from './defaults';
 import { rememberModelCatalog } from './model-catalog';
 import { accountsState, activeAccount } from '$lib/stores/agentAccounts';
+import { chatAutoNames, chatModelNames } from '$lib/stores/chatViewSettings';
 import type { StructuredAccess, StructuredChatState, StructuredSubagentSession } from './provider';
 import {
   StructuredEventJournal,
@@ -45,6 +46,7 @@ import {
   type PersistedJournal,
   type StructuredEvent,
 } from './event-journal';
+import { startStructuredChatNotifications } from './notifications';
 
 export type StructuredLifecycle = 'starting' | 'ready' | 'working' | 'failed' | 'detached' | 'closed';
 
@@ -73,6 +75,11 @@ export interface StructuredSessionRecord {
   /** Archived chats are hidden from tabs, /history and restore; never deleted. */
   archived?: boolean;
   archivedAt?: number;
+  /**
+   * The objective this chat last sent the agent through `/goal`. The agent owns
+   * the goal; Spacron only mirrors what it sent so the panel can show it.
+   */
+  goal?: { text: string; state: 'active' | 'paused'; at: number } | null;
   handoffFrom: { recordId: string | null; paneLabel: string } | null;
   handoffTo: string[];
   forkedFrom?: string | null;
@@ -269,12 +276,13 @@ function recordState(paneId: number): void {
   // prompt, so an earlier chat is recognisable in /history and the tab strip.
   // `titleAuto` is cleared by a rename, and undefined on records written before
   // this existed: those keep the title they were given.
-  if (record.titleAuto && record.origin === 'chat' && !record.archived) {
+  if (record.titleAuto && get(chatAutoNames) && record.origin === 'chat' && !record.archived) {
     const first = state.items.find((item) => item.kind === 'user' && item.text.trim());
     const named = first ? first.text.trim().split(/\r?\n/)[0].replace(/^[#>\s]+/, '').slice(0, 60).trim() : '';
     if (named) {
       patch.title = named;
       patch.titleAuto = false;
+      if (get(chatModelNames) && first) void upgradeTitleWithModel(paneId, record.id, named, first.text);
     }
   }
   const changed = added.length > 0 || (Object.keys(patch) as (keyof StructuredSessionRecord)[]).some((key) => patch[key] !== record[key]);
@@ -284,6 +292,29 @@ function recordState(paneId: number): void {
   if (patch.title) updateSessionTitle(paneId, patch.title);
   for (const listener of eventListeners) {
     for (const event of added) listener(paneId, event);
+  }
+}
+
+/** Chats a model name has already been requested for, so it is asked once. */
+const modelNamed = new Set<string>();
+
+/**
+ * Opt-in (`chatModelNames`): replace the first-message name with a short model
+ * title. The first-message name is already in place, so a failed or slow request
+ * costs nothing, and a rename made meanwhile is respected (the title must still
+ * be the one we set).
+ */
+async function upgradeTitleWithModel(paneId: number, recordId: string, placeholder: string, firstMessage: string): Promise<void> {
+  if (modelNamed.has(recordId)) return;
+  modelNamed.add(recordId);
+  try {
+    const { generateAiThreadTitle } = await import('$lib/stores/chatThreads');
+    const title = (await generateAiThreadTitle(firstMessage)).trim();
+    const current = recordForPane(paneId);
+    if (!title || !current || current.id !== recordId || current.title !== placeholder) return;
+    renameStructuredSession(paneId, title);
+  } catch {
+    // The first-message name stays.
   }
 }
 
@@ -383,6 +414,7 @@ export function startSessionStore(): void {
       if (!(paneId in panes)) detach(paneId);
     }
   });
+  startStructuredChatNotifications();
 }
 
 // ---------------------------------------------------------------------------
@@ -576,13 +608,14 @@ export async function answerStructuredApproval(
   requestId: string | number,
   decision: 'accept' | 'acceptForSession' | 'decline',
   optionId?: string,
+  optionLabel?: string,
 ): Promise<void> {
   const record = recordForPane(paneId);
   const attachment = attachments.get(paneId);
   const provider = structuredChatProvider(record?.provider ?? get(structuredChatPanes)[paneId]);
   if (record && attachment) {
     attachment.answered.add(String(requestId));
-    journalFor(record).record([{ type: 'approval.resolved', payload: { requestId: String(requestId), decision, ...(optionId ? { optionId } : {}) } }]);
+    journalFor(record).record([{ type: 'approval.resolved', payload: { requestId: String(requestId), decision, ...(optionId ? { optionId } : {}), ...(optionLabel ? { optionLabel } : {}) } }]);
     dirtyJournals.add(record.id);
     scheduleSave();
   }
@@ -634,6 +667,61 @@ export function listArchivedSessions(filter: { projectId?: string | null; provid
     .sort((a, b) => (b.archivedAt ?? b.updatedAt) - (a.archivedAt ?? a.updatedAt));
 }
 
+/** Mirror the objective a `/goal` command sent, and whether it is paused. */
+export function setStructuredGoal(paneId: number, text: string, state: 'active' | 'paused' = 'active'): boolean {
+  const record = recordForPane(paneId);
+  const clean = text.trim().slice(0, 300);
+  if (!record || !clean) return false;
+  patchRecord(record.id, { goal: { text: clean, state, at: Date.now() } });
+  return true;
+}
+
+export function clearStructuredGoal(paneId: number): boolean {
+  const record = recordForPane(paneId);
+  if (!record) return false;
+  patchRecord(record.id, { goal: null });
+  return true;
+}
+
+/** One answered approval or question card, as the transcript shows it. */
+export interface ApprovalReceipt {
+  requestId: string;
+  title: string;
+  decision: string | null;
+  optionId: string | null;
+  optionLabel?: string | null;
+  at: number;
+}
+
+/**
+ * Answered request cards from the journal, oldest first. Built from the paired
+ * `approval.requested` / `approval.resolved` events, so a receipt survives a
+ * reload with the answer that was actually sent.
+ */
+export function approvalReceipts(recordId: string): ApprovalReceipt[] {
+  const record = get(structuredSessions)[recordId];
+  if (!record) return [];
+  const journal = journalFor(record);
+  const titles = new Map<string, string>();
+  const out: ApprovalReceipt[] = [];
+  for (const event of journal.since(journal.replayableFrom)) {
+    if (event.type === 'approval.requested') {
+      titles.set(String(event.payload.requestId), String(event.payload.title ?? 'Approval'));
+    } else if (event.type === 'approval.resolved') {
+      const requestId = String(event.payload.requestId);
+      out.push({
+        requestId,
+        title: titles.get(requestId) ?? 'Approval',
+        decision: typeof event.payload.decision === 'string' ? event.payload.decision : null,
+        optionId: typeof event.payload.optionId === 'string' ? event.payload.optionId : null,
+        optionLabel: typeof event.payload.optionLabel === 'string' ? event.payload.optionLabel : null,
+        at: event.at,
+      });
+    }
+  }
+  return out.slice(-12);
+}
+
 export function renameStructuredSession(paneId: number, title: string): boolean {
   const record = recordForPane(paneId);
   const clean = title.trim().slice(0, 120);
@@ -659,6 +747,17 @@ export function compactStructuredSession(paneId: number): boolean {
  * resume id and the journal marks the clear (the old conversation stays in
  * the journal up to that point).
  */
+/**
+ * Whether a chat holds anything worth coming back to. A chat opened and never
+ * used (still on its default name, no prompt sent) is clutter in the tab strip
+ * and the earlier-chats list. A chat that was renamed, or that predates the
+ * naming flag, is always kept: it has a title someone chose.
+ */
+export function recordHasConversation(record: StructuredSessionRecord): boolean {
+  if (record.titleAuto !== true) return true;
+  return journalFor(record).snapshot().items.some((item) => item.kind === 'user');
+}
+
 export async function clearStructuredConversation(paneId: number): Promise<boolean> {
   const record = recordForPane(paneId);
   const attachment = attachments.get(paneId);

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { chatAutoNames } from '$lib/stores/chatViewSettings';
 
 const env = vi.hoisted(() => {
   const data = new Map<string, string>();
@@ -56,6 +57,9 @@ vi.mock('$lib/stores/terminal', () => {
     getActiveTerminalProjectId: () => 'proj',
     createTerminalSession: vi.fn(async () => terminal.nextPane++),
     updateSessionTitle: vi.fn(),
+    getAgentDisplayName: (preset: string) => preset,
+    activeSessionId: { subscribe: (fn: (v: unknown) => void) => { fn(null); return () => {}; } },
+    setActiveSession: vi.fn(),
   };
 });
 vi.mock('./panes', async () => {
@@ -69,6 +73,7 @@ vi.mock('./panes', async () => {
     forgetStructuredChatPane: (id: number) => structuredChatPanes.update((p) => { const n = { ...p }; delete n[id]; return n; }),
     setStructuredChatHistory: (id: number, items: unknown[]) => structuredChatHistory.update((h) => ({ ...h, [id]: items })),
     structuredChatPreset: () => 'codex',
+    markStructuredChatUnread: vi.fn(),
   };
 });
 vi.mock('./registry', () => ({ structuredChatProvider: (agent: string) => (agent === 'codex' ? fake.provider : null) }));
@@ -86,8 +91,11 @@ import {
   clearStructuredConversation,
   flushSessionStore,
   forkStructuredSession,
+  approvalReceipts,
   archiveStructuredRecord,
   archiveStructuredSession,
+  clearStructuredGoal,
+  setStructuredGoal,
   hydrateStructuredHistory,
   listArchivedSessions,
   listStructuredSessions,
@@ -285,6 +293,24 @@ describe('structured session store', () => {
     expect((get(panes.structuredChatHistory)[10] as { id: string }[]).map((i) => i.id)).toEqual(['u1', 'a1']);
   });
 
+  it('leaves a chat unnamed when automatic chat names are turned off', async () => {
+    chatAutoNames.set(false);
+    try {
+      terminal.sessions = [{ id: 15, isRunning: true }];
+      fake.set(15, ready());
+      panes.markStructuredChatPane(15, 'codex');
+      await tick();
+      const record = recordForPane(15)!;
+
+      fake.set(15, ready({ items: [{ id: 'u', kind: 'user', text: 'Fix the flaky test' }] }));
+      await tick();
+      expect(get(structuredSessions)[record.id].title).not.toBe('Fix the flaky test');
+      expect(get(structuredSessions)[record.id].titleAuto).toBe(true);
+    } finally {
+      chatAutoNames.set(true);
+    }
+  });
+
   it('names a chat from its first prompt but never renames a CLI conversation switched into chat', async () => {
     terminal.sessions = [{ id: 11, isRunning: true }];
     fake.set(11, ready());
@@ -311,6 +337,25 @@ describe('structured session store', () => {
     fake.set(12, ready({ items: [{ id: 'u2', kind: 'user', text: 'a new prompt that must not become the title' }] }));
     await tick();
     expect(get(structuredSessions)[converted.id].title).toBe('my cli run');
+  });
+
+  it('mirrors a goal and keeps an answered card as a receipt', async () => {
+    terminal.sessions = [{ id: 14, isRunning: true }];
+    fake.set(14, ready({ approvals: [{ requestId: 21, kind: 'other', title: 'Allow this agent action?', detail: 'ls', options: [{ id: 'proceed_once', label: 'Once', kind: 'allow_once' }] }] }));
+    panes.markStructuredChatPane(14, 'codex');
+    await tick();
+    const record = recordForPane(14)!;
+
+    expect(setStructuredGoal(14, 'Ship the fix')).toBe(true);
+    expect(get(structuredSessions)[record.id].goal).toMatchObject({ text: 'Ship the fix', state: 'active' });
+    expect(clearStructuredGoal(14)).toBe(true);
+    expect(get(structuredSessions)[record.id].goal).toBeNull();
+
+    await answerStructuredApproval(14, 21, 'accept', 'proceed_once', 'Once');
+    await tick();
+    expect(approvalReceipts(record.id)).toEqual([
+      expect.objectContaining({ requestId: '21', decision: 'accept', optionId: 'proceed_once', optionLabel: 'Once', title: 'Allow this agent action?' }),
+    ]);
   });
 
   it('archives a chat out of the tabs and restore, and keeps it for /unarchive', async () => {
