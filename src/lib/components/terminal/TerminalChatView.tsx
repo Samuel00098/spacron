@@ -2779,9 +2779,24 @@ export function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (im
       if (table.parentElement?.classList.contains('terminal-chat-table')) return;
       const wrap = document.createElement('div');
       wrap.className = 'terminal-chat-table';
-      wrap.tabIndex = 0;
-      wrap.setAttribute('role', 'region');
-      wrap.setAttribute('aria-label', 'Table');
+      const headers = Array.from(table.tHead?.rows[0]?.cells ?? []);
+      table.setAttribute('role', 'table');
+      for (const section of Array.from(table.tBodies)) {
+        section.setAttribute('role', 'rowgroup');
+        for (const row of Array.from(section.rows)) {
+          row.setAttribute('role', 'row');
+          for (const [index, cell] of Array.from(row.cells).entries()) {
+            cell.setAttribute('role', 'cell');
+            const label = headers[index]?.textContent?.trim();
+            if (!label) continue;
+            const caption = document.createElement('span');
+            caption.className = 'terminal-chat-table-label';
+            caption.setAttribute('aria-hidden', 'true');
+            caption.textContent = label;
+            cell.prepend(caption);
+          }
+        }
+      }
       table.replaceWith(wrap);
       wrap.appendChild(table);
     });

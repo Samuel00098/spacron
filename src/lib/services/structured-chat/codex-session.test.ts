@@ -44,6 +44,10 @@ describe('Codex thread items in the chat', () => {
       type: 'userMessage', id: 'u1', clientId: null,
       content: [{ type: 'text', text: 'reply with the single word pong', text_elements: [] }],
     })).toEqual({ id: 'u1', kind: 'user', text: 'reply with the single word pong' });
+    expect(chatItemFor({
+      type: 'userMessage', id: 'u2',
+      content: [{ type: 'text', text: 'look' }, { type: 'localImage', path: '/tmp/screenshot.png' }],
+    })).toEqual({ id: 'u2', kind: 'user', text: 'look', images: ['/tmp/screenshot.png'] });
     expect(chatItemFor({ type: 'agentMessage', id: 'a1', text: 'pong', phase: null })).toEqual({ id: 'a1', kind: 'assistant', text: 'pong' });
     expect(chatItemFor({ type: 'reasoning', id: 'r1', summary: ['Thinking', 'More'], content: [] })?.text).toBe('Thinking\n\nMore');
     expect(chatItemFor({ type: 'hookPrompt', id: 'h1', fragments: [] })).toBeNull();

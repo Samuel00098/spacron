@@ -304,7 +304,7 @@ function timeFor(itemId: string): number {
 /** A locally added row: command output or an answered approval. */
 interface LocalRow { id: string; text: string; kind: 'output' | 'error' | 'receipt' }
 
-interface ComposerAttachment { id: number; path: string; name: string; preview: string | null; revoke?: string }
+interface ComposerAttachment { id: number; path: string; name: string; preview: string | null }
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
 
 const ACCESS_LABELS: Record<StructuredAccess, { label: string; hint: string }> = {
@@ -356,19 +356,8 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
   }
 
   function removeAttachment(id: number) {
-    setAttachments((list) => {
-      const gone = list.find((attachment) => attachment.id === id);
-      if (gone?.revoke) URL.revokeObjectURL(gone.revoke);
-      return list.filter((attachment) => attachment.id !== id);
-    });
+    setAttachments((list) => list.filter((attachment) => attachment.id !== id));
   }
-
-  // Previews are blob: URLs; release them when the pane goes away.
-  const attachmentsRef = useRef(attachments);
-  attachmentsRef.current = attachments;
-  useEffect(() => () => {
-    for (const attachment of attachmentsRef.current) if (attachment.revoke) URL.revokeObjectURL(attachment.revoke);
-  }, []);
 
   // Images are attached as paths the agent can read; other files go into the
   // draft as paths, as Orca does when you drop them on the pane.
@@ -414,8 +403,8 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
         const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
         const name = file.name && IMAGE_FILE.test(file.name) ? file.name : `pasted-image-${Date.now()}.${ext}`;
         const path = await invoke<string>('save_pasted_image', { name, data: Array.from(new Uint8Array(await file.arrayBuffer())) });
-        const url = URL.createObjectURL(file);
-        addAttachment({ path, name, preview: url, revoke: url });
+        const preview = await invoke<string>('chat_image_preview', { path }).catch(() => null);
+        addAttachment({ path, name, preview });
       } catch (err) {
         addRow('error', err instanceof Error ? err.message : 'Could not save the pasted image.');
       }
@@ -437,8 +426,8 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null);
   const [historyAt, setHistoryAt] = useState<number | null>(null);
   const [rows, setRows] = useState<LocalRow[]>([]);
-  const [pendingSend, setPendingSend] = useState<{ id: string; text: string } | null>(null);
-  const [failedSend, setFailedSend] = useState<{ text: string; error: string } | null>(null);
+  const [pendingSend, setPendingSend] = useState<{ text: string; images: string[] } | null>(null);
+  const [failedSend, setFailedSend] = useState<{ text: string; error: string; attachments: ComposerAttachment[] } | null>(null);
   const [pendingCompact, setPendingCompact] = useState(false);
   // A message the app was still sending when it closed, if it never arrived.
   const [uncertainSend, setUncertainSend] = useState<string | null>(null);
@@ -744,18 +733,17 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
    * in-flight marker outlives a crash: on the next start a message that may
    * never have arrived is offered again instead of disappearing.
    */
-  async function deliver(text: string, images: string[] = []) {
+  async function deliver(text: string, sentAttachments: ComposerAttachment[] = []) {
     if (!agent) return;
-    const id = `pending-${Date.now()}`;
-    setPendingSend({ id, text });
+    setPendingSend({ text, images: sentAttachments.flatMap(({ preview }) => preview ? [preview] : []) });
     setFailedSend(null);
     setUncertainSend(null);
     try { localStorage.setItem(inflightSendKey, JSON.stringify({ text, at: Date.now() })); } catch { /* nothing to remember */ }
     try {
-      await sendStructuredChat(agent, sessionId, text, images);
+      await sendStructuredChat(agent, sessionId, text, sentAttachments.map(({ path }) => path));
       setNewMarker(null);
     } catch (err) {
-      setFailedSend({ text, error: err instanceof Error ? err.message : String(err) });
+      setFailedSend({ text, attachments: sentAttachments, error: err instanceof Error ? err.message : String(err) });
     } finally {
       setPendingSend(null);
       // Cleared either way: a failure already has its own "Not sent" row.
@@ -863,14 +851,15 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
 
   async function send() {
     const text = draft.trim();
-    if (!text || !ready) return;
+    if ((!text && !attachments.length) || !ready) return;
     if (working) {
+      setAttachments([]);
       if (capabilities?.steering === 'inject' && agent) {
         setDraft('');
         if (scrollOnSend) stickRef.current = true;
-        await steerStructuredChat(agent, sessionId, text);
+        await steerStructuredChat(agent, sessionId, text, attachments.map(({ path }) => path));
       } else {
-        enqueue(sessionId, text);
+        enqueue(sessionId, text, attachments.map(({ path, preview }) => ({ path, preview })));
         setDraft('');
       }
       return;
@@ -895,9 +884,8 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
           return;
         }
       }
-      const images = attachments.map((attachment) => attachment.path);
       setAttachments([]);
-      await deliver(text, images);
+      await deliver(text, attachments);
     }
     textareaRef.current?.focus();
   }
@@ -1146,11 +1134,11 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
               }
               return marker || changes ? [marker, body, changes] : body;
             })}
-            {pendingSend && <UserTurn text={pendingSend.text} images={[]} onOpenImage={openViewer} pending />}
+            {pendingSend && <UserTurn text={pendingSend.text} images={pendingSend.images} onOpenImage={openViewer} pending />}
             {failedSend && (
               <div className="tcr-command-notice" role="alert">
                 <span>Not sent: {failedSend.error}</span>
-                <button type="button" className="tcr-link-btn" onClick={() => void deliver(failedSend.text)}>Retry</button>
+                <button type="button" className="tcr-link-btn" onClick={() => void deliver(failedSend.text, failedSend.attachments)}>Retry</button>
               </div>
             )}
             {uncertainSend && (
@@ -1534,7 +1522,7 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
                 effort={state?.effort ?? null}
                 onEffort={(value) => agent && setStructuredChatEffort(agent, sessionId, value)}
               />
-              {working && !draft.trim() ? (
+              {working && !draft.trim() && !attachments.length ? (
                 <button type="button" className="terminal-chat-send stop" title="Stop (Esc)" aria-label="Stop" onClick={() => agent && void interruptStructuredChat(agent, sessionId)}>
                   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2.2" fill="currentColor" /></svg>
                 </button>
@@ -1544,7 +1532,7 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
                   className={`terminal-chat-send${working ? ' steer' : ''}`}
                   title={working ? (capabilities?.steering === 'inject' ? 'Inject guidance (Enter)' : 'Queue follow-up (Enter)') : 'Send (Enter)'}
                   aria-label={working ? (capabilities?.steering === 'inject' ? 'Inject guidance' : 'Queue follow-up') : 'Send'}
-                  disabled={!draft.trim() || !ready}
+                  disabled={(!draft.trim() && !attachments.length) || !ready}
                   onClick={() => void send()}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

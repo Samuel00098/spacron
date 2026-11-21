@@ -22,6 +22,7 @@ import { openAcpSession, stderrTail, type AcpNotification, type AcpServerRequest
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type { StructuredChatProvider, StructuredSubagentSession } from './provider';
+import { imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
 
 export type StructuredAccess = 'ask' | 'auto' | 'full-access';
@@ -169,7 +170,13 @@ export function chatItemFor(item: Json): TerminalChatItem | null {
     case 'userMessage': {
       const parts = Array.isArray(item.content) ? item.content : [];
       const text = parts.map((p) => str(rec(p)?.text) ?? '').filter(Boolean).join('\n');
-      return { id, kind: 'user', text };
+      const images = parts.flatMap((part) => {
+        const input = rec(part);
+        const source = input?.type === 'localImage' ? str(input.path)
+          : input?.type === 'image' ? str(input.url) : null;
+        return source ? [source] : [];
+      });
+      return { id, kind: 'user', text, ...(images.length ? { images } : {}) };
     }
     case 'agentMessage':
       return { id, kind: 'assistant', text: str(item.text) ?? '' };
@@ -532,7 +539,20 @@ function onNotification(sessionId: number, n: AcpNotification) {
       // `item/started` commonly carries an empty assistant shell; the
       // subsequent deltas own its text, so never let an empty completion
       // replace the streamed content already in the store.
-      if (chat && (chat.text || (chat.kind !== 'assistant' && chat.kind !== 'reasoning'))) upsertItem(sessionId, chat);
+      if (chat?.kind === 'user' && chat.images?.length) {
+        if (states.get(sessionId)?.items.some((entry) => entry.id === chat.id)) break;
+        const { images, ...user } = chat;
+        const runtime = runtimes.get(sessionId);
+        upsertItem(sessionId, user);
+        void imageDataUrlsFor(images).then((previews) => {
+          if (previews.length && runtime === runtimes.get(sessionId)
+            && states.get(sessionId)?.items.some((entry) => entry.id === user.id)) {
+            upsertItem(sessionId, { ...user, images: previews });
+          }
+        });
+      } else if (chat && (chat.text || (chat.kind !== 'assistant' && chat.kind !== 'reasoning'))) {
+        upsertItem(sessionId, chat);
+      }
       break;
     }
     case 'item/agentMessage/delta':

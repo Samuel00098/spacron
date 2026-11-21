@@ -8,6 +8,7 @@
  */
 import { openAgentSession, stderrTail, withTimeout, type AcpSession } from '$lib/services/acp-transport';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
+import { acpImageBlocks, imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
 import { get } from '$lib/stores/storeCompat';
 import { chatAutoAnswerInline } from '$lib/stores/settings';
@@ -205,13 +206,19 @@ export const piProvider: StructuredChatProvider = {
       stores.update(sessionId, { status: 'failed', error: reason && !message.includes(reason) ? `${message}: ${reason}` : message });
     }
   },
-  async send(sessionId, text) {
+  async send(sessionId, text, images = []) {
     const runtime = sessions.get(sessionId);
-    if (!runtime || !text.trim()) return;
+    if (!runtime || (!text.trim() && !images.length)) return;
+    const previews = await imageDataUrlsFor(images);
+    if (previews.length !== images.length) {
+      stores.update(sessionId, { status: 'ready', error: 'Could not read an attached image.' });
+      return;
+    }
+    const imageBlocks = acpImageBlocks(previews).map((image) => ({ type: 'image', ...image }));
     activeAssistantIds.delete(sessionId);
-    stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text });
+    stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text, ...(previews.length ? { images: previews } : {}) });
     stores.update(sessionId, { status: 'working' });
-    await sendRpc(runtime, 'prompt', { message: text });
+    await sendRpc(runtime, 'prompt', { message: text, ...(imageBlocks.length ? { images: imageBlocks } : {}) });
   },
   async interrupt(sessionId) { const runtime = sessions.get(sessionId); if (runtime) await sendRpc(runtime, 'abort', {}); },
   setModel(sessionId, model) {
