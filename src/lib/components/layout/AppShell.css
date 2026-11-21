@@ -3538,10 +3538,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   grid-column: 1 / -1;
 }
 
-.app-shell .left-sidebar .drawer-body {
-  background: color-mix(in srgb, var(--bg-primary) 16%, transparent);
-}
-
 /* The navigator supplies the one shared context heading. Individual panels
    keep their own action rows, but their repeated titles disappear so switching
    tools never produces a doubled "Projects / Projects" or "Git / Git" stack. */
@@ -3708,7 +3704,6 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .left-sidebar-nav {
   gap: 1px;
   padding: 9px 9px 11px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .app-shell .left-sidebar-nav-item {
@@ -3720,8 +3715,17 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 .app-shell .left-sidebar .drawer-body {
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 12%, transparent), transparent 30%);
+  background: transparent;
+}
+
+/* Sidebar controls use fills for hover and selection, with a separate focus outline. */
+.app-shell .left-sidebar :is(.left-sidebar-header, .left-sidebar-nav, .projects-sidebar-panel, .left-sidebar-footer) :where(button, input),
+.app-shell .left-sidebar :is(.projects-search-field, .project-worktree-row-wrap.active, .project-active-dot, .project-worktree-dot) {
+  box-shadow: none !important;
+}
+
+.app-shell .left-sidebar :is(.project-worktree-children, .project-process-children) {
+  border-left-color: transparent;
 }
 
 .app-shell .left-sidebar .projects-search-section {
@@ -3749,7 +3753,6 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .left-sidebar-footer {
   min-height: 51px;
   padding: 9px 10px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 /* Narrow rail (`data-narrow`, set below 240px — the rail gives way to keep the
