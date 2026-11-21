@@ -2,14 +2,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { marked, type Token } from 'marked';
 import { get, writable } from '$lib/stores/storeCompat';
 import { showToast } from '$lib/stores/notification';
-import { readAloudSettings, readAloudVoiceFor, type ReadAloudEngine } from '$lib/stores/readAloud';
+import { readAloudSettings, readAloudModelFor, readAloudVoiceFor, type CloudReadAloudEngine } from '$lib/stores/readAloud';
 
 /**
  * Read a chat reply aloud on request: with the OS's built-in voices (the Web
  * Speech API WebView2 exposes, free and offline) or a human-sounding cloud
- * voice (OpenAI or ElevenLabs, through `read_aloud_speak` so keys stay in the
- * backend). This is NOT the deleted reply-TTS pipeline: nothing ever speaks
- * on its own; the user presses Read aloud on one message and can stop it.
+ * voice (through `read_aloud_speak` so keys stay in the backend).
+ * Agent completion announcements use the same playback when enabled.
  */
 
 /** The message being read, or null. Drives the button's Stop state. */
@@ -168,11 +167,11 @@ function audioUrl(base64: string, mimeType: string): string {
  * the first request the reading runs without gaps. The first piece is kept
  * short so speech starts quickly.
  */
-async function readCloud(engine: Exclude<ReadAloudEngine, 'system'>, voice: string, text: string, mine: number): Promise<void> {
+async function readCloud(engine: CloudReadAloudEngine, model: string, voice: string, text: string, mine: number): Promise<void> {
   const opening = speechChunks(text, 240);
   const pieces = opening.length > 1 ? [opening[0], ...speechChunks(opening.slice(1).join(' '), 900)] : opening;
   const fetchPiece = (piece: string) =>
-    invoke<{ audio: string; mimeType: string }>('read_aloud_speak', { provider: engine, voice, text: piece });
+    invoke<{ audio: string; mimeType: string }>('read_aloud_speak', { provider: engine, model, voice, text: piece });
   let pending = fetchPiece(pieces[0]);
   for (let index = 0; index < pieces.length; index++) {
     let clip: { audio: string; mimeType: string };
@@ -210,21 +209,13 @@ export function toggleReadAloud(messageId: string, markdown: string): void {
   if (current === messageId) return;
   const text = speakableText(markdown);
   if (!text) return;
-  const mine = session;
-  readAloudMessageId.set(messageId);
-  const settings = get(readAloudSettings);
-  if (settings.engine === 'system') readSystem(speechChunks(text), mine);
-  else void readCloud(settings.engine, readAloudVoiceFor(settings), text, mine);
+  playReadAloud(messageId, text);
 }
 
-/** Speak a short sample with an engine and voice (the Settings Test button). */
-export function previewReadAloud(engine: ReadAloudEngine, voice: string): void {
+/** Speak a short sample with the active model and voice. */
+export function previewReadAloud(): void {
   stopReadAloud();
-  const mine = session;
-  readAloudMessageId.set('__preview__');
-  const sample = 'Hi! This is how I will sound when I read a reply aloud for you.';
-  if (engine === 'system') readSystem([sample], mine);
-  else void readCloud(engine, voice, sample, mine);
+  playReadAloud('__preview__', 'Hi! This is how I will sound when I read replies or announce agent completions.');
 }
 
 /** Speak `markdown` aloud using the current read-aloud settings (engine + voice).
@@ -234,9 +225,12 @@ export function speakText(markdown: string): void {
   stopReadAloud();
   const text = speakableText(markdown);
   if (!text) return;
-  const mine = session;
-  readAloudMessageId.set('__completion__');
+  playReadAloud('__completion__', text);
+}
+
+function playReadAloud(messageId: string, text: string): void {
+  readAloudMessageId.set(messageId);
   const settings = get(readAloudSettings);
-  if (settings.engine === 'system') readSystem(speechChunks(text), mine);
-  else void readCloud(settings.engine, readAloudVoiceFor(settings), text, mine);
+  if (settings.engine === 'system') readSystem(speechChunks(text), session);
+  else void readCloud(settings.engine, readAloudModelFor(settings), readAloudVoiceFor(settings), text, session);
 }

@@ -6,7 +6,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { customProviders, saveCustomProvider, deleteCustomProvider, type CustomProvider } from '$lib/stores/customProviders';
 import { explainError, type ExplainedError } from '$lib/utils/explainError';
 import { jevAgentUsage, type JevAgentUsage } from '$lib/stores/jevAgentTool';
-import { readAloudSettings, readAloudVoiceFor, OPENAI_READ_ALOUD_VOICES, ELEVENLABS_DEFAULT_VOICE, type ReadAloudEngine, type ReadAloudSettings } from '$lib/stores/readAloud';
+import {
+  READ_ALOUD_ENGINES, READ_ALOUD_MODELS, OPENAI_READ_ALOUD_VOICES, XAI_READ_ALOUD_VOICES,
+  ELEVENLABS_DEFAULT_VOICE, readAloudSettings, readAloudModelFor, readAloudVoiceFor,
+  type CloudReadAloudEngine, type ReadAloudEngine, type ReadAloudSettings,
+} from '$lib/stores/readAloud';
 import { previewReadAloud } from '$lib/services/read-aloud';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -283,7 +287,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'voice-input', tab: 'voice', section: 'Voice input', label: 'Voice input', keywords: 'speech transcription dictation', target: 'section' },
   { id: 'smart-voice-detection', tab: 'voice', section: 'Voice input', label: 'Smart voice detection', keywords: 'vad speaking silence' },
   { id: 'voice-refinement', tab: 'voice', section: 'Voice refinement', label: 'Voice refinement', keywords: 'transcript cleanup' },
-  { id: 'read-aloud', tab: 'voice', section: 'Read aloud', label: 'Read aloud', keywords: 'speak reply voice tts text to speech elevenlabs openai human natural', target: 'section' },
+  { id: 'read-aloud', tab: 'voice', section: 'Read aloud', label: 'Read aloud', keywords: 'agent completion voice tts text to speech elevenlabs openai minimax openrouter grok', target: 'section' },
   { id: 'conversation-engine', tab: 'voice', section: 'Conversation engine', label: 'Conversation engine', keywords: 'realtime voice assistant', target: 'section' },
   { id: 'terminal-font-size', tab: 'terminal', section: 'Appearance', label: 'Font size', keywords: 'terminal text' },
   { id: 'terminal-cursor', tab: 'terminal', section: 'Appearance', label: 'Cursor', keywords: 'terminal caret' },
@@ -745,124 +749,174 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-/**
- * Settings > Voice > Read aloud. The voice behind the chat's Read aloud
- * button: the free system voice, or a human-sounding cloud voice that uses a
- * saved key (OpenAI's from AI Providers, or an ElevenLabs key saved here).
- */
 function ReadAloudSection() {
-  const settings = useStore(readAloudSettings) as ReadAloudSettings;
-  const engine = settings.engine;
-  const voice = readAloudVoiceFor(settings);
+  const settings = useStore(readAloudSettings);
   const speakCompletions = useStore(speakAgentCompletions);
-  const [keyInput, setKeyInput] = useState('');
-  const [keyExists, setKeyExists] = useState<boolean | null>(null);
-  const [keyError, setKeyError] = useState('');
-  const [elevenVoices, setElevenVoices] = useState<{ id: string; label: string }[]>([]);
-  const [voicesError, setVoicesError] = useState('');
-  const keyProvider = engine === 'system' ? null : engine;
-
-  useEffect(() => {
-    let active = true;
-    setKeyExists(null);
-    if (!keyProvider) return;
-    void invoke<boolean>('provider_api_key_exists', { provider: keyProvider })
-      .then((exists) => { if (active) setKeyExists(exists); })
-      .catch(() => { if (active) setKeyExists(false); });
-    return () => { active = false; };
-  }, [keyProvider]);
-
-  useEffect(() => {
-    let active = true;
-    setVoicesError('');
-    if (engine !== 'elevenlabs' || !keyExists) return;
-    void invoke<{ id: string; name: string; detail?: string | null }[]>('read_aloud_voices', { provider: 'elevenlabs' })
-      .then((list) => { if (active) setElevenVoices(list.map((v) => ({ id: v.id, label: v.detail ? `${v.name} (${v.detail})` : v.name }))); })
-      .catch((error) => { if (active) setVoicesError(explainError(error).summary); });
-    return () => { active = false; };
-  }, [engine, keyExists]);
-
-  const setEngine = (next: ReadAloudEngine) => readAloudSettings.update((s: ReadAloudSettings) => ({ ...s, engine: next }));
-  const setVoice = (next: string) => readAloudSettings.update((s: ReadAloudSettings) => ({ ...s, voices: { ...s.voices, [s.engine]: next } }));
-
-  const saveKey = async (value: string) => {
-    setKeyError('');
-    try {
-      await invoke(value.trim() ? 'provider_api_key_set' : 'provider_api_key_delete',
-        value.trim() ? { provider: 'elevenlabs', apiKey: value.trim() } : { provider: 'elevenlabs' });
-      setKeyExists(Boolean(value.trim()));
-      setKeyInput('');
-    } catch (error) {
-      setKeyError(explainError(error).summary);
-    }
-  };
-
-  const voiceOptions = engine === 'openai'
-    ? OPENAI_READ_ALOUD_VOICES
-    : engine === 'elevenlabs'
-      ? (elevenVoices.length ? elevenVoices : [{ id: voice, label: voice === ELEVENLABS_DEFAULT_VOICE ? 'Rachel' : voice }])
-      : [];
-  const vendor = engine === 'openai' ? 'OpenAI' : 'ElevenLabs';
-  const status = engine === 'system'
-    ? 'Uses the voices built into your computer. Free and offline, but robotic.'
-    : keyExists === null
-      ? 'Checking for a key…'
-      : keyExists
-        ? `Using your saved ${vendor} key. ${vendor} bills each reply you have read aloud.`
-        : engine === 'openai'
-          ? 'No OpenAI key is saved. Add one under AI Providers > API keys.'
-          : 'No ElevenLabs key is saved yet. Paste one below.';
 
   return (
     <Section title="Read aloud">
-      <p className="shell-hint">
-        Voice used when reading chat replies aloud.
-      </p>
-      <SettingRow title="Voice engine" detail={status}>
+      <p className="shell-hint">Voice for chat replies and agent completion announcements.</p>
+      <SettingRow title="Voice engine" detail={settings.engine === 'system' ? 'Uses the voices built into your computer. Free and offline.' : 'Uses AI-generated speech.'}>
         <SelectField
-          value={engine}
-          options={[
-            { id: 'system' as const, label: 'System voice (free)' },
-            { id: 'openai' as const, label: 'OpenAI (natural)' },
-            { id: 'elevenlabs' as const, label: 'ElevenLabs (most human)' },
-          ]}
-          onChange={setEngine}
+          value={settings.engine}
+          options={[...READ_ALOUD_ENGINES]}
+          onChange={(engine: ReadAloudEngine) => readAloudSettings.update((s) => ({ ...s, engine }))}
           ariaLabel="Read aloud voice engine"
         />
       </SettingRow>
       <SettingRow
         title="Read agent completions aloud"
-        detail="Announce task completions (done, failed, needs input) with text-to-speech."
+        detail="Announce when an agent finishes, fails, or needs input."
       >
         <Toggle label="Read completions aloud" checked={speakCompletions} onChange={speakAgentCompletions.set} />
       </SettingRow>
-      {engine !== 'system' && (
-        <SettingRow title="Voice" detail={voicesError || undefined}>
-          <SelectField value={voice} options={voiceOptions} onChange={setVoice} ariaLabel="Read aloud voice" />
+      {settings.engine === 'system' ? (
+        <div className="settings-action-row">
+          <button className="settings-secondary" onClick={previewReadAloud}>Test voice</button>
+        </div>
+      ) : <ReadAloudCloudSettings key={settings.engine} engine={settings.engine} settings={settings} />}
+    </Section>
+  );
+}
+
+interface OpenRouterSpeechModel {
+  id: string;
+  name: string;
+  voices: string[];
+}
+
+function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEngine; settings: ReadAloudSettings }) {
+  const model = readAloudModelFor(settings, engine);
+  const voice = readAloudVoiceFor(settings, engine);
+  const vendor = READ_ALOUD_ENGINES.find(({ id }) => id === engine)?.label ?? engine;
+  const keyUrl = engine === 'elevenlabs' ? 'https://elevenlabs.io/app/settings/api-keys'
+    : engine === 'minimax' ? 'https://platform.minimax.io/console/keys' : null;
+  const [keyInput, setKeyInput] = useState('');
+  const [keyExists, setKeyExists] = useState<boolean | null>(null);
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyError, setKeyError] = useState('');
+  const [accountVoices, setAccountVoices] = useState<{ id: string; label: string }[]>([]);
+  const [voicesError, setVoicesError] = useState('');
+  const [openRouterModels, setOpenRouterModels] = useState<OpenRouterSpeechModel[] | null>(null);
+  const [modelsError, setModelsError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void invoke<boolean>('provider_api_key_exists', { provider: engine })
+      .then((exists) => { if (active) setKeyExists(exists); })
+      .catch(() => { if (active) setKeyExists(false); });
+    return () => { active = false; };
+  }, [engine]);
+
+  useEffect(() => {
+    if (engine === 'openai' || engine === 'openrouter' || !keyExists || savingKey) return;
+    let active = true;
+    void invoke<{ id: string; name: string; detail?: string | null }[]>('read_aloud_voices', { provider: engine })
+      .then((list) => { if (active) setAccountVoices(list.map((v) => ({ id: v.id, label: v.detail ? `${v.name} (${v.detail})` : v.name }))); })
+      .catch((error) => { if (active) setVoicesError(explainError(error).summary); });
+    return () => { active = false; };
+  }, [engine, keyExists, savingKey]);
+
+  useEffect(() => {
+    if (engine !== 'openrouter') return;
+    let active = true;
+    void invoke<OpenRouterSpeechModel[]>('read_aloud_openrouter_models')
+      .then((list) => { if (active) setOpenRouterModels(list); })
+      .catch((error) => { if (active) setModelsError(explainError(error).summary); });
+    return () => { active = false; };
+  }, [engine]);
+
+  const selectedRouterModel = openRouterModels?.find((item) => item.id === model);
+  const setModel = (next: string) => {
+    const routerModel = openRouterModels?.find((item) => item.id === next);
+    readAloudSettings.update((s) => {
+      const updated = { ...s, models: { ...s.models, [engine]: next } };
+      if (!routerModel) return updated;
+      const savedVoice = readAloudVoiceFor(updated, 'openrouter');
+      return {
+        ...updated,
+        openRouterVoices: {
+          ...s.openRouterVoices,
+          [next]: routerModel.voices.includes(savedVoice) ? savedVoice : routerModel.voices[0],
+        },
+      };
+    });
+  };
+  const setVoice = (next: string) => readAloudSettings.update((s) => engine === 'openrouter'
+    ? { ...s, openRouterVoices: { ...s.openRouterVoices, [model]: next } }
+    : { ...s, voices: { ...s.voices, [engine]: next } });
+
+  const saveKey = async (value: string) => {
+    const key = value.trim();
+    setKeyError('');
+    setSavingKey(true);
+    try {
+      await invoke(key ? 'provider_api_key_set' : 'provider_api_key_delete',
+        key ? { provider: engine, apiKey: key } : { provider: engine });
+      setAccountVoices([]);
+      setVoicesError('');
+      setKeyExists(Boolean(key));
+      setKeyInput('');
+    } catch (error) {
+      setKeyError(explainError(error).summary);
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
+  const modelOptions = engine === 'openrouter'
+    ? (openRouterModels ?? []).map(({ id, name }) => ({ id, label: name }))
+    : engine === 'minimax' || engine === 'elevenlabs' ? READ_ALOUD_MODELS[engine] : [];
+  const availableVoices = engine === 'openrouter'
+    ? (selectedRouterModel?.voices ?? []).map((id) => ({ id, label: id }))
+    : engine === 'openai' ? OPENAI_READ_ALOUD_VOICES
+      : engine === 'xai' && !accountVoices.length ? XAI_READ_ALOUD_VOICES : accountVoices;
+  const voiceOptions = voice && !availableVoices.some((option) => option.id === voice)
+    ? [{ id: voice, label: voice === ELEVENLABS_DEFAULT_VOICE ? 'Rachel' : voice }, ...availableVoices]
+    : availableVoices;
+  const status = keyExists === null ? 'Checking for an API key…'
+    : keyExists ? `Using the saved ${vendor} API key. Cloud speech uses your API balance.`
+      : keyUrl ? `Add a ${vendor} API key below.` : `Add a ${vendor} API key under AI Providers > API keys.`;
+  const routerSelectionUnavailable = engine === 'openrouter' && openRouterModels !== null
+    && !selectedRouterModel?.voices.includes(voice);
+  const routerModelDetail = engine === 'openrouter'
+    ? modelsError || (openRouterModels === null ? 'Loading speech models…'
+      : routerSelectionUnavailable ? 'Choose an available model and voice.' : undefined)
+    : undefined;
+
+  return (
+    <>
+      <p className="shell-hint">{status}</p>
+      {(engine === 'openrouter' || modelOptions.length > 0) && (
+        <SettingRow title="Speech model" detail={routerModelDetail}>
+          <StyledSelect value={model} options={modelOptions} onChange={setModel} ariaLabel="Read aloud speech model" showSearch={engine === 'openrouter'} />
         </SettingRow>
       )}
-      {engine === 'elevenlabs' && (
+      <SettingRow title="Voice" detail={voicesError || undefined}>
+        <StyledSelect value={voice} options={voiceOptions} onChange={setVoice} ariaLabel="Read aloud voice" showSearch={voiceOptions.length > 10} />
+      </SettingRow>
+      {keyUrl && (
         <>
-          <SettingRow title="ElevenLabs key">
+          <SettingRow title={`${vendor} API key`}>
             <input
               type="password"
               value={keyInput}
               onChange={(event) => setKeyInput(event.target.value)}
-              placeholder={keyExists ? 'ElevenLabs key saved in OS keychain' : 'Paste your ElevenLabs key'}
+              placeholder={keyExists ? 'Key saved in OS keychain' : `Paste your ${vendor} key`}
             />
           </SettingRow>
           <div className="settings-action-row">
-            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={!keyInput.trim()}>Save key</button>
-            <button className="settings-secondary" onClick={() => void saveKey('')} disabled={!keyExists}>Clear key</button>
-            <button className="settings-link-button" onClick={() => openExternalUrl('https://elevenlabs.io/app/settings/api-keys')}>Get a key</button>
+            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={savingKey || keyExists === null || !keyInput.trim()}>Save key</button>
+            <button className="settings-secondary" onClick={() => void saveKey('')} disabled={savingKey || !keyExists}>Clear key</button>
+            <button className="settings-link-button" onClick={() => openExternalUrl(keyUrl)}>Get a key</button>
           </div>
         </>
       )}
       <div className="settings-action-row">
-        <button className="settings-secondary" onClick={() => previewReadAloud(engine, voice)} disabled={engine !== 'system' && !keyExists}>Test voice</button>
+        <button className="settings-secondary" onClick={previewReadAloud} disabled={!keyExists || savingKey || !voice || routerSelectionUnavailable}>Test voice</button>
       </div>
       {keyError && <p className="shell-hint">{keyError}</p>}
-    </Section>
+    </>
   );
 }
 

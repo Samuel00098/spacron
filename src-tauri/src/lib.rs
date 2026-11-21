@@ -336,6 +336,7 @@ pub fn run() {
             commands::images::generate_media,
             commands::speech::read_aloud_speak,
             commands::speech::read_aloud_voices,
+            commands::speech::read_aloud_openrouter_models,
             commands::images::allow_generations_dir,
             commands::images::list_generations,
             commands::images::save_edit_mark,

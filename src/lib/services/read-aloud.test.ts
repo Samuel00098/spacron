@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { speakableText, speechChunks } from './read-aloud';
+import { describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+import { get } from '$lib/stores/storeCompat';
+import { readAloudSettings } from '$lib/stores/readAloud';
+import { previewReadAloud, speakableText, speakText, speechChunks, stopReadAloud } from './read-aloud';
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
 describe('read aloud', () => {
   it('reads Markdown as prose: code is announced, icons dropped, list items pause', () => {
@@ -13,5 +18,28 @@ describe('read aloud', () => {
     const long = speechChunks(`${'word '.repeat(80).trim()}.`, 60);
     expect(long.every((chunk) => chunk.length <= 60)).toBe(true);
     expect(long.join(' ')).toBe(`${'word '.repeat(80).trim()}.`);
+  });
+
+  it('uses the selected OpenRouter model and its voice for preview and completion', () => {
+    const previous = get(readAloudSettings);
+    const model = 'microsoft/mai-voice-2.1';
+    const voice = 'en-US-Harper:MAI-Voice-2.1';
+    vi.mocked(invoke).mockRejectedValue(new Error('No network in this test'));
+    readAloudSettings.set({
+      engine: 'openrouter',
+      models: { openrouter: model },
+      voices: {},
+      openRouterVoices: { [model]: voice },
+    });
+    try {
+      previewReadAloud();
+      expect(invoke).toHaveBeenLastCalledWith('read_aloud_speak', expect.objectContaining({ provider: 'openrouter', model, voice }));
+      speakText('Agent finished.');
+      expect(invoke).toHaveBeenLastCalledWith('read_aloud_speak', { provider: 'openrouter', model, voice, text: 'Agent finished.' });
+    } finally {
+      stopReadAloud();
+      readAloudSettings.set(previous);
+      vi.mocked(invoke).mockReset();
+    }
   });
 });

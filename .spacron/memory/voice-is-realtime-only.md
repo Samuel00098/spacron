@@ -1,12 +1,14 @@
-# Voice output is realtime-only; TTS is gone
+# Live voice and Read aloud
 
-Since 2026-08-25 Spacron never synthesizes speech *on its own*. Two separate
-paths, no overlap, plus one user-pressed exception (below):
+Spacron currently exposes dictation and Read aloud. The realtime Rust
+commands still exist, but the renderer no longer starts a live call. On
+2026-08-25 the earlier live voice pipeline was replaced with a direct
+speech-to-speech connection:
 
 - **Transcription** (`transcription-hotkey.ts`) — speech-to-text only, lands
   text at the caret or in a terminal. Never speaks. See
   [[transcription-hotkey]].
-- **Speech-to-speech** — one live realtime call (`realtime-voice.ts`), OpenAI
+- **Former speech-to-speech path** — one live realtime call (`realtime-voice.ts`), OpenAI
   over WebRTC or xAI Grok over WebSocket. The model owns the mic and speaks for
   itself; barge-in is server-side.
 
@@ -55,9 +57,9 @@ through.
 
 Related: [[transcription-hotkey]], [[prompt-bar-is-voice-only]]
 
-## Entering voice mode (2026-08-25)
+## Former realtime shortcuts (2026-08-25)
 
-A **bare tap of left Alt** toggles a realtime call from anywhere in the app,
+A **bare tap of left Alt** used to toggle a realtime call from anywhere in the app,
 including while the caret is in a text input or a dialog. The old
 `voiceShortcutArmedRef` (which required clicking the bar first) was removed at
 the user's explicit request, with the tradeoff stated: a stray Alt tap now opens
@@ -65,17 +67,16 @@ the mic and starts a call billed per audio token. That is why the gesture stays
 a *deliberate bare tap* via `alt-tap-gesture.ts` — cancelled by any modifier or
 any other key — rather than "Alt was involved". Don't loosen it further.
 
-`Ctrl+Shift+M` (`launchVoiceMode`) is a second, separate entry point and still
-goes through AppShell's normal bubble handler, so it DOES stand down for modals.
+`Ctrl+Shift+M` (`launchVoiceMode`) was a second entry point. The bare Alt
+gesture now starts dictation.
 
-## Exception: Read aloud (2026-10-13)
+## Read aloud
 
-The chat's per-message **Read aloud** button speaks one reply when, and only
-when, the user presses it (`services/read-aloud.ts`). Engines: the OS voices
-via Web Speech (free, robotic; WebView2 on Windows exposes only the old SAPI
-voices), or a cloud voice through `commands/speech.rs` (`read_aloud_speak`:
-OpenAI `gpt-4o-mini-tts` on the OpenAI key, ElevenLabs on its own
-`elevenlabs` keychain key). Choice lives in `stores/readAloud.ts`, set in
-Settings > Voice > Read aloud. It is NOT a revival of reply TTS: nothing
-auto-speaks, there is no voice brain, and agent completion cues stay a chime.
-Don't wire it into turn completion.
+Chat playback and agent completion announcements share the engine, model, and
+voice in Settings > Voice > Read aloud. The completion toggle selects speech
+when completion announcements are enabled. Keep these preferences separate
+from realtime conversation settings. The voice service sends one text chunk at
+a time and reads cloud keys through the Rust backend. OpenRouter's model and
+voice choices come from its speech catalog, which includes the output formats
+each model supports. Only models with selectable voices and MP3 output appear
+in the picker because the player consumes MP3 blobs.
