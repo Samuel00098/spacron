@@ -2125,10 +2125,22 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   border-radius: 6px;
   padding: 2.5px 7px;
   min-width: 0;
-  max-width: 100%;
   box-sizing: border-box;
   background: var(--tc-surface, color-mix(in srgb, var(--bg-secondary, #1a1a20) 65%, transparent));
   line-height: 1.35;
+}
+
+.structured-chat-task.has-stop,
+.structured-chat-task:has(.structured-chat-task-stop) {
+  flex: 1 1 280px;
+  max-width: 100%;
+}
+
+.structured-chat-task.no-stop,
+.structured-chat-task:not(:has(.structured-chat-task-stop)):not(.has-stop) {
+  flex: 1 1 calc(25% - 6px);
+  min-width: 120px;
+  max-width: calc(33.333% - 5px);
 }
 
 .structured-chat-task-name {
@@ -2144,7 +2156,33 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   white-space: nowrap;
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.structured-chat-task.has-stop .structured-chat-task-detail,
+.structured-chat-task:has(.structured-chat-task-stop) .structured-chat-task-detail {
   max-width: 440px;
+}
+
+.structured-chat-task.no-stop .structured-chat-task-detail,
+.structured-chat-task:not(:has(.structured-chat-task-stop)):not(.has-stop) .structured-chat-task-detail {
+  max-width: 130px;
+}
+
+@media (max-width: 560px) {
+  .structured-chat-task.no-stop,
+  .structured-chat-task:not(:has(.structured-chat-task-stop)):not(.has-stop) {
+    flex: 1 1 calc(50% - 6px);
+    max-width: calc(50% - 6px);
+    min-width: 100px;
+  }
+}
+
+@media (max-width: 380px) {
+  .structured-chat-task.no-stop,
+  .structured-chat-task:not(:has(.structured-chat-task-stop)):not(.has-stop) {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
 }
 
 .structured-chat-task-stop {
