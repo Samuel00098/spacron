@@ -7,6 +7,7 @@ import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import type { ChatReasoningEffort } from '$lib/types/chat';
 import type { AgentPlacement } from '$lib/stores/agentPlacement';
+import { AgentSparklesIcon } from './TasksIcons';
 import '$lib/components/shared/AgentPlacementModal.css';
 
 function WorktreeIcon() {
@@ -173,8 +174,8 @@ export default function TasksAgentReviewModal({
       <div className="apm-card" ref={cardRef} tabIndex={-1} style={{ width: 500 }}>
         {/* Header */}
         <header className="apm-header">
-          <span className="apm-badge" aria-hidden="true">
-            <WorktreeIcon />
+          <span className="apm-badge" aria-hidden="true" style={{ color: 'var(--accent)' }}>
+            <AgentSparklesIcon size={18} />
           </span>
           <div className="apm-header-text">
             <span className="apm-title">Configure this agent launch</span>

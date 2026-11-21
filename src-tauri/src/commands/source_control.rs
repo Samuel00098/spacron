@@ -188,7 +188,7 @@ pub(crate) fn parse_remote_url(url: &str) -> Option<(String, String, String)> {
 }
 
 /// Retrieve authentication token for the given provider.
-/// Tries keychain first, then gh CLI fallback if available.
+/// Tries keychain first, then CLI fallback (gh / glab), and env vars.
 pub(crate) fn resolve_token(provider: &str) -> Option<String> {
     if provider == "github" {
         if let Ok(token) = read_token() {
@@ -199,6 +199,31 @@ pub(crate) fn resolve_token(provider: &str) -> Option<String> {
         if let Ok(Some(token)) = gh_auth_token() {
             if !token.is_empty() {
                 return Some(token);
+            }
+        }
+        if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")) {
+            if !token.trim().is_empty() {
+                return Some(token.trim().to_string());
+            }
+        }
+    } else if provider == "gitlab" {
+        if let Ok(token) = std::env::var("GITLAB_TOKEN").or_else(|_| std::env::var("GL_TOKEN")).or_else(|_| std::env::var("CI_JOB_TOKEN")) {
+            if !token.trim().is_empty() {
+                return Some(token.trim().to_string());
+            }
+        }
+        if let Ok(output) = std::process::Command::new("glab").args(["auth", "token"]).output() {
+            if output.status.success() {
+                let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !token.is_empty() {
+                    return Some(token);
+                }
+            }
+        }
+    } else if provider == "bitbucket" {
+        if let Ok(token) = std::env::var("BITBUCKET_TOKEN") {
+            if !token.trim().is_empty() {
+                return Some(token.trim().to_string());
             }
         }
     }
@@ -1419,15 +1444,97 @@ pub async fn source_control_list_workflow_runs(
         .map_err(|_| "Project has no origin remote configured.".to_string())?;
 
     let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
-        "Origin remote is not a recognized GitHub repository.".to_string()
+        "Origin remote is not a recognized GitHub or GitLab repository.".to_string()
     })?;
 
     let token = resolve_token(&provider).ok_or_else(|| {
-        "No authentication token found. Please sign in via Settings or GitHub CLI.".to_string()
+        if provider == "gitlab" {
+            "No GitLab authentication token found. Set $GITLAB_TOKEN or log in via glab (`glab auth login`).".to_string()
+        } else {
+            "No authentication token found. Please sign in via Settings, $GITHUB_TOKEN, or GitHub CLI (`gh auth login`).".to_string()
+        }
     })?;
 
     let client = http_client();
     let page_num = page.unwrap_or(1);
+
+    if provider == "gitlab" {
+        let project_encoded = format!("{owner}%2F{repo_name}");
+        let mut url = format!("https://gitlab.com/api/v4/projects/{project_encoded}/pipelines?per_page=30&page={page_num}");
+        if let Some(b) = branch.filter(|s| !s.trim().is_empty() && s != "all") {
+            url.push_str(&format!("&ref={b}"));
+        }
+        if let Some(s) = status_filter.filter(|s| !s.trim().is_empty() && s != "all") {
+            let gl_status = match s.as_str() {
+                "in_progress" => "running",
+                "completed" | "success" => "success",
+                "failure" => "failed",
+                "queued" => "pending",
+                other => other,
+            };
+            url.push_str(&format!("&status={gl_status}"));
+        }
+
+        let response = client
+            .get(&url)
+            .header("PRIVATE-TOKEN", &token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch GitLab pipelines: {}", e.without_url()))?;
+
+        if !response.status().is_success() {
+            let err_text = response.text().await.unwrap_or_default();
+            return Err(format!("GitLab API error fetching pipelines: {err_text}"));
+        }
+
+        let items: Vec<serde_json::Value> = response.json().await.map_err(|e| e.to_string())?;
+        let mut result = Vec::new();
+        for item in items {
+            let id = item.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let head_branch = item.get("ref").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let head_sha = item.get("sha").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let gl_status = item.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
+            let (status, conclusion) = match gl_status {
+                "running" => ("in_progress".to_string(), None),
+                "success" => ("completed".to_string(), Some("success".to_string())),
+                "failed" => ("completed".to_string(), Some("failure".to_string())),
+                "canceled" => ("completed".to_string(), Some("cancelled".to_string())),
+                "skipped" => ("completed".to_string(), Some("skipped".to_string())),
+                "manual" => ("queued".to_string(), Some("action_required".to_string())),
+                _ => ("queued".to_string(), None),
+            };
+            let created_at = item.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let updated_at = item.get("updated_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let html_url = item.get("web_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let source = item.get("source").and_then(|v| v.as_str()).unwrap_or("pipeline").to_string();
+
+            result.push(WorkflowRun {
+                id,
+                name: format!("Pipeline #{id}"),
+                display_title: format!("Pipeline #{id} ({head_branch})"),
+                run_number: id,
+                event: source,
+                status,
+                conclusion,
+                head_branch,
+                head_sha,
+                actor: IssueAuthor {
+                    login: owner.clone(),
+                    avatar_url: String::new(),
+                },
+                created_at: created_at.clone(),
+                updated_at,
+                run_started_at: Some(created_at),
+                html_url,
+            });
+        }
+        return Ok(result);
+    }
+
+    if provider != "github" {
+        return Err(format!("CI/CD pipelines are not yet supported for provider '{provider}'. Supported hosts: GitHub Actions and GitLab CI/CD."));
+    }
+
     let mut url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs?per_page=30&page={page_num}");
     if let Some(b) = branch.filter(|s| !s.trim().is_empty() && s != "all") {
         url.push_str(&format!("&branch={b}"));
@@ -1512,7 +1619,7 @@ pub async fn source_control_get_workflow_run_jobs(
         .map_err(|_| "Project has no origin remote configured.".to_string())?;
 
     let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
-        "Origin remote is not a recognized GitHub repository.".to_string()
+        "Origin remote is not a recognized GitHub or GitLab repository.".to_string()
     })?;
 
     let token = resolve_token(&provider).ok_or_else(|| {
@@ -1520,6 +1627,54 @@ pub async fn source_control_get_workflow_run_jobs(
     })?;
 
     let client = http_client();
+
+    if provider == "gitlab" {
+        let project_encoded = format!("{owner}%2F{repo_name}");
+        let url = format!("https://gitlab.com/api/v4/projects/{project_encoded}/pipelines/{run_id}/jobs");
+        let response = client
+            .get(&url)
+            .header("PRIVATE-TOKEN", &token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch GitLab pipeline jobs: {}", e.without_url()))?;
+
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+
+        let jobs_arr: Vec<serde_json::Value> = response.json().await.unwrap_or_default();
+        let mut result = Vec::new();
+        for j in jobs_arr {
+            let id = j.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let name = j.get("name").and_then(|v| v.as_str()).unwrap_or("job").to_string();
+            let gl_status = j.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
+            let (status, conclusion) = match gl_status {
+                "running" => ("in_progress".to_string(), None),
+                "success" => ("completed".to_string(), Some("success".to_string())),
+                "failed" => ("completed".to_string(), Some("failure".to_string())),
+                "canceled" => ("completed".to_string(), Some("cancelled".to_string())),
+                "skipped" => ("completed".to_string(), Some("skipped".to_string())),
+                _ => ("queued".to_string(), None),
+            };
+            let started_at = j.get("started_at").and_then(|v| v.as_str()).map(ToString::to_string);
+            let completed_at = j.get("finished_at").and_then(|v| v.as_str()).map(ToString::to_string);
+            let html_url = j.get("web_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+            result.push(WorkflowJob {
+                id,
+                run_id,
+                name,
+                status,
+                conclusion,
+                started_at,
+                completed_at,
+                html_url,
+                steps: Vec::new(),
+            });
+        }
+        return Ok(result);
+    }
+
     let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/jobs");
 
     let response = client
@@ -1599,7 +1754,7 @@ pub async fn source_control_rerun_workflow(
         .map_err(|_| "Project has no origin remote configured.".to_string())?;
 
     let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
-        "Origin remote is not a recognized GitHub repository.".to_string()
+        "Origin remote is not a recognized GitHub or GitLab repository.".to_string()
     })?;
 
     let token = resolve_token(&provider).ok_or_else(|| {
@@ -1607,6 +1762,25 @@ pub async fn source_control_rerun_workflow(
     })?;
 
     let client = http_client();
+
+    if provider == "gitlab" {
+        let project_encoded = format!("{owner}%2F{repo_name}");
+        let url = format!("https://gitlab.com/api/v4/projects/{project_encoded}/pipelines/{run_id}/retry");
+        let response = client
+            .post(&url)
+            .header("PRIVATE-TOKEN", &token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to retry GitLab pipeline: {}", e.without_url()))?;
+
+        return if response.status().is_success() || response.status().as_u16() == 201 {
+            Ok(true)
+        } else {
+            let msg = response.text().await.unwrap_or_default();
+            Err(format!("Could not retry GitLab pipeline: {msg}"))
+        };
+    }
+
     let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/rerun");
 
     let response = client
@@ -1640,7 +1814,7 @@ pub async fn source_control_cancel_workflow_run(
         .map_err(|_| "Project has no origin remote configured.".to_string())?;
 
     let (provider, owner, repo_name) = parse_remote_url(&remote_url).ok_or_else(|| {
-        "Origin remote is not a recognized GitHub repository.".to_string()
+        "Origin remote is not a recognized GitHub or GitLab repository.".to_string()
     })?;
 
     let token = resolve_token(&provider).ok_or_else(|| {
@@ -1648,6 +1822,25 @@ pub async fn source_control_cancel_workflow_run(
     })?;
 
     let client = http_client();
+
+    if provider == "gitlab" {
+        let project_encoded = format!("{owner}%2F{repo_name}");
+        let url = format!("https://gitlab.com/api/v4/projects/{project_encoded}/pipelines/{run_id}/cancel");
+        let response = client
+            .post(&url)
+            .header("PRIVATE-TOKEN", &token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to cancel GitLab pipeline: {}", e.without_url()))?;
+
+        return if response.status().is_success() || response.status().as_u16() == 200 {
+            Ok(true)
+        } else {
+            let msg = response.text().await.unwrap_or_default();
+            Err(format!("Could not cancel GitLab pipeline: {msg}"))
+        };
+    }
+
     let url = format!("{GITHUB_API}/repos/{owner}/{repo_name}/actions/runs/{run_id}/cancel");
 
     let response = client

@@ -176,6 +176,16 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
     return `${min}m ${remSec}s`;
   };
 
+  const formatExactTime = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  };
+
   const formatRelativeTime = (dateStr: string) => {
     if (!dateStr) return '';
     const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
@@ -439,13 +449,25 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                       </code>
                     )}
 
-                    {/* Time & Duration */}
-                    <span>
-                      {formatRelativeTime(run.runStartedAt || run.createdAt)}
-                      {run.runStartedAt && run.updatedAt && (
-                        <span> · took {formatDuration(run.runStartedAt, run.updatedAt)}</span>
+                    {/* Time, Start, End & Working State */}
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      {run.status === 'in_progress' ? (
+                        <span className="actions-live-indicator working">
+                          <span className="actions-live-dot" /> Working now (started {formatExactTime(run.runStartedAt || run.createdAt)})
+                        </span>
+                      ) : run.status === 'queued' ? (
+                        <span className="actions-live-indicator queued">
+                          ⏳ Queued · Waiting to be picked up
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                          Started {formatExactTime(run.runStartedAt || run.createdAt)}
+                          {run.updatedAt && (
+                            <span> → Ended {formatExactTime(run.updatedAt)} ({formatDuration(run.runStartedAt || run.createdAt, run.updatedAt)})</span>
+                          )}
+                        </span>
                       )}
-                    </span>
+                    </div>
                   </div>
 
                   {/* Right: Author */}
@@ -484,6 +506,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                       jobs.map((job) => {
                         const jobSuccess = job.conclusion === 'success';
                         const jobFailed = job.conclusion === 'failure';
+                        const isWorkingNow = job.status === 'in_progress';
                         return (
                           <div
                             key={job.id}
@@ -498,7 +521,7 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                             }}
                           >
                             {/* Job Header */}
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 {jobSuccess ? (
                                   <CheckCircleIcon size={12} className="check-glyph-success" />
@@ -510,12 +533,28 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                                 <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-primary)' }}>
                                   {job.name}
                                 </span>
+                                {isWorkingNow ? (
+                                  <span className="actions-job-pill working">
+                                    <span className="actions-live-dot" /> Working now
+                                  </span>
+                                ) : job.status === 'queued' ? (
+                                  <span className="actions-job-pill queued">Queued · Waiting</span>
+                                ) : jobSuccess ? (
+                                  <span className="actions-job-pill success">Finished</span>
+                                ) : jobFailed ? (
+                                  <span className="actions-job-pill failed">Failed</span>
+                                ) : null}
                               </div>
 
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, color: 'var(--text-muted)' }}>
-                                {job.startedAt && job.completedAt && (
-                                  <span>{formatDuration(job.startedAt, job.completedAt)}</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: 'var(--text-muted)' }}>
+                                {job.startedAt && (
+                                  <span>Started: {formatExactTime(job.startedAt)}</span>
                                 )}
+                                {job.completedAt ? (
+                                  <span>Ended: {formatExactTime(job.completedAt)} ({formatDuration(job.startedAt, job.completedAt)})</span>
+                                ) : job.startedAt ? (
+                                  <span style={{ color: 'var(--accent)', fontWeight: 500 }}>Running for {formatDuration(job.startedAt)}</span>
+                                ) : null}
                                 {job.htmlUrl && (
                                   <button
                                     type="button"
@@ -531,10 +570,11 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
 
                             {/* Job Steps Breakdown */}
                             {job.steps.length > 0 && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4, paddingLeft: 18 }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, paddingLeft: 18 }}>
                                 {job.steps.map((step) => {
                                   const stepSuccess = step.conclusion === 'success';
                                   const stepFailed = step.conclusion === 'failure';
+                                  const stepWorking = step.status === 'in_progress';
                                   return (
                                     <div
                                       key={step.number}
@@ -550,13 +590,23 @@ export default function TasksActionsList({ projectId }: TasksActionsListProps) {
                                         <span style={{ fontSize: 9 }}>
                                           {stepSuccess ? '✓' : stepFailed ? '✗' : '•'}
                                         </span>
-                                        <span>{step.name}</span>
+                                        <span style={{ fontWeight: stepWorking ? 600 : 400 }}>{step.name}</span>
+                                        {stepWorking && (
+                                          <span className="actions-step-tag working">active step</span>
+                                        )}
                                       </div>
-                                      {step.startedAt && step.completedAt && (
-                                        <span style={{ fontSize: 9.5, color: 'var(--text-muted)' }}>
-                                          {formatDuration(step.startedAt, step.completedAt)}
-                                        </span>
-                                      )}
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 9.5, color: 'var(--text-muted)' }}>
+                                        {step.startedAt && (
+                                          <span>{formatExactTime(step.startedAt)}</span>
+                                        )}
+                                        {step.completedAt ? (
+                                          <span>→ {formatExactTime(step.completedAt)} ({formatDuration(step.startedAt, step.completedAt)})</span>
+                                        ) : step.startedAt ? (
+                                          <span style={{ color: 'var(--accent)', fontWeight: 500 }}>running ({formatDuration(step.startedAt)})</span>
+                                        ) : (
+                                          <span>queued</span>
+                                        )}
+                                      </div>
                                     </div>
                                   );
                                 })}
