@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { completionVerb, completionHeadline } from './AgentNotifications';
+import { completionVerb, completionHeadline, groupCompletions } from './AgentNotifications';
+import type { ChatMessage } from '$lib/stores/orchestrator';
+
+function mockMsg(
+  id: string,
+  ts: number,
+  status: 'done' | 'failed' | 'blocked',
+  endedBy?: 'declared' | 'exit' | 'inferred',
+): ChatMessage {
+  return {
+    id,
+    ts,
+    role: 'assistant',
+    text: '',
+    completion: {
+      taskId: `task-${id}`,
+      agentName: 'Agent',
+      taskTitle: `Task ${id}`,
+      status,
+      endedBy,
+    } as any,
+  };
+}
 
 /**
  * The card is only ever allowed to claim what actually happened. These are the
@@ -62,5 +84,46 @@ describe('what an exit is allowed to claim', () => {
     expect(silentFor('declared')).toBe(false);
     expect(silentFor('exit')).toBe(false);
     expect(silentFor('inferred')).toBe(true);
+  });
+});
+
+describe('completion grouping', () => {
+  it('groups declared, exit, and inferred completions apart', () => {
+    const msgs: ChatMessage[] = [
+      mockMsg('1', 100, 'done', 'declared'),
+      mockMsg('2', 200, 'done', 'exit'),
+      mockMsg('3', 300, 'done', 'inferred'),
+      mockMsg('4', 400, 'done', 'declared'),
+      mockMsg('5', 500, 'done', 'exit'),
+    ];
+    const groups = groupCompletions(msgs);
+    expect(groups.map((g) => g.key).sort()).toEqual(['cp-declared', 'cp-exit', 'cp-inferred']);
+
+    const declared = groups.find((g) => g.key === 'cp-declared')!;
+    expect(declared.members.map((m) => m.id)).toEqual(['1', '4']);
+
+    const exit = groups.find((g) => g.key === 'cp-exit')!;
+    expect(exit.members.map((m) => m.id)).toEqual(['2', '5']);
+
+    const inferred = groups.find((g) => g.key === 'cp-inferred')!;
+    expect(inferred.members.map((m) => m.id)).toEqual(['3']);
+  });
+
+  it('keeps non-done (failed and blocked) completions individual', () => {
+    const msgs: ChatMessage[] = [
+      mockMsg('1', 100, 'failed'),
+      mockMsg('2', 200, 'blocked'),
+      mockMsg('3', 300, 'done', 'declared'),
+    ];
+    const groups = groupCompletions(msgs);
+    expect(groups.map((g) => g.key).sort()).toEqual(['cp-1', 'cp-2', 'cp-declared']);
+  });
+
+  it('treats missing endedBy as declared for backwards compatibility', () => {
+    const msgs: ChatMessage[] = [
+      mockMsg('1', 100, 'done', undefined),
+    ];
+    const groups = groupCompletions(msgs);
+    expect(groups[0].key).toBe('cp-declared');
   });
 });

@@ -49,14 +49,42 @@ function formatSecs(s: number | null | undefined): string {
   return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-type CompletionGroup = {
+export type CompletionGroup = {
   key: string;
   status: 'done' | 'failed' | 'blocked';
   members: ChatMessage[];
 };
 
-function newestTs(group: CompletionGroup): number {
+export function newestTs(group: CompletionGroup): number {
   return Math.max(...group.members.map((m) => m.ts));
+}
+
+/**
+ * Partition pending completion messages into groups.
+ *
+ * "Finished", "went quiet", and "exited" are grouped apart even though all three
+ * are `done`. A mixed group takes its wording from the newest member, which would let
+ * one declared finish label an exit or guess as "N agents finished".
+ *
+ * Failed and blocked cards stay individual — each one is an actionable decision that
+ * should never be buried inside a list.
+ */
+export function groupCompletions(pending: ChatMessage[]): CompletionGroup[] {
+  const others = pending.filter((m) => m.completion!.status !== 'done');
+
+  const groups: CompletionGroup[] = [];
+  for (const source of ['declared', 'inferred', 'exit'] as const) {
+    const members = pending
+      .filter((m) => m.completion!.status === 'done' && (m.completion!.endedBy ?? 'declared') === source)
+      .slice(-MAX_COMPLETION_CARDS);
+    if (members.length > 0) groups.push({ key: `cp-${source}`, status: 'done', members });
+  }
+  for (const m of others) {
+    groups.push({ key: `cp-${m.id}`, status: m.completion!.status, members: [m] });
+  }
+  // Ascending by time → newest sits at the bottom, nearest the corner.
+  groups.sort((a, b) => newestTs(a) - newestTs(b));
+  return groups;
 }
 
 type NotifItem =
@@ -162,27 +190,7 @@ export default function AgentNotifications() {
           !m.completion.silent,
       )
       .slice(-MAX_COMPLETION_CARDS * 3);
-    // "Finished" and "went quiet" are grouped apart even though both are `done`.
-    // A mixed group takes its wording from the newest member, which would let
-    // one declared finish label two guesses as "3 agents finished".
-    const isQuiet = (m: (typeof pending)[number]) => m.completion!.endedBy === 'inferred';
-    const done = pending
-      .filter((m) => m.completion!.status === 'done' && !isQuiet(m))
-      .slice(-MAX_COMPLETION_CARDS);
-    const quiet = pending
-      .filter((m) => m.completion!.status === 'done' && isQuiet(m))
-      .slice(-MAX_COMPLETION_CARDS);
-    const others = pending.filter((m) => m.completion!.status !== 'done');
-
-    const groups: CompletionGroup[] = [];
-    if (done.length > 0) groups.push({ key: 'cp-done', status: 'done', members: done });
-    if (quiet.length > 0) groups.push({ key: 'cp-quiet', status: 'done', members: quiet });
-    for (const m of others) {
-      groups.push({ key: `cp-${m.id}`, status: m.completion!.status, members: [m] });
-    }
-    // Ascending by time → newest sits at the bottom, nearest the corner.
-    groups.sort((a, b) => newestTs(a) - newestTs(b));
-    return groups;
+    return groupCompletions(pending);
   }, [allChat, projectId, dismissed]);
 
   // Auto-clear a plain "finished" burst once its summaries have settled.
