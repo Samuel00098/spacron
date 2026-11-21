@@ -13,6 +13,7 @@ import {
 import MarkdownPreview from '$lib/components/preview/MarkdownPreview';
 import TasksDiffViewer from './TasksDiffViewer';
 import TasksPRTimeline from './TasksPRTimeline';
+import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
 import { showToast } from '$lib/stores/notification';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import {
@@ -27,6 +28,12 @@ import {
   FileCodeIcon,
   ClockIcon,
 } from './TasksIcons';
+
+const MERGE_METHOD_OPTIONS: DropdownOption[] = [
+  { value: 'squash', label: 'Squash and merge' },
+  { value: 'merge', label: 'Create a merge commit' },
+  { value: 'rebase', label: 'Rebase and merge' },
+];
 
 export default function TasksPullRequestDetail({
   projectId,
@@ -324,15 +331,14 @@ export default function TasksPullRequestDetail({
                     </div>
                   </div>
 
-                  <select
-                    className="pr-merge-method-select"
-                    value={mergeMethod}
-                    onChange={(e) => setMergeMethod(e.target.value as any)}
-                  >
-                    <option value="squash">Squash and merge</option>
-                    <option value="merge">Create a merge commit</option>
-                    <option value="rebase">Rebase and merge</option>
-                  </select>
+                  <div className="pr-merge-dropdown-wrap">
+                    <Dropdown
+                      options={MERGE_METHOD_OPTIONS}
+                      value={mergeMethod}
+                      onChange={(val) => setMergeMethod(val as any)}
+                      ariaLabel="Merge method"
+                    />
+                  </div>
                 </div>
 
                 {mergeError && <div className="pr-merge-error-banner">⚠ {mergeError}</div>}

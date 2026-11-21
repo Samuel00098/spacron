@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { WorkItemPR } from '$lib/services/work-items';
+import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown';
 import {
   SearchIcon,
   PullRequestIcon,
@@ -7,6 +8,14 @@ import {
   XCircleIcon,
   GitBranchIcon,
 } from './TasksIcons';
+
+const SORT_OPTIONS: DropdownOption[] = [
+  { value: 'newest', label: 'Sort: Newest' },
+  { value: 'oldest', label: 'Sort: Oldest' },
+  { value: 'updated', label: 'Sort: Recently Updated' },
+  { value: 'title-asc', label: 'Sort: Title (A-Z)' },
+  { value: 'title-desc', label: 'Sort: Title (Z-A)' },
+];
 
 export default function TasksPullRequestsList({
   pullRequests,
@@ -32,6 +41,16 @@ export default function TasksPullRequestsList({
     });
     return Array.from(set).sort();
   }, [pullRequests]);
+
+  const authorOptions = useMemo<DropdownOption[]>(() => {
+    return [
+      { value: 'all', label: 'Author: All' },
+      ...uniqueAuthors.map((auth) => ({
+        value: auth,
+        label: `Author: @${auth}`,
+      })),
+    ];
+  }, [uniqueAuthors]);
 
   const filteredPRs = useMemo(() => {
     const list = pullRequests.filter((item) => {
@@ -87,54 +106,25 @@ export default function TasksPullRequestsList({
           </div>
 
           {/* Sort Selector */}
-          <select
-            className="tasks-filter-pill"
-            style={{
-              padding: '4px 8px',
-              fontSize: 11,
-              background: 'var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent))',
-              border: '1px solid var(--border, rgba(127, 127, 127, 0.15))',
-              borderRadius: 6,
-              color: 'var(--text-primary)',
-              cursor: 'pointer',
-              outline: 'none',
-            }}
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-            title="Sort pull requests"
-          >
-            <option value="newest">Sort: Newest</option>
-            <option value="oldest">Sort: Oldest</option>
-            <option value="updated">Sort: Recently Updated</option>
-            <option value="title-asc">Sort: Title (A-Z)</option>
-            <option value="title-desc">Sort: Title (Z-A)</option>
-          </select>
+          <div className="tasks-filter-dropdown-wrap">
+            <Dropdown
+              options={SORT_OPTIONS}
+              value={sortBy}
+              onChange={(val) => setSortBy(val as any)}
+              ariaLabel="Sort pull requests"
+            />
+          </div>
 
           {/* Author Filter (if multiple authors exist) */}
           {uniqueAuthors.length > 1 && (
-            <select
-              className="tasks-filter-pill"
-              style={{
-                padding: '4px 8px',
-                fontSize: 11,
-                background: 'var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent))',
-                border: '1px solid var(--border, rgba(127, 127, 127, 0.15))',
-                borderRadius: 6,
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-                outline: 'none',
-              }}
-              value={authorFilter}
-              onChange={(e) => setAuthorFilter(e.target.value)}
-              title="Filter by author"
-            >
-              <option value="all">Author: All</option>
-              {uniqueAuthors.map((auth) => (
-                <option key={auth} value={auth}>
-                  Author: @{auth}
-                </option>
-              ))}
-            </select>
+            <div className="tasks-filter-dropdown-wrap">
+              <Dropdown
+                options={authorOptions}
+                value={authorFilter}
+                onChange={(val) => setAuthorFilter(val)}
+                ariaLabel="Filter by author"
+              />
+            </div>
           )}
         </div>
 

@@ -165,7 +165,7 @@
   height: auto;
   border-radius: 8px;
   margin: 1.8rem 0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: none !important;
 }
 
 .markdown-container .markdown-body hr {

@@ -212,12 +212,12 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  /* A hairline of top padding so the hover-lift (translateY(-1px)) on the
-     first card never clips against the scroll container edge. */
+  /* A hairline of top padding so the card never clips against the scroll container edge. */
   padding: 1px 0 10px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
   min-height: 0;
+  box-shadow: none !important;
 }
 
 /* ─── Task card ─── */
@@ -227,15 +227,15 @@
   align-items: flex-start;
   gap: 8px;
   padding: 9px 9px 9px 11px;
-  background: var(--app-surface);
-  border: 1px solid var(--border);
-  border-left-width: 3px;
+  background: var(--app-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-left-width: 3px !important;
   border-radius: 9px;
-  box-shadow: none;
+  box-shadow: none !important;
+  transform: none !important;
   transition:
     background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    transform var(--dur-base) var(--ease-spring);
+    border-color var(--dur-fast) var(--ease-out);
   /* Entrance: cards rise and fade in as they enter a column — new tasks and
      cross-column arrivals remount, so the animation plays on mount. The
      board's first paint suppresses it via `.no-enter` below. */
@@ -245,13 +245,15 @@
 
 .tasks-panel .task-card:active {
   cursor: grabbing;
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .tasks-panel .task-card:hover {
-  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 4%, var(--app-surface)));
-  border-color: var(--border-focus);
-  box-shadow: none;
-  transform: translateY(-1px);
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 4%, var(--app-surface))) !important;
+  border-color: var(--border-focus) !important;
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .tasks-panel .task-card.dragging {

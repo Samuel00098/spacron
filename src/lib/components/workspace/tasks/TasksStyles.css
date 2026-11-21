@@ -206,6 +206,45 @@
   font-weight: 600;
 }
 
+/* ─── Dropdown Wrappers in Tasks Header & Merge Bar ─── */
+.tasks-filter-dropdown-wrap .dropdown {
+  min-width: 140px;
+}
+
+.tasks-filter-dropdown-wrap .dd-trigger {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  box-shadow: none !important;
+}
+
+.tasks-filter-dropdown-wrap .dd-value {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.pr-merge-dropdown-wrap .dropdown {
+  min-width: 190px;
+}
+
+.pr-merge-dropdown-wrap .dd-trigger {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  background: var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  box-shadow: none !important;
+}
+
+.pr-merge-dropdown-wrap .dd-value {
+  font-size: 11.5px;
+  font-weight: 550;
+}
+
 /* ─── Work Item List ─── */
 .work-items-list-container {
   flex: 1;
@@ -215,7 +254,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--bg-primary, var(--app-surface));
+  background: var(--app-surface) !important;
+  box-shadow: none !important;
 }
 
 .work-item-card {
@@ -223,20 +263,22 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  background: var(--app-surface);
+  background: var(--app-surface) !important;
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
   cursor: pointer;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background 0.15s ease, border-color 0.15s ease;
   user-select: none;
-  box-shadow: none;
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .work-item-card:hover {
-  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 4%, var(--app-surface)));
-  border-color: var(--border-focus);
-  transform: translateY(-1px);
-  box-shadow: none;
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 4%, var(--app-surface))) !important;
+  border-color: var(--border-focus) !important;
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 .work-item-card-top {
@@ -379,7 +421,8 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: var(--bg-primary, var(--app-surface));
+  background: var(--app-surface) !important;
+  box-shadow: none !important;
 }
 
 .work-item-detail-topbar {
@@ -421,7 +464,8 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  background: var(--bg-primary, var(--app-surface));
+  background: var(--app-surface) !important;
+  box-shadow: none !important;
 }
 
 .work-item-header-block {
@@ -451,27 +495,38 @@
 }
 
 .work-item-detail-box {
-  background: var(--app-surface);
+  background: var(--app-surface) !important;
   padding: 16px;
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
-  box-shadow: none;
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.work-item-detail-box:hover {
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .work-item-detail-box .markdown-container,
-.comment-card .markdown-container {
+.comment-card .markdown-container,
+.pr-timeline-body .markdown-container {
   padding: 0;
-  background: transparent;
+  background: transparent !important;
   overflow-y: visible;
   height: auto;
+  box-shadow: none !important;
 }
 
 .work-item-detail-box .markdown-container .markdown-body,
-.comment-card .markdown-container .markdown-body {
+.comment-card .markdown-container .markdown-body,
+.pr-timeline-body .markdown-container .markdown-body {
   max-width: none;
   margin: 0;
   font-size: 13px;
   line-height: 1.55;
+  box-shadow: none !important;
 }
 
 /* ─── PR Tabs Shell ─── */
@@ -523,11 +578,13 @@
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  background: var(--app-surface);
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  background: var(--app-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
   border-radius: 8px;
   margin-top: 16px;
-  box-shadow: none;
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .pr-merge-header {
@@ -601,11 +658,18 @@
 }
 
 .diff-file-card {
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
   border-radius: 8px;
-  background: var(--app-surface);
+  background: var(--app-surface) !important;
   overflow: hidden;
-  box-shadow: none;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.diff-file-card:hover {
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .diff-file-header {
@@ -648,8 +712,9 @@
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre-wrap;
-  background: var(--bg-primary, var(--app-surface));
+  background: var(--app-surface) !important;
   color: var(--text-primary);
+  box-shadow: none !important;
 }
 
 .diff-line-add {
@@ -682,11 +747,18 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  background: var(--app-surface);
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  background: var(--app-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
   border-radius: 6px;
   font-size: 11.5px;
-  box-shadow: none;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.check-item-row:hover {
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .check-details-link-btn {
@@ -743,13 +815,20 @@
 
 .comment-card {
   padding: 12px 14px;
-  background: var(--app-surface);
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  background: var(--app-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
   border-radius: 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  box-shadow: none;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.comment-card:hover {
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .comment-card-header {
@@ -765,11 +844,13 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  background: var(--app-surface);
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  background: var(--app-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
   border-radius: 8px;
   margin-top: 14px;
-  box-shadow: none;
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .comment-textarea {
@@ -829,7 +910,8 @@
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   line-height: 1.5;
-  background: var(--app-surface);
+  background: var(--app-surface) !important;
+  box-shadow: none !important;
   overflow-x: auto;
 }
 
@@ -943,13 +1025,21 @@
 
 .pr-timeline-content-card {
   flex: 1;
-  background: var(--app-surface);
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.15));
+  background: var(--app-surface) !important;
+  border: 1px solid var(--border) !important;
+  border-color: var(--border) !important;
   border-radius: 8px;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.pr-timeline-content-card:hover {
+  box-shadow: none !important;
+  transform: none !important;
 }
 
 .pr-timeline-header {
