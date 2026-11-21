@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { activeProject, projects as projectsStore, switchToProject } from '$lib/stores/workspace';
 import { worktreesByProject } from '$lib/stores/projectWorktrees';
-import { accountsState, refreshAccounts } from '$lib/stores/agentAccounts';
+import { accountsState, refreshAccounts, selectAccount } from '$lib/stores/agentAccounts';
 import { showToast } from '$lib/stores/notification';
 import { quickSpawnAgent } from '$lib/services/quick-spawn';
 import HistoryBrand from './HistoryBrand.tsx';
@@ -180,6 +180,18 @@ export default function AgentHistoryTab() {
       showToast("This session's folder is outside the open project. Open that project to resume it.", 'warning');
       return;
     }
+    const activeAcct = accounts.accounts.find((a) => a.provider === row.agent && a.active);
+    const currentActiveId = activeAcct?.id ?? 'default';
+    const sessionAccountId = row.account ?? 'default';
+    if ((row.agent === 'claude' || row.agent === 'codex') && sessionAccountId !== currentActiveId) {
+      const sessionAcctName = sessionAccountLabel(row, accounts.accounts) ?? sessionAccountId;
+      const activeAcctName = activeAcct?.label ?? currentActiveId;
+      showToast(
+        `This session is in account "${sessionAcctName}", but the active account is "${activeAcctName}". Switch accounts to resume it.`,
+        'warning',
+      );
+      return;
+    }
     setBusy(rowKey(row));
     try {
       // A session only exists in the home of the account that wrote it, so it resumes under that account.
@@ -198,6 +210,12 @@ export default function AgentHistoryTab() {
     const expanded = open === key;
     const agent = HISTORY_AGENTS.find((a) => a.id === row.agent);
     const accountText = sessionAccountLabel(row, accounts.accounts);
+    const activeAcct = accounts.accounts.find((a) => a.provider === row.agent && a.active);
+    const currentActiveId = activeAcct?.id ?? 'default';
+    const sessionAccountId = row.account ?? 'default';
+    const isDifferentAccount = (row.agent === 'claude' || row.agent === 'codex') && sessionAccountId !== currentActiveId;
+    const sessionAcctName = accountText ?? sessionAccountId;
+    const activeAcctName = activeAcct?.label ?? currentActiveId;
     return (
       <li key={key} className={`ah-row${expanded ? ' is-open' : ''}`}>
         <div className="ah-row-main">
@@ -211,7 +229,29 @@ export default function AgentHistoryTab() {
             </span>
             <span className="ah-row-time" title={new Date(row.updatedMs).toLocaleString()}>{timeAgo(row.updatedMs)}</span>
           </button>
-          <button type="button" className="ah-btn" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : key)}>{expanded ? 'Hide details' : 'Show details'}</button>
+          <button
+            type="button"
+            className="ah-btn ah-btn-sm"
+            aria-expanded={expanded}
+            onClick={() => setOpen(expanded ? null : key)}
+            title={expanded ? 'Hide details' : 'Show details'}
+          >
+            <svg
+              className={`ah-chevron${expanded ? ' open' : ''}`}
+              width="8"
+              height="8"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="9 6 15 12 9 18" />
+            </svg>
+            <span>{expanded ? 'Hide details' : 'Show details'}</span>
+          </button>
         </div>
         {expanded && (
           <div className="ah-detail">
@@ -237,9 +277,59 @@ export default function AgentHistoryTab() {
                 )}
               </div>
             )}
+            {isDifferentAccount && (
+              <div className="ah-account-warning" role="note">
+                <div className="ah-account-warning-text">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span>
+                    This session was recorded under account &quot;{sessionAcctName}&quot;, but the currently active account is &quot;{activeAcctName}&quot;. It will not open in chat or terminal because it is in a different account.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="ah-btn ah-btn-sm"
+                  onClick={async () => {
+                    const ok = await selectAccount(row.agent, sessionAccountId);
+                    if (ok) {
+                      showToast(`Switched active ${agent?.label ?? row.agent} account to ${sessionAcctName}`, 'success');
+                    }
+                  }}
+                >
+                  Switch to {sessionAcctName}
+                </button>
+              </div>
+            )}
             <div className="ah-detail-actions">
-              <button type="button" className="ah-btn" disabled={busy === key || !resumable(row)} onClick={() => void resume(row, 'terminal')} title={`Continue this session in a new ${agent?.label ?? ''} terminal`}>Resume in terminal</button>
-              <button type="button" className="ah-btn" disabled={busy === key || !resumable(row)} onClick={() => void resume(row, 'chat')} title="Continue this session in a new native chat">Resume in chat</button>
+              <button
+                type="button"
+                className="ah-btn"
+                disabled={busy === key || !resumable(row) || isDifferentAccount}
+                onClick={() => void resume(row, 'terminal')}
+                title={
+                  isDifferentAccount
+                    ? `Cannot open: this session is in account "${sessionAcctName}", but the active account is "${activeAcctName}". Switch accounts to resume.`
+                    : `Continue this session in a new ${agent?.label ?? ''} terminal`
+                }
+              >
+                Resume in terminal
+              </button>
+              <button
+                type="button"
+                className="ah-btn"
+                disabled={busy === key || !resumable(row) || isDifferentAccount}
+                onClick={() => void resume(row, 'chat')}
+                title={
+                  isDifferentAccount
+                    ? `Cannot open: this session is in account "${sessionAcctName}", but the active account is "${activeAcctName}". Switch accounts to resume.`
+                    : 'Continue this session in a new native chat'
+                }
+              >
+                Resume in chat
+              </button>
               <button type="button" className="ah-btn" disabled={!resumable(row)} onClick={() => setHandoffRow(row)}>Hand off to another agent</button>
             </div>
             <div className="ah-detail-actions">
