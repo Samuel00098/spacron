@@ -406,14 +406,22 @@ function makeProvider(agent: string): StructuredChatProvider {
     stores.update(sessionId, { status: 'working', error: null });
     try {
       const result = await promptAcpNativeSession(runtime.session, runtime.sessionId, text, acpImageBlocks(dataUrls));
+      if (sessions.get(sessionId) !== runtime) return;
       const stopReason = result?.stopReason;
-      stores.update(sessionId, {
+      stores.update(sessionId, (state) => state.status !== 'working' ? {} : {
         status: 'ready',
         approvals: [],
-        ...(stopReason && stopReason !== 'end_turn' ? { error: `Turn stopped (${stopReason.replace(/_/g, ' ')}).` } : {}),
+        ...(stopReason && stopReason !== 'end_turn' && stopReason !== 'cancelled'
+          ? { error: `Turn stopped (${stopReason.replace(/_/g, ' ')}).` }
+          : {}),
       });
     } catch (error) {
-      stores.update(sessionId, { status: 'ready', error: error instanceof Error ? error.message : String(error) });
+      if (sessions.get(sessionId) !== runtime) return;
+      stores.update(sessionId, (state) => state.status !== 'working' ? {} : {
+        status: 'ready',
+        approvals: [],
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

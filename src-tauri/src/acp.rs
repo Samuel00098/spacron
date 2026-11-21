@@ -3,18 +3,48 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
-
-struct PendingResponse {
-    value: Mutex<Option<Value>>,
-    ready: Condvar,
-}
+use std::time::Duration;
+use tokio::sync::oneshot;
 
 struct AcpProcess {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
-    pending: Mutex<HashMap<String, Arc<PendingResponse>>>,
+    // None once stdout has closed, so new requests cannot register after EOF.
+    pending: Mutex<Option<HashMap<String, oneshot::Sender<Value>>>>,
+}
+
+pub(crate) struct AcpRequest {
+    process: Arc<AcpProcess>,
+    id: String,
+    response: oneshot::Receiver<Value>,
+    is_prompt: bool,
+}
+
+impl AcpRequest {
+    pub(crate) async fn wait(mut self) -> Result<Value, String> {
+        // A prompt owns the whole turn, including tool work and approvals.
+        // Cancellation is sent separately and the agent answers the prompt.
+        let result = if self.is_prompt {
+            (&mut self.response).await
+        } else {
+            tokio::time::timeout(Duration::from_secs(120), &mut self.response)
+                .await
+                .map_err(|_| "ACP request timed out")?
+        };
+        result.map_err(|_| "ACP agent exited before responding".into())
+    }
+}
+
+impl Drop for AcpRequest {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.process.pending.lock() {
+            if let Some(pending) = pending.as_mut() {
+                pending.remove(&self.id);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -175,7 +205,7 @@ impl AcpManager {
         let process = Arc::new(AcpProcess {
             stdin: Mutex::new(stdin),
             child: Mutex::new(child),
-            pending: Mutex::new(HashMap::new()),
+            pending: Mutex::new(Some(HashMap::new())),
         });
         let reader_process = Arc::clone(&process);
         let manager = Arc::clone(self);
@@ -230,12 +260,9 @@ impl AcpManager {
                             .pending
                             .lock()
                             .ok()
-                            .and_then(|mut p| p.remove(&request_id));
+                            .and_then(|mut pending| pending.as_mut()?.remove(&request_id));
                         if let Some(waiter) = waiter {
-                            if let Ok(mut value) = waiter.value.lock() {
-                                *value = Some(message);
-                                waiter.ready.notify_one();
-                            }
+                            let _ = waiter.send(message);
                         } else {
                             // Not an answer to one of our JSON-RPC requests:
                             // protocols with their own ids (Pi's RPC answers
@@ -257,18 +284,7 @@ impl AcpManager {
                     }
                 }
                 if let Ok(mut pending) = reader_process.pending.lock() {
-                    for (_, waiter) in pending.drain() {
-                        if let Ok(mut value) = waiter.value.lock() {
-                            *value = Some(json!({
-                                "jsonrpc": "2.0",
-                                "error": {
-                                    "code": -32000,
-                                    "message": "ACP agent exited before responding"
-                                }
-                            }));
-                            waiter.ready.notify_one();
-                        }
-                    }
+                    pending.take();
                 }
                 if let Ok(mut processes) = manager.processes.lock() {
                     processes.remove(&id);
@@ -283,13 +299,13 @@ impl AcpManager {
         Ok(AcpStartResult { id })
     }
 
-    pub fn request(
+    pub(crate) fn start_request(
         &self,
         id: u32,
         request_id: String,
         method: String,
         params: Value,
-    ) -> Result<Value, String> {
+    ) -> Result<AcpRequest, String> {
         let process = self
             .processes
             .lock()
@@ -297,49 +313,36 @@ impl AcpManager {
             .get(&id)
             .cloned()
             .ok_or("ACP session not found")?;
-        let waiter = Arc::new(PendingResponse {
-            value: Mutex::new(None),
-            ready: Condvar::new(),
-        });
-        process
-            .pending
-            .lock()
-            .map_err(|_| "ACP process unavailable")?
-            .insert(request_id.clone(), Arc::clone(&waiter));
+        let is_prompt = method == "session/prompt";
         let payload =
             json!({ "jsonrpc": "2.0", "id": request_id, "method": method, "params": params });
         let line = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
-        if let Err(error) = process
+        let (sender, response) = oneshot::channel();
+        {
+            let mut pending = process
+                .pending
+                .lock()
+                .map_err(|_| "ACP process unavailable")?;
+            let pending = pending.as_mut().ok_or("ACP agent already exited")?;
+            if pending.contains_key(&request_id) {
+                return Err("ACP request ID already pending".into());
+            }
+            pending.insert(request_id.clone(), sender);
+        }
+        let request = AcpRequest {
+            process,
+            id: request_id,
+            response,
+            is_prompt,
+        };
+        request
+            .process
             .stdin
             .lock()
             .map_err(|_| "ACP stdin unavailable")?
             .write_all(format!("{line}\n").as_bytes())
-        {
-            process
-                .pending
-                .lock()
-                .ok()
-                .map(|mut pending| pending.remove(&request_id));
-            return Err(format!("Could not write ACP request: {error}"));
-        }
-        let mut value = waiter
-            .value
-            .lock()
-            .map_err(|_| "ACP response unavailable")?;
-        let (guard, timeout) = waiter
-            .ready
-            .wait_timeout(value, std::time::Duration::from_secs(120))
-            .map_err(|_| "ACP response wait failed")?;
-        value = guard;
-        if timeout.timed_out() {
-            process
-                .pending
-                .lock()
-                .ok()
-                .map(|mut pending| pending.remove(&request_id));
-            return Err("ACP request timed out".into());
-        }
-        value.take().ok_or("ACP response was empty".into())
+            .map_err(|error| format!("Could not write ACP request: {error}"))?;
+        Ok(request)
     }
 
     pub fn close(&self, id: u32) -> Result<(), String> {
@@ -374,6 +377,11 @@ impl AcpManager {
             Err(error) => Err(error.to_string()),
         };
         let _ = child.try_wait();
+        if result.is_ok() {
+            if let Ok(mut pending) = process.pending.lock() {
+                pending.take();
+            }
+        }
         result
     }
 

@@ -12,7 +12,7 @@ pub fn acp_start(
     state.acp_manager.start(args, app)
 }
 
-/// Wait for provider replies off Tauri's main thread.
+/// Write to the agent pipe off the main thread, then await its reply asynchronously.
 #[tauri::command]
 pub async fn acp_request(
     id: u32,
@@ -22,9 +22,12 @@ pub async fn acp_request(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let manager = std::sync::Arc::clone(&state.acp_manager);
-    tauri::async_runtime::spawn_blocking(move || manager.request(id, request_id, method, params))
-        .await
-        .map_err(|error| error.to_string())?
+    let request = tauri::async_runtime::spawn_blocking(move || {
+        manager.start_request(id, request_id, method, params)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    request.wait().await
 }
 
 #[tauri::command]
