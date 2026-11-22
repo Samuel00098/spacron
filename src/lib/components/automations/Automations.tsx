@@ -39,13 +39,13 @@ const templates: Template[] = [
     prompt: 'Search the codebase for TODO, FIXME and HACK comments and for obviously dead code. Group what you find by area, note which items look stale or risky, and suggest the three most worthwhile to tackle next week. Do not edit any files.' },
 ];
 
-function scheduleLabel(a: Pick<Automation, 'schedule' | 'time' | 'day'>) {
+export function scheduleLabel(a: Pick<Automation, 'schedule' | 'time' | 'day'>) {
   return a.schedule === 'hourly' ? `Every hour at :${a.time.slice(3)}` : `${a.schedule === 'weekly' ? weekdays[a.day] : a.schedule === 'weekdays' ? 'Mon–Fri' : 'Every day'} at ${a.time}`;
 }
 
 export default function Automations() {
   const [open, setOpen] = useState(false);
-  useEffect(() => startAutomationScheduler(message => showToast(message, 'error')), []);
+  useEffect(() => startAutomationScheduler(message => showToast(message, 'error'), (message, tone) => showToast(message, tone, 8000)), []);
   return <><button className="icon-btn" aria-label="Automations" title="Automations" onClick={() => setOpen(true)}><Clock size={16}/></button>
     {open && createPortal(<AutomationDialog close={() => setOpen(false)} />, document.body)}</>;
 }
@@ -53,7 +53,7 @@ export default function Automations() {
 export function AutomationDialog({ close }: { close: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useModalFocus(ref, close);
-  const { automations, runs } = useSyncExternalStore(subscribeAutomations, automationSnapshot);
+  const { automations, runs, settings } = useSyncExternalStore(subscribeAutomations, automationSnapshot);
   const project = useStore(activeProject);
   const remote = useStore(remoteTarget);
   const usage = useStore(usageState);
@@ -141,7 +141,7 @@ export function AutomationDialog({ close }: { close: () => void }) {
         {!runs.length ? <div className="automation-empty"><div className="automation-empty-icon"><Clock size={30}/></div><h3>Every run, in one place</h3><p>Results, approval requests, and run details<br/>will appear here once an automation starts.</p></div> : runs.map(run => <article key={run.id} className="automation-run"><span className={`automation-run-dot ${run.status}`}/><div><strong>{run.name}</strong><p>{new Date(run.startedAt).toLocaleString()} · {run.status === 'quiet' ? 'Went quiet' : run.status.replace(/_/g, ' ')}</p>{run.detail && <small>{run.detail}</small>}</div>{run.sessionId !== undefined && <button onClick={() => { setActiveSession(run.sessionId!); requestRoomControl('focus', `agent:${run.sessionId}`); close(); }}>Open session ↗</button>}</article>)}
       </section>}
       </div>
-      <div className="automation-bottom"><span className="automation-local-dot"/> Local schedules <details><summary>How scheduling works</summary><p>Spacron must stay open with the saved local project active. Times follow this computer's time zone ({timezone}). Missed runs catch up once within 15 minutes. Agents retain their approval prompts.</p></details></div>
+      <div className="automation-bottom"><span className="automation-local-dot"/> Local schedules <details><summary>How scheduling works</summary><p>Spacron must stay open with the saved local project active. Times follow this computer's time zone ({timezone}). {settings.catchUpMinutes ? `Missed runs catch up once within ${settings.catchUpMinutes} minutes.` : 'Missed runs are skipped.'}{settings.enabled ? '' : ' Scheduling is paused in Settings.'} Agents retain their approval prompts.</p></details></div>
     </div>
   </div>;
 }

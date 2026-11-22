@@ -22,9 +22,21 @@ export interface AutomationRun {
   status: 'starting' | 'running' | 'needs_input' | 'completed' | 'failed' | 'missed' | 'interrupted' | 'quiet';
   detail?: string; sessionId?: number;
 }
-interface State { automations: Automation[]; runs: AutomationRun[] }
+export interface AutomationSettings {
+  /** Master switch: when off, nothing runs on schedule (Run now still works). */
+  enabled: boolean;
+  /** How late a scheduled run may still start; 0 means never catch up. */
+  catchUpMinutes: number;
+  historyLimit: number;
+  /** Show a notice when a run finishes or needs approval. */
+  notify: boolean;
+}
+export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = { enabled: true, catchUpMinutes: 15, historyLimit: 100, notify: true };
+interface State { automations: Automation[]; runs: AutomationRun[]; settings: AutomationSettings }
 const KEY = 'spacron_automations_v1';
-let state: State = { automations: [], runs: [] };
+let state: State = { automations: [], runs: [], settings: DEFAULT_AUTOMATION_SETTINGS };
+type Notice = (message: string, tone: 'info' | 'success' | 'warning' | 'error') => void;
+let notice: Notice | null = null;
 let loaded = false;
 const listeners = new Set<() => void>();
 export const subscribeAutomations = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
@@ -47,7 +59,7 @@ export function loadAutomations() {
       if (!item.id || !item.root || !item.projectId || !item.prompt || typeof item.agent !== 'string' || !item.agent.trim() || !['hourly', 'daily', 'weekdays', 'weekly'].includes(item.schedule) || !Number.isFinite(item.nextRunAt)) throw new Error('Invalid saved automation');
       nextOccurrence(item.schedule, item.time, item.day, Date.now());
     }
-    commit({ ...saved, runs: saved.runs.map(({ sessionId: _session, ...run }) => active(run) ? { ...run, status: 'interrupted', finishedAt: Date.now(), detail: 'App restarted; completion was not observed.' } : run) });
+    commit({ ...saved, settings: { ...DEFAULT_AUTOMATION_SETTINGS, ...(saved.settings ?? {}) }, runs: saved.runs.map(({ sessionId: _session, ...run }) => active(run) ? { ...run, status: 'interrupted', finishedAt: Date.now(), detail: 'App restarted; completion was not observed.' } : run) });
   }
   loaded = true;
 }
@@ -64,11 +76,27 @@ export function removeAutomation(id: string) {
   if (state.runs.some(r => r.automationId === id && active(r))) throw new Error('Wait for the active run to end before deleting');
   commit({ ...state, automations: state.automations.filter(a => a.id !== id) });
 }
+export function updateAutomationSettings(patch: Partial<AutomationSettings>) {
+  commit({ ...state, settings: { ...state.settings, ...patch } });
+}
+export function setAllAutomationsEnabled(enabled: boolean) {
+  commit({ ...state, automations: state.automations.map(a => a.enabled === enabled ? a : { ...a, enabled, nextRunAt: nextOccurrence(a.schedule, a.time, a.day, Date.now()) }) });
+}
+/** Removes finished runs; active runs stay so their completion is still recorded. */
+export function clearAutomationHistory() {
+  commit({ ...state, runs: state.runs.filter(active) });
+}
 function updateRun(id: string, patch: Partial<AutomationRun>) {
   const current = state.runs.find(r => r.id === id);
   if (!current || !active(current)) return;
   if (Object.entries(patch).every(([key, value]) => current[key as keyof AutomationRun] === value)) return;
   commit({ ...state, runs: state.runs.map(r => r.id === id ? { ...r, ...patch } : r) });
+  if (!state.settings.notify || !notice || !patch.status || patch.status === current.status) return;
+  const name = `Automation "${current.name}"`;
+  if (patch.status === 'completed') notice(`${name} finished. Open Run history to see the result.`, 'success');
+  else if (patch.status === 'needs_input') notice(`${name} is waiting for your approval.`, 'warning');
+  else if (patch.status === 'failed') notice(`${name} failed${patch.detail ? `: ${patch.detail}` : '.'}`, 'error');
+  else if (patch.status === 'quiet' || patch.status === 'interrupted') notice(`${name} stopped without confirming it finished. Check its session.`, 'warning');
 }
 function canRun(a: Automation) {
   const project = get(activeProject);
@@ -80,9 +108,10 @@ export async function runAutomation(id: string, scheduled = false): Promise<void
   if (!canRun(a)) throw new Error('Open this automation’s local project to run it');
   if (state.runs.some(r => r.automationId === id && active(r))) throw new Error('This automation already has an active run');
   const now = Date.now();
-  const missed = scheduled && now - a.nextRunAt > 15 * 60_000;
-  const run: AutomationRun = { id: crypto.randomUUID(), automationId: id, name: a.name, startedAt: now, status: missed ? 'missed' : 'starting', ...(missed ? { finishedAt: now, detail: 'Schedule missed by more than 15 minutes.' } : {}) };
-  commit({ automations: state.automations.map(item => item.id === id && scheduled ? { ...item, nextRunAt: nextOccurrence(a.schedule, a.time, a.day, now) } : item), runs: [run, ...state.runs].filter((r, i) => i < 100 || active(r)) });
+  // A zero window still allows one scheduler tick of slack.
+  const missed = scheduled && now - a.nextRunAt > Math.max(1, state.settings.catchUpMinutes) * 60_000;
+  const run: AutomationRun = { id: crypto.randomUUID(), automationId: id, name: a.name, startedAt: now, status: missed ? 'missed' : 'starting', ...(missed ? { finishedAt: now, detail: `Schedule missed by more than ${Math.max(1, state.settings.catchUpMinutes)} minute(s).` } : {}) };
+  commit({ automations: state.automations.map(item => item.id === id && scheduled ? { ...item, nextRunAt: nextOccurrence(a.schedule, a.time, a.day, now) } : item), runs: [run, ...state.runs].filter((r, i) => i < state.settings.historyLimit || active(r)), settings: state.settings });
   if (missed) return;
   let unsubscribe = () => {};
   try {
@@ -173,9 +202,11 @@ async function launchTerminalAutomation(a: Automation, run: AutomationRun): Prom
     sendPromptToSession(sessionId, a.prompt, a.agent);
   } catch (error) { cleanup(); throw error; }
 }
-export function startAutomationScheduler(onError: (message: string) => void): () => void {
+export function startAutomationScheduler(onError: (message: string) => void, onNotice?: Notice): () => void {
+  if (onNotice) notice = onNotice;
   try { loadAutomations(); } catch (error) { onError(String(error)); return () => {}; }
   const tick = () => {
+    if (!state.settings.enabled) return;
     for (const a of state.automations) {
       if (a.enabled && a.nextRunAt <= Date.now() && canRun(a) && !state.runs.some(r => r.automationId === a.id && active(r))) void runAutomation(a.id, true).catch(error => onError(String(error)));
     }

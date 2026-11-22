@@ -138,3 +138,40 @@ it('catches up once within grace and advances the schedule before launching', as
   } finally { vi.useRealTimers(); }
 });
 
+it('skips scheduled runs while the master switch is off', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date(2026, 10, 20, 8));
+    const { api } = await setup();
+    api.updateAutomationSettings({ enabled: false });
+    vi.setSystemTime(new Date(2026, 10, 20, 9, 1));
+    const stop = api.startAutomationScheduler(() => {});
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mock.spawn).not.toHaveBeenCalled();
+    expect(api.automationSnapshot().runs).toHaveLength(0);
+    stop();
+  } finally { vi.useRealTimers(); }
+});
+it('honours a longer catch-up window from settings', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date(2026, 10, 20, 8));
+    const { api } = await setup();
+    api.updateAutomationSettings({ catchUpMinutes: 240 });
+    vi.setSystemTime(new Date(2026, 10, 20, 10));
+    const stop = api.startAutomationScheduler(() => {});
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mock.spawn).toHaveBeenCalledTimes(1);
+    stop();
+  } finally { vi.useRealTimers(); }
+});
+it('notifies on completion and clears only finished history', async () => {
+  const { api, id } = await setup();
+  const notices: string[] = [];
+  api.startAutomationScheduler(() => {}, message => notices.push(message));
+  await api.runAutomation(id);
+  mock.chat.status = 'ready'; mock.listener();
+  expect(notices.some(n => n.includes('finished'))).toBe(true);
+  api.clearAutomationHistory();
+  expect(api.automationSnapshot().runs).toHaveLength(0);
+});
