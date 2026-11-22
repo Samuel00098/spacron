@@ -1603,7 +1603,8 @@ export async function forkChatThreadFrom(threadId: string, messageId: string | n
   const messages = get(chatThreadState).messagesByThread[threadId] ?? [];
   const cut = messageId ? messages.findIndex((message) => message.id === messageId) : messages.length;
   if (cut < 0) return null;
-  const copied = messages.slice(0, cut);
+  // Fork from the selected message, so the new branch includes that turn.
+  const copied = messages.slice(0, messageId ? cut + 1 : cut);
   const fork = createChatThread(thread.projectId, {
     title: `${thread.title} (fork)`,
     agentName: thread.agentName,
@@ -1637,6 +1638,7 @@ export async function forkChatThreadFrom(threadId: string, messageId: string | n
     forkOfThreadId: thread.id,
     status: copied.length ? 'idle' : 'draft',
   });
+  selectChatThread(thread.projectId, fork.id);
 
   // Natively fork the Claude SDK session so the fork reuses the source's
   // agent conversation instead of replaying the transcript.

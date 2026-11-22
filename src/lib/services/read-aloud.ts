@@ -177,8 +177,8 @@ function audioUrl(base64: string, mimeType: string): string {
  * short so speech starts quickly.
  */
 async function readCloud(engine: CloudReadAloudEngine, model: string, voice: string, text: string, mine: number): Promise<void> {
-  const opening = speechChunks(text, 240);
-  const pieces = opening.length > 1 ? [opening[0], ...speechChunks(opening.slice(1).join(' '), 900)] : opening;
+  const opening = speechChunks(text, engine === 'groq' ? 180 : 240);
+  const pieces = opening.length > 1 ? [opening[0], ...speechChunks(opening.slice(1).join(' '), engine === 'groq' ? 180 : 900)] : opening;
   const fetchPiece = (piece: string) =>
     invoke<{ audio: string; mimeType: string }>('read_aloud_speak', { provider: engine, model, voice, text: piece });
   let pending = fetchPiece(pieces[0]);

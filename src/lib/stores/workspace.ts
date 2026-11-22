@@ -2,6 +2,7 @@ import { writable, derived, get } from '$lib/stores/storeCompat';
 import type { Project, Workspace } from '$lib/types/workspace';
 import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles, resetEditorSession } from './editor';
 import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, setSessionOwnerTask, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, setSessionCwd, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
+import { browserDefaultPort, browserPreferredHost } from './settings';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths, cancelCreate, cancelRename, hideContextMenu } from './explorer';
 import { resetSettingsToDefault } from './settings';
@@ -938,6 +939,11 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
   useWorkspaceStore.getState().setSwitchingPhase('Restoring project…');
   try {
     const { invoke } = await import('@tauri-apps/api/core');
+    // A box folder: make it the server's project root before anything asks
+    // git, worktrees or search about it.
+    if (isRemoteProjectId(projectId)) {
+      await backendInvoke('remote_set_project_root', { path: rootPath }).catch(() => {});
+    }
     // Before anything can be saved: every save stamps its pane ids with this.
     await loadPtyInstanceId();
     if (generation !== restoreProjectStateGeneration) return;
@@ -1079,9 +1085,10 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
 
       if (!persisted?.preview) {
         try {
-          const port = await invoke<number>('workspace_detect_port', { path: rootPath });
+          const port = await invoke<number>('workspace_detect_port', { path: rootPath, fallbackPort: get(browserDefaultPort) });
           if (generation !== restoreProjectStateGeneration) return;
           await setTargetPort(port, { silent: true });
+          await setPreferredLocalHost(get(browserPreferredHost));
         } catch (err) {
           console.error('Failed to auto-detect/set up preview for new project:', err);
         }
@@ -1280,7 +1287,7 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
                 const claimed = structured?.claimConvertedSession(projectId, pane.agentPreset, pane.cwd || rootPath) ?? null;
                 if (structured && claimed?.view === 'chat') {
                   applyRestoredSessionMetadata(roomId, metadata);
-                  if (await structured.restoreConvertedInChat(roomId, claimed)) return roomId;
+                  if (await structured.restoreStructuredInChat(roomId, claimed)) return roomId;
                 }
                 const { resumeArgs, transcriptAgentFor } = await import('$lib/services/terminal-chat');
                 const transcriptAgent = transcriptAgentFor(pane.agentPreset);
@@ -1871,38 +1878,65 @@ let previousLocalProjectId: string | null = null;
  */
 export async function openRemoteRoot(conn: RemoteConnection): Promise<void> {
   const info = await backendInvoke<{ root: string; name: string }>('workspace_info');
+  // Point git, worktrees and search back at the box folder (an older server has
+  // no project folders, and the box folder is its only root anyway).
+  await backendInvoke('remote_set_project_root', { path: info.root }).catch(() => {});
+  await openRemoteProject(`remote:${conn.id}`, info.name || conn.name, info.root);
+}
 
+/** A short stable tag for a folder path, so each box folder gets its own
+ *  project id (and so its own saved panes, tasks and layout). */
+function folderTag(path: string): string {
+  let h = 5381;
+  for (let i = 0; i < path.length; i++) h = ((h << 5) + h + path.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * Open a folder inside the connected box's workspace as its own project. The
+ * server confines it to its deploy folder and makes it the root for git,
+ * worktrees and search (`remote_set_project_root`).
+ */
+export async function openRemoteFolder(path: string): Promise<void> {
+  const { activeConnection } = await import('./remoteWorkspace');
+  const conn = get(activeConnection);
+  if (!conn) throw new Error('Connect to a remote first.');
+  const info = await backendInvoke<{ root: string; name: string }>('remote_set_project_root', { path });
+  const home = await backendInvoke<{ root: string }>('workspace_info');
+  const id = info.root === home.root ? `remote:${conn.id}` : `remote:${conn.id}:${folderTag(info.root)}`;
+  await openRemoteProject(id, info.name, info.root);
+}
+
+/**
+ * Make a box folder the active project and restore it like any project: saved
+ * editor files and layout, its agents' terminals re-attached (they keep running
+ * on the box), their task cards relinked, and its MCP configs written there.
+ * The restore's laptop-only steps (local port detection, preview proxy) fail
+ * softly for a box path; previews of the box's dev servers go through the
+ * tunnel instead.
+ */
+async function openRemoteProject(id: string, name: string, root: string): Promise<void> {
   // Remember and save the outgoing local project so disconnect can restore it.
   const current = get(activeProjectId);
   if (current && !current.startsWith('remote:')) {
     previousLocalProjectId = current;
-    saveProjectState(current);
   }
+  if (current && current !== id) saveProjectState(current);
   // A queued autosave from the outgoing project would otherwise fire mid-switch
   // and write transitional state under the wrong id.
   cancelPendingProjectAutosave();
 
-  const id = `remote:${conn.id}`;
   const project: Project = {
     id,
-    name: info.name || conn.name,
-    root_path: info.root,
+    name,
+    root_path: root,
     state: { open_files: [], active_file: null, last_modified: Date.now().toString() },
   };
-
   projects.update((p) => setProjectIn(p, id, project));
   openProjectIds.update((ids) => (ids.includes(id) ? ids : [...ids, id]));
   activeProjectId.set(id);
-
-  // Minimal restore, in the same order as restoreProjectState: clear the outgoing
-  // project's stores first, then point the terminal at the remote root. The file
-  // tree loads itself — FileExplorer reacts to the active project's root — and a
-  // new remote project starts blank just like a local project.
-  clearAllStores();
   setActiveTerminalProject(id);
-  setTerminalProjectRoot(id, info.root);
-  terminalRoomOpen.set(false);
-  layout.update((l) => ({ ...l, activeView: 'terminal', editorVisible: false }));
+  await restoreProjectState(id, root);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { GROQ_READ_ALOUD_VOICES, GEMINI_READ_ALOUD_VOICES } from '$lib/stores/readAloud';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
@@ -176,6 +177,7 @@ import ChatSettingsPane from './ChatSettingsPane';
 import BrowserSettingsSection from './BrowserSettingsSection';
 import ProjectSettingsSection from './ProjectSettingsSection';
 import WorkspaceCleanupSection from './WorkspaceCleanupSection';
+import AutomationSettingsSection from './AutomationSettingsSection';
 import { ProjectIconBadge } from '$lib/components/shared/ProjectIcons';
 import { normalizeProjectPath } from '$lib/components/workspace/projectListPrefs';
 import { useGithubSignIn } from '$lib/react/useGithubSignIn';
@@ -223,7 +225,7 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'project', label: 'Project', kicker: 'Project workspace', description: 'Per-project configuration, scripts, source control and rules.' },
   { id: 'general', label: 'General', kicker: 'Editor and app', description: 'Editor behaviour and everyday app preferences.' },
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media', description: 'Visual style.' },
-  { id: 'browser', label: 'Browser', kicker: 'Web preview & navigation', description: 'Built-in browser preview, dev server defaults, and Orca Design Mode preferences.' },
+  { id: 'browser', label: 'Browser', kicker: 'Web preview & navigation', description: 'Built-in browser preview, dev server defaults, and Design Mode preferences.' },
   { id: 'models', label: 'AI Providers', kicker: 'Accounts and keys', description: 'Your agent accounts, plus the API keys Spacron’s own AI features use.' },
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation', description: 'Dictation, transcription and voice conversation.' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering', description: 'Default shell and how terminals render.' },
@@ -234,6 +236,7 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'mcp', label: 'MCP & plugins', kicker: 'Tools and plugins', description: 'Tool servers and plugins available to your agents.' },
   { id: 'stats', label: 'Usage', kicker: 'Model usage and cost', description: 'Token and cost analytics across the agents.' },
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map', description: 'Keyboard shortcuts across the app.' },
+  { id: 'automations', label: 'Automations', kicker: 'Scheduled agent work', description: 'Every scheduled automation in one place, plus how and when they run.' },
   { id: 'cleanup', label: 'Workspace Cleanup', kicker: 'Workspace Hygiene', description: 'Remove workspaces you’re done with and reclaim stale worktree resources.' },
   { id: 'about', label: 'About', kicker: 'Version and reset', description: 'Version details and resetting Spacron.' },
 ];
@@ -242,7 +245,7 @@ const settingsNavGroups: { label?: string; tabs: Tab[] }[] = [
   { tabs: ['general', 'appearance', 'browser', 'chat', 'voice', 'terminal', 'shortcuts', 'stats'] },
   // 'orchestrator' is left out while there is no Chat mode to configure; its
   // pane and search entries are kept so it can be listed here again.
-  { label: 'Agents', tabs: ['agents', 'mcp'] },
+  { label: 'Agents', tabs: ['agents', 'mcp', 'automations'] },
   { label: 'Connections', tabs: ['models', 'source-control'] },
   { label: 'Projects', tabs: ['project'] },
   { label: 'Workspace', tabs: ['cleanup'] },
@@ -264,6 +267,7 @@ const settingsTabIconPaths: Record<Tab, string> = {
   mcp: 'M8 7V4M16 7V4M5 7h14v6a7 7 0 0 1-14 0V7ZM12 20v2M9 4h.01M15 4h.01',
   stats: 'M4 19V5M4 19h16M8 15l3-4 3 2 5-7',
   shortcuts: 'M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12H3V6ZM7 8h.01M11 8h.01M15 8h.01M7 12h.01M11 12h.01M15 12h.01M8 16h8',
+  automations: 'M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18Z M12 7v5l3 2',
   cleanup: 'M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
   about: 'M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
 };
@@ -278,6 +282,9 @@ type SettingsSearchEntry = {
 };
 
 const settingsSearchEntries: SettingsSearchEntry[] = [
+  { id: 'automations-schedule', tab: 'automations', section: 'Scheduling', label: 'Run automations on schedule', keywords: 'automation schedule cron pause timer recurring' },
+  { id: 'automations-notify', tab: 'automations', section: 'Results', label: 'Notify when a run finishes', keywords: 'automation result notification alert toast' },
+  { id: 'automations-list', tab: 'automations', section: 'All automations', label: 'All automations', keywords: 'automation list pause delete run', target: 'section' },
   { id: 'cleanup-rules', tab: 'cleanup', section: 'Workspace Cleanup', label: 'Automatic cleanup', keywords: 'worktree prune sweep delete merged' },
   { id: 'cleanup-manual', tab: 'cleanup', section: 'Workspace Cleanup', label: 'Manual cleanup', keywords: 'review delete workspaces' },
   { id: 'editor-font-size', tab: 'general', section: 'Editor', label: 'Font size', keywords: 'editor text code' },
@@ -302,9 +309,9 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'background-blur', tab: 'appearance', section: 'Background', label: 'Blur', keywords: 'wallpaper image' },
   { id: 'browser-port', tab: 'browser', section: 'Dev server & Connection', label: 'Default port', keywords: 'preview port localhost server web' },
   { id: 'browser-host', tab: 'browser', section: 'Dev server & Connection', label: 'Preferred local host', keywords: 'preview localhost 127.0.0.1 ip' },
-  { id: 'browser-theme', tab: 'browser', section: 'Appearance & Themes', label: 'Browser color scheme', keywords: 'preview theme dark light color scheme orca' },
+  { id: 'browser-theme', tab: 'browser', section: 'Appearance & Themes', label: 'Browser color scheme', keywords: 'preview theme dark light color scheme' },
   { id: 'browser-viewport', tab: 'browser', section: 'Appearance & Themes', label: 'Default device viewport', keywords: 'preview mobile responsive iphone ipad desktop' },
-  { id: 'browser-design-mode', tab: 'browser', section: 'Orca Design Mode', label: 'Orca Design Mode', keywords: 'orca design mode element inspect screenshot prompt agent visual' },
+  { id: 'browser-design-mode', tab: 'browser', section: 'Design Mode', label: 'Design Mode', keywords: 'design mode element inspect screenshot prompt agent visual' },
   { id: 'browser-routing', tab: 'browser', section: 'Link routing & Tabs', label: 'Open web links in', keywords: 'preview open external browser links tabs' },
   { id: 'browser-cache', tab: 'browser', section: 'Data, Cache & History', label: 'Preview cookies & cache', keywords: 'preview cookies cache history clear' },
   { id: 'agent-accounts', tab: 'models', section: 'Accounts', label: 'Accounts', keywords: 'account sign in login switch claude codex email add remove', target: 'section' },
@@ -819,7 +826,8 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   const voice = readAloudVoiceFor(settings, engine);
   const vendor = READ_ALOUD_ENGINES.find(({ id }) => id === engine)?.label ?? engine;
   const keyUrl = engine === 'elevenlabs' ? 'https://elevenlabs.io/app/settings/api-keys'
-    : engine === 'minimax' ? 'https://platform.minimax.io/console/keys' : null;
+    : engine === 'minimax' ? 'https://platform.minimax.io/console/keys'
+    : engine === 'fish' ? 'https://fish.audio/app/api-keys/' : null;
   const [keyInput, setKeyInput] = useState('');
   const [keyExists, setKeyExists] = useState<boolean | null>(null);
   const [savingKey, setSavingKey] = useState(false);
@@ -827,7 +835,7 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   const [accountVoices, setAccountVoices] = useState<{ id: string; label: string }[]>([]);
   const [voicesError, setVoicesError] = useState('');
   const modelCatalogCommand = engine === 'openrouter' ? 'read_aloud_openrouter_models'
-    : engine === 'elevenlabs' || engine === 'minimax' ? 'read_aloud_provider_models' : null;
+    : engine !== 'xai' ? 'read_aloud_provider_models' : null;
   const canLoadModels = modelCatalogCommand !== null && (engine === 'openrouter' || keyExists === true);
   const [liveModels, setLiveModels] = useState<ReadAloudSpeechModel[] | null>(null);
   const [modelsError, setModelsError] = useState('');
@@ -848,7 +856,7 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   }, [engine]);
 
   useEffect(() => {
-    if (engine === 'openai' || engine === 'openrouter' || !keyExists || savingKey) return;
+    if (engine === 'openai' || engine === 'openrouter' || engine === 'groq' || engine === 'google' || !keyExists || savingKey) return;
     let active = true;
     void invoke<{ id: string; name: string; detail?: string | null }[]>('read_aloud_voices', { provider: engine })
       .then((list) => { if (active) setAccountVoices(list.map((v) => ({ id: v.id, label: v.detail ? `${v.name} (${v.detail})` : v.name }))); })
@@ -863,6 +871,7 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
     }
     let active = true;
     setModelsError('');
+    setLiveModels(null);
     setModelsLoading(true);
     void invoke<ReadAloudSpeechModel[]>(modelCatalogCommand, engine === 'openrouter' ? undefined : { provider: engine })
       .then((list) => { if (active) setLiveModels(list); })
@@ -872,10 +881,24 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   }, [engine, modelCatalogCommand, canLoadModels, savingKey, modelsRefresh]);
 
   const selectedRouterModel = engine === 'openrouter' ? liveModels?.find((item) => item.id === model) : undefined;
+  // Fish Audio models carry their voice list, like OpenRouter's.
+  const selectedFishModel = engine === 'fish' ? liveModels?.find((item) => item.id === model) : undefined;
   const setModel = (next: string) => {
     const routerModel = engine === 'openrouter' ? liveModels?.find((item) => item.id === next) : undefined;
     readAloudSettings.update((s) => {
       const updated = { ...s, models: { ...s.models, [engine]: next } };
+      if (engine === 'groq' && model.includes('arabic') !== next.includes('arabic')) {
+        return { ...updated, voices: { ...s.voices, groq: next.includes('arabic') ? 'fahad' : 'troy' } };
+      }
+      if (engine === 'openai' && next.startsWith('tts-1') && !['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].includes(readAloudVoiceFor(s, engine))) {
+        return { ...updated, voices: { ...s.voices, openai: 'alloy' } };
+      }
+      if (engine === 'fish') {
+        const fishModel = liveModels?.find((item) => item.id === next);
+        const kept = s.fishVoices?.[next] ?? readAloudVoiceFor(s, 'fish');
+        const voiceForModel = !fishModel || fishModel.voices.includes(kept) ? kept : 'default';
+        return { ...updated, fishVoices: { ...s.fishVoices, [next]: voiceForModel } };
+      }
       if (!routerModel) return updated;
       const savedVoice = readAloudVoiceFor(updated, 'openrouter');
       return {
@@ -889,6 +912,7 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   };
   const setVoice = (next: string) => readAloudSettings.update((s) => engine === 'openrouter'
     ? { ...s, openRouterVoices: { ...s.openRouterVoices, [model]: next } }
+    : engine === 'fish' ? { ...s, fishVoices: { ...s.fishVoices, [model]: next } }
     : { ...s, voices: { ...s.voices, [engine]: next } });
 
   const saveKey = async (value: string) => {
@@ -903,6 +927,7 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
       setLiveModels(null);
       setModelsError('');
       setKeyExists(Boolean(key));
+      setModelsRefresh((version) => version + 1);
       setKeyInput('');
     } catch (error) {
       setKeyError(explainError(error).summary);
@@ -916,17 +941,21 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   const usingMiniMaxPresets = engine === 'minimax' && !liveModels?.length;
   const modelOptions = liveModels && !usingMiniMaxPresets
     ? liveModels.map(({ id, name }) => ({ id, label: name }))
-    : engine === 'minimax' || engine === 'elevenlabs' ? [...READ_ALOUD_MODELS[engine]] : [];
+    : engine === 'openai' || engine === 'minimax' || engine === 'elevenlabs' || engine === 'groq' || engine === 'google' || engine === 'fish' ? [...READ_ALOUD_MODELS[engine]] : [];
   if (((engine === 'elevenlabs' && liveModels === null) || usingMiniMaxPresets)
     && !modelOptions.some((option) => option.id === model)) {
     modelOptions.unshift({ id: model, label: model });
   }
+  const fishVoiceLabel = (id: string) => accountVoices.find((v) => v.id === id)?.label ?? (id === 'default' ? 'Fish default voice' : id);
   const availableVoices = engine === 'openrouter'
     ? (selectedRouterModel?.voices ?? []).map((id) => ({ id, label: id }))
-    : engine === 'openai' ? OPENAI_READ_ALOUD_VOICES
+    : engine === 'fish' ? (selectedFishModel?.voices ?? accountVoices.map((v) => v.id)).map((id) => ({ id, label: fishVoiceLabel(id) }))
+    : engine === 'groq' ? (model.includes('arabic') ? ['fahad', 'lulwa', 'noura'].map((id) => ({ id, label: id })) : GROQ_READ_ALOUD_VOICES)
+    : engine === 'google' ? GEMINI_READ_ALOUD_VOICES
+    : engine === 'openai' ? (model.startsWith('tts-1') ? OPENAI_READ_ALOUD_VOICES.filter(({ id }) => ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].includes(id)) : OPENAI_READ_ALOUD_VOICES)
       : engine === 'xai' && !accountVoices.length ? XAI_READ_ALOUD_VOICES : accountVoices;
   const voiceOptions = voice && !availableVoices.some((option) => option.id === voice)
-    ? [{ id: voice, label: voice === ELEVENLABS_DEFAULT_VOICE ? 'Rachel' : voice }, ...availableVoices]
+    ? [{ id: voice, label: voice === ELEVENLABS_DEFAULT_VOICE ? 'Rachel' : voice === 'default' && engine === 'fish' ? 'Fish default voice' : voice }, ...availableVoices]
     : availableVoices;
   const status = keyExists === null ? (keyError ? 'Could not check the OS keychain.' : 'Checking for an API key…')
     : keyExists ? `Using the ${vendor} API key saved in the OS keychain. Cloud speech uses your API balance.`
@@ -942,6 +971,8 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
   return (
     <>
       <p className="shell-hint">{status}</p>
+      {engine === 'openrouter' && <p className="shell-hint">Models come from OpenRouter's public speech catalog; listing does not confirm your key has access.</p>}
+      {engine === 'xai' && <p className="shell-hint">xAI uses its speech endpoint directly; this engine has no selectable speech model.</p>}
       {(modelCatalogCommand || modelOptions.length > 0) && (
         <>
           <SettingRow title="Speech model" detail={modelDetail}>
@@ -956,7 +987,7 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
           )}
         </>
       )}
-      <SettingRow title="Voice" detail={voicesError || undefined}>
+      <SettingRow title="Voice" detail={voicesError || (engine === 'fish' && selectedFishModel ? `Voices for ${selectedFishModel.name}. Each model keeps its own voice.` : undefined)}>
         <StyledSelect value={voice} options={voiceOptions} onChange={setVoice} ariaLabel="Read aloud voice" showSearch={voiceOptions.length > 10} />
       </SettingRow>
       {keyUrl && (
@@ -4834,6 +4865,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               </>
             )}
 
+            {activeTab === 'automations' && <AutomationSettingsSection />}
             {activeTab === 'cleanup' && (
               <WorkspaceCleanupSection onCloseSettings={onclose} />
             )}

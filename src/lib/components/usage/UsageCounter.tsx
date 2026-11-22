@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
@@ -48,6 +48,8 @@ const MAX_WINDOWS = 1;
 export default function UsageCounter() {
   const { providers, loading } = useStore(usageState);
   const panelOpen = useStore(isUsagePanelOpen);
+  const dockRef = useRef<HTMLButtonElement | null>(null);
+  const [maxAgents, setMaxAgents] = useState(MAX_AGENTS);
 
   // One owner for the schedule. Idempotent, so mounting twice is harmless.
   // Not gated on a workspace: usage belongs to the signed-in agent accounts,
@@ -59,8 +61,47 @@ export default function UsageCounter() {
   const headlines = useMemo(() => providerHeadlines(providers), [providers]);
   const peak = useMemo(() => peakWindow(providers), [providers]);
 
+  // Dynamically adapt shown agent count to available footer width
+  // so badges and percentages never collide or overlap.
+  useEffect(() => {
+    const el = dockRef.current;
+    if (!el) return;
+    const parent = el.parentElement;
+
+    const computeMax = (containerWidth: number) => {
+      // In narrow footers (<195px), show 1 agent + "+N" badge so readings remain crisp and uncrowded.
+      // In mid footers (195px - 265px), show 2 agents + "+N".
+      // In wide footers (>=265px), show up to MAX_AGENTS (3).
+      if (containerWidth < 195) return 1;
+      if (containerWidth < 265) return 2;
+      return MAX_AGENTS;
+    };
+
+    const target = parent ?? el;
+    const update = () => {
+      const w = target.getBoundingClientRect().width;
+      if (w > 0) {
+        const next = computeMax(w);
+        setMaxAgents((prev) => (prev !== next ? next : prev));
+      }
+    };
+
+    update();
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = entry.contentRect.width;
+        if (w > 0) {
+          const next = computeMax(w);
+          setMaxAgents((prev) => (prev !== next ? next : prev));
+        }
+      }
+    });
+    ro.observe(target);
+    return () => ro.disconnect();
+  }, []);
+
   const severity = peak ? severityOf(peak.window.usedPercent) : 'none';
-  const shown = headlines.slice(0, MAX_AGENTS);
+  const shown = headlines.slice(0, maxAgents);
   const hidden = headlines.length - shown.length;
 
   const label = peak
@@ -69,6 +110,7 @@ export default function UsageCounter() {
 
   return (
     <button
+      ref={dockRef}
       className="usage-dock usage-dock-sidebar"
       data-usage-toggle
       data-severity={severity}

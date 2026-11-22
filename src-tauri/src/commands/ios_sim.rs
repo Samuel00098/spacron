@@ -584,6 +584,16 @@ pub async fn ios_sim_rotate(udid: String, orientation: String) -> Result<(), Str
     run_npx(&["rotate", &orientation, "-d", &udid]).map(|_| ())
 }
 
+/// Drive the Duo guest hinge through serve-sim; capture follows the active panel.
+#[tauri::command]
+pub async fn ios_sim_fold(udid: String, angle: u16) -> Result<(), String> {
+    gate_input(&udid)?;
+    if angle > 180 { return Err("Hinge angle must be between 0 and 180 degrees".into()); }
+    tokio::task::spawn_blocking(move || {
+        run_npx(&["fold", &angle.to_string(), "-d", &udid]).map(|_| ())
+    }).await.map_err(|error| error.to_string())?
+}
+
 // `adb_program` lives in `mobile`; this module's transport is serve-sim.
 
 #[cfg(test)]

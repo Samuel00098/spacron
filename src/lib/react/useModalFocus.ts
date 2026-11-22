@@ -76,8 +76,11 @@ export function useModalFocus(
       }
     }
 
+    const dismissForChat = () => onEscape?.();
+    window.addEventListener('spacron:reveal-agent-chat', dismissForChat);
     document.addEventListener('keydown', handleKeydown, true);
     return () => {
+      window.removeEventListener('spacron:reveal-agent-chat', dismissForChat);
       document.removeEventListener('keydown', handleKeydown, true);
       modalOpenCount.value = Math.max(0, modalOpenCount.value - 1);
       previouslyFocused?.focus();

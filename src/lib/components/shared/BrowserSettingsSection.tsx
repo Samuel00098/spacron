@@ -22,6 +22,16 @@ import {
 import { clearPreviewData } from '$lib/stores/preview';
 import { clearBrowsingHistory } from '$lib/stores/previewHistory';
 import { showToast } from '$lib/stores/notification';
+import Dropdown, { type DropdownOption } from './Dropdown';
+
+function SettingSelect({ value, options, onChange, ariaLabel }: {
+  value: string;
+  options: DropdownOption[];
+  onChange: (value: string) => void;
+  ariaLabel: string;
+}) {
+  return <div className="browser-settings-select"><Dropdown value={value} options={options} onChange={onChange} ariaLabel={ariaLabel} menuClassName="browser-settings-dropdown" /></div>;
+}
 
 function settingsSearchKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -128,7 +138,7 @@ export default function BrowserSettingsSection() {
     browserPreferredHost.set('localhost');
     browserThemeMode.set('system');
     browserOpenLinksIn.set('preview');
-    browserOpenLinksInBackground.set('preview' as any === false ? false : false);
+    browserOpenLinksInBackground.set(false);
     browserDesignModeAutoScreenshot.set(true);
     browserDesignModeIncludeStyles.set(true);
     browserDesignModeIncludeHtml.set(true);
@@ -196,28 +206,20 @@ export default function BrowserSettingsSection() {
           title="Preferred local host"
           detail="Host format used when building preview addresses."
         >
-          <select
-            value={preferredHost}
-            onChange={(e) => browserPreferredHost.set(e.target.value as 'localhost' | '127.0.0.1')}
-            aria-label="Preferred local host"
-          >
-            <option value="localhost">localhost</option>
-            <option value="127.0.0.1">127.0.0.1</option>
-          </select>
+          <SettingSelect value={preferredHost} onChange={(value) => browserPreferredHost.set(value as 'localhost' | '127.0.0.1')} ariaLabel="Preferred local host" options={[
+            { value: 'localhost', label: 'localhost' },
+            { value: '127.0.0.1', label: '127.0.0.1' },
+          ]} />
         </SettingRow>
 
         <SettingRow
           title="Initial panel placement"
           detail="Where a newly opened preview panel is docked."
         >
-          <select
-            value={placement}
-            onChange={(e) => previewPlacement.set(e.target.value as PreviewPlacement)}
-            aria-label="Initial panel placement"
-          >
-            <option value="sidebar">Sidebar (Right utility drawer)</option>
-            <option value="room">Stage room (Full workspace tab)</option>
-          </select>
+          <SettingSelect value={placement} onChange={(value) => previewPlacement.set(value as PreviewPlacement)} ariaLabel="Initial panel placement" options={[
+            { value: 'sidebar', label: 'Sidebar (Right utility drawer)' },
+            { value: 'room', label: 'Stage room (Full workspace tab)' },
+          ]} />
         </SettingRow>
       </Section>
 
@@ -226,52 +228,40 @@ export default function BrowserSettingsSection() {
           title="Browser color scheme"
           detail="Decouples preview pages from the application theme. Allows testing dark and light sites independently."
         >
-          <select
-            value={themeMode}
-            onChange={(e) => browserThemeMode.set(e.target.value as BrowserThemeMode)}
-            aria-label="Browser color scheme"
-          >
-            <option value="system">Follow application theme</option>
-            <option value="light">Force light mode</option>
-            <option value="dark">Force dark mode</option>
-          </select>
+          <SettingSelect value={themeMode} onChange={(value) => browserThemeMode.set(value as BrowserThemeMode)} ariaLabel="Browser color scheme" options={[
+            { value: 'system', label: 'Follow application theme' },
+            { value: 'light', label: 'Force light mode' },
+            { value: 'dark', label: 'Force dark mode' },
+          ]} />
         </SettingRow>
 
         <SettingRow
           title="Default device viewport"
           detail="Initial device emulation size when opening preview."
         >
-          <select
-            value={defaultViewport}
-            onChange={(e) => browserDefaultViewport.set(e.target.value)}
-            aria-label="Default device viewport"
-          >
-            <option value="desktop">Desktop (1280 × 800)</option>
-            <option value="phone">Phone (iPhone 14 / 15 · 393 × 852)</option>
-            <option value="tablet">Tablet (iPad · 820 × 1180)</option>
-          </select>
+          <SettingSelect value={defaultViewport} onChange={browserDefaultViewport.set} ariaLabel="Default device viewport" options={[
+            { value: 'desktop', label: 'Desktop (1280 × 800)' },
+            { value: 'phone', label: 'Phone (iPhone 14 / 15 · 393 × 852)' },
+            { value: 'tablet', label: 'Tablet (iPad · 820 × 1180)' },
+          ]} />
         </SettingRow>
 
         <SettingRow
           title="Default zoom"
           detail="Initial zoom scale for preview viewports."
         >
-          <select
-            value={defaultZoom}
-            onChange={(e) => browserDefaultZoom.set(e.target.value)}
-            aria-label="Default zoom"
-          >
-            <option value="fit">Auto-fit to panel</option>
-            <option value="100">100% (Actual size)</option>
-            <option value="75">75%</option>
-            <option value="50">50%</option>
-          </select>
+          <SettingSelect value={defaultZoom} onChange={browserDefaultZoom.set} ariaLabel="Default zoom" options={[
+            { value: 'fit', label: 'Auto-fit to panel' },
+            { value: '100', label: '100% (Actual size)' },
+            { value: '75', label: '75%' },
+            { value: '50', label: '50%' },
+          ]} />
         </SettingRow>
       </Section>
 
-      <Section title="Orca Design Mode">
+      <Section title="Design Mode">
         <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-          Orca-style visual inspection that connects elements directly to your AI coding agents, eliminating ambiguity in frontend UI edits.
+          Visual inspection that connects page elements directly to your AI coding agents, removing ambiguity from frontend UI edits.
         </p>
 
         <SettingRow
@@ -311,16 +301,12 @@ export default function BrowserSettingsSection() {
           title="Max HTML snippet characters"
           detail="Upper character limit for the included HTML snippet to keep prompts concise."
         >
-          <select
-            value={maxHtmlLength}
-            onChange={(e) => browserDesignModeMaxHtmlLength.set(parseInt(e.target.value, 10))}
-            aria-label="Max HTML snippet length"
-          >
-            <option value={1000}>1,000 characters</option>
-            <option value={2000}>2,000 characters (Recommended)</option>
-            <option value={3000}>3,000 characters</option>
-            <option value={5000}>5,000 characters</option>
-          </select>
+          <SettingSelect value={String(maxHtmlLength)} onChange={(value) => browserDesignModeMaxHtmlLength.set(Number(value))} ariaLabel="Max HTML snippet length" options={[
+            { value: '1000', label: '1,000 characters' },
+            { value: '2000', label: '2,000 characters (Recommended)' },
+            { value: '3000', label: '3,000 characters' },
+            { value: '5000', label: '5,000 characters' },
+          ]} />
         </SettingRow>
       </Section>
 
@@ -329,14 +315,10 @@ export default function BrowserSettingsSection() {
           title="Open web links in"
           detail="Where links clicked in terminal sessions or agent chats are opened."
         >
-          <select
-            value={openLinksIn}
-            onChange={(e) => browserOpenLinksIn.set(e.target.value as BrowserLinkRouting)}
-            aria-label="Open web links in"
-          >
-            <option value="preview">Built-in Preview Browser</option>
-            <option value="external">System Default Browser</option>
-          </select>
+          <SettingSelect value={openLinksIn} onChange={(value) => browserOpenLinksIn.set(value as BrowserLinkRouting)} ariaLabel="Open web links in" options={[
+            { value: 'preview', label: 'Built-in Preview Browser' },
+            { value: 'external', label: 'System Default Browser' },
+          ]} />
         </SettingRow>
 
         <SettingRow

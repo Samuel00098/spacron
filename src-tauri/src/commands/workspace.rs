@@ -546,7 +546,8 @@ pub fn workspace_git_fetch(project_id: String, state: State<AppState>) -> Result
 }
 
 #[tauri::command]
-pub fn workspace_detect_port(path: String, state: State<AppState>) -> u16 {
+pub fn workspace_detect_port(path: String, fallback_port: Option<u16>, state: State<AppState>) -> u16 {
+    let fallback_port = fallback_port.filter(|port| *port > 0).unwrap_or(5173);
     let root = match std::fs::canonicalize(std::path::PathBuf::from(&path)) {
         Ok(r) => crate::commands::clean_path_buf(r),
         Err(_) => return 5173,
@@ -616,8 +617,7 @@ pub fn workspace_detect_port(path: String, state: State<AppState>) -> u16 {
         }
     }
 
-    // Default fallback
-    5173
+    fallback_port
 }
 
 fn extract_port_from_cmd(cmd: &str) -> Option<u16> {

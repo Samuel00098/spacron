@@ -1,0 +1,28 @@
+.mobile-panel .mobile-t3-view { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; touch-action: none; cursor: grab; }
+.mobile-panel .mobile-t3-canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+.mobile-t3-source { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; overflow: hidden; }
+.mobile-t3-source .mobile-device-screen { width: 2px; height: 2px; }
+.mobile-t3-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-muted); pointer-events: none; }
+.mobile-t3-view.failed .mobile-t3-canvas { display: none; }
+.mobile-t3-view.failed .mobile-t3-source { inset: 0; width: 100%; height: 100%; opacity: 1; pointer-events: auto; }
+.mobile-t3-view.failed .mobile-t3-source .mobile-device-screen { width: 100%; height: 100%; object-fit: contain; }
+.mobile-panel .mobile-stage:has(.mobile-t3-view) { padding: 8px; display: block; }
+/* The 3D camera frames the model to the canvas width (an unfolded foldable
+   fills it), so the docked toolbar cannot sit beside the model the way it does
+   in 2D. Keep the canvas out of the toolbar's column instead; useDockedToolbar
+   docks it to the right edge in 3D. 58px = DOCK_WIDTH 42 + DOCK_EDGE 8 + gap 8. */
+.mobile-panel .mobile-device-body:has(> .mobile-side-toolbar) > .mobile-stage:has(.mobile-t3-view) { padding-right: 58px; }
+
+.mobile-panel .mobile-t3-fallback { width: 100%; height: 100%; background: transparent; }
+.mobile-panel .mobile-t3-fallback .mobile-device-screen { object-fit: contain; }
+/* The output canvas is an interactive transparent viewport, not a phone-screen
+   element. Override the legacy stream canvas's black fill and disabled hit test. */
+.mobile-panel .mobile-t3-view .mobile-t3-canvas {
+  width: 100%; height: 100%; max-width: none; max-height: none;
+  background: transparent; border-radius: 0; pointer-events: auto;
+}
+.mobile-panel .mobile-t3-fallback { position: relative; }
+.mobile-t3-error { position: absolute; z-index: 5; top: 8px; left: 8px; right: 8px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface-menu, #222); color: var(--text-primary,#eee); border-radius: 8px; font-size: 12px; }
+.mobile-t3-error span { flex: 1; overflow-wrap: anywhere; }
+.mobile-t3-error button { flex-shrink: 0; }
+.mobile-panel .mobile-t3-surface { position: absolute; inset: 0; width: 100%; height: 100%; }

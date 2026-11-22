@@ -41,12 +41,12 @@ describe('structured driver event mappings', () => {
     expect(chatItemForAcpUpdate('opencode', { params: { update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed', content: [{ type: 'text', text: 'done' }] } } })).toMatchObject({ id: 'tool-1', kind: 'tool', toolOutput: 'done', toolStatus: 'done' });
   });
 
-  it('maps structured ACP diffs and edit locations into the turn file summary', () => {
-    const diff = chatItemForAcpUpdate('antigravity', {
+  it.each(['gemini', 'opencode', 'grok', 'antigravity', 'cursor', 'copilot', 'kimi', 'hermes', 'omp'])('maps %s edit locations and diffs into the turn file summary', (agent) => {
+    const diff = chatItemForAcpUpdate(agent, {
       sessionUpdate: 'tool_call_update', toolCallId: 'edit', status: 'completed',
       content: [{ type: 'diff', path: 'src/edit.ts', oldText: 'before', newText: 'after' }],
     });
-    const deletion = chatItemForAcpUpdate('antigravity', {
+    const deletion = chatItemForAcpUpdate(agent, {
       sessionUpdate: 'tool_call', toolCallId: 'delete', status: 'completed',
       kind: 'delete', locations: [{ path: 'src/remove.ts' }],
     });

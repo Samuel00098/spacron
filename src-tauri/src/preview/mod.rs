@@ -232,6 +232,7 @@ const INSPECTOR_SNIPPET: &str = r#"<script>
             page: { url: location.href, title: document.title },
             rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }
         };
+        setEnabled(false);
         parent.postMessage({ type: 'forge-inspector:selected', payload: state.selected }, parentOrigin);
     }, true);
 
@@ -1591,6 +1592,8 @@ async fn serve_local_file(
             None => format!("{}\n{}", base_tag, html),
         };
 
+        let injected = inject_local_file_bridges(&injected);
+
         return Response::builder()
             .header("Content-Type", "text/html; charset=utf-8")
             .header("Cache-Control", "no-cache")
@@ -1713,6 +1716,12 @@ async fn serve_local_file_path(
     }
 
     let mime = guess_local_file_mime(&canonical);
+
+    let content = if mime.starts_with("text/html") {
+        inject_local_file_bridges(&String::from_utf8_lossy(&content)).into_bytes()
+    } else {
+        content
+    };
 
     Response::builder()
         .header("Content-Type", mime)
@@ -2898,12 +2907,9 @@ async fn build_preview_response(
             }
         };
         let html = String::from_utf8_lossy(&body_bytes);
-        // Only inject inspector into local dev server responses, never external sites.
-        let injected = if !strip_embed_headers {
-            inject_inspector_script(html.as_ref())
-        } else {
-            html.into_owned()
-        };
+        // Design Mode uses the same postMessage bridge on every proxied page.
+        // Cross-origin iframe documents cannot be instrumented by the app shell.
+        let injected = inject_inspector_script(html.as_ref());
         // Keep the document edge flush with the embedded browser viewport before
         // the page's own styles load. A site's explicit body margin can still
         // override this normally; this only removes the user-agent default.
@@ -3015,6 +3021,17 @@ async fn build_preview_response(
         )
             .into_response()
     })
+}
+
+// Local-file routes bypass the upstream response builder, so they must install
+// the same iframe bridges explicitly (including linked HTML subpages).
+fn inject_local_file_bridges(html: &str) -> String {
+    let html = inject_viewport_edge_style(html);
+    let html = inject_inspector_script(&html);
+    let html = inject_preview_theme_script(&html);
+    let html = inject_scroll_script(&html);
+    let html = inject_media_script(&html);
+    inject_input_script(&html)
 }
 
 fn inject_inspector_script(html: &str) -> String {
@@ -3473,6 +3490,17 @@ async fn bridge_ws_streams(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn local_file_html_installs_design_mode_bridge_once() {
+        let html = "<html><head></head><body><button>Inspect me</button></body></html>";
+        let injected = super::inject_local_file_bridges(html);
+        assert!(injected.contains("forge-inspector:set"));
+        assert!(injected.contains("overscroll-behavior: none"));
+        assert!(injected.contains("forge-inspector:selected"));
+        assert!(injected.contains("<button>Inspect me</button>"));
+        assert_eq!(super::inject_local_file_bridges(&injected), injected);
+    }
+
     use super::{
         consent_form_params, encode_dir_for_base_href, get_ws_target_from_proxy_path,
         html_escape_attr, inject_bridge_snippet, inject_late, inject_local_location_script,
@@ -4137,6 +4165,7 @@ mod local_file_e2e {
         assert!(content_type.contains("text/html"), "got: {content_type}");
         let body = resp.text().await.unwrap();
         assert!(body.contains("stylesheet"), "original HTML preserved");
+        assert!(body.contains("forge-inspector:set"), "local HTML must support Design Mode");
 
         // The <base> must be parsed BEFORE the stylesheet <link>: browsers only
         // apply a base to elements that come after it, so a base injected at the

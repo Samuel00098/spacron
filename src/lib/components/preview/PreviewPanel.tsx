@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { useAction } from '$lib/react/useAction';
@@ -65,10 +66,15 @@ import PreviewAnnotationOverlay from './PreviewAnnotationOverlay';
 import { dispatchPromptToAgent } from '$lib/services/agent-target';
 import {
   browserDefaultPort,
-  browserPreferredHost,
   browserThemeMode,
   browserDesignModeAutoScreenshot,
+  browserDesignModeIncludeStyles,
+  browserDesignModeIncludeHtml,
+  browserDesignModeMaxHtmlLength,
   browserConsoleAutoOpenOnError,
+  browserConsolePreserveLog,
+  browserDefaultZoom,
+  browserDefaultViewport,
 } from '$lib/stores/settings';
 import { activeProject } from '$lib/stores/workspace';
 import { activeTheme } from '$lib/stores/theme';
@@ -204,6 +210,14 @@ function isAbsoluteUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
+function isLocalFileBrowserUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ['localhost', '127.0.0.1'].includes(parsed.hostname) &&
+      (Boolean(parseLocalFilePreviewUrl(url)) || parsed.pathname.startsWith('/local-file/'));
+  } catch { return false; }
+}
+
 function parseLocalDevUrl(url: string): { host: string; port: number; path: string } | null {
   try {
     const parsed = new URL(url);
@@ -241,6 +255,19 @@ function relativeTime(ts: number): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+function clipCaptureRect(rect: Pick<DOMRectReadOnly, 'left' | 'top' | 'right' | 'bottom'>, clip: DOMRectReadOnly) {
+  const x = Math.ceil(Math.max(0, rect.left, clip.left));
+  const y = Math.ceil(Math.max(0, rect.top, clip.top));
+  const right = Math.floor(Math.min(rect.right, clip.right, window.innerWidth));
+  const bottom = Math.floor(Math.min(rect.bottom, clip.bottom, window.innerHeight));
+  if (right <= x || bottom <= y) return null;
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function afterPreviewPaint(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 }
 
 function pngBytesToDataUrl(pngBytes: number[]): string {
@@ -313,6 +340,7 @@ function getInspectorScript(): string {
       page: { url: location.href, title: document.title },
       rect: { x:Math.round(r.x), y:Math.round(r.y), width:Math.round(r.width), height:Math.round(r.height) }
     };
+    setEnabled(false);
     parent.postMessage({ type:'forge-inspector:selected', payload:state.selected }, '*');
   }, true);
   window.addEventListener('message', e => {
@@ -347,14 +375,19 @@ export default function PreviewPanel() {
   const proxyPortValue = useStore(proxyPort);
   const proxyStartedValue = useStore(proxyStarted);
   const preferredLocalHostValue = useStore(preferredLocalHost);
+  const browserPortDefault = useStore(browserDefaultPort);
+  const browserZoomDefault = useStore(browserDefaultZoom);
+  const browserViewportDefault = useStore(browserDefaultViewport);
   const localDevProxyPortsValue = useStore(localDevProxyPorts);
   const isConnectingValue = useStore(isConnecting);
   const browsingHistoryValue = useStore(browsingHistory);
   const project = useStore(activeProject);
   const appThemeValue = useStore(activeTheme);
+  const browserThemeModeValue = useStore(browserThemeMode);
 
   const iframeElementsRef = useRef<Record<string, HTMLIFrameElement | undefined>>({});
   const previewContentRef = useRef<HTMLDivElement>(null);
+  const elementCaptureRef = useRef(0);
   const viewportFrameRef = useRef<HTMLDivElement>(null);
   const consoleBodyRef = useRef<HTMLDivElement>(null);
   const [screenshotting, setScreenshotting] = useState(false);
@@ -367,13 +400,23 @@ export default function PreviewPanel() {
   const [annotateMode, setAnnotateMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showPreviewThemeMenu, setShowPreviewThemeMenu] = useState(false);
-  const [previewThemeMode, setPreviewThemeMode] = useProjectPanelState<PreviewThemeMode>('preview.themeMode', 'system');
+  const [showBrowserToolsMenu, setShowBrowserToolsMenu] = useState(false);
+  const [previewThemeMode, setPreviewThemeMode] = useProjectPanelState<PreviewThemeMode>('preview.themeMode', browserThemeModeValue);
+  useEffect(() => {
+    setPreviewThemeMode(browserThemeModeValue);
+  }, [browserThemeModeValue]);
+
   // Responsive/device mode. The viewport is a plain rectangle of an exact
   // CSS-pixel size (what every browser's responsive mode does) — the page sees a
   // real 390px-wide viewport, so its media queries and vh units behave for real.
   const [deviceMode, setDeviceMode] = useProjectPanelState('preview.deviceMode', false);
-  const [viewportSize, setViewportSize] = useProjectPanelState('preview.viewportSize', { width: DEFAULT_VIEWPORT.width, height: DEFAULT_VIEWPORT.height });
-  const [zoomMode, setZoomMode] = useProjectPanelState<ViewportZoom>('preview.zoomMode', 'fit');
+  const defaultDeviceSize = browserViewportDefault === 'phone'
+    ? (findPreset(DEFAULT_PHONE_PRESET) ?? DEFAULT_VIEWPORT)
+    : browserViewportDefault === 'tablet'
+      ? (findPreset(DEFAULT_TABLET_PRESET) ?? DEFAULT_VIEWPORT)
+      : DEFAULT_VIEWPORT;
+  const [viewportSize, setViewportSize] = useProjectPanelState('preview.viewportSize', { width: defaultDeviceSize.width, height: defaultDeviceSize.height });
+  const [zoomMode, setZoomMode] = useProjectPanelState<ViewportZoom>('preview.zoomMode', browserZoomDefault === 'fit' ? 'fit' : Number(browserZoomDefault) / 100);
   const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   // Scale is frozen for the duration of a hand-resize: with 'fit' active,
@@ -383,17 +426,31 @@ export default function PreviewPanel() {
   // every keystroke turns a half-typed "3" into the 200px minimum.
   const [widthDraft, setWidthDraft] = useState<string | null>(null);
   const [heightDraft, setHeightDraft] = useState<string | null>(null);
+  const [viewportPreferencesSeeded, setViewportPreferencesSeeded] = useProjectPanelState('preview.browserDefaultsSeeded', false);
   const [selectedElementInfo, setSelectedElementInfo] = useState<SelectedElementInfo | null>(null);
   const [selectedElementScreenshot, setSelectedElementScreenshot] = useState<string | null>(null);
   const autoScreenshotSetting = useStore(browserDesignModeAutoScreenshot);
+  const includeStylesSetting = useStore(browserDesignModeIncludeStyles);
+  const includeHtmlSetting = useStore(browserDesignModeIncludeHtml);
+  const maxHtmlLengthSetting = useStore(browserDesignModeMaxHtmlLength);
   const consoleAutoOpenSetting = useStore(browserConsoleAutoOpenOnError);
+  const preserveConsoleSetting = useStore(browserConsolePreserveLog);
   const globalBrowserTheme = useStore(browserThemeMode);
   const consoleLogs = useStore(previewConsoleLogs);
   const [showConsole, setShowConsole] = useProjectPanelState('preview.showConsole', false);
   const [consoleFilter, setConsoleFilter] = useProjectPanelState<ConsoleFilter>('preview.consoleFilter', 'all');
   const [consoleQuery, setConsoleQuery] = useProjectPanelState('preview.consoleQuery', '');
-  const [preserveConsoleLog, setPreserveConsoleLog] = useProjectPanelState('preview.preserveConsoleLog', false);
+  const [preserveConsoleLog, setPreserveConsoleLog] = useProjectPanelState('preview.preserveConsoleLog', preserveConsoleSetting);
+  useEffect(() => setPreserveConsoleLog(preserveConsoleSetting), [preserveConsoleSetting, setPreserveConsoleLog]);
   const [tabLoadState, setTabLoadState] = useState<Record<string, TabLoadState>>({});
+
+  useEffect(() => {
+    if (viewportPreferencesSeeded) return;
+    setDeviceMode(browserViewportDefault !== 'desktop');
+    if (browserViewportDefault !== 'desktop') setViewportSize({ width: defaultDeviceSize.width, height: defaultDeviceSize.height });
+    setZoomMode(browserZoomDefault === 'fit' ? 'fit' : Number(browserZoomDefault) / 100);
+    setViewportPreferencesSeeded(true);
+  }, [viewportPreferencesSeeded, browserViewportDefault, browserZoomDefault, defaultDeviceSize, setDeviceMode, setViewportSize, setZoomMode, setViewportPreferencesSeeded]);
 
   const appThemeMode: 'light' | 'dark' =
     appThemeValue?.type ??
@@ -510,7 +567,7 @@ export default function PreviewPanel() {
     (tab: { url: string }): string | null => {
       const normalized = normalizeUrl(tab.url);
       if (normalized === 'about:blank') return null;
-      const localDev = parseLocalDevUrl(normalized);
+      const localDev = isLocalFileBrowserUrl(normalized) ? null : parseLocalDevUrl(normalized);
       if (localDev) return getLocalDevProxyOrigin(localDev);
       return proxyPortRef.current ? `http://127.0.0.1:${proxyPortRef.current}` : null;
     },
@@ -534,6 +591,10 @@ export default function PreviewPanel() {
         return proxyPortValue
           ? `http://127.0.0.1:${proxyPortValue}/local-file${localFile.search}`
           : '';
+      }
+      if (isLocalFileBrowserUrl(norm)) {
+        const fileUrl = new URL(norm);
+        return proxyPortValue ? `http://127.0.0.1:${proxyPortValue}${fileUrl.pathname}${fileUrl.search}${fileUrl.hash}` : '';
       }
       const localDev = parseLocalDevUrl(norm);
       if (localDev) {
@@ -731,12 +792,12 @@ export default function PreviewPanel() {
       return;
     }
     try {
-      const detected = await invoke<number>('workspace_detect_port', { path: projectPath });
+      const detected = await invoke<number>('workspace_detect_port', { path: projectPath, fallbackPort: browserPortDefault });
       await setTargetPort(detected);
     } catch {
       showToast('Could not detect dev server port', 'error');
     }
-  }, [project]);
+  }, [project, browserPortDefault]);
 
   const navigateTo = useCallback(
     async (rawUrl: string) => {
@@ -805,6 +866,25 @@ export default function PreviewPanel() {
     }
   }, [getActiveIframeElement, startLoadFeedback, markDrivenLoad]);
 
+  const hardReload = useCallback(() => {
+    const activeIframe = getActiveIframeElement();
+    if (!activeIframe) return;
+    markDrivenLoad();
+    startLoadFeedback(activeTabRef.current?.id);
+    try {
+      const frameWindow = activeIframe.contentWindow;
+      if (frameWindow) {
+        frameWindow.location.reload();
+        return;
+      }
+    } catch {
+      // Cross-origin pages fall back to reloading the iframe URL below.
+    }
+    const url = new URL(activeIframe.src);
+    url.searchParams.set('__spacron_hard_reload', String(Date.now()));
+    activeIframe.src = url.toString();
+  }, [getActiveIframeElement, startLoadFeedback, markDrivenLoad]);
+
   const clearBrowsingData = useCallback(async () => {
     if (clearingData) return;
     setClearingData(true);
@@ -823,21 +903,7 @@ export default function PreviewPanel() {
     if (!activeIframe?.contentWindow) return;
     const tab = activeTabRef.current;
     if (!tab) return;
-    const url = tab.url;
-    const localDev = parseLocalDevUrl(normalizeUrl(url));
-    let targetOrigin: string | null;
-    if (localDev) {
-      // Local dev tab — only send if proxy port is known
-      targetOrigin = getLocalDevProxyOrigin(localDev);
-    } else if (isAbsoluteUrl(normalizeUrl(url))) {
-      // External URL — inspector is never injected, skip entirely
-      targetOrigin = null;
-    } else if (proxyPortRef.current) {
-      // Relative path (served via proxy)
-      targetOrigin = `http://127.0.0.1:${proxyPortRef.current}`;
-    } else {
-      targetOrigin = window.location.origin;
-    }
+    const targetOrigin = getPreviewTargetOrigin(tab);
     if (!targetOrigin) return;
     // Include parentOrigin so the iframe script can use it as the postMessage target
     // when replying, avoiding the need for '*' in the reverse direction.
@@ -845,7 +911,7 @@ export default function PreviewPanel() {
       { type: 'forge-inspector:set', enabled: inspectModeRef.current, parentOrigin: window.location.origin },
       targetOrigin,
     );
-  }, [getActiveIframeElement, getLocalDevProxyOrigin]);
+  }, [getActiveIframeElement, getPreviewTargetOrigin]);
 
   const postPreviewTheme = useCallback(
     (tabId?: string) => {
@@ -871,24 +937,8 @@ export default function PreviewPanel() {
     for (const tab of tabs || []) postPreviewTheme(tab.id);
   }, [tabs, postPreviewTheme]);
 
-  // Inject the inspector script directly into the iframe when the proxy hasn't
-  // done it (e.g. external URLs or proxy not yet ready).
-  const injectInspectorIfNeeded = useCallback(() => {
-    const activeIframe = getActiveIframeElement();
-    if (!activeIframe?.contentWindow) return;
-    try {
-      const doc = activeIframe.contentDocument || activeIframe.contentWindow.document;
-      if (!doc || doc.querySelector('script[data-forge-inspector]')) return;
-      const script = doc.createElement('script');
-      script.setAttribute('data-forge-inspector', '1');
-      script.textContent = getInspectorScript();
-      (doc.head || doc.documentElement).appendChild(script);
-    } catch {
-      // Cross-origin — proxy injection is needed; silently ignore
-    }
-  }, [getActiveIframeElement]);
-
   const toggleAnnotateMode = useCallback(() => {
+    elementCaptureRef.current += 1;
     setAnnotateMode((prev) => {
       const next = !prev;
       if (next && inspectModeRef.current) {
@@ -901,22 +951,20 @@ export default function PreviewPanel() {
   }, [postInspectorState]);
 
   const toggleInspectMode = useCallback(() => {
-    setInspectMode((prev) => {
-      const next = !prev;
-      inspectModeRef.current = next;
-      setSelectedElementInfo(null);
-      setSelectedElementScreenshot(null);
-      if (next) {
-        setAnnotateMode(false);
-        ensureProxyRunning();
-        injectInspectorIfNeeded();
-      }
-      postInspectorState();
-      return next;
-    });
-  }, [injectInspectorIfNeeded, postInspectorState]);
+    elementCaptureRef.current += 1;
+    const next = !inspectModeRef.current;
+    inspectModeRef.current = next;
+    setInspectMode(next);
+    setSelectedElementInfo(null);
+    setSelectedElementScreenshot(null);
+    if (next) {
+      setAnnotateMode(false);
+      void ensureProxyRunning();
+    }
+    postInspectorState();
+  }, [postInspectorState]);
 
-  // Alt+D shortcut to toggle Orca Design Mode
+  // Alt+D shortcut to toggle Design Mode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'd') {
@@ -964,23 +1012,18 @@ export default function PreviewPanel() {
 
         // The element rect from the inspector is relative to the iframe's viewport.
         // Offset it by the iframe's position on screen to get absolute screen coords.
-        const x = Math.round((iframeRect.left + info.rect.x * frameScale) * scale) / scale;
-        const y = Math.round((iframeRect.top + info.rect.y * frameScale) * scale) / scale;
-        const width = Math.max(4, Math.round(info.rect.width * frameScale));
-        const height = Math.max(4, Math.round(info.rect.height * frameScale));
-
-        // Clamp to the iframe's visible area so we never request out-of-bounds pixels
-        const clampedX = Math.max(iframeRect.left, x);
-        const clampedY = Math.max(iframeRect.top, y);
-        const clampedW = Math.min(width, iframeRect.right - clampedX);
-        const clampedH = Math.min(height, iframeRect.bottom - clampedY);
-        if (clampedW <= 0 || clampedH <= 0) return null;
-
+        const left = iframeRect.left + info.rect.x * frameScale;
+        const top = iframeRect.top + info.rect.y * frameScale;
+        const clip = previewContentRef.current?.getBoundingClientRect() ?? iframeRect;
+        const crop = clipCaptureRect({
+          left: Math.max(iframeRect.left, left),
+          top: Math.max(iframeRect.top, top),
+          right: Math.min(iframeRect.right, left + info.rect.width * frameScale),
+          bottom: Math.min(iframeRect.bottom, top + info.rect.height * frameScale),
+        }, clip);
+        if (!crop) return null;
         const pngBytes = await invoke<number[]>('preview_capture_screenshot', {
-          x: Math.round(clampedX),
-          y: Math.round(clampedY),
-          width: Math.round(clampedW),
-          height: Math.round(clampedH),
+          ...crop,
           scale,
         });
 
@@ -993,27 +1036,34 @@ export default function PreviewPanel() {
     [getActiveIframeElement],
   );
 
-  const captureViewportScreenshot = useCallback(async (): Promise<string | null> => {
+  const captureViewportScreenshot = useCallback(async () => {
     try {
-      const target = deviceMode ? viewportFrameRef.current : previewContentRef.current;
-      if (!target) return null;
+      const target = getActiveIframeElement();
+      const frame = viewportFrameRef.current?.getBoundingClientRect();
+      if (!target || !frame || !frame.width || !frame.height) return null;
       const rect = target.getBoundingClientRect();
-      const scale = window.devicePixelRatio || 1;
-      const pngBytes = await invoke<number[]>('preview_capture_screenshot', {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-        scale,
-      });
-      return pngBytesToDataUrl(pngBytes);
+      const crop = clipCaptureRect(rect, previewContentRef.current?.getBoundingClientRect() ?? rect);
+      if (!crop) return null;
+      const pngBytes = await invoke<number[]>('preview_capture_screenshot', { ...crop, scale: window.devicePixelRatio || 1 });
+      return {
+        dataUrl: pngBytesToDataUrl(pngBytes),
+        // The annotation canvas covers the full viewport even when its frame is clipped.
+        x: (crop.x - frame.left) / frame.width,
+        y: (crop.y - frame.top) / frame.height,
+        width: crop.width / frame.width,
+        height: crop.height / frame.height,
+      };
     } catch {
       return null;
     }
-  }, [deviceMode]);
+  }, [getActiveIframeElement]);
 
   const addElementToAgent = useCallback((info: SelectedElementInfo) => {
-    const text = buildElementPrompt(info).trim();
+    const text = buildElementPrompt(info, {
+      includeStyles: includeStylesSetting,
+      includeHtml: includeHtmlSetting,
+      maxHtml: maxHtmlLengthSetting,
+    }).trim();
     const sessionId = getActiveAgentSessionId();
     if (!text) return;
     if (sessionId === null) {
@@ -1027,7 +1077,7 @@ export default function PreviewPanel() {
     requestTerminalInput(sessionId, text);
     setSelectedElementInfo(null);
     showToast('Element added to the active agent input', 'success');
-  }, []);
+  }, [includeStylesSetting, includeHtmlSetting, maxHtmlLengthSetting]);
 
   const handleIframeLoad = useCallback(
     (tabId: string) => {
@@ -1066,7 +1116,7 @@ export default function PreviewPanel() {
   const expectedOriginForTab = useCallback(
     (tabId: string): string | null => {
       const sourceTab = (tabsRef.current || []).find((t) => t.id === tabId);
-      const sourceLocalDev = sourceTab ? parseLocalDevUrl(normalizeUrl(sourceTab.url)) : null;
+      const sourceLocalDev = sourceTab && !isLocalFileBrowserUrl(normalizeUrl(sourceTab.url)) ? parseLocalDevUrl(normalizeUrl(sourceTab.url)) : null;
       if (sourceLocalDev) return getLocalDevProxyOrigin(sourceLocalDev);
       return proxyPortRef.current ? `http://127.0.0.1:${proxyPortRef.current}` : null;
     },
@@ -1272,24 +1322,33 @@ export default function PreviewPanel() {
         return;
       }
 
-      // Inspector selection events: only accept from our proxy origin or a local dev URL.
-      // External-URL iframes never have the inspector injected, so we reject those.
+      // Inspector selections must come from the active proxied iframe.
       if (event.data.type !== 'forge-inspector:selected') return;
+      if (!inspectModeRef.current || sourceTabId !== get(activePreviewTabId)) return;
       if (!sourceTabId) return;
       {
         const expectedOrigin = expectedOriginForTab(sourceTabId);
         if (!expectedOrigin || event.origin !== expectedOrigin) return;
       }
       const info = event.data.payload;
-      setSelectedElementInfo(info);
+      const captureId = ++elementCaptureRef.current;
+      setSelectedElementScreenshot(null);
       setInspectMode(false);
       inspectModeRef.current = false;
       postInspectorState();
-      if (autoScreenshotSetting) {
-        void captureElementScreenshot(info).then((dataUrl) => {
-          setSelectedElementScreenshot(dataUrl);
-        });
+      if (!autoScreenshotSetting) {
+        setSelectedElementInfo(info);
+        return;
       }
+      // Let the page paint with the inspector highlight removed before capture.
+      // Keep the dialog off the page until the screenshot has been acquired.
+      void afterPreviewPaint().then(async () => {
+        if (elementCaptureRef.current !== captureId || get(activePreviewTabId) !== sourceTabId) return;
+        const dataUrl = await captureElementScreenshot(info);
+        if (elementCaptureRef.current !== captureId || get(activePreviewTabId) !== sourceTabId) return;
+        setSelectedElementScreenshot(dataUrl);
+        setSelectedElementInfo(info);
+      });
     },
     [expectedOriginForTab, postInspectorState, autoScreenshotSetting, captureElementScreenshot, updateTabLoadState, clearLoadFeedbackTimer],
   );
@@ -1597,6 +1656,7 @@ export default function PreviewPanel() {
 
   const activateTab = useCallback((tabId: string) => {
     if (tabId === activeTabRef.current?.id) return;
+    elementCaptureRef.current += 1;
     selectPreviewBrowserTab(tabId);
     setSelectedElementInfo(null);
     // Only the active tab's output is captured, so anything still on screen
@@ -1686,6 +1746,15 @@ export default function PreviewPanel() {
     return () => window.removeEventListener('click', handleWindowClickForPreviewTheme);
   }, [showPreviewThemeMenu]);
 
+  useEffect(() => {
+    const close = (event: MouseEvent) => {
+      if (!showBrowserToolsMenu) return;
+      if (!(event.target instanceof Element) || !event.target.closest('.browser-tools-wrap')) setShowBrowserToolsMenu(false);
+    };
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [showBrowserToolsMenu]);
+
   // When the user navigates to an external absolute URL, ensure the background
   // proxy server is running (for iframe embedding) but do NOT change proxyStarted.
   // proxyStarted only controls local dev server forwarding.
@@ -1767,8 +1836,8 @@ export default function PreviewPanel() {
         <button
           className="preview-placement-btn"
           onClick={() => setPreviewDocked(!previewDocked)}
-          title={previewDocked ? 'Open Preview as a room' : 'Back to right sidebar'}
-          aria-label={previewDocked ? 'Open Preview as a room' : 'Back to right sidebar'}
+          title={previewDocked ? 'Open Browser as a room' : 'Back to right sidebar'}
+          aria-label={previewDocked ? 'Open Browser as a room' : 'Back to right sidebar'}
         >
           {previewDocked ? (
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -1803,13 +1872,47 @@ export default function PreviewPanel() {
               <path d="M8 16H3v5" />
             </svg>
           </button>
+
+        {/* Open in system browser button */}
+        {isAbsoluteUrl(currentUrlValue) && (
+          <button className="nav-btn open-external-btn" onClick={openInBrowser} title="Open in system browser" aria-label="Open in system browser">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </button>
+        )}
+
         </div>
 
-        <div className="nav-group utility-nav">
+      <div className="preview-address-row">
+        <form className="address-bar" onSubmit={handleNavigate}>
+          <span className={`protocol-badge ${protocolBadge.toLowerCase()}`}>{protocolBadge}</span>
+          <input
+            type="text"
+            value={inputUrl}
+            onChange={(e) => setInputUrl(e.target.value)}
+            placeholder="Enter URL or search…"
+            className="address-input"
+            onKeyDown={handleInputKeydown}
+            onClick={(e) => (e.target as HTMLInputElement).select()}
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <button type="submit" className="go-btn" title="Navigate">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+        </form>
+      </div>
+
+
           <div className="history-wrap">
             <button
               className={`nav-btn history-btn${showHistory ? ' active' : ''}`}
-              onClick={() => setShowHistory((prev) => !prev)}
+              onClick={() => { setShowHistory((prev) => !prev); setShowBrowserToolsMenu(false); }}
               title="Browsing history"
               aria-label="Browsing history"
             >
@@ -1854,193 +1957,40 @@ export default function PreviewPanel() {
               </div>
             )}
           </div>
-          <button
-            className={`nav-btn inspect-btn design-mode-btn${inspectMode ? ' active' : ''}`}
-            onClick={toggleInspectMode}
-            title={inspectMode ? 'Exit Design Mode (Alt+D)' : 'Design Mode: Inspect elements & prompt agent (Alt+D)'}
-            aria-pressed={inspectMode}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-            </svg>
-            <span className="design-mode-label">Design Mode</span>
-            {inspectMode && <span className="design-mode-on-dot" />}
-          </button>
-          <button
-            className={`nav-btn inspect-btn annotate-mode-btn${annotateMode ? ' active' : ''}`}
-            onClick={toggleAnnotateMode}
-            title={annotateMode ? 'Exit Draw Mode' : 'Draw Mode: Draw or write on page & prompt agent'}
-            aria-pressed={annotateMode}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 19l7-7 3 3-7 7-3-3z" />
-              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-            </svg>
-            <span className="design-mode-label">Draw</span>
-            {annotateMode && <span className="design-mode-on-dot" />}
-          </button>
-          <button
-            className={`nav-btn console-btn${showConsole ? ' active' : ''}`}
-            onClick={() => setShowConsole((prev) => !prev)}
-            title={
-              consoleCounts.errors || consoleCounts.warnings
-                ? `Preview console: ${consoleCounts.errors} error(s), ${consoleCounts.warnings} warning(s)`
-                : 'Toggle preview console'
-            }
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
-            {(consoleCounts.errors > 0 || consoleCounts.warnings > 0) && (
-              <span className={`console-badge${consoleCounts.errors > 0 ? ' has-errors' : ''}`}>
-                {consoleCounts.errors > 0 ? consoleCounts.errors : consoleCounts.warnings}
-              </span>
-            )}
-          </button>
-
-          <div className="preview-theme-wrap">
-            <button
-              className={`nav-btn preview-theme-btn${showPreviewThemeMenu ? ' active' : ''}`}
-              onClick={() =>
-                setPreviewThemeMode((previous) => {
-                  const current = previous === 'system' ? effectivePreviewTheme : previous;
-                  return current === 'dark' ? 'light' : 'dark';
-                })
-              }
-              title={`Switch preview theme (currently ${previewThemeLabel})`}
-              aria-label={`Switch preview theme (currently ${previewThemeLabel})`}
-            >
-              {effectivePreviewTheme === 'dark' ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z" />
-                </svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="4" />
-                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-                </svg>
-              )}
-            </button>
-            <button
-              className={`nav-btn preview-theme-options-btn${showPreviewThemeMenu ? ' active' : ''}`}
-              onClick={() => setShowPreviewThemeMenu((previous) => !previous)}
-              title="Preview theme options"
-              aria-label="Preview theme options"
-              aria-expanded={showPreviewThemeMenu}
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </button>
-            {showPreviewThemeMenu && (
-              <div className="preview-theme-menu" role="menu" aria-label="Preview theme">
-                <div className="preview-theme-menu-title">Preview theme</div>
-                <button
-                  className={`preview-theme-option${previewThemeMode === 'system' ? ' active' : ''}`}
-                  onClick={() => {
-                    setPreviewThemeMode('system');
-                    setShowPreviewThemeMenu(false);
-                  }}
-                  role="menuitemradio"
-                  aria-checked={previewThemeMode === 'system'}
-                >
-                  <span className="preview-theme-option-icon">⌘</span>
-                  <span>
-                    Follow app
-                    <small>{appThemeMode === 'dark' ? 'Dark right now' : 'Light right now'}</small>
-                  </span>
-                  {previewThemeMode === 'system' && <span className="preview-theme-check">✓</span>}
-                </button>
-                <button
-                  className={`preview-theme-option${previewThemeMode === 'light' ? ' active' : ''}`}
-                  onClick={() => {
-                    setPreviewThemeMode('light');
-                    setShowPreviewThemeMenu(false);
-                  }}
-                  role="menuitemradio"
-                  aria-checked={previewThemeMode === 'light'}
-                >
-                  <span className="preview-theme-option-icon">☼</span>
-                  <span>Light</span>
-                  {previewThemeMode === 'light' && <span className="preview-theme-check">✓</span>}
-                </button>
-                <button
-                  className={`preview-theme-option${previewThemeMode === 'dark' ? ' active' : ''}`}
-                  onClick={() => {
-                    setPreviewThemeMode('dark');
-                    setShowPreviewThemeMenu(false);
-                  }}
-                  role="menuitemradio"
-                  aria-checked={previewThemeMode === 'dark'}
-                >
-                  <span className="preview-theme-option-icon">◐</span>
-                  <span>Dark</span>
-                  {previewThemeMode === 'dark' && <span className="preview-theme-check">✓</span>}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Screenshot */}
-          <button
-            className={`nav-btn screenshot-btn${screenshotting ? ' screenshotting' : ''}`}
-            onClick={takeScreenshot}
-            disabled={screenshotting}
-            title={
-              deviceMode
-                ? `Screenshot the ${viewportSize.width} x ${viewportSize.height} viewport`
-                : 'Screenshot preview'
-            }
-          >
-            {screenshotting ? (
-              <svg className="spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
-              </svg>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                <circle cx="12" cy="13" r="4" />
-              </svg>
-            )}
-          </button>
-
-          {/* Clear cookies & cache */}
-          <button
-            className={`nav-btn clear-data-btn${clearingData ? ' clearing' : ''}`}
-            onClick={clearBrowsingData}
-            disabled={clearingData}
-            title="Clear preview cookies & cache (keeps app settings)"
-          >
-            {clearingData ? (
-              <svg className="spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
-              </svg>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5Z" />
-                <circle cx="9.5" cy="11" r="0.6" fill="currentColor" />
-                <circle cx="14" cy="14.5" r="0.6" fill="currentColor" />
-                <circle cx="9.5" cy="16" r="0.6" fill="currentColor" />
-              </svg>
-            )}
-          </button>
-
-          {/* Browser Settings */}
-          <button
-            className="nav-btn browser-settings-btn"
-            onClick={() => openSettings('browser')}
-            title="Browser Settings (Dev Server, Theme, Orca Design Mode & Network)"
-            aria-label="Browser Settings"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        <div className="browser-tools-wrap">
+          <button type="button" className={`nav-btn${annotateMode ? ' active' : ''}`}
+            aria-label="Annotate page" title="Annotate page" aria-pressed={annotateMode} disabled={!activeIframeSrc && !annotateMode}
+            onClick={() => { toggleAnnotateMode(); setShowBrowserToolsMenu(false); }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="m4 16 12-12 4 4L8 20H4zM14 6l4 4" />
             </svg>
           </button>
-        </div>
+          <button
+            className={`nav-btn browser-tools-trigger${showBrowserToolsMenu ? ' active' : ''}${inspectMode || annotateMode || showConsole ? ' has-active-tool' : ''}`}
+            onClick={() => { setShowBrowserToolsMenu((open) => !open); setShowHistory(false); }}
+            aria-label="Browser tools"
+            aria-haspopup="menu"
+            aria-expanded={showBrowserToolsMenu}
+            title="Browser tools"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" />
+            </svg>
+            <span className="browser-tools-label">Tools</span>
+            <svg className="browser-tools-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="6 9 12 15 18 9" /></svg>
+          </button>
+          {showBrowserToolsMenu && (
+            <div className="browser-tools-menu" role="menu" aria-label="Browser tools">
+<div className="browser-tools-subhead">Browser</div>
+              <button className="browser-tools-item" role="menuitem" onClick={() => { hardReload(); setShowBrowserToolsMenu(false); }}>
+                <span aria-hidden="true" /><span>Hard reload<small>Reload the page and bypass its cache</small></span>
+              </button>
 
+<div className="browser-tools-divider" />
+              <div className="preview-theme-menu-title">Page tools</div>
+              <button className={`browser-tools-item${inspectMode ? ' active' : ''}`} role="menuitemcheckbox" aria-checked={inspectMode} onClick={() => { toggleInspectMode(); setShowBrowserToolsMenu(false); }}><span>⌖</span><span>Design Mode<small>Pick an element and describe what to change</small></span>{inspectMode && <span className="preview-theme-check">✓</span>}</button>
+              <button className={`browser-tools-item${showConsole ? ' active' : ''}`} role="menuitemcheckbox" aria-checked={showConsole} onClick={() => { setShowConsole((open) => !open); setShowBrowserToolsMenu(false); }}><span>›_</span><span>Developer console<small>{consoleCounts.errors} errors · {consoleCounts.warnings} warnings</small></span>{showConsole && <span className="preview-theme-check">✓</span>}</button>
+<div className="browser-tools-divider" /><div className="browser-tools-subhead">Viewport</div>
         <div className="nav-group viewport-nav">
           {/* Fill the pane (no viewport emulation) */}
           <button
@@ -2081,86 +2031,6 @@ export default function PreviewPanel() {
             </svg>
           </button>
         </div>
-
-        <span
-          className="preview-trust-pill"
-          title="External pages load through Spacron's embedded proxy. Local dev preview uses the active project's configured port."
-        >
-          Sandboxed preview
-        </span>
-
-        {/* Open in system browser button */}
-        {isAbsoluteUrl(currentUrlValue) && (
-          <button className="nav-btn open-external-btn" onClick={openInBrowser} title="Open in system browser" aria-label="Open in system browser">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
-          </button>
-        )}
-
-        <div className="proxy-settings">
-          <span className="label">Port:</span>
-          <div className="port-combo">
-            <input
-              type="text"
-              inputMode="numeric"
-              list="common-ports"
-              className="port-input"
-              value={tempPort}
-              onChange={(e) => setTempPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
-              onBlur={handlePortChange}
-              onKeyDown={(e) => e.key === 'Enter' && handlePortChange()}
-              maxLength={5}
-              title="Dev server port (type custom or pick common)"
-            />
-            <datalist id="common-ports">
-              {commonPorts.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </datalist>
-            <button className="nav-btn detect-btn" onClick={autoDetectPort} title="Auto-detect dev server port from project config">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" />
-                <path d="M21 21l-4.35-4.35" />
-              </svg>
-            </button>
-          </div>
-
-          <button
-            className={`proxy-btn${proxyStartedValue ? ' running' : ''}`}
-            onClick={toggleProxy}
-            disabled={isConnectingValue}
-            title={proxyStartedValue ? 'Stop local dev preview' : 'Start local dev preview on this port'}
-          >
-            {isConnectingValue ? (
-              <>
-                <svg className="spin-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
-                </svg>
-                <span className="proxy-btn-text">Connecting</span>
-              </>
-            ) : proxyStartedValue ? (
-              <>
-                <svg width="8" height="8" viewBox="0 0 8 8">
-                  <circle cx="4" cy="4" r="4" fill="currentColor" />
-                </svg>
-                <span className="proxy-btn-text">Dev: On</span>
-              </>
-            ) : (
-              <>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
-                </svg>
-                <span className="proxy-btn-text">Dev: Off</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
 
       {deviceMode && (
         <div className="device-bar">
@@ -2248,28 +2118,84 @@ export default function PreviewPanel() {
         </div>
       )}
 
-      {/* Keep the address/search field in its own full-width row. It stays
-          visible below the browser and device controls at every preview width. */}
-      <div className="preview-address-row">
-        <form className="address-bar" onSubmit={handleNavigate}>
-          <span className={`protocol-badge ${protocolBadge.toLowerCase()}`}>{protocolBadge}</span>
-          <input
-            type="text"
-            value={inputUrl}
-            onChange={(e) => setInputUrl(e.target.value)}
-            placeholder="Enter URL or search…"
-            className="address-input"
-            onKeyDown={handleInputKeydown}
-            onClick={(e) => (e.target as HTMLInputElement).select()}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <button type="submit" className="go-btn" title="Navigate">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
+
+<div className="browser-tools-subhead">Dev server</div>
+        <div className="proxy-settings">
+          <span className="label">Port:</span>
+          <div className="port-combo">
+            <input
+              type="text"
+              inputMode="numeric"
+              list="common-ports"
+              className="port-input"
+              value={tempPort}
+              onChange={(e) => setTempPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
+              onBlur={handlePortChange}
+              onKeyDown={(e) => e.key === 'Enter' && handlePortChange()}
+              maxLength={5}
+              title="Dev server port (type custom or pick common)"
+            />
+            <datalist id="common-ports">
+              {commonPorts.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </datalist>
+            <button className="nav-btn detect-btn" onClick={autoDetectPort} title="Auto-detect dev server port from project config">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <path d="M21 21l-4.35-4.35" />
+              </svg>
+            </button>
+          </div>
+
+          <button
+            className={`proxy-btn${proxyStartedValue ? ' running' : ''}`}
+            onClick={toggleProxy}
+            disabled={isConnectingValue}
+            title={proxyStartedValue ? 'Stop local dev preview' : 'Start local dev preview on this port'}
+          >
+            {isConnectingValue ? (
+              <>
+                <svg className="spin-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
+                </svg>
+                <span className="proxy-btn-text">Connecting</span>
+              </>
+            ) : proxyStartedValue ? (
+              <>
+                <svg width="8" height="8" viewBox="0 0 8 8">
+                  <circle cx="4" cy="4" r="4" fill="currentColor" />
+                </svg>
+                <span className="proxy-btn-text">Dev: On</span>
+              </>
+            ) : (
+              <>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
+                </svg>
+                <span className="proxy-btn-text">Dev: Off</span>
+              </>
+            )}
           </button>
-        </form>
+        </div>
+              <div className="browser-tools-divider" /><div className="browser-tools-subhead">Appearance</div>
+              <button className="browser-tools-item" role="menuitem" onClick={() => { setPreviewThemeMode(previewThemeMode === 'system' ? (effectivePreviewTheme === 'dark' ? 'light' : 'dark') : previewThemeMode === 'dark' ? 'light' : 'dark'); setShowBrowserToolsMenu(false); }}><span>◐</span><span>Switch page theme<small>Currently {previewThemeLabel}</small></span></button>
+              {(['system', 'light', 'dark'] as const).map((mode) => (
+                <button key={mode} className="browser-tools-item" role="menuitemradio" aria-checked={previewThemeMode === mode} onClick={() => { setPreviewThemeMode(mode); setShowBrowserToolsMenu(false); }}>
+                  <span aria-hidden="true">{previewThemeMode === mode ? '\u2713' : ''}</span><span>{mode === 'system' ? 'Follow app theme' : mode === 'light' ? 'Light theme' : 'Dark theme'}</span>
+                </button>
+              ))}
+              <div className="browser-tools-divider" />
+              <button className="browser-tools-item" role="menuitem" disabled={screenshotting} onClick={() => { void takeScreenshot(); setShowBrowserToolsMenu(false); }}><span>▣</span><span>Capture screenshot<small>Save the current browser view</small></span></button>
+              <button className="browser-tools-item" role="menuitem" disabled={clearingData} onClick={() => { void clearBrowsingData(); setShowBrowserToolsMenu(false); }}><span>◌</span><span>Clear cookies & cache<small>Clear preview data and reload the page</small></span></button>
+              <button className="browser-tools-item" role="menuitem" onClick={() => { openSettings('browser'); setShowBrowserToolsMenu(false); }}><span>⚙</span><span>Browser settings<small>Connection, appearance, and behavior</small></span></button>
+            </div>
+          )}
+        </div>
+
+
       </div>
 
       {getActiveTabLoadState().isLoading && (
@@ -2292,7 +2218,7 @@ export default function PreviewPanel() {
 
       {getActiveTabLoadState().iframeError && (
         <div className="preview-status-banner error">
-          <span>Preview failed to load. Check that the local dev server is running and reachable on port {port}.</span>
+          <span>Browser failed to load. Check that the local dev server is running and reachable on port {port}.</span>
         </div>
       )}
 
@@ -2300,17 +2226,32 @@ export default function PreviewPanel() {
         <div className="design-mode-status-bar">
           <span className="design-mode-live-pill">
             <span className="design-mode-dot-live" />
-            <span>Design Mode Active</span>
+            <span>Inspect mode</span>
           </span>
           <span className="design-mode-instruction">
-            Hover and click any element in the web page to inspect and prompt an AI agent.
+            Hover to highlight an element, then click it to capture its layout, styles, HTML, and screenshot for an agent prompt.
           </span>
           <button
             type="button"
             className="design-mode-cancel-btn"
             onClick={toggleInspectMode}
           >
-            Exit Design Mode
+            Exit inspect
+          </button>
+        </div>
+      )}
+
+      {annotateMode && (
+        <div className="design-mode-status-bar annotate-mode-status-bar">
+          <span className="design-mode-live-pill">
+            <span className="design-mode-dot-live" />
+            <span>Draw mode</span>
+          </span>
+          <span className="design-mode-instruction">
+            Mark up the page to show the changes you want, then send the annotated screenshot to an agent.
+          </span>
+          <button type="button" className="design-mode-cancel-btn" onClick={toggleAnnotateMode}>
+            Exit draw
           </button>
         </div>
       )}
@@ -2340,18 +2281,7 @@ export default function PreviewPanel() {
               setSelectedElementScreenshot(null);
               showToast(`Element context sent to ${target.displayName}`, 'success');
             } else {
-              const sessionId = getActiveAgentSessionId();
-              if (sessionId === null) {
-                showToast('No active agent terminal found', 'warning');
-                return;
-              }
-              if (screenshot) {
-                addImageToPrompt(screenshot, `${selectedElementInfo.tag.toLowerCase()}-snapshot.png`);
-              }
-              requestTerminalInput(sessionId, promptText);
-              setSelectedElementInfo(null);
-              setSelectedElementScreenshot(null);
-              showToast('Element context sent to active agent input', 'success');
+              throw new Error('Choose an available agent before sending.');
             }
           }}
         />
@@ -2432,7 +2362,7 @@ export default function PreviewPanel() {
                         key={tab.id}
                         ref={(node) => setIframeElement(tab.id, node)}
                         src={tabSrc}
-                        aria-label="Web Preview"
+                        aria-label="Browser"
                         className={`preview-iframe${tab.id === activeTabId ? ' is-active' : ''}`}
                         onLoad={() => handleIframeLoad(tab.id)}
                         onError={() => handleIframeError(tab.id)}
@@ -2501,7 +2431,7 @@ export default function PreviewPanel() {
                 <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 014-10z" />
               </svg>
             </div>
-            <h3>Web Preview</h3>
+            <h3>Browser</h3>
             <p>
               Built for previewing your <strong>local dev server</strong> (port {port}). You can also open external pages, but many full
               websites block embedding and won't load here, because this isn't a full web browser.
@@ -2524,7 +2454,7 @@ export default function PreviewPanel() {
                 </svg>
                 Browse Web
               </button>
-              <button className="action-btn" onClick={toggleProxy} title="Preview local dev server">
+              <button className="action-btn" onClick={toggleProxy} title="Browse local dev server">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
                 </svg>

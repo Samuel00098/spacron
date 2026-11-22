@@ -136,6 +136,12 @@ export const useEditorStore = create<EditorState>((set, getState) => ({
   },
 
   openFile: async (path: string) => {
+    if (/\.(pdf|docx)$/i.test(path)) {
+      const documents = await import('$lib/stores/editor');
+      await documents.openFile(path);
+      return;
+    }
+
     const { fileCache, openFileHistory } = getState();
     if (fileCache.has(path)) {
       set({ activeFile: path, jumpToLine: null });

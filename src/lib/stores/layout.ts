@@ -86,6 +86,17 @@ export function sanitiseRightSidebarTab(
 }
 /** The last selected tab in the unified right sidebar, preserved while closed. */
 export const rightSidebarTab = writable<RightSidebarTab>('files');
+let lastNonMobileTab: RightSidebarTab = 'files';
+rightSidebarTab.subscribe((tab) => {
+  if (tab !== 'mobile') lastNonMobileTab = tab;
+});
+/** Keep other tools available when the device moves into its own window. */
+export function releaseMobileSidebar() {
+  if (get(rightSidebarTab) !== 'mobile') return;
+  rightSidebarTab.set(lastNonMobileTab);
+  if (get(rightSidebarVisible)) openRightSidebar();
+}
+
 
 // The Home (welcome) screen is an OVERLAY, not a route. Navigating home used to
 // null `activeWorkspaceId`, which unmounted the whole workspace tree — every
@@ -130,6 +141,12 @@ export function openRightSidebar() {
   } else {
     useLayoutStore.getState().setRightDrawerTool(null);
   }
+}
+/** Directly opens the right sidebar on the Mobile Device tab. */
+export function openMobileSidebar() {
+  rightSidebarTab.set('mobile');
+  rightSidebarVisible.set(true);
+  useLayoutStore.getState().setRightDrawerTool('mobile');
 }
 /** Hide the right sidebar and its drawer tool. Like `openRightSidebar`, this
  *  stays out of the View Transition (see the note above `toggleSidebar`). */

@@ -31,6 +31,8 @@ export interface BoxRun {
   detail?: string | null;
   /** Workspace-relative log path. */
   log?: string | null;
+  /** Absolute log path on the box (newer servers). */
+  logPath?: string | null;
 }
 export interface AutomationRun {
   id: string; automationId: string; name: string; startedAt: number; finishedAt?: number;
@@ -101,7 +103,8 @@ export async function syncBoxAutomations(): Promise<void> {
     .filter(a => a.runOn === 'box' && a.projectId === project.id && a.root === project.root_path)
     .map(a => ({ id: a.id, name: a.name, prompt: a.prompt, agent: a.agent, model: a.model ?? null, enabled: a.enabled, occurrences: upcomingOccurrences(a, now) }));
   const { backendInvoke } = await import('$lib/services/backend');
-  await backendInvoke('box_automations_sync', { automations, enabled: state.settings.enabled, catchUpMinutes: state.settings.catchUpMinutes });
+  // Scoped to this project's folder: the box keeps other folders' automations.
+  await backendInvoke('box_automations_sync', { projectRoot: project.root_path, automations, enabled: state.settings.enabled, catchUpMinutes: state.settings.catchUpMinutes });
 }
 
 /** Runs the box recorded, newest first; empty when no remote is active. */

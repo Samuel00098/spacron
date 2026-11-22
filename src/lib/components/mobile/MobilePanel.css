@@ -254,7 +254,7 @@
   display: grid;
   place-items: center;
   overflow: auto;
-  padding: 20px;
+  padding: 12px 10px;
   /* No fill of its own: the stage is the panel's surface, so it takes the
      theme's color in light and dark mode like the rest of the pane. A painted
      vignette here read as a black box dropped into the panel. */
@@ -923,6 +923,64 @@
   font-weight: 600;
 }
 
+/* ── 3D View Header Controls ────────────────────────────────────────── */
+.mobile-panel .mobile-header-3d-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.mobile-panel .mobile-3d-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 50%, transparent);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.mobile-panel .mobile-3d-toggle-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.mobile-panel .mobile-3d-toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.mobile-panel .mobile-restore-3d-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.mobile-panel .mobile-restore-3d-header-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
 .mobile-panel .mobile-device-settings {
   flex: 0 0 auto;
 }
@@ -975,12 +1033,11 @@
   width: max-content;
   min-width: 192px;
   padding: 6px;
-  border: 1px solid var(--border);
   border-radius: 10px;
-  background: #151515;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  background: var(--surface-menu, var(--bg-secondary, #1e1e24));
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  box-shadow: var(--surface-menu-shadow, inset 0 0 0 1px var(--border)), 0 12px 32px rgba(0, 0, 0, 0.28);
 }
 
 .mobile-panel .mobile-device-menu button {
@@ -989,7 +1046,7 @@
   gap: 8px;
   width: 100%;
   min-height: 30px;
-  padding: 5px 8px;
+  padding: 6px 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -997,10 +1054,14 @@
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background var(--dur-fast, 0.12s) ease, color var(--dur-fast, 0.12s) ease;
 }
 
 .mobile-panel .mobile-device-menu button:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(255, 255, 255, .08));
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 10%, transparent));
+  color: var(--text-primary);
 }
 
 .mobile-panel .mobile-device-menu button:disabled {
@@ -1009,7 +1070,11 @@
 }
 
 .mobile-panel .mobile-device-menu button.danger {
-  color: var(--color-danger, #ef4444);
+  color: var(--error, #ef4444);
+}
+
+.mobile-panel .mobile-device-menu button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error, #ef4444) 14%, transparent);
 }
 
 .mobile-panel .mobile-device-menu-separator {
@@ -1031,20 +1096,102 @@
   min-height: min(420px, calc(100vh - 48px));
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
-  resize: both;
+  resize: none !important;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: #101010;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, .55);
+  background: var(--app-surface, var(--bg-primary, #141416));
+  color: var(--text-primary);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border);
   cursor: grab;
   touch-action: none;
+}
+
+/* ── 8-Angle Multi-Direction Resize Handles for Floating Popup ───────── */
+.mobile-resize-handle {
+  position: absolute;
+  z-index: 9000;
+  touch-action: none;
+  background: transparent;
+}
+
+/* North edge */
+.mobile-resize-handle.handle-n {
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+/* South edge */
+.mobile-resize-handle.handle-s {
+  bottom: 0;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+/* East edge */
+.mobile-resize-handle.handle-e {
+  top: 12px;
+  bottom: 12px;
+  right: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+/* West edge */
+.mobile-resize-handle.handle-w {
+  top: 12px;
+  bottom: 12px;
+  left: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+/* North-West corner */
+.mobile-resize-handle.handle-nw {
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+/* North-East corner */
+.mobile-resize-handle.handle-ne {
+  top: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+/* South-West corner */
+.mobile-resize-handle.handle-sw {
+  bottom: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+/* South-East corner */
+.mobile-resize-handle.handle-se {
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
 }
 
 .mobile-panel.mobile-panel-floating .mobile-device-view,
 .mobile-panel.mobile-panel-floating .mobile-device-body,
 .mobile-panel.mobile-panel-floating .mobile-stage {
-  background: #101010;
+  background: var(--app-surface, var(--bg-primary, #141416));
+  color: var(--text-primary);
 }
 
 .mobile-panel.mobile-panel-floating .mobile-device-body > .mobile-stage,
@@ -1057,10 +1204,12 @@
   align-items: center;
   gap: 8px;
   min-height: 38px;
-  padding: 5px 8px 5px 12px;
+  padding: 6px 10px 6px 14px;
   border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -1075,13 +1224,38 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .mobile-panel .mobile-floating-header button {
-  padding: 4px 7px;
+  padding: 4px 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: transparent;
+  background: var(--bg-tertiary, color-mix(in srgb, var(--bg-secondary) 80%, var(--text-primary) 10%));
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--dur-fast, 0.12s) ease, border-color var(--dur-fast, 0.12s) ease;
+}
+
+.mobile-panel .mobile-floating-header button:hover {
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 12%, transparent));
+  border-color: var(--text-secondary);
+}
+
+.mobile-panel .mobile-floating-header button.mobile-floating-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+}
   color: var(--text-primary);
   cursor: pointer;
   touch-action: manipulation;
@@ -1378,3 +1552,116 @@
   background: transparent;
   flex-wrap: wrap;
 }
+
+.mobile-panel .mobile-device-card { align-items: flex-start; }
+.mobile-panel .mobile-device-card-icon,
+.mobile-panel .mobile-device-card-open { margin-top: 4px; }
+.mobile-panel .mobile-device-specs summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding-block: 3px;
+}
+.mobile-panel .mobile-device-specs dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 8px 0 2px;
+}
+.mobile-panel .mobile-device-specs dl > div { min-width: 0; }
+.mobile-panel .mobile-device-specs dt { color: var(--text-muted); font-size: 11px; }
+.mobile-panel .mobile-device-specs dd { margin: 2px 0 0; color: var(--text-primary); overflow-wrap: anywhere; font-size: 12px; }
+/* Device appearances share live stream sizing; never stretch the application. */
+.mobile-header-3d-controls select {
+  max-width: 170px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 11px;
+}
+.mobile-stage { touch-action: none; }
+.mobile-stage[data-device-skin="samsung"] .pixel-camera-visor,
+.mobile-stage[data-device-skin="fold"] .pixel-camera-visor {
+  width: 30%; left: 7%; top: 5%; height: 30%;
+  border-radius: 24px;
+}
+.mobile-stage[data-device-skin="samsung"] .visor-glass-cutout,
+.mobile-stage[data-device-skin="fold"] .visor-glass-cutout {
+  flex-direction: column; height: 100%; width: 100%;
+}
+.mobile-stage[data-device-skin="samsung"] .pixel-lens-group,
+.mobile-stage[data-device-skin="fold"] .pixel-lens-group { flex-direction: column; }
+.mobile-stage[data-device-skin="samsung"] .google-g-wrap,
+.mobile-stage[data-device-skin="fold"] .google-g-wrap,
+.mobile-stage[data-device-skin="xiaomi"] .google-g-wrap { display: none; }
+.mobile-stage[data-device-skin="xiaomi"] .pixel-camera-visor {
+  width: 72%; height: 32%; left: 14%; top: 5%; border-radius: 50%;
+  background: linear-gradient(135deg,#333,#080808);
+}
+.mobile-stage[data-device-skin="xiaomi"] .visor-glass-cutout {
+  width: 90%; height: 80%; border-radius: 50%;
+}
+.mobile-stage[data-device-skin="fold"] .mobile-3d-back::after,
+.mobile-stage[data-device-skin="duo"] .mobile-3d-back::after {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+  background: linear-gradient(90deg,#333,#bbb,#333); border-radius: 3px;
+}
+.mobile-stage[data-device-skin="iphone18"] .ios-camera-plateau {
+  width: 90%; left: 5%; border-radius: 24px;
+}
+.mobile-stage[data-device-skin="duo"] .ios-lens.lens-telephoto,
+.mobile-stage[data-device-skin="duo"] .ios-lidar-sensor { display: none; }
+.mobile-panel .mobile-stage[data-view="3d"] { overflow: hidden; scrollbar-width: none; }
+.mobile-panel .mobile-stage[data-view="3d"]::-webkit-scrollbar { display: none; }
+.mobile-header-3d-controls .dropdown { min-width: 0; max-width: 160px; }
+.mobile-stage[data-device-skin="samsung"] .mobile-device-shell,
+.mobile-stage[data-device-skin="samsung"] .mobile-3d-front,
+.mobile-stage[data-device-skin="samsung"] .mobile-3d-back { border-radius: 14px; }
+.mobile-stage[data-device-skin="xiaomi"] .mobile-device-shell,
+.mobile-stage[data-device-skin="xiaomi"] .mobile-3d-front,
+.mobile-stage[data-device-skin="xiaomi"] .mobile-3d-back { border-radius: 30px; }
+.mobile-stage[data-device-skin="fold"] .mobile-device-shell,
+.mobile-stage[data-device-skin="duo"] .mobile-ios-shell { border-radius: 22px; }
+/* Panel chrome follows the configured app font, independent of container width. */
+.mobile-panel { font-size: var(--ui-font-size, 14px); text-size-adjust: none; -webkit-text-size-adjust: none; }
+.mobile-panel .mobile-tab { font-size: inherit; }
+.mobile-stage[data-device-skin="generic"] .pixel-camera-visor,
+.mobile-stage[data-device-skin="generic"] .google-g-wrap { display: none; }
+/* Keep physical preview sizing independent of sidebar width. */
+.mobile-panel .mobile-device-body > .mobile-stage {
+  justify-items: center;
+  padding-left: 32px;
+  padding-right: 32px;
+}
+.mobile-panel .mobile-stage[data-view="3d"] { cursor: grab; }
+.mobile-panel .mobile-stage[data-view="3d"]:active { cursor: grabbing; }
+.mobile-panel .mobile-3d-viewport { width: max-content; height: min(740px, calc(100vh - 120px)); }
+.mobile-panel .mobile-3d-rig { width: max-content; height: 100%; }
+
+.mobile-stage[data-device-skin="ipad"] .mobile-3d-island { display: none; }
+.mobile-stage[data-device-skin="ipad"] .mobile-ios-shell,
+.mobile-stage[data-device-skin="ipad"] .mobile-3d-front,
+.mobile-stage[data-device-skin="ipad"] .mobile-3d-back { border-radius: 22px; }
+
+.mobile-panel .mobile-device-card-text { flex: 1; min-width: 0; }
+.mobile-panel .mobile-device-specs { width: 100%; }
+/* Pixel's camera capsule sits inside the rear edges, rather than crossing them. */
+.mobile-stage[data-device-skin="pixel"] .pixel-camera-visor {
+  left: 6%; width: 88%; top: 6%; height: 10%; border-radius: 999px;
+}
+.mobile-stage[data-device-skin="pixel"] .visor-glass-cutout { min-width: 0; flex: 1; }
+.mobile-stage[data-device-skin="pixel"] .pixel-lens { flex-shrink: 0; }
+
+/* A folding form factor must not replace Google's hardware identity. */
+.mobile-stage[data-device-skin="fold"][data-device-brand="google"] .pixel-camera-visor {
+  left: 6%; width: 88%; top: 6%; height: 10%; border-radius: 999px;
+}
+.mobile-stage[data-device-skin="fold"][data-device-brand="google"] .visor-glass-cutout {
+  flex-direction: row; height: auto; width: auto; flex: 1;
+}
+.mobile-stage[data-device-skin="fold"][data-device-brand="google"] .pixel-lens-group { flex-direction: row; }
+.mobile-stage[data-device-skin="fold"][data-device-brand="google"] .google-g-wrap { display: flex; }

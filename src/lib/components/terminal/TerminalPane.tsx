@@ -52,10 +52,9 @@ import {
   terminalRenderer,
 } from '$lib/stores/settings';
 import { activeTheme } from '$lib/stores/theme';
-import { setActiveView, showTerminal } from '$lib/stores/layout';
-import { requestRoomControl } from '$lib/stores/layoutControl';
+import { showTerminal } from '$lib/stores/layout';
 import { activeProject, projects } from '$lib/stores/workspace';
-import { clearProxyTarget, currentUrl, ensureProxyRunning, setPreferredLocalHost, setTargetPort } from '$lib/stores/preview';
+import { currentUrl, openUrlInPreviewPanel } from '$lib/stores/preview';
 import { showToast } from '$lib/stores/notification';
 import TerminalChatView from './TerminalChatView';
 import ContextHandoffButton from './ContextHandoffButton';
@@ -137,42 +136,7 @@ function normalizePaneTitle(title: string) {
   return title.replace(/\s+/g, ' ').trim();
 }
 
-function isLocalPreviewUrl(url: URL) {
-  return (
-    url.hostname === 'localhost' ||
-    url.hostname === '127.0.0.1' ||
-    url.hostname === '0.0.0.0' ||
-    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(url.hostname) ||
-    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(url.hostname) ||
-    /^(172\.(1[6-9]|2\d|3[0-1]))\.\d{1,3}\.\d{1,3}$/.test(url.hostname)
-  );
-}
-
-async function openUrlInPreview(rawUrl: string) {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) return;
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
-  if (isLocalPreviewUrl(parsed) && parsed.port) {
-    await clearProxyTarget();
-    const port = Number(parsed.port);
-    if (Number.isFinite(port) && port > 0 && port <= 65535) {
-      await setPreferredLocalHost(parsed.hostname);
-      await setTargetPort(port);
-    }
-  } else {
-    await setPreferredLocalHost(null);
-  }
-  await ensureProxyRunning();
-  currentUrl.set(parsed.toString());
-  setActiveView('preview');
-  requestRoomControl('focus', 'preview');
-}
+const openUrlInPreview = openUrlInPreviewPanel;
 
 function TerminalPane({
   sessionId,

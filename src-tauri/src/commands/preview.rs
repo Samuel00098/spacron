@@ -184,18 +184,20 @@ pub async fn preview_capture_screenshot(
     {
         let phys_x = (x.max(0) as f64 * scale).round() as i32;
         let phys_y = (y.max(0) as f64 * scale).round() as i32;
-        let (tx, rx) = std::sync::mpsc::channel();
-
+        let (tx, rx) = tokio::sync::oneshot::channel();
         window
             .with_webview(move |webview| {
-                let result = capture_webview2_region(webview, phys_x, phys_y, phys_w, phys_h);
-                let _ = tx.send(result);
+                let _ = start_webview2_capture(webview, tx);
             })
             .map_err(|e| e.to_string())?;
 
-        return rx
-            .recv()
-            .map_err(|_| "Screenshot capture was interrupted".to_string())?;
+        let png = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .map_err(|_| "Screenshot capture timed out".to_string())?
+            .map_err(|_| "Screenshot capture was interrupted".to_string())??;
+        return tokio::task::spawn_blocking(move || crop_webview2_png(&png, phys_x, phys_y, phys_w, phys_h))
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     #[cfg(target_os = "macos")]
@@ -433,15 +435,10 @@ unsafe fn wk_snapshot_to_png(
 }
 
 #[cfg(target_os = "windows")]
-fn capture_webview2_region(
+fn start_webview2_capture(
     webview: tauri::webview::PlatformWebview,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, String> {
-    use image::DynamicImage;
-    use std::io::Cursor;
+    tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+) -> Result<(), String> {
     use std::slice;
     use webview2_com::{
         CapturePreviewCompletedHandler,
@@ -455,46 +452,43 @@ fn capture_webview2_region(
         },
     };
 
-    let controller = webview.controller();
-    let core = unsafe { controller.CoreWebView2() }.map_err(|e| e.to_string())?;
+    let core = unsafe { webview.controller().CoreWebView2() }.map_err(|e| e.to_string())?;
     let stream =
         unsafe { CreateStreamOnHGlobal(HGLOBAL::default(), true) }.map_err(|e| e.to_string())?;
     let capture_stream = stream.clone();
-
+    let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
+        let png = result.map_err(|e| e.to_string()).and_then(|_| unsafe {
+            let hglobal = GetHGlobalFromStream(&stream).map_err(|e| e.to_string())?;
+            let size = GlobalSize(hglobal);
+            if size == 0 {
+                return Err("WebView2 returned an empty screenshot".to_string());
+            }
+            let ptr = GlobalLock(hglobal);
+            if ptr.is_null() {
+                return Err("Failed to read WebView2 screenshot stream".to_string());
+            }
+            let bytes = slice::from_raw_parts(ptr as *const u8, size).to_vec();
+            let _ = GlobalUnlock(hglobal);
+            Ok(bytes)
+        });
+        let _ = tx.send(png);
+        Ok(())
+    }));
     unsafe {
-        CapturePreviewCompletedHandler::wait_for_async_operation(
-            Box::new(move |handler| {
-                core.CapturePreview(
-                    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-                    &capture_stream,
-                    &handler,
-                )
-                .map_err(webview2_com::Error::WindowsError)
-            }),
-            Box::new(|result| {
-                result?;
-                Ok(())
-            }),
-        )
-        .map_err(|e| e.to_string())?;
+        core.CapturePreview(
+            COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+            &capture_stream,
+            &handler,
+        ).map_err(|e| e.to_string())
     }
+}
 
-    let png = unsafe {
-        let hglobal = GetHGlobalFromStream(&stream).map_err(|e| e.to_string())?;
-        let size = GlobalSize(hglobal);
-        if size == 0 {
-            return Err("WebView2 returned an empty screenshot".to_string());
-        }
-        let ptr = GlobalLock(hglobal);
-        if ptr.is_null() {
-            return Err("Failed to read WebView2 screenshot stream".to_string());
-        }
-        let bytes = slice::from_raw_parts(ptr as *const u8, size).to_vec();
-        let _ = GlobalUnlock(hglobal);
-        bytes
-    };
+#[cfg(target_os = "windows")]
+fn crop_webview2_png(png: &[u8], x: i32, y: i32, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    use image::DynamicImage;
+    use std::io::Cursor;
 
-    let image = image::load_from_memory(&png)
+    let image = image::load_from_memory(png)
         .map_err(|e| format!("Failed to decode WebView2 screenshot: {e}"))?
         .to_rgba8();
     let (image_w, image_h) = image.dimensions();

@@ -1,4 +1,11 @@
-import { useState, useMemo, useCallback } from 'react';
+import BrowserActionIcon, { type BrowserActionIconName } from './BrowserActionIcon';
+import Dropdown from '$lib/components/shared/Dropdown';
+import { useStore } from '$lib/react/useStore';
+import { browserDesignModeIncludeStyles, browserDesignModeIncludeHtml, browserDesignModeMaxHtmlLength } from '$lib/stores/settings';
+import { useAgentTargets } from '$lib/react/useAgentTargets';
+import { useState, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { useModalFocus } from '$lib/react/useModalFocus';
 import type { SelectedElementInfo } from '$lib/services/element-prompt';
 import { buildElementPrompt } from '$lib/services/element-prompt';
 import type { AgentTarget } from '$lib/services/agent-target';
@@ -12,34 +19,40 @@ export type DesignModePanelProps = {
   screenshotUrl: string | null;
   onClose: () => void;
   onReselect: () => void;
-  onSendToAgent: (prompt: string, screenshotUrl: string | null, target?: AgentTarget | null) => void;
+  onSendToAgent: (prompt: string, screenshotUrl: string | null, target?: AgentTarget | null) => void | Promise<void>;
 };
 
 type DesignTab = 'prompt' | 'styles' | 'html' | 'attributes';
 
 const PROMPT_PRESETS = [
   {
-    label: '🎨 Styling & Colors',
+    icon: 'styles' as BrowserActionIconName,
+    label: 'Styling & Colors',
     prompt: 'Update the styling and color palette of this element to match modern UI design standards.',
   },
   {
-    label: '📐 Layout & Spacing',
+    icon: 'layout' as BrowserActionIconName,
+    label: 'Layout & Spacing',
     prompt: 'Adjust the layout, alignment, margins, and padding of this element for better visual balance.',
   },
   {
-    label: '📱 Responsive Design',
+    icon: 'device' as BrowserActionIconName,
+    label: 'Responsive Design',
     prompt: 'Make this element fully responsive so it scales cleanly across mobile, tablet, and desktop screens.',
   },
   {
-    label: '✏️ Copy & Typography',
+    icon: 'type' as BrowserActionIconName,
+    label: 'Copy & Typography',
     prompt: 'Improve the typography, font hierarchy, line height, and text readability of this element.',
   },
   {
-    label: '⚡ States & Animation',
+    icon: 'motion' as BrowserActionIconName,
+    label: 'States & Animation',
     prompt: 'Add smooth hover, focus, and active interactive states with CSS transitions to this element.',
   },
   {
-    label: '🛠️ Refactor Component',
+    icon: 'refactor' as BrowserActionIconName,
+    label: 'Refactor Component',
     prompt: 'Refactor this component for cleaner, more modular markup and improved accessibility (ARIA).',
   },
 ];
@@ -53,19 +66,23 @@ export default function DesignModePanel({
 }: DesignModePanelProps) {
   const [activeTab, setActiveTab] = useState<DesignTab>('prompt');
   const [userInstructions, setUserInstructions] = useState('');
-  const [includeScreenshot, setIncludeScreenshot] = useState(Boolean(screenshotUrl));
-  const [includeStyles, setIncludeStyles] = useState(true);
-  const [includeHtml, setIncludeHtml] = useState(true);
+  const [includeScreenshot, setIncludeScreenshot] = useState(true);
+  const stylesDefault = useStore(browserDesignModeIncludeStyles);
+  const htmlDefault = useStore(browserDesignModeIncludeHtml);
+  const maxHtmlLength = useStore(browserDesignModeMaxHtmlLength);
+  const [isSending, setIsSending] = useState(false);
+  const [includeStyles, setIncludeStyles] = useState(stylesDefault);
+  const [includeHtml, setIncludeHtml] = useState(htmlDefault);
   const [styleFilter, setStyleFilter] = useState('');
   const [showImageZoom, setShowImageZoom] = useState(false);
 
   // Agent target resolution
-  const availableTargets = useMemo(() => getActiveAgentTargets(), []);
+  const availableTargets = useAgentTargets();
   const defaultTarget = useMemo(() => resolveDefaultTarget(availableTargets), [availableTargets]);
   const [selectedTargetId, setSelectedTargetId] = useState<number | null>(defaultTarget?.id ?? null);
 
   const currentTarget = useMemo(() => {
-    return availableTargets.find((t) => t.id === selectedTargetId) ?? defaultTarget ?? null;
+    return selectedTargetId === null ? defaultTarget : availableTargets.find((t) => t.id === selectedTargetId) ?? null;
   }, [availableTargets, selectedTargetId, defaultTarget]);
 
   // Filtered computed styles
@@ -92,20 +109,30 @@ export default function DesignModePanel({
     return Object.entries(attrs).filter(([k]) => k !== 'data-forge-inspect');
   }, [elementInfo.attributes]);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
+    if (!currentTarget || isSending) return;
+    setIsSending(true);
+    try {
     const promptText = buildElementPrompt(elementInfo, {
       userInstructions: userInstructions.trim() || undefined,
       includeStyles,
       includeHtml,
+      maxHtml: maxHtmlLength,
     });
-    onSendToAgent(promptText, includeScreenshot ? screenshotUrl : null, currentTarget);
-  }, [elementInfo, userInstructions, includeStyles, includeHtml, onSendToAgent, includeScreenshot, screenshotUrl, currentTarget]);
+    await onSendToAgent(promptText, includeScreenshot ? screenshotUrl : null, currentTarget);
+    } catch (error) {
+      showToast(`Could not send element context: ${error}`, 'error');
+    } finally {
+      setIsSending(false);
+    }
+  }, [elementInfo, userInstructions, includeStyles, includeHtml, onSendToAgent, includeScreenshot, screenshotUrl, currentTarget, isSending, maxHtmlLength]);
 
   const handleCopyFullContext = useCallback(async () => {
     const promptText = buildElementPrompt(elementInfo, {
       userInstructions: userInstructions.trim() || undefined,
       includeStyles,
       includeHtml,
+      maxHtml: maxHtmlLength,
     });
     await copyTextToClipboard(promptText);
     showToast('Full element context copied to clipboard', 'success');
@@ -138,11 +165,12 @@ export default function DesignModePanel({
   }, []);
 
   return (
-    <aside className="design-mode-panel" aria-label="Orca Design Mode Inspector">
+    <div className="design-mode-backdrop" onClick={onClose}>
+    <aside className="design-mode-panel" role="dialog" aria-label="Design Mode Inspector" onClick={(event) => event.stopPropagation()}>
       {/* Header bar */}
       <div className="design-panel-header">
         <div className="design-panel-title-group">
-          <div className="design-mode-badge" title="Orca Design Mode">
+          <div className="design-mode-badge" title="Design Mode">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 20h9" />
               <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
@@ -181,7 +209,7 @@ export default function DesignModePanel({
             title="Close Design Mode panel"
             aria-label="Close Design Mode panel"
           >
-            ✕
+            <BrowserActionIcon name="close" />
           </button>
         </div>
       </div>
@@ -189,10 +217,10 @@ export default function DesignModePanel({
       {/* Snapshot and Breadcrumbs overview */}
       <div className="design-panel-overview">
         {screenshotUrl && (
-          <div className="design-snapshot-preview" onClick={() => setShowImageZoom(!showImageZoom)} title="Click to expand snapshot">
+          <button type="button" className="design-snapshot-preview" onClick={() => setShowImageZoom(true)} aria-label="Expand snapshot">
             <img src={screenshotUrl} alt="Selected element visual snapshot" />
-            <span className="design-snapshot-badge">Visual Snapshot</span>
-          </div>
+            <span className="design-snapshot-badge">Snapshot</span>
+          </button>
         )}
 
         <div className="design-breadcrumbs-row" title="Element hierarchy in DOM">
@@ -210,14 +238,7 @@ export default function DesignModePanel({
 
       {/* Enlarged image preview modal if clicked */}
       {showImageZoom && screenshotUrl && (
-        <div className="design-image-zoom-overlay" onClick={() => setShowImageZoom(false)}>
-          <div className="design-image-zoom-card" onClick={(e) => e.stopPropagation()}>
-            <img src={screenshotUrl} alt="Expanded visual snapshot" />
-            <button type="button" className="design-btn-secondary" onClick={() => setShowImageZoom(false)}>
-              Close Zoom
-            </button>
-          </div>
-        </div>
+        <SnapshotDialog src={screenshotUrl} onClose={() => setShowImageZoom(false)} />
       )}
 
       {/* Navigation tabs */}
@@ -229,7 +250,7 @@ export default function DesignModePanel({
           className={`design-tab-btn${activeTab === 'prompt' ? ' active' : ''}`}
           onClick={() => setActiveTab('prompt')}
         >
-          <span>💬 Prompt Agent</span>
+          <BrowserActionIcon name="message" /><span>Prompt Agent</span>
         </button>
         <button
           type="button"
@@ -238,7 +259,7 @@ export default function DesignModePanel({
           className={`design-tab-btn${activeTab === 'styles' ? ' active' : ''}`}
           onClick={() => setActiveTab('styles')}
         >
-          <span>🎨 Computed Styles ({Object.keys(elementInfo.styles || {}).length})</span>
+          <BrowserActionIcon name="styles" /><span>Computed Styles ({Object.keys(elementInfo.styles || {}).length})</span>
         </button>
         <button
           type="button"
@@ -247,7 +268,7 @@ export default function DesignModePanel({
           className={`design-tab-btn${activeTab === 'html' ? ' active' : ''}`}
           onClick={() => setActiveTab('html')}
         >
-          <span>📄 HTML</span>
+          <BrowserActionIcon name="code" /><span>HTML</span>
         </button>
         <button
           type="button"
@@ -256,7 +277,7 @@ export default function DesignModePanel({
           className={`design-tab-btn${activeTab === 'attributes' ? ' active' : ''}`}
           onClick={() => setActiveTab('attributes')}
         >
-          <span>🏷️ Attributes ({attributesList.length})</span>
+          <BrowserActionIcon name="tag" /><span>Attributes ({attributesList.length})</span>
         </button>
       </div>
 
@@ -281,25 +302,21 @@ export default function DesignModePanel({
 
               {availableTargets.length > 1 && (
                 <div className="design-target-select-wrap">
-                  <select
-                    id="design-agent-select"
-                    className="design-target-select"
-                    value={selectedTargetId ?? ''}
-                    onChange={(e) => setSelectedTargetId(Number(e.target.value))}
-                    aria-label="Target AI Agent"
-                  >
-                    {availableTargets.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name} ({t.isChatView ? 'Chat UI' : 'Terminal'})
-                      </option>
-                    ))}
-                  </select>
+                  <Dropdown
+                    options={availableTargets.map((target) => ({ value: String(target.id), label: target.name, sublabel: target.isChatView ? 'Chat' : 'Terminal' }))}
+                    value={currentTarget ? String(currentTarget.id) : ''}
+                    onChange={(value) => setSelectedTargetId(Number(value))}
+                    placeholder="Choose an agent"
+                    ariaLabel="Target AI agent"
+                    boundarySelector=".design-mode-panel"
+                    disableTooltips
+                  />
                 </div>
               )}
 
               {availableTargets.length === 0 && (
                 <div className="design-target-warning-pill">
-                  <span>⚠️ No active agent running</span>
+                  <BrowserActionIcon name="warning" /><span>No active agent running</span>
                 </div>
               )}
             </div>
@@ -326,7 +343,7 @@ export default function DesignModePanel({
                     className="design-preset-chip"
                     onClick={() => handlePresetClick(preset.prompt)}
                   >
-                    {preset.label}
+                    <BrowserActionIcon name={preset.icon} />{preset.label}
                   </button>
                 ))}
               </div>
@@ -368,13 +385,13 @@ export default function DesignModePanel({
                 type="button"
                 className="design-btn-primary"
                 onClick={handleSend}
-                disabled={!currentTarget}
+                disabled={!currentTarget || isSending}
                 title={!currentTarget ? 'No active agent found' : `Send context to ${currentTarget.name} (${currentTarget.isChatView ? 'Chat UI' : 'Terminal'})`}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
-                <span>Send to {currentTarget ? currentTarget.name : 'Agent'}</span>
+                <span>{isSending ? 'Sending?' : `Send to ${currentTarget ? currentTarget.name : 'Agent'}`}</span>
               </button>
 
               <button
@@ -383,7 +400,7 @@ export default function DesignModePanel({
                 onClick={handleCopyFullContext}
                 title="Copy complete markdown prompt with all element details"
               >
-                <span>📋 Copy Full Context</span>
+                <BrowserActionIcon name="copy" /><span>Copy Full Context</span>
               </button>
 
               <button
@@ -469,5 +486,23 @@ export default function DesignModePanel({
         )}
       </div>
     </aside>
+    </div>
+  );
+}
+
+
+function SnapshotDialog({ src, onClose }: { src: string; onClose: () => void }) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  useModalFocus(cardRef, onClose);
+
+  return createPortal(
+    <div className="design-image-zoom-overlay" onClick={onClose}>
+      <div ref={cardRef} className="design-image-zoom-card" role="dialog" aria-modal="true"
+        aria-label="Selected element snapshot" onClick={(event) => event.stopPropagation()}>
+        <img src={src} alt="Expanded visual snapshot" draggable={false} />
+        <button type="button" className="design-btn-secondary" onClick={onClose}>Close snapshot</button>
+      </div>
+    </div>,
+    document.body,
   );
 }

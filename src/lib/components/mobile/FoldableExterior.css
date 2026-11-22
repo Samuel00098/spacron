@@ -1,0 +1,29 @@
+.fold-exterior {
+  position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 3px 1fr;
+  border-radius: inherit; overflow: hidden; background: var(--phone-metal-low,#272c34);
+  box-shadow: inset 0 0 0 1px var(--phone-edge, #777);
+}
+.fold-exterior-back { position: relative; background: linear-gradient(145deg,var(--phone-back-high,#3d454f),var(--phone-back-low,#292f38)); }
+.fold-exterior-cover {
+  position: relative; background: linear-gradient(120deg,#12171e,#090c11);
+  border-radius: 0 var(--device-radius,34px) var(--device-radius,34px) 0;
+  box-shadow: inset 0 0 0 5px var(--phone-metal-low,#333),inset 0 0 0 6px rgb(255 255 255 / .1);
+}
+.fold-exterior-hinge { background: linear-gradient(90deg,#15191e,#89919c,#252b34); }
+.fold-exterior-cameras {
+  position: absolute; left: 8%; top: 7%; width: 76%; padding: 6px;
+  display: flex; align-items: center; gap: 4px; border-radius: 18px;
+  background: #11161c; box-shadow: inset 0 0 0 1px #5b626d,0 3px 6px rgb(0 0 0 / .3);
+}
+.fold-exterior-lens { position: relative; display: grid; place-items: center; width: 25%; aspect-ratio: 1; border-radius: 50%; background: linear-gradient(135deg,#a4aeba,#303944); padding: 2px; }
+.fold-exterior-lens i { width: 100%; height: 100%; border-radius: inherit; background: radial-gradient(circle at 35% 30%,#30435d,#0a101a 40%,#020405 80%); }
+.fold-exterior-flash { width: 5px; height: 7px; background: #f5edc9; border-radius: 50%; align-self: flex-start; margin-top: 2px; }
+.fold-exterior-camera { position: absolute; top: 14px; left: calc(50% - 4px); width: 8px; height: 8px; border-radius: 50%; background: #030507; box-shadow: 0 0 0 1px #202834; }
+.fold-exterior-brand { position: absolute; top: 53%; width: 100%; text-align: center; color: var(--phone-edge,#9ca4af); font-size: 12px; letter-spacing: .08em; opacity: .5; }
+.fold-exterior[data-brand="samsung"] .fold-exterior-cameras { flex-direction: column; width: 25%; background: transparent; box-shadow: none; gap: 10px; padding: 0; }
+.fold-exterior[data-brand="samsung"] .fold-exterior-lens { width: 100%; }
+.fold-exterior[data-brand="samsung"] .fold-exterior-flash { position: absolute; left: 130%; top: 15%; }
+.fold-exterior[data-brand="apple"] .fold-exterior-cameras { width: 68%; border-radius: 22px; }
+.fold-exterior[data-brand="apple"] .fold-exterior-lens { width: 38%; }
+.fold-exterior[data-brand="xiaomi"] .fold-exterior-cameras { width: 70%; border-radius: 14px; }
+.fold-exterior[data-brand="generic"] .fold-exterior-cameras { display: none; }

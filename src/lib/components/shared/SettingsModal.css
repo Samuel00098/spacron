@@ -666,6 +666,14 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
   padding-block: 2px;
 }
 
+.settings-control .browser-settings-select {
+  width: min(100%, 260px);
+}
+
+.settings-control .browser-settings-select .dd-trigger {
+  min-width: 150px;
+}
+
 /* ── Form Inputs ── */
 .settings-control input,
 .shortcut-row input {

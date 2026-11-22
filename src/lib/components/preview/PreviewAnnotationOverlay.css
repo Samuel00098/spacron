@@ -32,9 +32,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: color-mix(in srgb, var(--bg-primary, #18181f) 92%, transparent);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: var(--surface-menu);
   border: 1px solid color-mix(in srgb, var(--border, rgba(255, 255, 255, 0.12)) 80%, var(--accent, #7c6af7));
   border-radius: 9999px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(124, 106, 247, 0.2);
@@ -118,7 +116,7 @@
 
 .annotation-color-dot.active {
   transform: scale(1.25);
-  border-color: #ffffff;
+  border-color: var(--surface-menu);
   outline: 2px solid var(--accent, #7c6af7);
 }
 
@@ -187,7 +185,7 @@
   gap: 6px;
   padding: 6px 14px;
   background: var(--accent, #7c6af7);
-  color: #ffffff;
+  color: var(--on-accent);
   border: none;
   border-radius: 9999px;
   font-size: 12px;
@@ -223,7 +221,7 @@
 }
 
 .annotation-close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bg-hover);
   color: var(--text-primary, #ffffff);
 }
 
@@ -234,8 +232,8 @@
 }
 
 .annotation-inline-text-input {
-  background: rgba(15, 23, 42, 0.95);
-  color: #ffffff;
+  background: var(--surface-menu);
+  color: var(--text-primary);
   border: 1.5px solid var(--accent, #7c6af7);
   border-radius: 6px;
   padding: 4px 10px;
@@ -251,8 +249,6 @@
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -264,7 +260,7 @@
 .annotation-modal-card {
   width: 100%;
   max-width: 520px;
-  background: var(--bg-primary, #18181f);
+  background: var(--surface-menu);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
   border-radius: 14px;
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.6);
@@ -322,7 +318,7 @@
 
 .annotation-modal-close:hover {
   color: var(--text-primary, #ffffff);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-hover);
 }
 
 .annotation-modal-body {
@@ -340,7 +336,7 @@
   overflow: hidden;
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   max-height: 180px;
-  background: #09090b;
+  background: var(--bg-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -357,13 +353,13 @@
   position: absolute;
   bottom: 8px;
   right: 8px;
-  background: rgba(0, 0, 0, 0.8);
-  color: #ffffff;
+  background: var(--surface-menu);
+  color: var(--text-primary);
   font-size: 10px;
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--border);
 }
 
 /* Agent Target Selection */
@@ -416,13 +412,13 @@
 }
 
 .annotation-target-kind.chat {
-  background: rgba(59, 130, 246, 0.25);
-  color: #60a5fa;
+  background: color-mix(in srgb, var(--info) 15%, transparent);
+  color: var(--info);
 }
 
 .annotation-target-kind.terminal {
-  background: rgba(245, 158, 11, 0.25);
-  color: #fbbf24;
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  color: var(--warning);
 }
 
 .annotation-auto-chip {
@@ -454,7 +450,7 @@
 }
 
 .annotation-no-target-warning {
-  color: #f59e0b;
+  color: var(--warning);
   font-size: 12px;
   display: flex;
   align-items: center;
@@ -546,7 +542,7 @@
 .annotation-btn-primary {
   padding: 7px 16px;
   background: var(--accent, #7c6af7);
-  color: #ffffff;
+  color: var(--on-accent);
   border: none;
   border-radius: 8px;
   font-size: 12px;
@@ -561,7 +557,8 @@
 }
 
 .annotation-btn-primary:disabled {
-  opacity: 0.45;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
   cursor: not-allowed;
 }
 
@@ -578,6 +575,65 @@
 }
 
 .annotation-btn-secondary:hover {
-  background: color-mix(in srgb, var(--bg-tertiary, #2b2b36) 80%, white);
+  background: var(--bg-hover);
   color: var(--text-primary, #ffffff);
 }
+
+/* Drawing controls must remain reachable in a docked or phone-sized pane. */
+.annotation-toolbar {
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  flex-wrap: wrap;
+  justify-content: center;
+  border-radius: 14px;
+}
+
+.annotation-notes-tray {
+  position: absolute;
+  bottom: 12px;
+  right: 8px;
+  z-index: 61;
+  width: min(280px, calc(100% - 16px));
+  max-height: 35%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+.annotation-note-row { display: flex; gap: 6px; margin-top: 6px; }
+.annotation-note-row input { min-width: 0; flex: 1; padding: 6px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; }
+.annotation-note-row button { flex: 0 0 auto; color: var(--text-secondary); font-size: 10px; }
+
+/* The drawing send sheet belongs to this browser, not the whole app. */
+.preview-annotation-container .annotation-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding: 10px;
+  background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overscroll-behavior: none;
+}
+.annotation-modal-backdrop .annotation-modal-card {
+  max-height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--surface-outline) !important;
+  border-radius: 10px;
+}
+.annotation-modal-card .annotation-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+.annotation-modal-card :is(.annotation-modal-header, .annotation-modal-footer) { flex-shrink: 0; }
+.annotation-target-dropdown-wrap .dd-root { width: 100%; }
+
+.preview-annotation-container.is-capturing { visibility: hidden; }

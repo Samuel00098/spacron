@@ -1,3 +1,4 @@
+import { revealAgentChat } from '$lib/services/reveal-agent-chat';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { marked } from 'marked';
@@ -338,6 +339,15 @@ export default function TerminalChatView({
   const [items, setItems] = useState<TerminalChatItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reconnectChat = () => {
+    setError(null);
+    void reconnectStructuredSession(sessionId).then((ok) => {
+      if (ok) return;
+      const detail = structuredAgent ? getStructuredChat(structuredAgent, sessionId)?.error : null;
+      setError(detail ?? `Couldn't reconnect ${agentLabel}. The conversation so far is kept above.`);
+    });
+  };
+
   const [transcriptBusy, setTranscriptBusy] = useState<boolean | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [pending, setPending] = useState<PendingSend[]>([]);
@@ -1052,6 +1062,7 @@ export default function TerminalChatView({
         return;
       }
       applyLaunchView(nextSession, target.command, 'chat');
+      await revealAgentChat(nextSession);
       const sent = await sendAgentPromptDirect(nextSession, handoff.prompt);
       if (!sent) {
         showToast(`${target.name} opened, but the handoff prompt was not sent. Copy Context is available from this menu.`, 'error', 7000);
@@ -1075,8 +1086,10 @@ export default function TerminalChatView({
 
   function runContextCommand(command: SlashCommand) {
     setContextMenu(null);
-    if (busy && queueFollowUps) enqueue(sessionId, command.name);
-    else if (!busy) void runSlashCommand(command.name);
+    void revealAgentChat(sessionId).then(() => {
+      if (busy && queueFollowUps) enqueue(sessionId, command.name);
+      else if (!busy) void runSlashCommand(command.name);
+    });
   }
 
   // ── Composer menus: `/` commands and skills, `$` skills (Codex), `@` files ──
@@ -1696,9 +1709,18 @@ export default function TerminalChatView({
         agents={otherAgents}
         commandDisabled={!isRunning || (busy && !queueFollowUps)}
         onClose={() => setContextMenu(null)}
-        onFind={() => { setContextMenu(null); setFindOpen(true); }}
+        onFind={() => {
+          setContextMenu(null);
+          void revealAgentChat(sessionId).then(() => {
+            setFindOpen(true);
+            requestAnimationFrame(() => document.querySelector<HTMLInputElement>('input[aria-label="Find in chat"]')?.focus());
+          });
+        }}
         onCommand={runContextCommand}
-        onHandOff={(target) => void handOffToAgent(target)}
+        onHandOff={() => {
+          setContextMenu(null);
+          requestHandoffPicker(sessionId);
+        }}
         onCopyContext={() => void copyChatContext()}
       />
       {hoverLink && linkPreviews && (
@@ -1893,12 +1915,7 @@ export default function TerminalChatView({
           <SignInNotice
             label={agentLabel}
             onOpenTerminal={openTerminalView}
-            onRetry={() => {
-              setError(null);
-              void reconnectStructuredSession(sessionId).then((ok) => {
-                if (!ok) setError(`Couldn't reconnect ${agentLabel}. The conversation so far is kept above.`);
-              });
-            }}
+            onRetry={reconnectChat}
           />
         )}
         {error && (
@@ -1907,12 +1924,7 @@ export default function TerminalChatView({
             {structuredMode && (structuredState?.status === 'failed' || structuredState?.status === 'closed' || !structuredState) && (
               <button
                 type="button"
-                onClick={() => {
-                  setError(null);
-                  void reconnectStructuredSession(sessionId).then((ok) => {
-                    if (!ok) setError(`Couldn't reconnect ${agentLabel}. The conversation so far is kept above.`);
-                  });
-                }}
+                onClick={reconnectChat}
               >
                 Reconnect
               </button>

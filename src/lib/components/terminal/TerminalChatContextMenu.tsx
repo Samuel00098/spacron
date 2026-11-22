@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { SlashCommand } from '$lib/services/terminal-chat-rich';
 
 export type ChatMenuAgent = { command: string; name: string };
@@ -13,11 +13,10 @@ type Props = {
   onClose: () => void;
   onFind: () => void;
   onCommand: (command: SlashCommand) => void;
-  onHandOff: (agent: ChatMenuAgent) => void;
+  onHandOff: () => void;
   onCopyContext: () => void;
 };
 
-type MenuPage = 'main' | 'commands' | 'agents';
 
 /** Context actions for the transcript view, portaled so fixed positioning follows the window. */
 export default function TerminalChatContextMenu({
@@ -31,20 +30,17 @@ export default function TerminalChatContextMenu({
   onHandOff,
   onCopyContext,
 }: Props) {
-  const [page, setPage] = useState<MenuPage>('main');
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!point) return undefined;
-    setPage('main');
     const onPointerDown = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      if (page !== 'main') setPage('main');
-      else onClose();
+      onClose();
     };
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown, true);
@@ -52,7 +48,7 @@ export default function TerminalChatContextMenu({
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [point, page, onClose]);
+  }, [point, onClose]);
 
   if (!point || typeof document === 'undefined') return null;
   const left = Math.max(8, Math.min(point.x, window.innerWidth - 252));
@@ -63,56 +59,14 @@ export default function TerminalChatContextMenu({
       ref={menuRef}
       className="terminal-chat-context-menu"
       role="menu"
-      aria-label={page === 'main' ? 'Chat actions' : page === 'commands' ? 'Quick Commands' : 'Hand off to another agent'}
+      aria-label="Chat actions"
       style={{ left, top }}
       onContextMenu={(event) => event.preventDefault()}
     >
-      {page === 'main' ? (
-        <>
-          <MenuButton icon="search" shortcut="Ctrl+F" onClick={onFind}>Find in chat</MenuButton>
-          <MenuButton icon="play" arrow onClick={() => setPage('commands')}>Quick Commands</MenuButton>
-          <MenuButton icon="handoff" disabled={!agents.length} onClick={() => setPage('agents')}>
-            Hand Off to Another Agent
-          </MenuButton>
-          <div className="terminal-chat-context-menu-separator" />
-          <MenuButton icon="copy" onClick={onCopyContext}>Copy Context</MenuButton>
-        </>
-      ) : page === 'commands' ? (
-        <>
-          <div className="terminal-chat-context-menu-heading">
-            <button type="button" className="terminal-chat-context-menu-back" onClick={() => setPage('main')} aria-label="Back to chat actions">‹</button>
-            <span>Quick Commands</span>
-          </div>
-          <div className="terminal-chat-context-menu-list">
-            {commands.length ? commands.map((command) => (
-              <MenuButton
-                key={command.name}
-                icon="command"
-                disabled={commandDisabled}
-                onClick={() => onCommand(command)}
-                title={command.description}
-              >
-                <span className="terminal-chat-context-menu-command-name">{command.name}</span>
-                {command.description && <span className="terminal-chat-context-menu-description">{command.description}</span>}
-              </MenuButton>
-            )) : <div className="terminal-chat-context-menu-empty">No commands for this agent</div>}
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="terminal-chat-context-menu-heading">
-            <button type="button" className="terminal-chat-context-menu-back" onClick={() => setPage('main')} aria-label="Back to chat actions">‹</button>
-            <span>Hand Off to Another Agent</span>
-          </div>
-          <div className="terminal-chat-context-menu-list">
-            {agents.length ? agents.map((agent) => (
-              <MenuButton key={agent.command} icon="agent" onClick={() => onHandOff(agent)}>
-                {agent.name}
-              </MenuButton>
-            )) : <div className="terminal-chat-context-menu-empty">No other agents are available</div>}
-          </div>
-        </>
-      )}
+      <MenuButton icon="search" shortcut="Ctrl+F" onClick={onFind}>Find in chat</MenuButton>
+      <MenuButton icon="handoff" onClick={onHandOff}>Hand Off to Another Agent</MenuButton>
+      <div className="terminal-chat-context-menu-separator" />
+      <MenuButton icon="copy" onClick={onCopyContext}>Copy Context</MenuButton>
     </div>,
     document.body,
   );

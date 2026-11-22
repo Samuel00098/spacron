@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from 'react';
 import Dropdown from './Dropdown';
-import ReasoningSlider from './ReasoningSlider';
 import {
   getAgentProviderCapabilities,
   type AgentProviderModel,
@@ -152,23 +151,17 @@ export default function AgentLaunchConfigFields({
 
       <label className="agent-launch-config-field">
         <span>Reasoning level</span>
-        {compact ? <Dropdown
+        <Dropdown
           value={effortUsable ? reasoningEffort : 'default'}
           options={[
-            { value: 'default', label: options.defaultReasoning ? `Default (${REASONING_LABELS[options.defaultReasoning] ?? options.defaultReasoning})` : 'Agent default' },
+            { value: 'default', label: options.defaultReasoning ? `Default (${REASONING_LABELS[options.defaultReasoning] ?? options.defaultReasoning})` : defaultReasoningLabel },
             ...options.reasoning.filter(entry => !entry.disabled).map(entry => ({ value: entry.effort, label: REASONING_LABELS[entry.effort] ?? entry.effort })),
           ]}
           onChange={value => onReasoningChange(value as ChatReasoningEffort)}
           ariaLabel={`${capabilities.label} reasoning level`}
           disabled={!hasReasoningControl}
           boundarySelector={boundarySelector}
-        /> : <ReasoningSlider
-          value={effortUsable ? reasoningEffort : 'default'}
-          levels={options.reasoning.filter((entry) => !entry.disabled).map((entry) => entry.effort)}
-          onChange={onReasoningChange}
-          defaultLabel={defaultReasoningLabel}
-          disabled={!hasReasoningControl}
-        />}
+        />
         {!hasReasoningControl && (
           <small>
             {reportedOnly ? 'The agent reports no reasoning levels for this model.' : options.reasoning.length

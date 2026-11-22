@@ -154,7 +154,7 @@ export function applyLaunchView(sessionId: number, preset: string, view?: AgentL
   setTerminalChatView(sessionId, wanted === 'chat' && canShowTerminalChat(preset));
 }
 
-const chatViewSessions = writable<ReadonlySet<number>>(new Set());
+export const chatViewSessions = writable<ReadonlySet<number>>(new Set());
 
 export function isTerminalChatView(sessionId: number): boolean {
   return get(chatViewSessions).has(sessionId);

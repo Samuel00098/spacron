@@ -4,7 +4,7 @@
  * body shows `StructuredChatView` in place of its terminal. The agent runs as
  * a protocol process (`codex-session.ts`); the pane's own shell sits unused.
  *
- * Not persisted yet: after an app restart the pane comes back as a plain shell.
+ * Session records and conversation history are owned by session-store.ts.
  */
 import { writable } from '$lib/stores/storeCompat';
 import { useStore } from '$lib/react/useStore';
@@ -17,6 +17,11 @@ export type StructuredChatAgent = 'codex' | 'claude' | 'opencode' | 'grok' | 'cu
 export const structuredChatPanes = writable<Record<number, StructuredChatAgent>>({});
 /** The CLI preset a pane continues in when it goes back to its terminal. */
 const panePresets = new Map<number, string>();
+const newChatPanes = new Set<number>();
+
+export function isNewStructuredChatPane(paneId: number): boolean {
+  return newChatPanes.has(paneId);
+}
 /** The conversation before the chat took over (from the CLI's transcript). */
 export const structuredChatHistory = writable<Record<number, TerminalChatItem[]>>({});
 /** A chat that finished while its window was hidden, for the tab's dot. */
@@ -44,7 +49,8 @@ export function useStructuredChatUnread(sessionId: number): boolean {
   return Boolean(useStore(structuredChatUnread)[sessionId]);
 }
 
-export function markStructuredChatPane(sessionId: number, agent: StructuredChatAgent, preset?: string): void {
+export function markStructuredChatPane(sessionId: number, agent: StructuredChatAgent, preset?: string, origin?: 'chat'): void {
+  if (origin === 'chat') newChatPanes.add(sessionId);
   if (preset) panePresets.set(sessionId, preset);
   structuredChatPanes.update((panes) => ({ ...panes, [sessionId]: agent }));
 }

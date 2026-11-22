@@ -1,4 +1,4 @@
-export type EditorFileKind = 'text' | 'image' | 'audio' | 'video';
+export type EditorFileKind = 'text' | 'image' | 'audio' | 'video' | 'pdf' | 'docx';
 
 export interface EditorFile {
   path: string;
@@ -10,6 +10,7 @@ export interface EditorFile {
   /** What the viewer shows for an image, audio or video file: a blob: URL,
    *  or an asset-protocol URL streamed from disk. */
   imageSrc?: string | null;
+  documentData?: Uint8Array;
   mimeType?: string | null;
   size?: number | null;
 }

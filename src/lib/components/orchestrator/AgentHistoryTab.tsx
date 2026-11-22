@@ -443,7 +443,7 @@ export default function AgentHistoryTab() {
           <button type="button" className={prefs.scope === 'project' ? 'on' : ''} onClick={() => setPrefs({ scope: 'project' })} disabled={!project}>Project</button>
           <button type="button" className={prefs.scope === 'all' ? 'on' : ''} onClick={() => setPrefs({ scope: 'all', group: 'project' })}>All</button>
         </div>
-        <span className="ah-count">{rows ? `${shown.length} shown · ${total} recent` : ''}</span>
+        <span className="ah-count" title="Filtered sessions out of all loaded sessions. Scope, agents, search, and Hide empty sessions affect this count.">{rows ? `${shown.length} of ${total} sessions` : ''}</span>
       </div>
 
       <div className="ah-list">

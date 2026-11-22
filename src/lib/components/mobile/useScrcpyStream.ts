@@ -93,9 +93,14 @@ function makeChunk(type: 'key' | 'delta', timestamp: number, data: Uint8Array): 
  * current, and an abandoned stream is stopped before it can orphan a backend
  * thread.
  */
+let lastKnownStreamDims: StreamDims | null = null;
+
 export function useScrcpyStream() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [state, setState] = useState<StreamState>({ phase: 'idle' });
+  const [state, setState] = useState<StreamState>(() => ({
+    phase: 'idle',
+    dims: lastKnownStreamDims ?? undefined,
+  }));
   const streamIdRef = useRef<string | null>(null);
   const activeRef = useRef(false);
   const generationRef = useRef(0);
@@ -384,12 +389,16 @@ export function useScrcpyStream() {
           setState({ phase: 'starting', message: ev.message });
         } else if (ev.kind === 'ready') {
           // Handshake completed — the device answered, so it was alive at the
-          // moment the stream opened. The first frames follow immediately.
+          // moment the stream opened. Keep starting phase until the first frame paints
+          // to avoid flickering a blank canvas over the placeholder frame.
           lastFrameAtRef.current = Date.now();
-          setState({
-            phase: 'streaming',
-            dims: ev.width && ev.height ? { width: ev.width, height: ev.height } : undefined,
-          });
+          const dims = ev.width && ev.height ? { width: ev.width, height: ev.height } : lastKnownStreamDims ?? undefined;
+          if (dims) lastKnownStreamDims = dims;
+          setState((s) => ({
+            ...s,
+            message: 'Stream connected, decoding first frame…',
+            dims: dims ?? s.dims,
+          }));
         } else if (ev.kind === 'frame') {
           handleFrame(ev);
         } else if (ev.kind === 'png_frame') {

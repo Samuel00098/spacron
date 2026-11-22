@@ -1636,3 +1636,44 @@
 }
 
 
+
+/* Review setup keeps launch settings beside the editable instructions. */
+.tasks-agent-modal-card {
+  width: 920px !important;
+  overflow: hidden !important;
+  padding-bottom: 0 !important;
+  gap: 18px !important;
+}
+.tasks-review-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 20px;
+  gap: 24px;
+}
+.tasks-review-settings { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.tasks-review-body .tasks-modal-section,
+.tasks-review-body .tasks-modal-config-wrap { padding: 0; }
+.tasks-review-body .tasks-modal-section-label { flex-wrap: wrap; gap: 4px 12px; }
+.tasks-review-prompt { min-width: 0; }
+.tasks-review-prompt .tasks-modal-prompt-textarea {
+  flex: 1;
+  min-height: 320px;
+  max-height: none;
+  resize: vertical;
+}
+.tasks-agent-modal-card .apm-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 16px 20px;
+}
+.tasks-agent-modal-card .apm-hint { white-space: normal; overflow: visible; }
+.tasks-agent-modal-card .apm-actions { margin-left: auto; flex-shrink: 0; }
+@media (max-width: 760px) {
+  .tasks-review-body { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .tasks-review-prompt .tasks-modal-prompt-textarea { min-height: 220px; }
+}

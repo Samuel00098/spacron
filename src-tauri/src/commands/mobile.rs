@@ -18,6 +18,9 @@ use std::process::Command;
 use base64::Engine;
 use serde::Serialize;
 
+#[path = "mobile_capture.rs"]
+mod mobile_capture;
+
 /// Run a blocking closure off the async runtime's worker threads.
 ///
 /// Every call in this module shells out with `Command::output()`, which blocks
@@ -159,6 +162,7 @@ pub struct AndroidDevice {
     pub state: String,
     /// Human label: emulator AVD name, or device model, falling back to serial.
     pub label: String,
+    pub model: String,
 }
 
 #[derive(Serialize)]
@@ -230,11 +234,11 @@ fn list_devices() -> Result<Vec<AndroidDevice>, String> {
             // Try to resolve the running AVD's friendly name.
             android_avd_name(&serial).unwrap_or_else(|| serial.clone())
         } else if !model.is_empty() {
-            model
+            model.clone()
         } else {
             serial.clone()
         };
-        devices.push(AndroidDevice { serial, state, label });
+        devices.push(AndroidDevice { serial, state, label, model });
     }
     Ok(devices)
 }
@@ -276,16 +280,93 @@ pub async fn android_list_avds() -> Result<Vec<String>, String> {
     .await
 }
 
+/// Read installed emulator metadata without booting devices or querying their shells.
+#[tauri::command]
+pub async fn android_avd_details() -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+    blocking(|| {
+        let home = std::env::var_os("ANDROID_AVD_HOME").map(PathBuf::from)
+            .or_else(|| std::env::var_os("ANDROID_USER_HOME").map(|p| PathBuf::from(p).join("avd")))
+            .or_else(|| std::env::var_os("ANDROID_EMULATOR_HOME").map(|p| PathBuf::from(p).join("avd")))
+            .or_else(|| std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|p| PathBuf::from(p).join(".android").join("avd")));
+        let mut result = std::collections::BTreeMap::new();
+        let Some(home) = home else { return Ok(result); };
+        let Ok(entries) = std::fs::read_dir(&home) else { return Ok(result); };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|v| v.to_str()) != Some("ini") { continue; }
+            let Ok(contents) = std::fs::read_to_string(&path) else { continue; };
+            let values: std::collections::BTreeMap<_, _> = contents.lines()
+                .filter_map(|line| line.split_once('=')).map(|(k,v)| (k.trim(),v.trim())).collect();
+            let config = values.get("path").map(PathBuf::from)
+                .unwrap_or_else(|| home.join(format!("{}.avd", path.file_stem().unwrap_or_default().to_string_lossy())))
+                .join("config.ini");
+            let Ok(contents) = std::fs::read_to_string(config) else { continue; };
+            let fields: std::collections::BTreeMap<_, _> = contents.lines()
+                .filter_map(|line| line.split_once('=')).map(|(k,v)| (k.trim(),v.trim())).collect();
+            let mut details = Vec::new();
+            for (key,label,unit) in [
+                ("hw.device.name","Model",""), ("hw.device.manufacturer","Manufacturer",""),
+                ("abi.type","Architecture",""), ("hw.cpu.ncore","CPU cores",""),
+                ("hw.ramSize","RAM"," MB"), ("disk.dataPartition.size","Storage",""),
+                ("hw.lcd.density","Density"," dpi"), ("tag.display","System image",""),
+            ] {
+                if let Some(value) = fields.get(key).filter(|v| !v.is_empty()) {
+                    details.push(format!("{label}: {value}{unit}"));
+                }
+            }
+            if let Some(target) = values.get("target") { details.push(format!("Android target: {target}")); }
+            if let (Some(width),Some(height)) = (fields.get("hw.lcd.width"),fields.get("hw.lcd.height")) {
+                details.push(format!("Display: {width} ? {height} px"));
+            }
+            result.insert(path.file_stem().unwrap_or_default().to_string_lossy().into_owned(),details);
+        }
+        Ok(result)
+    }).await
+}
+
 /// Boot an AVD without opening its graphical window. Spacron shows the device
 /// through its in-app emulator stream, so a separate Emulator window is not
 /// needed. The process remains detached and available to adb/gRPC as usual.
 #[tauri::command]
 pub async fn android_launch_avd(name: String) -> Result<(), String> {
-    quiet_command(&emulator_program())
-        .args(["-avd", &name, "-no-window"])
-        .spawn()
-        .map_err(|e| missing_tool("emulator", e))?;
-    Ok(())
+    blocking(move || {
+        if name.is_empty() || name.len() > 200 || !name.chars().all(|c| c.is_alphanumeric() || "._-".contains(c)) {
+            return Err("Invalid emulator name".to_string());
+        }
+        if list_devices()?.iter().any(|device| device.serial.starts_with("emulator-") && device.label == name) {
+            return Ok(());
+        }
+        let log_path = std::env::temp_dir().join(format!("spacron-emulator-{name}.log"));
+        let log = std::fs::File::create(&log_path).map_err(|e| format!("Cannot create emulator log: {e}"))?;
+        let stderr = log.try_clone().map_err(|e| e.to_string())?;
+        let mut child = quiet_command(&emulator_program())
+            .args(["-avd", &name, "-no-window", "-no-boot-anim"])
+            .stdin(std::process::Stdio::null())
+            .stdout(log)
+            .stderr(stderr)
+            .spawn()
+            .map_err(|e| missing_tool("emulator", e))?;
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Err(format!("Emulator exited during startup ({status}). See {}", log_path.display()));
+        }
+        // Reap the child when it exits while leaving it independent of the panel.
+        std::thread::spawn(move || { let _ = child.wait(); });
+        Ok(())
+    }).await
+}
+
+/// ADB becoming online precedes Android completing boot.
+#[tauri::command]
+pub async fn android_boot_ready(serial: String) -> Result<bool, String> {
+    blocking(move || {
+        check_serial(&serial)?;
+        let out = quiet_command(&adb_program())
+            .args(["-s", &serial, "shell", "getprop", "sys.boot_completed"])
+            .output().map_err(|e| missing_tool("adb", e))?;
+        Ok(out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "1")
+    }).await
 }
 
 #[derive(Serialize)]
@@ -313,9 +394,11 @@ pub async fn android_screencap(serial: String) -> Result<AndroidFrame, String> {
 
 fn screencap(serial: &str) -> Result<AndroidFrame, String> {
     check_serial(serial)?;
-    let out = quiet_command(&adb_program())
-        .args(["-s", serial, "exec-out", "screencap", "-p"])
-        .output()
+    let state = if serial.starts_with("emulator-") { read_display_state(serial).ok() } else { None };
+    let mut command = quiet_command(&adb_program());
+    command.args(["-s", serial, "exec-out", "screencap", "-p"]);
+    if let Some(id) = state.as_ref().and_then(|s| s.physical_id.as_ref()) { command.args(["-d", id]); }
+    let out = command.output()
         .map_err(|e| missing_tool("adb", e))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
@@ -324,7 +407,7 @@ fn screencap(serial: &str) -> Result<AndroidFrame, String> {
         return Err("Empty screen capture (is the device unlocked?)".to_string());
     }
 
-    let img = image::load_from_memory(&out.stdout)
+    let img = image::load_from_memory(mobile_capture::png_payload(&out.stdout)?)
         .map_err(|e| format!("Failed to decode capture: {e}"))?;
     let (width, height) = (img.width(), img.height());
 
@@ -469,6 +552,68 @@ pub async fn android_rotate(serial: String, rotation: i32) -> Result<(), String>
         adb_shell(&serial, &["settings", "put", "system", "user_rotation", &rotation.to_string()])
     })
     .await
+}
+
+#[derive(Serialize)]
+pub struct AndroidDisplayState {
+    pub physical_id: Option<String>,
+    pub port: u32,
+    pub width: u32,
+    pub height: u32,
+    pub posture: Option<String>,
+}
+
+fn read_display_state(serial: &str) -> Result<AndroidDisplayState, String> {
+    check_serial(serial)?;
+    let out = quiet_command(&adb_program()).args(["-s", serial, "shell", "dumpsys", "display"]).output().map_err(|e| missing_tool("adb", e))?;
+    if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).trim().into()); }
+    let display = mobile_capture::active_display(&String::from_utf8_lossy(&out.stdout));
+    let state = quiet_command(&adb_program()).args(["-s", serial, "shell", "dumpsys", "device_state"]).output().map_err(|e| missing_tool("adb", e))?;
+    let posture = mobile_capture::committed_posture(&String::from_utf8_lossy(&state.stdout)).map(str::to_string);
+    Ok(AndroidDisplayState {
+        physical_id: display.as_ref().map(|d| d.physical_id.clone()), port: display.as_ref().map_or(0, |d| d.port),
+        width: display.as_ref().map_or(0, |d| d.width), height: display.as_ref().map_or(0, |d| d.height), posture,
+    })
+}
+
+#[tauri::command]
+pub async fn android_display_state(serial: String) -> Result<AndroidDisplayState, String> {
+    blocking(move || read_display_state(&serial)).await
+}
+
+/// Change the actual emulator hinge posture, rather than resizing the framebuffer.
+#[tauri::command]
+pub async fn android_fold(serial: String, folded: bool) -> Result<(), String> {
+    check_serial(&serial)?;
+    if !serial.starts_with("emulator-") {
+        return Err("Folding requires a foldable Android AVD, not a physical device".into());
+    }
+    blocking(move || {
+        let action = if folded { "fold" } else { "unfold" };
+        let out = quiet_command(&adb_program())
+            .args(["-s", &serial, "emu", action])
+            .output().map_err(|e| missing_tool("adb", e))?;
+        let reply = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        // The emulator console can return KO even when adb exits successfully.
+        if !out.status.success() || reply.lines().any(|line| line.trim_start().starts_with("KO")) {
+            return Err(format!("Cannot {action} this AVD. Use a foldable hardware profile in Android Studio. {}", reply.trim()));
+        }
+        Ok(())
+    }).await
+}
+
+/// Apply a reversible display-size override to an emulator, leaving physical devices untouched.
+#[tauri::command]
+pub async fn android_preview_resolution(serial: String, width: u32, height: u32) -> Result<(), String> {
+    check_serial(&serial)?;
+    if !serial.starts_with("emulator-") { return Err("Resolution overrides require an Android emulator".into()); }
+    if (width != 0 || height != 0) && (!(320..=3840).contains(&width) || !(320..=3840).contains(&height)) {
+        return Err("Display dimensions must be between 320 and 3840 pixels".into());
+    }
+    blocking(move || {
+        let size = if width == 0 && height == 0 { "reset".to_string() } else { format!("{width}x{height}") };
+        adb_shell(&serial, &["wm", "size", &size])
+    }).await
 }
 
 /// Query the device's current screen size (`wm size`), returning (width,
@@ -651,7 +796,7 @@ fn simctl(args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// Boot a simulator by UDID and reveal the Simulator app window.
+/// Boot a simulator by UDID without launching an external simulator window.
 #[tauri::command]
 pub async fn ios_boot(udid: String) -> Result<(), String> {
     check_serial(&udid)?;
@@ -661,8 +806,6 @@ pub async fn ios_boot(udid: String) -> Result<(), String> {
             return Err(e);
         }
     }
-    // Bring up Simulator.app so the device is visible/interactive.
-    let _ = quiet_command("open").args(["-a", "Simulator"]).output();
     Ok(())
 }
 

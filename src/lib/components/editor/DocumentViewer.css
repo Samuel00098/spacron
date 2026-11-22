@@ -1,0 +1,10 @@
+.document-viewer { display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; background:var(--bg-primary); color:var(--text-primary); }
+.document-viewer-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 12px; flex-shrink:0; }
+.document-viewer-toolbar > span:first-child { min-width:0; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.document-viewer-toolbar small { color:var(--text-muted); margin-right:auto; }
+.document-viewer-toolbar button { padding:5px 8px; border-radius:5px; background:var(--bg-secondary); color:var(--text-primary); }
+.document-viewer-toolbar button:disabled { opacity:.4; }
+.document-viewer-pages { flex:1; min-height:0; overflow:auto; overscroll-behavior:none; padding:16px; background:var(--bg-secondary); }
+.document-viewer-pages canvas { display:block; margin:0 auto; background:white; }
+.document-viewer iframe { width:100%; flex:1; min-height:0; border:0; background:white; }
+.document-viewer > p { padding:8px 16px; }

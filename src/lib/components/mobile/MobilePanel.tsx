@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import './MobilePanel.css';
+import { meshScreenPoint } from './meshScreen';
+import { resolveDeviceProfile } from './deviceProfile';
 import { nextSelectedSerial } from './deviceSelection';
 import DeviceToolsPanel from './DeviceToolsPanel';
 import { showToast } from '$lib/stores/notification';
@@ -17,7 +19,9 @@ import {
 } from './streamResolution';
 import { sendStreamKey, sendStreamText, useStreamTouch, type FrameDims } from './useStreamInput';
 import { useProjectPanelState } from '$lib/react/useProjectPanelState';
-import { setRightDrawerTool, toggleMobileVisible } from '$lib/stores/layout';
+import { openMobileSidebar, releaseMobileSidebar, closeRightSidebar, setRightDrawerTool, toggleMobileVisible } from '$lib/stores/layout';
+import { MobilePhone3D } from './MobilePhone3D';
+import { unproject3dPoint } from './unproject3d';
 import {
   advanceScroll,
   createWheelGestures,
@@ -30,6 +34,7 @@ interface AndroidDevice {
   serial: string;
   state: string;
   label: string;
+  model?: string;
 }
 
 interface AndroidFrame {
@@ -106,10 +111,6 @@ const SCROLL_IDLE_MS = 130;
  */
 const POLL_SCROLL_FLUSH_MS = 140;
 
-/** Tooltip for the mirror — the only place the gesture set is spelled out. */
-const GESTURE_HINT =
-  'Drag to swipe · wheel to scroll · swipe sideways (or shift+wheel) for back/forward · right-click Back · middle-click Home';
-
 function Ico({ children, size = 15 }: { children: React.ReactNode; size?: number }) {
   return (
     <svg
@@ -140,9 +141,11 @@ function isBooted(state: string | undefined) {
  * stage's `max-width/max-height: 100%` scale the whole shell to fit.
  */
 function aspectStyle(dims: { width: number; height: number } | null | undefined) {
-  return dims && dims.width > 0 && dims.height > 0
-    ? ({ aspectRatio: `${dims.width} / ${dims.height}` } as const)
-    : undefined;
+  if (dims && dims.width > 0 && dims.height > 0) {
+    return { aspectRatio: `${dims.width} / ${dims.height}` } as const;
+  }
+  // Standard phone ratio fallback so the phone chassis NEVER collapses into a squashed rectangle
+  return { aspectRatio: '9 / 19.5' } as const;
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
@@ -178,12 +181,14 @@ const openIcon = (
 function DeviceCard({
   name,
   detail,
+  information = [],
   action,
   actionLabel,
   disabled,
 }: {
   name: string;
   detail: string;
+  information?: string[];
   action: () => void;
   actionLabel: string;
   disabled?: boolean;
@@ -194,6 +199,20 @@ function DeviceCard({
       <span className="mobile-device-card-text">
         <span className="mobile-device-card-name">{name}</span>
         <span className="mobile-device-card-detail">{detail}</span>
+        {information.length > 0 && (
+          <details className="mobile-device-specs">
+            <summary>Show details</summary>
+            <dl>
+              {information.map((value) => {
+                const separator = value.indexOf(':');
+                return <div key={value}>
+                  <dt>{separator < 0 ? 'Device' : value.slice(0, separator)}</dt>
+                  <dd>{separator < 0 ? value : value.slice(separator + 1).trim()}</dd>
+                </div>;
+              })}
+            </dl>
+          </details>
+        )}
       </span>
       <button type="button" className="mobile-device-card-open" onClick={action} disabled={disabled}>
         {openIcon}
@@ -229,7 +248,13 @@ function useDockedToolbar() {
     if (!body) return;
     let shell: Element | null = null;
     const place = () => {
-      const next = body.querySelector('.mobile-device-shell, .mobile-ios-shell');
+      // In 3D the flat shell stays mounted as a 2px `source-only` stream source
+      // centred in the stage; docking to it would park the toolbar over the
+      // middle of the model. With no visible shell, fall back to the right edge
+      // (the 3D stage reserves that column, see T3DeviceView.css).
+      const next = body.querySelector(
+        '.mobile-device-shell:not(.source-only), .mobile-ios-shell:not(.source-only)',
+      );
       if (next !== shell) {
         if (shell) ro.unobserve(shell);
         shell = next;
@@ -252,7 +277,8 @@ function useDockedToolbar() {
     const ro = new ResizeObserver(place);
     ro.observe(body);
     const mo = new MutationObserver(place);
-    mo.observe(body, { childList: true, subtree: true });
+    // `class` too: the 2D↔3D switch flips `source-only` on the same shell node.
+    mo.observe(body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     place();
     cleanup.current = () => {
       ro.disconnect();
@@ -290,36 +316,80 @@ function SideBtn({
   );
 }
 
-const FLOAT_DEVICE_EVENT = 'spacron:mobile-float-device';
-const CLOSE_FLOAT_DEVICE_EVENT = 'spacron:mobile-close-floating-device';
+export const FLOAT_DEVICE_EVENT = 'spacron:mobile-float-device';
+export const CLOSE_FLOAT_DEVICE_EVENT = 'spacron:mobile-close-floating-device';
 
-export function MobilePanelFloatingHost() {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    const show = () => setOpen(true);
-    const hide = () => setOpen(false);
-    window.addEventListener(FLOAT_DEVICE_EVENT, show);
-    window.addEventListener(CLOSE_FLOAT_DEVICE_EVENT, hide);
-    return () => {
-      window.removeEventListener(FLOAT_DEVICE_EVENT, show);
-      window.removeEventListener(CLOSE_FLOAT_DEVICE_EVENT, hide);
-    };
-  }, []);
-  return open ? <MobilePanel floatingHost onFloatingClose={() => setOpen(false)} /> : null;
+type DeviceWindow = { platform: MobileTab; target: string };
+
+/**
+ * Hand-off from a floating device window to the sidebar panel: the floating
+ * "Devices" button writes the device here, then opens the sidebar. A sidebar
+ * panel that is already mounted takes it via DOCK_DEVICE_EVENT; one that mounts
+ * because the sidebar was closed takes it on mount. Whichever takes it clears it.
+ */
+const DOCK_DEVICE_KEY = 'spacron.mobile.dockDevice';
+const DOCK_DEVICE_EVENT = 'spacron:mobile-dock-device';
+
+function takeDockedDevice(): DeviceWindow | null {
+  const raw = localStorage.getItem(DOCK_DEVICE_KEY);
+  localStorage.removeItem(DOCK_DEVICE_KEY);
+  try {
+    const parsed = raw ? JSON.parse(raw) as DeviceWindow : null;
+    return parsed && (parsed.platform === 'android' || parsed.platform === 'ios') && parsed.target ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
-export default function MobilePanel({ floatingHost = false, onFloatingClose }: { floatingHost?: boolean; onFloatingClose?: () => void } = {}) {
-  const [tab, setTab] = useProjectPanelState<MobileTab>('mobile.tab', 'android');
+export function MobilePanelFloatingHost() {
+  const [windows, setWindows] = useState<DeviceWindow[]>([]);
+  useEffect(() => {
+    const show = (event: Event) => {
+      const detail = (event as CustomEvent<DeviceWindow>).detail;
+      const device = detail?.target ? detail : {
+        platform: (localStorage.getItem('spacron.mobile.tab') === 'ios' ? 'ios' : 'android') as MobileTab,
+        target: localStorage.getItem('spacron.mobile.serial') ?? '',
+      };
+      if (!device.target) return;
+      setWindows((current) => [...current.filter((item) => item.platform !== device.platform || item.target !== device.target), device]);
+    };
+    window.addEventListener(FLOAT_DEVICE_EVENT, show);
+    return () => window.removeEventListener(FLOAT_DEVICE_EVENT, show);
+  }, []);
+  return <>{windows.map((device, index) => <MobilePanel
+    key={`${device.platform}:${device.target}`} floatingHost pinnedDevice={device} windowIndex={index}
+    onFloatingClose={() => setWindows((current) => current.filter((item) => item !== device))}
+  />)}</>;
+}
+
+export default function MobilePanel({ floatingHost = false, onFloatingClose, pinnedDevice, windowIndex = 0 }: {
+  floatingHost?: boolean; onFloatingClose?: () => void; pinnedDevice?: DeviceWindow; windowIndex?: number;
+} = {}) {
+  // Taken once, before the tab / device / view state below reads it.
+  const [dockedDevice] = useState(() => floatingHost ? null : takeDockedDevice());
+  const [tab, setTab] = useState<MobileTab>(pinnedDevice?.platform ?? dockedDevice?.platform ?? 'android');
   // The panel opens on the device list; "Open" on a device shows its screen.
   const [view, setView] = useState<'list' | 'device'>(() => {
-    const openDevice = floatingHost || localStorage.getItem('spacron.mobile.openDeviceOnMount') === '1';
+    const openDevice = floatingHost || !!dockedDevice || localStorage.getItem('spacron.mobile.openDeviceOnMount') === '1';
     localStorage.removeItem('spacron.mobile.openDeviceOnMount');
     return openDevice ? 'device' : 'list';
   });
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [floating, setFloating] = useState(floatingHost);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const [floatingPosition, setFloatingPosition] = useState<{ left: number; top: number } | null>(null);
+  const [floatingSize, setFloatingSize] = useState<{ width: number; height: number } | null>(null);
   const floatingDragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null);
+  const floatingResizeRef = useRef<{
+    pointerId: number;
+    dir: 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+    startX: number;
+    startY: number;
+    startLeft: number;
+    startTop: number;
+    startWidth: number;
+    startHeight: number;
+  } | null>(null);
   const deviceMenuRef = useRef<HTMLDivElement | null>(null);
   // The platform whose screen is being mirrored, or null on the device list —
   // every stream / screenshot loop keys off this, so the list never streams.
@@ -329,15 +399,20 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
   const [showSettings, setShowSettings] = useState(false);
   // Bumped after the toolbar's sun button so an open Tools panel re-reads.
   const [toolsKey, setToolsKey] = useState(0);
+  // The device's current appearance, so the toolbar shows a sun (light) or moon (dark).
+  const [deviceDark, setDeviceDark] = useState<boolean | null>(null);
   const [bootingName, setBootingName] = useState<string | null>(null);
   const [platform, setPlatform] = useState('');
 
   // ── Android ────────────────────────────────────────────────────────────
   const [tools, setTools] = useState<AndroidTools | null>(null);
   const [devices, setDevices] = useState<AndroidDevice[]>([]);
+  const [avdDetails, setAvdDetails] = useState<Record<string, string[]>>({});
   const [avds, setAvds] = useState<string[]>([]);
   const [selectedSerial, setSelectedSerial] = useState(
-    () => localStorage.getItem('spacron.mobile.serial') ?? '',
+    () => pinnedDevice?.platform === 'android' ? pinnedDevice.target
+      : dockedDevice?.platform === 'android' ? dockedDevice.target
+      : localStorage.getItem('spacron.mobile.serial') ?? '',
   );
   const [frame, setFrame] = useState<AndroidFrame | null>(null);
   const [frameError, setFrameError] = useState<string | null>(null);
@@ -374,11 +449,29 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
 
   // ── iOS ────────────────────────────────────────────────────────────────
   const [sims, setSims] = useState<IosSimulator[]>([]);
-  const [iosUdid, setIosUdid] = useProjectPanelState('mobile.iosUdid', '');
+  const [iosUdid, setIosUdid] = useState(
+    pinnedDevice?.platform === 'ios' ? pinnedDevice.target : dockedDevice?.platform === 'ios' ? dockedDevice.target : '',
+  );
   const [iosShot, setIosShot] = useState<string | null>(null);
   const [iosShotDims, setIosShotDims] = useState<{ width: number; height: number } | null>(null);
   const [iosError, setIosError] = useState<string | null>(null);
   const [iosActionKey, setIosActionKey] = useState(0);
+
+  // Keep the sun/moon icon in step with the device. Polling also catches changes
+  // made from the Tools panel or inside the device's own settings.
+  useEffect(() => {
+    const target = mirrorTab === 'android' ? (selectedSerial ? { platform: 'android', target: selectedSerial } : null)
+      : mirrorTab === 'ios' ? (iosUdid ? { platform: 'ios', target: iosUdid } : null) : null;
+    setDeviceDark(null);
+    if (!target) return;
+    let alive = true;
+    const read = () => invoke<{ appearance: string | null }>('device_tools_state', target)
+      .then((state) => { if (alive) setDeviceDark(state.appearance === 'dark' ? true : state.appearance === 'light' ? false : null); })
+      .catch(() => { /* a booting device has no appearance yet */ });
+    void read();
+    const timer = window.setInterval(read, 15_000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [mirrorTab, selectedSerial, iosUdid, toolsKey]);
 
   useEffect(() => {
     if (!deviceMenuOpen) return;
@@ -395,6 +488,112 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [deviceMenuOpen]);
+
+  const [hingeMotion, setHingeMotion] = useState<{ angle: number; revision: number } | null>(null);
+  const [hingeBusy, setHingeBusy] = useState(false);
+  const [hingeRevision, setHingeRevision] = useState(0);
+  const [androidDisplay, setAndroidDisplay] = useState<{ physical_id: string | null; port: number; width: number; height: number; posture: string | null } | null>(null);
+  useEffect(() => {
+    if (mirrorTab !== 'android' || !selectedSerial.startsWith('emulator-')) { setAndroidDisplay(null); return; }
+    let cancelled = false;
+    let inFlight = false;
+    let signature: string | null = null;
+    setAndroidDisplay(null);
+    const read = async () => {
+      if (inFlight || cancelled || document.hidden) return;
+      inFlight = true;
+      try {
+        const state = await invoke<{ physical_id: string | null; port: number; width: number; height: number; posture: string | null }>('android_display_state', { serial: selectedSerial });
+        if (cancelled) return;
+        // Display handoff can briefly expose no powered panel. Preserve the
+        // last valid preview until the replacement panel is available.
+        if (!state.physical_id || !state.width || !state.height) return;
+        const next = `${state.physical_id}:${state.width}:${state.height}`;
+        if (signature !== null && signature !== next) {
+          stopStream(); setHingeRevision((key) => key + 1);
+        }
+        signature = next;
+        setAndroidDisplay(state);
+      } catch { /* Discovery errors do not replace the stream's own diagnostics. */ }
+      finally { inFlight = false; }
+    };
+    void read();
+    const timer = window.setInterval(() => void read(), 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [mirrorTab, selectedSerial]);
+  // 3D perspective phone view
+  const [is3D, setIs3D] = useState(() => {
+    try {
+      const stored = localStorage.getItem('spacron:mobile:3d');
+      return stored === null ? true : stored === 'true';
+    } catch {
+      return true; // default 3D enabled for rich experience
+    }
+  });
+  // Default to 0°/0°: straight forward upright "perfect state", never bent or edge-angled
+  const [rotX, setRotX] = useState(() => {
+    try {
+      const stored = localStorage.getItem('spacron:mobile:rotX');
+      if (stored !== null) return Number(stored) || 0;
+    } catch {}
+    return 0;
+  });
+  const [rotY, setRotY] = useState(() => {
+    try {
+      const stored = localStorage.getItem('spacron:mobile:rotY');
+      if (stored !== null) return Number(stored) || 0;
+    } catch {}
+    return 0;
+  });
+
+  useEffect(() => { setRotX(0); setRotY(0); }, [view, tab]);
+  const resetToPerfect3D = useCallback(() => {
+    setView('device');
+    setIs3D(true);
+    setRotX(0);
+    setRotY(0);
+    try {
+      localStorage.setItem('spacron:mobile:3d', 'true');
+      localStorage.setItem('spacron:mobile:rotX', '0');
+      localStorage.setItem('spacron:mobile:rotY', '0');
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    const onReset = () => {
+      resetToPerfect3D();
+    };
+    window.addEventListener('spacron:mobile:reset-perfect-3d', onReset);
+    return () => window.removeEventListener('spacron:mobile:reset-perfect-3d', onReset);
+  }, [resetToPerfect3D]);
+
+  useEffect(() => {
+    if (localStorage.getItem('spacron.mobile.openDeviceOnMount') === '1') {
+      localStorage.removeItem('spacron.mobile.openDeviceOnMount');
+      resetToPerfect3D();
+    }
+  }, [resetToPerfect3D]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('spacron:mobile:3d', String(is3D));
+    } catch {
+      // ignore
+    }
+  }, [is3D]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('spacron:mobile:rotX', String(rotX));
+      localStorage.setItem('spacron:mobile:rotY', String(rotY));
+    } catch {
+      // ignore
+    }
+  }, [rotX, rotY]);
+
+  // In floating popup mode, the phone stays in clean 2D flat mode
+  const isFloating = floating || floatingHost;
+  const effective3D = !isFloating && is3D;
 
   // The Android stage. Measured (not the device shell, which is content-sized
   // until a frame gives it an aspect ratio) to decide what resolution to ask
@@ -486,17 +685,20 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
   const refreshAndroid = useCallback(async () => {
     setDevicesLoading(true);
     try {
-      const [devs, avdList, toolsInfo] = await Promise.all([
+      const [devs, avdList, toolsInfo, metadata] = await Promise.all([
         invoke<AndroidDevice[]>('android_list_devices'),
         invoke<string[]>('android_list_avds'),
         invoke<AndroidTools>('android_check'),
+        invoke<Record<string, string[]>>('android_avd_details').catch(() => ({})),
       ]);
       setDevices(devs);
       setAvds(avdList);
+      setAvdDetails(metadata);
       setTools(toolsInfo);
       // Keep the current pick while it still exists; otherwise jump to the
       // first online device, or clear the stale serial entirely.
       setSelectedSerial((prev) => {
+        if (pinnedDevice?.platform === 'android') return pinnedDevice.target;
         if (prev && devs.some((d) => d.serial === prev)) return prev;
         const online = devs.find((d) => d.state === 'device');
         return online?.serial ?? '';
@@ -506,7 +708,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     } finally {
       setDevicesLoading(false);
     }
-  }, []);
+  }, [pinnedDevice]);
 
   useEffect(() => {
     if (view === 'list' || tab === 'android') void refreshAndroid();
@@ -532,7 +734,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
         const devs = await invoke<AndroidDevice[]>('android_list_devices');
         if (cancelled) return;
         setDevices(devs);
-        setSelectedSerial((prev) => nextSelectedSerial(prev, devs));
+        setSelectedSerial((prev) => pinnedDevice?.platform === 'android' ? pinnedDevice.target : nextSelectedSerial(prev, devs));
       } catch {
         // A transient adb hiccup is not worth surfacing here — the screencap
         // poll and the stream both report their own failures.
@@ -578,6 +780,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
   }, [
     mirrorTab,
     selectedSerial,
+    hingeRevision,
     streamMode,
     streamSide,
     streamFallback,
@@ -669,6 +872,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
         setSims(list);
         setIosError(null);
         setIosUdid((prev) => {
+          if (pinnedDevice?.platform === 'ios') return pinnedDevice.target;
           if (prev && list.some((s) => s.udid === prev)) return prev;
           return list.find((s) => isBooted(s.state))?.udid ?? list[0]?.udid ?? '';
         });
@@ -757,8 +961,27 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     const el = (androidStreaming ? streamCanvasRef.current : screenRef.current) as HTMLElement | null;
     const dims = androidStreaming ? streamState.dims : frame;
     if (!el || !dims) return null;
+    if (effective3D) {
+      const point = meshScreenPoint(stageRef.current, clientX, clientY);
+      if (point !== undefined) return point ? { x: Math.round(point.x * (dims.width - 1)), y: Math.round(point.y * (dims.height - 1)) } : null;
+    }
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
+
+    if (effective3D && (Math.abs(rotX) > 0.05 || Math.abs(rotY) > 0.05) && stageRef.current) {
+      const stageRect = stageRef.current.getBoundingClientRect();
+      const unprojected = unproject3dPoint({
+        clientX,
+        clientY,
+        screenRect: rect,
+        stageRect,
+        rotXDeg: rotX,
+        rotYDeg: rotY,
+        dims,
+      });
+      if (unprojected) return unprojected;
+    }
+
     return {
       x: Math.max(0, Math.min(dims.width - 1, Math.round(((clientX - rect.left) / rect.width) * dims.width))),
       y: Math.max(0, Math.min(dims.height - 1, Math.round(((clientY - rect.top) / rect.height) * dims.height))),
@@ -890,7 +1113,8 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     if (!el || !dims) return;
     const rect = el.getBoundingClientRect();
     if (rect.height === 0) return;
-    const deviceDy = -Math.round(deltaY * (dims.height / rect.height));
+    const renderedHeight = effective3D && stageRef.current ? stageRef.current.getBoundingClientRect().height : rect.height;
+    const deviceDy = -Math.round(deltaY * (dims.height / Math.max(1, renderedHeight)));
     if (deviceDy === 0) return;
     if (androidStreaming) {
       const anchor = (client && clientToDevice(client.x, client.y)) || scrollAnchor(dims);
@@ -913,7 +1137,8 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
   wheelHandlerRef.current = (e: WheelEvent) => {
     // Only the mirrored screen consumes the wheel; over the empty stage the
     // event belongs to whatever the drawer wants to do with it.
-    if (!selectedSerial || !(e.target as HTMLElement | null)?.closest?.('.mobile-device-shell')) return;
+    if (!selectedSerial || !(e.target as HTMLElement | null)?.closest?.('.mobile-device-shell, .mobile-3d-screen-wrap, .mobile-device-screen')) return;
+    if (effective3D && meshScreenPoint(stageRef.current, e.clientX, e.clientY) === null) return;
     e.preventDefault();
     const intent = wheelGesturesRef.current.handle(e, e.timeStamp);
     if (intent) runGesture(intent, { x: e.clientX, y: e.clientY });
@@ -923,7 +1148,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
   // prop could never call `preventDefault` — and without that, scrolling the
   // phone would scroll the drawer behind it as well. Hence a native listener.
   useEffect(() => {
-    const stage = stageRef.current;
+    const stage = stageRef.current?.closest<HTMLElement>('.mobile-device-body') ?? stageRef.current;
     if (mirrorTab !== 'android' || !stage) return;
     const listener = (e: WheelEvent) => wheelHandlerRef.current(e);
     stage.addEventListener('wheel', listener, { passive: false });
@@ -945,7 +1170,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
   }, [selectedSerial, androidStreaming, mirrorTab]);
 
   function onPointerDown(e: React.PointerEvent) {
-    if (!selectedSerial) return;
+    if (!selectedSerial || (streamMode === 'stream' && !streamFallback && !androidStreaming)) return;
 
     // Non-primary buttons are navigation gestures, not fingers: right for Back,
     // middle for Home, the side buttons for Back/Forward. Suppressing the
@@ -1095,8 +1320,33 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     if (!el) return;
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+
+    let x = (e.clientX - rect.left) / rect.width;
+    let y = (e.clientY - rect.top) / rect.height;
+    const meshPoint = effective3D ? meshScreenPoint(stageRef.current, e.clientX, e.clientY) : undefined;
+    if (meshPoint === null) return;
+    if (meshPoint) { x = meshPoint.x; y = meshPoint.y; }
+
+
+    if (meshPoint === undefined && effective3D && (Math.abs(rotX) > 0.05 || Math.abs(rotY) > 0.05) && stageRef.current) {
+      const stageRect = stageRef.current.getBoundingClientRect();
+      const unprojected = unproject3dPoint({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        screenRect: rect,
+        stageRect,
+        rotXDeg: rotX,
+        rotYDeg: rotY,
+        dims: { width: 1000, height: 1000 },
+      });
+      if (unprojected) {
+        x = unprojected.x / 999;
+        y = unprojected.y / 999;
+      }
+    }
+
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
     try {
       await invoke('ios_sim_tap', { udid: iosUdid, x, y });
     } catch (err) {
@@ -1159,16 +1409,19 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     try {
       await invoke('android_launch_avd', { name });
       // Emulators take a while to boot; poll until the new emulator is online.
-      for (let i = 0; i < 45; i++) {
+      let ready = false;
+      for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         const list = await invoke<AndroidDevice[]>('android_list_devices');
         setDevices(list);
-        const emu = list.find((d) => d.serial.startsWith('emulator-') && d.state === 'device');
-        if (emu) {
+        const emu = list.find((d) => d.serial.startsWith('emulator-') && d.label === name && d.state === 'device');
+        if (emu && await invoke<boolean>('android_boot_ready', { serial: emu.serial }).catch(() => false)) {
+          ready = true;
           setSelectedSerial(emu.serial);
           break;
         }
       }
+      if (!ready) throw new Error('The emulator has not finished booting after four minutes. It may still be starting. Refresh devices to reconnect.');
     } catch (e) {
       setFrameError(String(e));
     } finally {
@@ -1226,6 +1479,20 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     setView('device');
   }
 
+  // A sidebar panel that is already mounted takes a device docked from a
+  // floating window (a closed sidebar mounts a fresh panel that takes it on mount).
+  const openDockedRef = useRef<(device: DeviceWindow) => void>(() => {});
+  openDockedRef.current = (device) => device.platform === 'android' ? openAndroidDevice(device.target) : openSim(device.target);
+  useEffect(() => {
+    if (floatingHost) return;
+    const onDock = () => {
+      const device = takeDockedDevice();
+      if (device) openDockedRef.current(device);
+    };
+    window.addEventListener(DOCK_DEVICE_EVENT, onDock);
+    return () => window.removeEventListener(DOCK_DEVICE_EVENT, onDock);
+  }, [floatingHost]);
+
   function openAvd(name: string) {
     setTab('android');
     setSelectedSerial('');
@@ -1278,6 +1545,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
                 <DeviceCard
                   key={d.serial}
                   name={d.label}
+                  information={[`Serial: ${d.serial}`, ...(avdDetails[d.label] ?? [])]}
                   detail={`This machine · ${androidStateText(d.state)}`}
                   actionLabel="Open"
                   action={() => openAndroidDevice(d.serial)}
@@ -1287,6 +1555,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
                 <DeviceCard
                   key={`avd:${name}`}
                   name={name}
+                  information={avdDetails[name] ?? []}
                   detail={bootingName === name && booting ? 'This machine · Starting…' : 'This machine · Stopped'}
                   actionLabel="Open"
                   action={() => openAvd(name)}
@@ -1308,6 +1577,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
                 <DeviceCard
                   key={d.serial}
                   name={d.label}
+                  information={[`Serial: ${d.serial}`, ...(avdDetails[d.label] ?? [])]}
                   detail={`USB · ${androidStateText(d.state)}`}
                   actionLabel="Open"
                   action={() => openAndroidDevice(d.serial)}
@@ -1361,6 +1631,9 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
   const icoText = <Ico><polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" /></Ico>;
   const icoSettings = <Ico><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></Ico>;
   const icoSun = <Ico><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></Ico>;
+  const icoMoon = <Ico><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></Ico>;
+  const appearanceTitle = deviceDark === null ? 'Switch light / dark appearance' : deviceDark ? 'Dark appearance — switch to light' : 'Light appearance — switch to dark';
+  const icoAppearance = deviceDark ? icoMoon : icoSun;
   const icoCamera = <Ico><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" /><circle cx="12" cy="13" r="3" /></Ico>;
 
   /** The device on screen, as the tools commands address it. */
@@ -1382,6 +1655,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
       const state = await invoke<{ appearance: string | null }>('device_tools_state', t);
       const dark = state.appearance !== 'dark';
       await invoke('device_set_appearance', { ...t, dark });
+      setDeviceDark(dark);
       showToast(dark ? 'Dark appearance' : 'Light appearance', 'success');
       setToolsKey((k) => k + 1);
     } catch (e) {
@@ -1458,6 +1732,33 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     }
   }
 
+  function renderViewButtons() {
+    if (isFloating) return null;
+    return <>
+      <span className="mobile-toolbar-separator" />
+      <SideBtn title="3D view" active={is3D} onClick={() => {
+        setIs3D(true); setRotX(0); setRotY(0);
+      }}><Ico size={16}><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></Ico></SideBtn>
+      <SideBtn title="Flat view" active={!is3D} onClick={() => setIs3D(false)}>
+        <Ico size={16}><rect x="5" y="3" width="14" height="18" rx="2" /></Ico>
+      </SideBtn>
+    </>;
+  }
+
+  function renderFoldButtons() {
+    const supported = tab === 'android' ? androidDisplay?.posture != null : selectedSkin === 'duo';
+    if (!supported || isFloating) return null;
+    return <>
+      <span className="mobile-toolbar-separator" />
+      <SideBtn title="Fold device" disabled={hingeBusy} active={tab === 'android' ? androidDisplay?.posture === 'closed' : hingeMotion?.angle === 0} onClick={() => void changeHinge(true)}>
+        <Ico size={16}><rect x="8" y="3" width="9" height="18" rx="2" /><path d="M6 5H4v14h2M12 8l-2 4 2 4" /></Ico>
+      </SideBtn>
+      <SideBtn title="Unfold device" disabled={hingeBusy} active={tab === 'android' ? androidDisplay?.posture === 'opened' : hingeMotion?.angle === 180} onClick={() => void changeHinge(false)}>
+        <Ico size={16}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16M8 9l-2 3 2 3M16 9l2 3-2 3" /></Ico>
+      </SideBtn>
+    </>;
+  }
+
   function renderDeviceMenu() {
     return (
       <div className="mobile-device-menu-wrap" ref={deviceMenuRef}>
@@ -1466,22 +1767,37 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
         </SideBtn>
         {deviceMenuOpen && (
           <div className="mobile-device-menu" role="menu" aria-label="Device actions">
-            {!floatingHost && (
+            {!isFloating && <>
+              {is3D && <button type="button" role="menuitem" onClick={() => {
+                setRotX(0); setRotY(0); setDeviceMenuOpen(false);
+              }}>{icoRotate}<span>Restore front view</span></button>}
+              <span className="mobile-device-menu-separator" />
+            </>}
+            {!isFloating && (
               <button type="button" role="menuitem" onClick={() => {
                 setDeviceMenuOpen(false);
-                window.dispatchEvent(new Event(FLOAT_DEVICE_EVENT));
-                toggleMobileVisible();
+                localStorage.setItem('spacron.mobile.openDeviceOnMount', '1');
+                window.dispatchEvent(new CustomEvent(FLOAT_DEVICE_EVENT, { detail: { platform: tab, target: tab === 'android' ? selectedSerial : iosUdid } }));
+                releaseMobileSidebar();
               }}>
                 Float device over chat
               </button>
             )}
             <button type="button" role="menuitem" onClick={() => {
               setDeviceMenuOpen(false);
-              if (floatingHost) onFloatingClose?.();
-              else toggleMobileVisible();
+              if (isFloating) {
+                setFloating(false);
+                onFloatingClose?.();
+                window.dispatchEvent(new CustomEvent(CLOSE_FLOAT_DEVICE_EVENT));
+              } else {
+                sessionStorage.setItem('spacron:mobile:explicitly-closed', '1');
+                closeRightSidebar();
+              }
             }}>
-              {floatingHost ? 'Close floating phone' : 'Close device panel'}
+              {isFloating ? 'Close floating phone' : 'Close device panel'}
             </button>
+            {tab === 'ios' && selectedSkin === 'duo' && <button type="button" role="menuitem" disabled={hingeBusy} onClick={() => { setDeviceMenuOpen(false); void changeIosHinge(130); }}>Book posture</button>}
+
             <span className="mobile-device-menu-separator" />
             <button type="button" role="menuitem" className="danger" disabled={!canPowerOff} onClick={() => void powerOffDevice()}>
               {icoPower}<span>Power off device</span>
@@ -1494,8 +1810,8 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
 
   function startFloatingDrag(event: React.PointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
-    if (target.closest('button, .mobile-device-shell, .mobile-ios-shell, .mobile-device-menu')) return;
-    const panel = event.currentTarget.closest<HTMLElement>('.mobile-panel-floating');
+    if (target.closest('button, .mobile-device-shell, .mobile-ios-shell, .mobile-device-menu, .mobile-resize-handle')) return;
+    const panel = panelRef.current ?? event.currentTarget.closest<HTMLElement>('.mobile-panel-floating');
     const bounds = panel?.getBoundingClientRect();
     if (!bounds) return;
     event.preventDefault();
@@ -1508,12 +1824,15 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
       top: bounds.top,
     };
     setFloatingPosition({ left: bounds.left, top: bounds.top });
+    if (!floatingSize) {
+      setFloatingSize({ width: bounds.width, height: bounds.height });
+    }
   }
 
   function moveFloatingPanel(event: React.PointerEvent<HTMLDivElement>) {
     const drag = floatingDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const panel = event.currentTarget.closest<HTMLElement>('.mobile-panel-floating');
+    const panel = panelRef.current ?? event.currentTarget.closest<HTMLElement>('.mobile-panel-floating');
     if (!panel) return;
     const left = Math.max(0, Math.min(window.innerWidth - panel.offsetWidth, drag.left + event.clientX - drag.x));
     const top = Math.max(0, Math.min(window.innerHeight - 48, drag.top + event.clientY - drag.y));
@@ -1524,6 +1843,116 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     if (floatingDragRef.current?.pointerId === event.pointerId) floatingDragRef.current = null;
   }
 
+  type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+
+  function startResize(e: React.PointerEvent, dir: ResizeDirection) {
+    e.preventDefault();
+    e.stopPropagation();
+    const panel = panelRef.current;
+    if (!panel) return;
+    const bounds = panel.getBoundingClientRect();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+
+    floatingResizeRef.current = {
+      pointerId: e.pointerId,
+      dir,
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: bounds.left,
+      startTop: bounds.top,
+      startWidth: bounds.width,
+      startHeight: bounds.height,
+    };
+    setFloatingPosition({ left: bounds.left, top: bounds.top });
+    setFloatingSize({ width: bounds.width, height: bounds.height });
+  }
+
+  function handleResizeMove(e: React.PointerEvent) {
+    const resize = floatingResizeRef.current;
+    if (!resize || resize.pointerId !== e.pointerId) return;
+
+    const dx = e.clientX - resize.startX;
+    const dy = e.clientY - resize.startY;
+    const minW = Math.min(320, window.innerWidth - 32);
+    const minH = Math.min(420, window.innerHeight - 32);
+    const maxW = window.innerWidth - 16;
+    const maxH = window.innerHeight - 16;
+
+    let newLeft = resize.startLeft;
+    let newTop = resize.startTop;
+    let newWidth = resize.startWidth;
+    let newHeight = resize.startHeight;
+
+    if (resize.dir.includes('e')) {
+      newWidth = Math.max(minW, Math.min(maxW, resize.startWidth + dx));
+    } else if (resize.dir.includes('w')) {
+      const desiredWidth = resize.startWidth - dx;
+      newWidth = Math.max(minW, Math.min(maxW, desiredWidth));
+      newLeft = resize.startLeft + (resize.startWidth - newWidth);
+    }
+
+    if (resize.dir.includes('s')) {
+      newHeight = Math.max(minH, Math.min(maxH, resize.startHeight + dy));
+    } else if (resize.dir.includes('n')) {
+      const desiredHeight = resize.startHeight - dy;
+      newHeight = Math.max(minH, Math.min(maxH, desiredHeight));
+      newTop = resize.startTop + (resize.startHeight - newHeight);
+    }
+
+    newLeft = Math.max(0, Math.min(window.innerWidth - newWidth, newLeft));
+    newTop = Math.max(0, Math.min(window.innerHeight - newHeight, newTop));
+
+    setFloatingPosition({ left: newLeft, top: newTop });
+    setFloatingSize({ width: newWidth, height: newHeight });
+  }
+
+  function handleResizeEnd(e: React.PointerEvent) {
+    if (floatingResizeRef.current?.pointerId === e.pointerId) {
+      floatingResizeRef.current = null;
+    }
+  }
+
+  async function changeIosHinge(angle: number) {
+    setHingeBusy(true);
+    setIosError(null);
+    try {
+      await invoke('ios_sim_fold', { udid: iosUdid, angle });
+      setHingeMotion((previous) => ({ angle, revision: (previous?.revision ?? 0) + 1 }));
+      setRotX(0); setRotY(0);
+    } catch (error) { setIosError(`Unable to change hinge posture: ${String(error)}. Requires a compatible serve-sim and Xcode Duo runtime.`); }
+    finally { setHingeBusy(false); }
+  }
+  async function changeHinge(folded: boolean) {
+    if (tab === 'ios') { await changeIosHinge(folded ? 0 : 180); return; }
+    setHingeBusy(true);
+    setFrameError(null);
+    try {
+      // Resolution overrides mask the AVD's real outer/inner display sizes.
+      await invoke('android_preview_resolution', { serial: selectedSerial, width: 0, height: 0 });
+      await invoke('android_fold', { serial: selectedSerial, folded });
+      const desired = folded ? 'closed' : 'opened';
+      let confirmed = false;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const state = await invoke<typeof androidDisplay>('android_display_state', { serial: selectedSerial });
+        if (state?.posture === desired) { setAndroidDisplay(state); confirmed = true; break; }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      }
+      if (!confirmed) throw new Error('The emulator has not confirmed the requested hinge posture.');
+
+      setHingeMotion((previous) => ({ angle: folded ? 0 : 180, revision: (previous?.revision ?? 0) + 1 }));
+      // Keep the current stream mounted while its chassis folds, then reconnect
+      // to the AVD's new inner/outer display dimensions.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 850));
+      setRotX(0); setRotY(0);
+      setRefreshKey((key) => key + 1);
+      stopStream();
+      setHingeRevision((key) => key + 1);
+    } catch (error) { setFrameError(String(error)); }
+    finally { setHingeBusy(false); }
+  }
+  const deviceProfile = resolveDeviceProfile(tab, tab === 'android' ? [selectedDevice?.model ?? '', ...(avdDetails[selectedDevice?.label ?? ''] ?? []).filter((line) => /^(model|manufacturer):/i.test(line))].join(' ') : '', tab === 'android' ? selectedDevice?.label ?? '' : iosSelectedSim?.name ?? '');
+  const selectedSkin = deviceProfile.appearance;
+  const detectedBrand = deviceProfile.brand;
   const deviceName = tab === 'android'
     ? selectedDevice?.label ?? (booting && bootingName ? bootingName : 'Android device')
     : iosSelectedSim?.name ?? 'iOS Simulator';
@@ -1545,8 +1974,9 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
           <Ico size={14}><path d="m15 18-6-6 6-6" /></Ico>
           <span>Devices</span>
         </button>
-        <span className="mobile-device-title">{deviceName}</span>
+        <span className="mobile-device-title" title={`Detected: ${deviceName}${selectedSkin === 'generic' ? ' ? generic chassis' : ''}`}>{deviceName}</span>
         {live && <span className="mobile-live-dot" title="Live stream" />}
+
       </div>
     );
   }
@@ -1555,41 +1985,62 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     return (
       <>
         <div className="mobile-device-body" ref={dockRef}>
-          <div className="mobile-stage" ref={stageRef}>
+          <div className="mobile-stage" data-device-skin={selectedSkin} data-device-brand={detectedBrand} data-view={effective3D ? '3d' : '2d'} ref={stageRef}>
             {booting && !selectedSerial ? (
               <EmptyState title={`Starting ${bootingName ?? 'emulator'}…`} body="Emulators take a little while to boot. The screen appears as soon as it is up." />
             ) : !selectedSerial ? (
               <EmptyState title={frameError ? 'Could not start the device' : 'No device selected'} body={frameError ?? 'Go back to Devices and open one.'} />
-            ) : androidStreaming ? (
-              <div
-                className={`mobile-device-shell${dragging ? ' dragging' : ''}`}
-                style={aspectStyle(streamState.dims)}
+            ) : streamMode === 'stream' && !streamFallback ? (
+              <MobilePhone3D
+                key={`android-stream:${selectedSerial}`}
+                profile={deviceProfile}
+                deviceModel={deviceName}
+                foldAngle={tab === 'android' ? androidDisplay?.posture === 'closed' ? 0 : androidDisplay?.posture === 'opened' ? 180 : androidDisplay?.posture === 'half_opened' ? 90 : null : hingeMotion?.angle ?? null}
+                hingeMotion={hingeMotion}
+                is3D={effective3D}
+                rotX={rotX}
+                rotY={rotY}
+                onRotate={(x, y) => { setRotX(x); setRotY(y); }}
+                onResetView={() => { setRotX(0); setRotY(0); }}
+                isDraggingDevice={dragging}
+                isIos={false}
+                aspectStyle={aspectStyle(streamState.dims || frame)}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
-                onContextMenu={(e) => e.preventDefault()}
-                aria-label="Live mobile stream"
-                title={GESTURE_HINT}
+                ariaLabel="Live mobile stream"
+                stageRef={stageRef}
+                screenContainerRef={screenRef}
               >
-                <canvas ref={streamCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
-              </div>
+                <canvas ref={streamCanvasRef} width={1} height={1} className="mobile-device-screen mobile-stream-canvas" />
+              </MobilePhone3D>
             ) : !frame ? (
               <EmptyState
                 title={frameError ? 'Cannot reach device' : 'Waiting for screen…'}
                 body={frameError ?? 'Connecting to the device.'}
               />
             ) : (
-              <div
-                className={`mobile-device-shell${dragging ? ' dragging' : ''}`}
-                style={aspectStyle(frame)}
+              <MobilePhone3D
+                profile={deviceProfile}
+                deviceModel={deviceName}
+                foldAngle={tab === 'android' ? androidDisplay?.posture === 'closed' ? 0 : androidDisplay?.posture === 'opened' ? 180 : androidDisplay?.posture === 'half_opened' ? 90 : null : hingeMotion?.angle ?? null}
+                hingeMotion={hingeMotion}
+                is3D={effective3D}
+                rotX={rotX}
+                rotY={rotY}
+                onRotate={(x, y) => { setRotX(x); setRotY(y); }}
+                onResetView={() => { setRotX(0); setRotY(0); }}
+                isDraggingDevice={dragging}
+                isIos={false}
+                aspectStyle={aspectStyle(frame)}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
-                onContextMenu={(e) => e.preventDefault()}
-                aria-label="Device screen"
-                title={GESTURE_HINT}
+                ariaLabel="Device screen"
+                stageRef={stageRef}
+                screenContainerRef={screenRef}
               >
                 <img
                   ref={screenRef}
@@ -1598,20 +2049,22 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
                   alt="Device screen"
                   draggable={false}
                 />
-              </div>
+              </MobilePhone3D>
             )}
           </div>
 
-          {!floatingHost && <div className="mobile-side-toolbar" role="toolbar" aria-label="Device controls" aria-orientation="vertical">
+          {!isFloating && <div className="mobile-side-toolbar" role="toolbar" aria-label="Device controls" aria-orientation="vertical">
             <SideBtn title="Home" onClick={() => sendKey(KEY_HOME)} disabled={!selectedSerial}>{icoHome}</SideBtn>
             <SideBtn title="Back" onClick={() => sendKey(KEY_BACK)} disabled={!selectedSerial}>{icoBack}</SideBtn>
             <SideBtn title="Recents" onClick={() => sendKey(KEY_RECENTS)} disabled={!selectedSerial}>{icoRecents}</SideBtn>
             <SideBtn title="Rotate 90° clockwise" onClick={cycleRotation} disabled={!selectedSerial}>{icoRotate}</SideBtn>
             <span className="mobile-side-sep" />
-            <SideBtn title="Switch light / dark appearance" onClick={() => void toggleAppearance()} disabled={!selectedSerial}>{icoSun}</SideBtn>
+            <SideBtn title={appearanceTitle} onClick={() => void toggleAppearance()} disabled={!selectedSerial}>{icoAppearance}</SideBtn>
             <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!selectedSerial}>{icoText}</SideBtn>
             <SideBtn title="Tools" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!selectedSerial}>{icoSettings}</SideBtn>
             <SideBtn title="Save screenshot" onClick={() => void saveScreenshot()} disabled={!selectedSerial}>{icoCamera}</SideBtn>
+            {renderViewButtons()}
+            {renderFoldButtons()}
             {renderDeviceMenu()}
             <span className="mobile-side-sep" />
             <SideBtn title="Power" onClick={() => sendKey(KEY_POWER)} disabled={!selectedSerial}>{icoPower}</SideBtn>
@@ -1619,7 +2072,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
             <SideBtn title="Volume down" onClick={() => sendKey(KEY_VOL_DOWN)} disabled={!selectedSerial}>{icoVolDown}</SideBtn>
           </div>}
 
-          {!floatingHost && showSettings && selectedSerial && (
+          {!isFloating && showSettings && selectedSerial && (
             <DeviceToolsPanel
               key={`android:${selectedSerial}:${toolsKey}`}
               platform="android"
@@ -1674,7 +2127,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
           )}
         </div>
 
-        {!floatingHost && showText && selectedSerial && (
+        {!isFloating && showText && selectedSerial && (
           <div className="mobile-input-row">
             <input
               className="mobile-text-input"
@@ -1692,7 +2145,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
           </div>
         )}
 
-        {!floatingHost && (frameError || deviceOffline || (streamMode === 'stream' && streamState.phase === 'starting')) && (
+        {!isFloating && (frameError || deviceOffline) && (
           <div className={`mobile-status${frameError ? ' error' : ''}`}>
             <span className="mobile-status-text">
               {frameError
@@ -1714,23 +2167,48 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
     return (
       <>
         <div className="mobile-device-body" ref={dockRef}>
-          <div className="mobile-stage">
+          <div className="mobile-stage" data-device-skin={selectedSkin} data-device-brand={detectedBrand} data-view={effective3D ? '3d' : '2d'} ref={stageRef}>
             {booted ? (
-              iosStreaming ? (
-                <div
-                  className="mobile-ios-shell mobile-ios-shell--stream"
-                  style={aspectStyle(mjpegState.dims)}
+              iosStreamMode === 'stream' && mjpegState.phase !== 'error' ? (
+                <MobilePhone3D
+                  key={`ios-stream:${iosUdid}`}
+                  profile={deviceProfile}
+                deviceModel={deviceName}
+                foldAngle={tab === 'android' ? androidDisplay?.posture === 'closed' ? 0 : androidDisplay?.posture === 'opened' ? 180 : androidDisplay?.posture === 'half_opened' ? 90 : null : hingeMotion?.angle ?? null}
+                hingeMotion={hingeMotion}
+                is3D={effective3D}
+                  rotX={rotX}
+                  rotY={rotY}
+                  onRotate={(x, y) => { setRotX(x); setRotY(y); }}
+                  onResetView={() => { setRotX(0); setRotY(0); }}
+                  isDraggingDevice={false}
+                  isIos={true}
+                  aspectStyle={aspectStyle(mjpegState.dims)}
                   onPointerUp={iosTap}
-                  aria-label="iOS Simulator live stream"
+                  ariaLabel="iOS Simulator live stream"
+                  stageRef={stageRef}
+                  screenContainerRef={screenRef}
                 >
-                  <canvas ref={mjpegCanvasRef} className="mobile-device-screen mobile-stream-canvas" />
-                </div>
+                  <canvas ref={mjpegCanvasRef} width={1} height={1} className="mobile-device-screen mobile-stream-canvas" />
+                </MobilePhone3D>
               ) : iosShot ? (
-                <div
-                  className="mobile-ios-shell"
-                  style={aspectStyle(iosShotDims)}
+                <MobilePhone3D
+                  profile={deviceProfile}
+                deviceModel={deviceName}
+                foldAngle={tab === 'android' ? androidDisplay?.posture === 'closed' ? 0 : androidDisplay?.posture === 'opened' ? 180 : androidDisplay?.posture === 'half_opened' ? 90 : null : hingeMotion?.angle ?? null}
+                hingeMotion={hingeMotion}
+                is3D={effective3D}
+                  rotX={rotX}
+                  rotY={rotY}
+                  onRotate={(x, y) => { setRotX(x); setRotY(y); }}
+                  onResetView={() => { setRotX(0); setRotY(0); }}
+                  isDraggingDevice={false}
+                  isIos={true}
+                  aspectStyle={aspectStyle(iosShotDims)}
                   onPointerUp={iosTap}
-                  aria-label="iOS Simulator screen"
+                  ariaLabel="iOS Simulator screen"
+                  stageRef={stageRef}
+                  screenContainerRef={screenRef}
                 >
                   <img
                     ref={iosImgRef}
@@ -1741,11 +2219,12 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
                     onLoad={(e) => {
                       const el = e.currentTarget;
                       if (el.naturalWidth && el.naturalHeight) {
-                        setIosShotDims({ width: el.naturalWidth, height: el.naturalHeight });
+                        const dims = { width: el.naturalWidth, height: el.naturalHeight };
+                        setIosShotDims(dims);
                       }
                     }}
                   />
-                </div>
+                </MobilePhone3D>
               ) : (
                 <EmptyState title="Capturing screen…" body="Waiting for the first screenshot from the simulator." />
               )
@@ -1757,14 +2236,16 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
             )}
           </div>
 
-          {!floatingHost && <div className="mobile-side-toolbar" role="toolbar" aria-label="Simulator controls" aria-orientation="vertical">
+          {!isFloating && <div className="mobile-side-toolbar" role="toolbar" aria-label="Simulator controls" aria-orientation="vertical">
             <SideBtn title="Home" onClick={() => iosButton('home')} disabled={!booted}>{icoHome}</SideBtn>
             <SideBtn title="Rotate" onClick={cycleIosOrientation} disabled={!booted}>{icoRotate}</SideBtn>
             <span className="mobile-side-sep" />
-            <SideBtn title="Switch light / dark appearance" onClick={() => void toggleAppearance()} disabled={!booted}>{icoSun}</SideBtn>
+            <SideBtn title={appearanceTitle} onClick={() => void toggleAppearance()} disabled={!booted}>{icoAppearance}</SideBtn>
             <SideBtn title="Type text" onClick={() => setShowText((v) => !v)} active={showText} disabled={!booted}>{icoText}</SideBtn>
             <SideBtn title="Tools" onClick={() => setShowSettings((v) => !v)} active={showSettings} disabled={!booted}>{icoSettings}</SideBtn>
             <SideBtn title="Save screenshot" onClick={() => void saveScreenshot()} disabled={!booted}>{icoCamera}</SideBtn>
+            {renderViewButtons()}
+            {renderFoldButtons()}
             {renderDeviceMenu()}
             <span className="mobile-side-sep" />
             <SideBtn
@@ -1776,7 +2257,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
             </SideBtn>
           </div>}
 
-          {!floatingHost && showSettings && booted && (
+          {!isFloating && showSettings && booted && (
             <DeviceToolsPanel
               key={`ios:${iosUdid}:${toolsKey}`}
               platform="ios"
@@ -1806,7 +2287,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
           )}
         </div>
 
-        {!floatingHost && showText && booted && (
+        {!isFloating && showText && booted && (
           <div className="mobile-input-row">
             <input
               className="mobile-text-input"
@@ -1824,7 +2305,7 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
           </div>
         )}
 
-        {!floatingHost && iosError && booted && (
+        {!isFloating && iosError && booted && (
           <div className="mobile-status error">
             <span className="mobile-status-text">{iosError}</span>
           </div>
@@ -1835,32 +2316,79 @@ export default function MobilePanel({ floatingHost = false, onFloatingClose }: {
 
   const panel = (
     <div
-      className={`mobile-panel${floating ? ' mobile-panel-floating' : ''}`}
-      style={floatingPosition ? { left: floatingPosition.left, top: floatingPosition.top, right: 'auto', bottom: 'auto' } : undefined}
-      onPointerDown={floating ? startFloatingDrag : undefined}
-      onPointerMove={floating ? moveFloatingPanel : undefined}
-      onPointerUp={floating ? endFloatingDrag : undefined}
-      onPointerCancel={floating ? endFloatingDrag : undefined}
+      ref={panelRef}
+      className={`mobile-panel${isFloating ? ' mobile-panel-floating' : ''}`}
+      style={
+        isFloating
+          ? {
+              left: floatingPosition ? `${floatingPosition.left}px` : `${80 + windowIndex * 36}px`,
+              top: floatingPosition ? `${floatingPosition.top}px` : `${80 + windowIndex * 28}px`,
+              right: floatingPosition ? 'auto' : undefined,
+              bottom: floatingPosition ? 'auto' : undefined,
+              width: floatingSize ? `${floatingSize.width}px` : undefined,
+              height: floatingSize ? `${floatingSize.height}px` : undefined,
+            }
+          : undefined
+      }
+      onPointerDown={isFloating ? startFloatingDrag : undefined}
+      onPointerMove={isFloating ? moveFloatingPanel : undefined}
+      onPointerUp={isFloating ? endFloatingDrag : undefined}
+      onPointerCancel={isFloating ? endFloatingDrag : undefined}
     >
-      {floating && (
+      {isFloating && (
+        <>
+          {/* 8-Direction Resize Handles: resize smoothly from any angle */}
+          <div className="mobile-resize-handle handle-n" onPointerDown={(e) => startResize(e, 'n')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+          <div className="mobile-resize-handle handle-s" onPointerDown={(e) => startResize(e, 's')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+          <div className="mobile-resize-handle handle-e" onPointerDown={(e) => startResize(e, 'e')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+          <div className="mobile-resize-handle handle-w" onPointerDown={(e) => startResize(e, 'w')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+          <div className="mobile-resize-handle handle-nw" onPointerDown={(e) => startResize(e, 'nw')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+          <div className="mobile-resize-handle handle-ne" onPointerDown={(e) => startResize(e, 'ne')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+          <div className="mobile-resize-handle handle-sw" onPointerDown={(e) => startResize(e, 'sw')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+          <div className="mobile-resize-handle handle-se" onPointerDown={(e) => startResize(e, 'se')} onPointerMove={handleResizeMove} onPointerUp={handleResizeEnd} onPointerCancel={handleResizeEnd} />
+        </>
+      )}
+      {isFloating && (
         <div className="mobile-floating-header">
-          <span>{deviceName}</span>
+          <span title={deviceName}>{deviceName}</span>
           <button type="button" onClick={() => {
-            localStorage.setItem('spacron.mobile.openDeviceOnMount', '1');
+            localStorage.removeItem('spacron.mobile.openDeviceOnMount');
+            // Open this device itself in the sidebar, not the device list.
+            const target = tab === 'android' ? selectedSerial : iosUdid;
+            if (target) {
+              localStorage.setItem(DOCK_DEVICE_KEY, JSON.stringify({ platform: tab, target } satisfies DeviceWindow));
+              window.dispatchEvent(new CustomEvent(DOCK_DEVICE_EVENT));
+            }
+            setFloating(false);
             onFloatingClose?.();
-            setRightDrawerTool('mobile');
-          }}>Go back to sidebar</button>
+            window.dispatchEvent(new CustomEvent(CLOSE_FLOAT_DEVICE_EVENT));
+            window.dispatchEvent(new CustomEvent('spacron:mobile:reset-perfect-3d'));
+            openMobileSidebar();
+          }}>Devices</button>
+          <button
+            type="button"
+            className="mobile-floating-close-btn"
+            onClick={() => {
+              setFloating(false);
+              onFloatingClose?.();
+              window.dispatchEvent(new CustomEvent(CLOSE_FLOAT_DEVICE_EVENT));
+            }}
+            title="Close floating window"
+            aria-label="Close"
+          >
+            ✕
+          </button>
         </div>
       )}
       {view === 'list' ? (
         renderDeviceList()
       ) : (
         <div className="mobile-device-view">
-          {!floatingHost && renderDeviceHeader()}
+          {!isFloating && renderDeviceHeader()}
           {tab === 'android' ? renderAndroidDevice() : renderIosDevice()}
         </div>
       )}
     </div>
   );
-  return floating ? createPortal(panel, document.body) : panel;
+  return isFloating ? createPortal(panel, document.body) : panel;
 }

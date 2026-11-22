@@ -44,6 +44,7 @@ const fake = vi.hoisted(() => {
 
 const terminal = vi.hoisted(() => ({ sessions: [] as { id: number; isRunning: boolean; agentPreset?: string | null; title?: string }[], nextPane: 50 }));
 
+vi.mock('$lib/stores/workspace', () => ({}));
 vi.mock('$lib/react/useStore', () => ({ useStore: () => ({}) }));
 vi.mock('$lib/stores/agentAccounts', () => ({
   accountsState: { subscribe: (fn: (v: unknown) => void) => { fn({ accounts: [{ provider: 'codex', id: 'work', active: true }] }); return () => {}; } },
@@ -53,6 +54,7 @@ vi.mock('$lib/stores/agentAccounts', () => ({
 vi.mock('$lib/stores/terminal', () => {
   return {
     sessions: { subscribe: (fn: (v: unknown) => void) => { fn(terminal.sessions); return () => {}; } },
+    allProjectSessions: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
     getSessionRoot: () => '/repo',
     getActiveTerminalProjectId: () => 'proj',
     createTerminalSession: vi.fn(async () => terminal.nextPane++),
@@ -66,10 +68,16 @@ vi.mock('./panes', async () => {
   const { writable } = await import('$lib/stores/storeCompat');
   const structuredChatPanes = writable<Record<number, string>>({});
   const structuredChatHistory = writable<Record<number, unknown[]>>({});
+  const newChats = new Set<number>();
   return {
     structuredChatPanes,
     structuredChatHistory,
-    markStructuredChatPane: (id: number, agent: string) => structuredChatPanes.update((p) => ({ ...p, [id]: agent })),
+    isNewStructuredChatPane: (id: number) => newChats.has(id),
+    markStructuredChatPane: (id: number, agent: string, _preset?: string, origin?: 'chat') => {
+      if (origin === 'chat') newChats.add(id);
+      else newChats.delete(id);
+      structuredChatPanes.update((p) => ({ ...p, [id]: agent }));
+    },
     forgetStructuredChatPane: (id: number) => structuredChatPanes.update((p) => { const n = { ...p }; delete n[id]; return n; }),
     setStructuredChatHistory: (id: number, items: unknown[]) => structuredChatHistory.update((h) => ({ ...h, [id]: items })),
     structuredChatPreset: () => 'codex',
@@ -87,6 +95,7 @@ import {
   __resetSessionStoreForTests,
   adoptConvertedPane,
   answerStructuredApproval,
+  claimClosedChat,
   claimConvertedSession,
   clearStructuredConversation,
   flushSessionStore,
@@ -100,10 +109,11 @@ import {
   listArchivedSessions,
   listStructuredSessions,
   replayStructuredEvents,
-  restoreConvertedInChat,
+  restoreStructuredInChat,
   resumeStructuredSessionInPane,
   rewindStructuredSession,
   recordForPane,
+  reconnectStructuredSession,
   bindStructuredAccount,
   restoreStructuredSessions,
   startSessionStore,
@@ -154,6 +164,20 @@ describe('structured session store', () => {
     expect(get(structuredSessions)[id].lifecycle).toBe('closed');
   });
 
+  it('reclaims a closed launcher chat once for the same worktree and account', () => {
+    terminal.sessions = [{ id: 42, isRunning: true, agentPreset: 'codex' }];
+    fake.set(42, { status: 'ready', items: [{ id: 'u', kind: 'user', text: 'hello' }], threadId: 'thread-42', approvals: [], models: [], model: null, effort: null, access: 'ask', contextUsed: null, contextWindow: null });
+    panes.markStructuredChatPane(42, 'codex', 'codex', 'chat');
+    const record = recordForPane(42)!;
+    expect(record.origin).toBe('chat');
+    terminal.sessions = [];
+    panes.forgetStructuredChatPane(42);
+    expect(claimClosedChat('proj', 'codex', 'codex', record.cwd, 'other')).toBeNull();
+    expect(claimClosedChat('proj', 'codex', 'codex', '/another/worktree')).toBeNull();
+    expect(claimClosedChat('proj', 'codex', 'codex', record.cwd)?.id).toBe(record.id);
+    expect(claimClosedChat('proj', 'codex', 'codex', record.cwd)).toBeNull();
+  });
+
   it('restores an open chat record into a new pane with its history, resuming the native id', async () => {
     fake.set(3, { status: 'ready', error: null, items: [{ id: 'u', kind: 'user', text: 'remember me' }], models: [], model: 'gpt', effort: 'high', access: 'ask', threadId: 'thread-3', approvals: [], contextUsed: null, contextWindow: null });
     panes.markStructuredChatPane(3, 'codex');
@@ -180,6 +204,26 @@ describe('structured session store', () => {
   });
 
   const ready = (patch: Record<string, unknown> = {}) => ({ status: 'ready', error: null, items: [], models: [], model: null, effort: null, access: 'ask', threadId: 't', approvals: [], contextUsed: null, contextWindow: null, ...patch });
+
+  it.each([false, true])('only replaces a missing Codex rollout when the journal is empty (has message: %s)', async (hasMessage) => {
+    const pane = 43;
+    const threadId = 'thread-missing';
+    fake.set(pane, ready({ threadId, items: hasMessage ? [{ id: 'u', kind: 'user', text: 'Keep this message' }] : [] }));
+    panes.markStructuredChatPane(pane, 'codex');
+    fake.provider.start.mockImplementationOnce(async (id) => {
+      fake.set(id, ready({ status: 'failed', threadId: null, error: 'no rollout found for thread id thread-missing' }));
+    });
+
+    expect(await reconnectStructuredSession(pane)).toBe(!hasMessage);
+    if (hasMessage) {
+      expect(fake.provider.start).toHaveBeenLastCalledWith(pane, '/repo', { access: 'ask', accountId: 'work', resumeId: threadId });
+      expect(recordForPane(pane)?.nativeSessionId).toBe(threadId);
+      expect(get(panes.structuredChatHistory)[pane]).toEqual([expect.objectContaining({ text: 'Keep this message' })]);
+    } else {
+      expect(fake.provider.start).toHaveBeenLastCalledWith(pane, '/repo', { access: 'ask', accountId: 'work', resumeId: null });
+      expect(recordForPane(pane)?.restoredMode).toBe('fresh');
+    }
+  });
 
   it('records the active account and journals an approval decision exactly once', async () => {
     fake.set(4, ready({ approvals: [{ requestId: 11, kind: 'command', title: 'Run?', detail: 'ls' }] }));
@@ -247,7 +291,7 @@ describe('structured session store', () => {
     startSessionStore();
     expect(claimConvertedSession('proj', 'codex', '/repo/')).toMatchObject({ id: record.id });
     expect(claimConvertedSession('proj', 'codex', '/repo')).toBeNull(); // already claimed
-    expect(await restoreConvertedInChat(70, get(structuredSessions)[record.id])).toBe(true);
+    expect(await restoreStructuredInChat(70, get(structuredSessions)[record.id])).toBe(true);
     expect(recordForPane(70)?.id).toBe(record.id);
 
     // The other path: the CLI was relaunched instead.

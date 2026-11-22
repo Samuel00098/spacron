@@ -32,6 +32,8 @@ interface DropdownProps {
   menuMaxHeight?: number;
   /** Extra class for a menu that needs context-specific styling. */
   menuClassName?: string;
+  /** Disable hover tooltips for dropdowns embedded in chat surfaces. */
+  disableTooltips?: boolean;
 }
 
 // Menu max-height (keep in sync with .dd-menu max-height in CSS).
@@ -56,6 +58,7 @@ export default function Dropdown({
   direction = 'auto',
   menuMaxHeight = MENU_MAX,
   menuClassName,
+  disableTooltips = false,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [dropUp, setDropUp] = useState(false);
@@ -242,7 +245,7 @@ export default function Dropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
-        title={selected?.tooltip}
+        title={disableTooltips ? undefined : selected?.tooltip}
         onClick={toggle}
         onKeyDown={onKeydown}
       >
@@ -289,7 +292,7 @@ export default function Dropdown({
                 className={`dd-item${option.value === value ? ' active' : ''}`}
                 disabled={option.disabled}
                 role="option"
-                title={option.tooltip}
+                title={disableTooltips ? undefined : option.tooltip}
                 aria-selected={option.value === value}
                 onClick={() => choose(option)}
               >

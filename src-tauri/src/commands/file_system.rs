@@ -585,6 +585,22 @@ pub fn read_file(path: &str, roots: &[PathBuf]) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| sanitize_io_error(e, path))
 }
 
+/// Open a project document in its system-associated application.
+#[tauri::command(async)]
+pub fn fs_open_document(path: String, app: tauri::AppHandle, state: State<AppState>) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+
+    let document = require_path(&path)?;
+    require_in_roots(&document, &project_roots(&state))?;
+    let extension = document.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+    if !document.is_file() || !["docx", "pdf"].iter().any(|kind| extension.eq_ignore_ascii_case(kind)) {
+        return Err("Choose a DOCX or PDF file in an open project.".to_string());
+    }
+
+    #[allow(deprecated)]
+    app.shell().open(document.to_string_lossy().into_owned(), None).map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
 pub fn fs_read_binary(path: String, state: State<AppState>) -> Result<Vec<u8>, String> {
     read_binary(&path, &project_roots(&state))

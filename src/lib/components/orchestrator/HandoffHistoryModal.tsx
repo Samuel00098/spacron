@@ -1,3 +1,5 @@
+import { agentLaunchView } from '$lib/services/terminal-chat';
+import { get } from '$lib/stores/storeCompat';
 /**
  * Hand a past session's context to another agent. Shows exactly what will be
  * sent (editable), lets you pick the agent and whether it opens as a chat or a
@@ -38,7 +40,7 @@ export default function HandoffHistoryModal({ row, onClose }: { row: HistoryRow;
   const [snapshot, setSnapshot] = useState<HistoryHandoffSnapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [target, setTarget] = useState('');
-  const [mode, setMode] = useState<'chat' | 'terminal'>('chat');
+  const [mode, setMode] = useState<'chat' | 'terminal'>(() => get(agentLaunchView));
   const [text, setText] = useState('');
   const [edited, setEdited] = useState(false);
   const [sending, setSending] = useState(false);

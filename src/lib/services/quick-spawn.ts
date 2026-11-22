@@ -6,13 +6,13 @@
 
 import { get } from '$lib/stores/storeCompat';
 import { applyLaunchView, launchViewFor, readTerminalTranscript, resumeArgs, transcriptAgentFor, type AgentLaunchView } from '$lib/services/terminal-chat';
-import { activeProject } from '$lib/stores/workspace';
+import { activeProject, projects } from '$lib/stores/workspace';
 import { showToast } from '$lib/stores/notification';
 import { layoutSnapshot } from '$lib/stores/layoutControl';
 import { sessions, spawnAgentPreset, manualPromptTargetId, waitForAgentReady, sendPromptToSession, createTerminalSession, updateSessionTitle, setActiveSession } from '$lib/stores/terminal';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { markStructuredChatPane, setStructuredChatHistory, structuredChatAgentFor, type StructuredChatAgent } from '$lib/services/structured-chat/panes';
-import { bindStructuredAccount, renameStructuredSession } from '$lib/services/structured-chat/session-store';
+import { bindStructuredAccount, claimClosedChat, releaseStructuredSessionClaim, renameStructuredSession, restoreStructuredInChat } from '$lib/services/structured-chat/session-store';
 import { getStructuredChat, sendStructuredChat, setStructuredChatEffort, setStructuredChatModel, startStructuredChat, structuredChatProvider, subscribeStructuredChat } from '$lib/services/structured-chat/registry';
 import { structuredAccessFor } from '$lib/services/structured-chat/defaults';
 import { getAgentProviderLaunchOptions } from '$lib/services/chat-provider-adapters';
@@ -37,6 +37,8 @@ function enrichPromptWithProjectInstructions(rawPrompt: string | undefined, proj
 }
 
 export interface QuickLaunchOptions {
+  /** Explicit owner when launching from a background project. */
+  projectId?: string;
   /** Provider model id; null/undefined keeps the CLI's configured model. */
   model?: string | null;
   reasoningEffort?: ChatReasoningEffort;
@@ -59,7 +61,7 @@ export interface QuickLaunchOptions {
 }
 
 export async function quickSpawnAgent(command: string, options: QuickLaunchOptions = {}): Promise<number | null> {
-  const project = get(activeProject);
+  const project = options.projectId ? get(projects).get(options.projectId) : get(activeProject);
   if (!project) {
     showToast('Open a project first to spawn an agent', 'warning');
     return null;
@@ -158,16 +160,29 @@ async function openStructuredChat(
   // host belongs in the agent's room rather than the user's terminal mosaic.
   // Marking it as an agent also lets AppShell create the same `agent:<id>` room
   // used by CLI launches, so the structured view overtakes that room in place.
+  const previous = options.resumeId || options.prompt?.trim()
+    ? null
+    : claimClosedChat(projectId, agent, command, cwd, options.accountId);
   const id = await createTerminalSession(cwd, undefined, projectId, {
     assignPane: false,
     agentPreset: command,
     isDev: get(layoutSnapshot).ambient === 'development',
+  }).catch((error) => {
+    if (previous) releaseStructuredSessionClaim(previous.id);
+    throw error;
   });
   if (id === null) {
+    if (previous) releaseStructuredSessionClaim(previous.id);
     showToast("Couldn't open the chat. See the console for details.", 'warning');
     return null;
   }
-  markStructuredChatPane(id, agent, command);
+  if (previous) {
+    setActiveSession(id);
+    useLayoutStore.getState().showTerminal();
+    await restoreStructuredInChat(id, previous);
+    return id;
+  }
+  markStructuredChatPane(id, agent, command, 'chat');
   if (options.accountId) bindStructuredAccount(id, options.accountId, options.accountLabel);
   updateSessionTitle(id, options.title?.trim() || `${structuredChatProvider(agent)?.label ?? 'Agent'} Chat`);
   // A resumed conversation is the CLI's own: its provider does not replay it,

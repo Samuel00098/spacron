@@ -100,11 +100,12 @@ pub struct ActiveGrpcStream {
     /// `None` until the first lookup completes; a failed lookup is retried
     /// rather than cached, since it is usually a transient adb hiccup.
     device_size: Mutex<Option<(u32, u32)>>,
+    display_port: std::sync::atomic::AtomicU32,
 }
 
 impl ActiveGrpcStream {
     pub fn new(serial: String, endpoint: GrpcEndpoint) -> Self {
-        Self { serial, stop: AtomicBool::new(false), endpoint, device_size: Mutex::new(None) }
+        Self { serial, stop: AtomicBool::new(false), endpoint, device_size: Mutex::new(None), display_port: std::sync::atomic::AtomicU32::new(0) }
     }
 }
 
@@ -447,7 +448,18 @@ pub async fn run_grpc_stream(
     // A square box: the emulator fits the device's aspect inside it and never
     // exceeds either side, so one number controls the long edge whatever the
     // orientation is.
-    let request = frame_message(&encode_image_format(IMG_FORMAT_PNG, max_side, max_side));
+    if let Ok(display) = crate::commands::mobile::android_display_state(active.serial.clone()).await {
+        // screencap takes the 64-bit SurfaceFlinger physical ID, whereas this
+        // API (and its touch events) takes the emulator's small display port.
+        active.display_port.store(display.port, std::sync::atomic::Ordering::Relaxed);
+        if display.width > 0 && display.height > 0 {
+            *active.device_size.lock().unwrap() = Some((display.width, display.height));
+        }
+    }
+    let mut format = encode_image_format(IMG_FORMAT_PNG, max_side, max_side);
+    let port = active.display_port.load(std::sync::atomic::Ordering::Relaxed);
+    if port != 0 { format.push(0x28); put_varint(&mut format, port as u64); }
+    let request = frame_message(&format);
 
     let url = format!(
         "http://127.0.0.1:{}/android.emulation.control.EmulatorController/streamScreenshot",
@@ -761,7 +773,9 @@ pub async fn send_touch(
     let Some(active) = stream_for_serial(serial) else { return false };
     let Some(device) = device_size(&active).await else { return false };
     let (dx, dy) = scale_to_device(x, y, (frame_width, frame_height), device);
-    let payload = encode_touch_event(dx, dy, if touching { 1 } else { 0 }, 0);
+    let mut payload = encode_touch_event(dx, dy, if touching { 1 } else { 0 }, 0);
+    let port = active.display_port.load(std::sync::atomic::Ordering::Relaxed);
+    if port != 0 { payload.push(0x10); put_varint(&mut payload, port as u64); }
     handled(unary_call(&active.endpoint, "sendTouch", payload).await)
 }
 

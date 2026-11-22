@@ -7,7 +7,7 @@ import {
 } from '$lib/services/project-worktrees';
 
 /**
- * Which worktree each project is "in" — Orca's selected workspace row.
+ * Which worktree each project is "in" â€” Orca's selected workspace row.
  *
  * New agents, terminals and chat threads for a project start in its active
  * worktree. No entry (or the main checkout) means the project root, which is
@@ -59,12 +59,13 @@ export interface WorktreeIssue {
 /** The Create worktree dialog's target, or null when it is closed. */
 export const createWorktreeRequest = writable<{
   projectId: string;
+  project?: { id: string; name: string; root_path: string };
   parent?: string | null;
   issue?: WorktreeIssue;
 } | null>(null);
 
-export function openCreateWorktree(projectId: string, parent?: string | null, issue?: WorktreeIssue) {
-  createWorktreeRequest.set({ projectId, parent: parent ?? null, ...(issue ? { issue } : {}) });
+export function openCreateWorktree(projectId: string, parent?: string | null, issue?: WorktreeIssue, project?: { id: string; name: string; root_path: string }) {
+  createWorktreeRequest.set({ projectId, project, parent: parent ?? null, ...(issue ? { issue } : {}) });
 }
 
 export function closeCreateWorktree() {
@@ -142,7 +143,7 @@ export function setActiveWorktree(projectId: string, path: string | null) {
  * Where new work for this project should start: the active worktree's folder,
  * or null for the project root.
  *
- * Before the list has loaded, the saved choice is trusted — it was valid when
+ * Before the list has loaded, the saved choice is trusted â€” it was valid when
  * it was made, and the first refresh clears it if the worktree has since gone.
  */
 export function getActiveWorktreePath(projectId: string | null | undefined): string | null {

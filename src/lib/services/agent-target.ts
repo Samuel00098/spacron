@@ -111,6 +111,10 @@ export async function dispatchPromptToAgent(
   promptText: string,
   options?: DispatchPromptOptions
 ): Promise<boolean> {
+  // Never redirect visual context after its chosen destination closes.
+  if (!getActiveAgentTargets().some((candidate) => candidate.sessionId === target.sessionId)) {
+    throw new Error('The selected agent is no longer available. Choose another agent.');
+  }
   const text = promptText.trim();
   const dataUrl = options?.imageDataUrl;
   const imageName = options?.imageName || `snapshot-${Date.now()}.png`;
@@ -132,7 +136,8 @@ export async function dispatchPromptToAgent(
   }
 
   // Activate session
-  activeSessionId.set(target.sessionId);
+  if (target.isDev) devActiveSessionId.set(target.sessionId);
+  else activeSessionId.set(target.sessionId);
 
   if (target.isChatView) {
     // Deliver to Chat UI (TerminalChatView)

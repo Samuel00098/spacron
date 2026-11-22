@@ -21,12 +21,14 @@ import { useStore } from '$lib/react/useStore';
 import {
   createTerminalSession,
   getActiveTerminalProjectId,
+  allProjectSessions,
   getSessionRoot,
   sessions,
   updateSessionTitle,
 } from '$lib/stores/terminal';
 import {
   markStructuredChatPane,
+  isNewStructuredChatPane,
   setStructuredChatHistory,
   structuredChatHistory,
   structuredChatPanes,
@@ -341,8 +343,8 @@ function attach(paneId: number, agent: StructuredChatAgent): void {
       accountId: accountFor(preset),
       accountLabel: activeAccount(get(accountsState), agent)?.label ?? null,
       cwd: getSessionRoot(paneId) ?? '.',
-      projectId: getActiveTerminalProjectId(),
-      origin: info?.agentPreset ? 'converted' : 'chat',
+      projectId: get(allProjectSessions).find((session) => session.id === paneId)?.projectId ?? getActiveTerminalProjectId(),
+      origin: info?.agentPreset && !isNewStructuredChatPane(paneId) ? 'converted' : 'chat',
       view: 'chat',
       lifecycle: 'starting',
       model: null,
@@ -500,19 +502,28 @@ async function openRecordInPane(paneId: number, record: StructuredSessionRecord)
   const provider = structuredChatProvider(record.provider);
   if (!provider) throw new Error(`No structured chat provider for ${record.provider}`);
   const access = record.access ?? structuredAccessFor(record.preset ?? record.provider);
-  const journal = journalFor(record);
-  setStructuredChatHistory(paneId, journal.snapshot().items);
-  await provider.start(paneId, record.cwd, { resumeId: record.nativeSessionId, access, accountId: record.accountId ?? 'default' });
+  const history = journalFor(record).snapshot().items;
+  setStructuredChatHistory(paneId, history);
+  const options = { access, accountId: record.accountId ?? 'default' };
+  let resumeId = record.nativeSessionId;
+  await provider.start(paneId, record.cwd, { ...options, resumeId });
   let state = provider.get(paneId);
-  if (record.nativeSessionId && (!state || state.status === 'failed')) {
-    // Keep the failed resume visible. A new conversation would lose native context.
+
+  // Codex allocates an ID before it writes any conversation to disk.
+  // A missing rollout is safe to recover only when this chat has no messages.
+  if (record.provider === 'codex' && resumeId && !record.turnId && history.length === 0 &&
+      state?.status === 'failed' && /no rollout found for thread id/i.test(state.error ?? '')) {
+    await provider.close(paneId);
+    resumeId = null;
+    patchRecord(record.id, { nativeSessionId: null });
+    await provider.start(paneId, record.cwd, { ...options, resumeId });
+    state = provider.get(paneId);
+  }
+  if (!state || state.status === 'failed' || state.status === 'closed') {
     patchRecord(record.id, { lifecycle: 'failed' });
     return;
-  } else if (record.nativeSessionId && state?.status !== 'failed') {
-    patchRecord(record.id, { restoredMode: 'native' });
-  } else {
-    patchRecord(record.id, { restoredMode: 'fresh' });
   }
+  patchRecord(record.id, { restoredMode: resumeId ? 'native' : history.length ? 'journal-only' : 'fresh' });
   if (state?.status === 'ready' || state?.status === 'working') {
     if (record.model && state.model !== record.model) provider.setModel(paneId, record.model);
     if (record.effort && state.effort !== record.effort) provider.setEffort(paneId, record.effort);
@@ -940,6 +951,32 @@ export async function rewindStructuredSession(
   return nativeOk;
 }
 
+/** Claim the latest closed chat in this project, worktree, and provider account. */
+export function claimClosedChat(projectId: string, provider: StructuredChatAgent, preset: string, cwd: string, accountId?: string | null): StructuredSessionRecord | null {
+  startSessionStore();
+  const normalize = (path: string) => {
+    const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+    return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+  };
+  const account = accountId ?? accountFor(preset) ?? 'default';
+  const linked = new Set(paneRecords.values());
+  const record = Object.values(get(structuredSessions))
+    .filter((candidate) =>
+      candidate.lifecycle === 'closed' && candidate.view === 'chat' && !candidate.archived &&
+      candidate.projectId === projectId && candidate.provider === provider && candidate.preset === preset &&
+      (candidate.accountId ?? 'default') === account && normalize(candidate.cwd) === normalize(cwd) &&
+      (candidate.nativeSessionId || candidate.lastSeq > 0) &&
+      !linked.has(candidate.id) && !restoring.has(candidate.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  if (!record) return null;
+  restoring.add(record.id);
+  return record;
+}
+
+export function releaseStructuredSessionClaim(recordId: string): void {
+  restoring.delete(recordId);
+}
+
 /**
  * Cold restore of a CLI agent pane that had been switched into chat (or back).
  * Returns the newest open record for that agent and folder, claimed so a
@@ -965,12 +1002,13 @@ export function claimConvertedSession(projectId: string, preset: string, cwd: st
   return match;
 }
 
-/** Bring a claimed converted record back as a chat in an idle agent pane. */
-export async function restoreConvertedInChat(paneId: number, record: StructuredSessionRecord): Promise<boolean> {
+/** Reconnect a claimed conversation in an idle agent pane. */
+export async function restoreStructuredInChat(paneId: number, record: StructuredSessionRecord): Promise<boolean> {
   startSessionStore();
   try {
     pendingLinks.set(paneId, record.id);
     markStructuredChatPane(paneId, record.provider, record.preset ?? undefined);
+    if (record.title) updateSessionTitle(paneId, record.title);
     await openRecordInPane(paneId, record);
     await restoreRecordSubagents(paneId, record);
     return structuredChatProvider(record.provider)?.get(paneId)?.status !== 'failed';

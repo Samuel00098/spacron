@@ -53,6 +53,10 @@ vi.mock('$lib/stores/terminal', () => ({
   setActiveSession: (...args: any[]) => mockSetActiveSession(...args),
 }));
 
+vi.mock('$lib/services/reveal-agent-chat', () => ({
+  revealAgentChat: (...args: any[]) => mockSetActiveSession(...args),
+}));
+
 vi.mock('$lib/services/nudge', () => ({
   playNudge: (...args: any[]) => mockPlayNudge(...args),
 }));

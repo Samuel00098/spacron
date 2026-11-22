@@ -725,7 +725,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   // The file open in the side viewer: `label` is the path as the conversation
   // names it, `path` the absolute file under this chat's root.
   const [viewerFile, setViewerFile] = useState<{ path: string; label: string } | null>(null);
-  const viewerRoot = project?.root_path ?? '';
+  const viewerRoot = thread?.worktree?.path ?? project?.root_path ?? '';
   const openFileInViewer = useCallback((path: string) => {
     if (!viewerRoot && !/^(?:[a-zA-Z]:)?[\\/]/.test(path)) {
       showToast('No folder to open this file from.', 'warning', 3000);
@@ -1912,7 +1912,22 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   if (!project) return null;
 
   return (
-    <section className={`chat-mode-panel${standalone ? ' standalone-chat-panel' : ''}${messages.length === 0 ? ' empty' : ''}${viewerFile ? ' has-file-viewer' : ''}`} aria-label="Chat">
+    <section
+      className={`chat-mode-panel${standalone ? ' standalone-chat-panel' : ''}${messages.length === 0 ? ' empty' : ''}${viewerFile ? ' has-file-viewer' : ''}`}
+      aria-label="Chat"
+      onMouseOver={(event) => {
+        const target = event.target instanceof Element ? event.target.closest('[title]') as HTMLElement | null : null;
+        if (!target || !event.currentTarget.contains(target)) return;
+        target.dataset.chatTooltipTitle ??= target.getAttribute('title') ?? '';
+        target.removeAttribute('title');
+      }}
+      onMouseOut={(event) => {
+        const target = event.target instanceof Element ? event.target.closest('[data-chat-tooltip-title]') as HTMLElement | null : null;
+        if (!target || target.contains(event.relatedTarget as Node | null)) return;
+        target.setAttribute('title', target.dataset.chatTooltipTitle ?? '');
+        delete target.dataset.chatTooltipTitle;
+      }}
+    >
       {viewerFile && (
         <Suspense fallback={null}>
           <ChatFileViewer
@@ -2624,6 +2639,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                   ariaLabel="Agent access"
                   disabled={!thread && !standalone}
                   boundarySelector=".chat-mode-panel"
+                  disableTooltips
                 />
               </div>
               <div className="chat-mode-work-dropdown">
@@ -2633,7 +2649,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                 ]} onChange={(value) => {
                   const target = ensureConversationThread();
                   if (target) updateChatThread(target.id, { workMode: value === 'plan' ? 'plan' : 'build', updatedAt: Date.now() });
-                }} ariaLabel="Chat work mode" disabled={!thread && !standalone} boundarySelector=".chat-mode-panel" />
+                }} ariaLabel="Chat work mode" disabled={!thread && !standalone} boundarySelector=".chat-mode-panel" disableTooltips />
               </div>
               {reasoningLevels.length > 0 && (
                 <div className="chat-mode-reasoning-dropdown">

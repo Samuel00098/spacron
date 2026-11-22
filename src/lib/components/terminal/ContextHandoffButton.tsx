@@ -1,3 +1,5 @@
+import { agentLaunchView } from '$lib/services/terminal-chat';
+import { get } from '$lib/stores/storeCompat';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getAgentRoster } from '$lib/stores/runs';
@@ -41,7 +43,7 @@ interface Props {
 export default function ContextHandoffButton({ sessionId, sourceAgentName, sourcePreset, chatActive }: Props) {
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState<string | null>(null);
-  const [mode, setMode] = useState<HandoffMode>(chatActive ? 'chat' : 'terminal');
+  const [mode, setMode] = useState<HandoffMode>(() => get(agentLaunchView));
   const record = usePaneHandoff(sessionId);
   const busy = isHandoffInProgress(sessionId);
   // Some chat providers resolve their send only after the whole reply.

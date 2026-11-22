@@ -10,6 +10,7 @@
  * chrome added later lives in `StructuredChatExtras.tsx`. Anything added here
  * alone never runs — port it to the live view before calling it done.
  */
+import { reconnectStructuredSession } from '$lib/services/structured-chat/session-store';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
@@ -28,13 +29,11 @@ import {
   setStructuredChatEffort,
   setStructuredChatModel,
   spawnStructuredSubagent,
-  startStructuredChat,
   steerStructuredChat,
   subscribeStructuredChat,
   subscribeStructuredSubagents,
 } from '$lib/services/structured-chat/registry';
 import { structuredChatProvider } from '$lib/services/structured-chat/registry';
-import { structuredAccessFor } from '$lib/services/structured-chat/defaults';
 import { useStructuredChatHistory, useStructuredChatPane } from '$lib/services/structured-chat/panes';
 import { runStructuredCommand, STRUCTURED_COMMANDS, STRUCTURED_PASSTHROUGH } from '$lib/services/structured-chat/commands';
 import { forkStructuredSession, rewindStructuredSession } from '$lib/services/structured-chat/session-store';
@@ -423,10 +422,6 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
   const [uncertainSend, setUncertainSend] = useState<string | null>(null);
   const inflightSendKey = `spacron_structured_inflight_${sessionId}`;
   const restoredDraft = useRef(false);
-
-  useEffect(() => {
-    if (agent && !getStructuredChat(agent, sessionId)) void startStructuredChat(agent, sessionId, cwd, { access: structuredAccessFor(agent) });
-  }, [agent, sessionId, cwd]);
 
   // The conversation from before the chat took over (the terminal CLI's
   // transcript), then the live one.
@@ -1020,6 +1015,18 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
       <div
         ref={viewRef}
         className="terminal-chat-view structured-chat-view"
+        onMouseOver={(event) => {
+          const target = event.target instanceof Element ? event.target.closest('[title]') as HTMLElement | null : null;
+          if (!target || !event.currentTarget.contains(target)) return;
+          target.dataset.chatTooltipTitle ??= target.getAttribute('title') ?? '';
+          target.removeAttribute('title');
+        }}
+        onMouseOut={(event) => {
+          const target = event.target instanceof Element ? event.target.closest('[data-chat-tooltip-title]') as HTMLElement | null : null;
+          if (!target || target.contains(event.relatedTarget as Node | null)) return;
+          target.setAttribute('title', target.dataset.chatTooltipTitle ?? '');
+          delete target.dataset.chatTooltipTitle;
+        }}
         data-timestamps={timestamps ? '' : undefined}
         data-match-terminal={appearance.matchTerminal ? '' : undefined}
         data-contrast={appearance.contrast !== 100 ? '' : undefined}
@@ -1327,7 +1334,7 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
             {state?.status === 'failed' && (
               <div className="terminal-chat-error" role="alert">
                 <span>{state.error ?? `${label} stopped.`}</span>
-                <button type="button" onClick={() => agent && void startStructuredChat(agent, sessionId, cwd, { access: structuredAccessFor(agent) })}>Restart</button>
+                <button type="button" onClick={() => void reconnectStructuredSession(sessionId)}>Reconnect</button>
               </div>
             )}
           </div>

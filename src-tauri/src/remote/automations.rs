@@ -47,6 +47,10 @@ pub(super) struct BoxAutomation {
     /// Upcoming run times, epoch ms, ascending.
     #[serde(default)]
     pub occurrences: Vec<u64>,
+    /// The project folder it runs in (inside the box folder). `None` is the
+    /// box folder itself, for automations saved before folders could be opened.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -121,24 +125,56 @@ fn update_runs(workspace: &Path, f: impl FnOnce(&mut Vec<BoxRun>)) {
 
 // ── invoke handlers (called from the server's dispatch) ─────────────────────
 
-/// `box_automations_sync`: replace the box's automation list.
+/// The folder an automation runs in: its own project folder when that is still
+/// a folder inside the box folder, else the box folder.
+fn run_dir(workspace: &Path, cwd: Option<&str>) -> PathBuf {
+    cwd.and_then(|c| std::fs::canonicalize(c).ok())
+        .map(crate::commands::clean_path_buf)
+        .filter(|c| c.starts_with(workspace) && c.is_dir())
+        .unwrap_or_else(|| workspace.to_path_buf())
+}
+
+/// `box_automations_sync`: replace one project folder's automations. Each
+/// desktop sync covers only the project it has open (`projectRoot`), so the
+/// other folders' automations on this box are kept as they are.
 pub(super) fn sync(args: Value, workspace: &Path) -> Result<Value, String> {
-    let config: BoxConfig = serde_json::from_value(args).map_err(|e| format!("Invalid automation sync: {e}"))?;
-    for a in &config.automations {
+    let project = args.get("projectRoot").and_then(|v| v.as_str()).map(|p| run_dir(workspace, Some(p)));
+    let incoming: BoxConfig = serde_json::from_value(args).map_err(|e| format!("Invalid automation sync: {e}"))?;
+    for a in &incoming.automations {
         if a.id.trim().is_empty() || a.prompt.trim().is_empty() {
             return Err("Every automation needs an id and a prompt.".into());
         }
         agent_command(&a.agent, &a.prompt, a.model.as_deref())?;
     }
+    let project = project.unwrap_or_else(|| workspace.to_path_buf());
     let _guard = file_lock().lock();
-    write_json(&dir(workspace).join("box.json"), &config)?;
-    Ok(json!({ "ok": true, "count": config.automations.len() }))
+    let path = dir(workspace).join("box.json");
+    let existing: BoxConfig = read_json(&path);
+    let mut automations: Vec<BoxAutomation> = existing
+        .automations
+        .into_iter()
+        .filter(|a| run_dir(workspace, a.cwd.as_deref()) != project)
+        .collect();
+    let count = incoming.automations.len();
+    automations.extend(incoming.automations.into_iter().map(|mut a| {
+        a.cwd = Some(project.to_string_lossy().to_string());
+        a
+    }));
+    write_json(&path, &BoxConfig { automations, enabled: incoming.enabled, catch_up_minutes: incoming.catch_up_minutes })?;
+    Ok(json!({ "ok": true, "count": count }))
 }
 
-/// `box_automations_state`: run records, newest first.
+/// `box_automations_state`: run records, newest first, each with the absolute
+/// `logPath` so a desktop with a sub-folder open can still read it.
 pub(super) fn state(workspace: &Path) -> Result<Value, String> {
     let runs: Vec<BoxRun> = read_json(&dir(workspace).join("runs.json"));
-    serde_json::to_value(runs).map_err(|e| e.to_string())
+    let mut value = serde_json::to_value(runs).map_err(|e| e.to_string())?;
+    for run in value.as_array_mut().into_iter().flatten() {
+        if let Some(log) = run["log"].as_str() {
+            run["logPath"] = json!(workspace.join(log).to_string_lossy());
+        }
+    }
+    Ok(value)
 }
 
 /// `box_automation_run_now`: start one automation immediately.
@@ -282,7 +318,7 @@ async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result
         c
     };
     command
-        .current_dir(workspace)
+        .current_dir(run_dir(workspace, a.cwd.as_deref()))
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
@@ -329,6 +365,23 @@ mod tests {
         sync(good, dir.path()).unwrap();
         let saved: BoxConfig = read_json(&super::dir(dir.path()).join("box.json"));
         assert_eq!(saved.automations[0].occurrences, vec![1]);
+    }
+
+    #[test]
+    fn syncing_one_folder_keeps_the_other_folders_automations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = crate::commands::clean_path_buf(std::fs::canonicalize(tmp.path()).unwrap());
+        for name in ["app", "api"] { std::fs::create_dir(ws.join(name)).unwrap(); }
+        let one = |id: &str, folder: &str| json!({ "projectRoot": ws.join(folder).to_string_lossy(),
+            "automations": [{ "id": id, "name": id, "prompt": "p", "agent": "claude", "enabled": true }] });
+        sync(one("a", "app"), &ws).unwrap();
+        sync(one("b", "api"), &ws).unwrap();
+        sync(one("a2", "app"), &ws).unwrap();
+        let saved: BoxConfig = read_json(&super::dir(&ws).join("box.json"));
+        let mut ids: Vec<_> = saved.automations.iter().map(|a| a.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, ["a2", "b"]);
+        assert!(saved.automations.iter().all(|a| a.cwd.as_deref().is_some_and(|c| c.starts_with(&*ws.to_string_lossy()))));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import EditorTabs from './EditorTabs.tsx';
 import ImageViewer from './ImageViewer.tsx';
 import MediaViewer from './MediaViewer.tsx';
@@ -7,6 +7,8 @@ import RichMarkdownEditor from './RichMarkdownEditor.tsx';
 import { useEditorStore } from '$lib/stores/zustand/editor';
 import CodeEditor from './CodeEditor.tsx';
 import './EditorPanel.css';
+
+const DocumentViewer = lazy(() => import('./DocumentViewer'));
 
 const EDITOR_LANGUAGES = [
   ['plaintext', 'Plain text'], ['shell', 'Bash'], ['c', 'C'], ['cpp', 'C++'],
@@ -182,7 +184,11 @@ export default function EditorPanel() {
       </div>
 
       <div className="editor-workspace-area">
-        {file.kind === 'image' && file.imageSrc ? (
+        {file.kind === 'pdf' || file.kind === 'docx' ? (
+          <Suspense fallback={<p role="status">Loading document viewer...</p>}>
+            <DocumentViewer key={file.path} kind={file.kind} data={file.documentData} path={file.path} />
+          </Suspense>
+        ) : file.kind === 'image' && file.imageSrc ? (
           <ImageViewer src={file.imageSrc} path={file.path} mimeType={file.mimeType} size={file.size} />
         ) : file.kind === 'audio' || file.kind === 'video' || isVideoPath(file.path) || isAudioPath(file.path) ? (
           // Decided by the file name too, so a media tab never lands in the text

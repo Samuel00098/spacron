@@ -14,8 +14,8 @@ the Rust proxy injects (`src-tauri/src/preview/mod.rs`, applied in
 
 | message | injected by | pages |
 | --- | --- | --- |
-| `forge-preview:console` | `INSPECTOR_SNIPPET` | local dev |
-| `forge-inspector:selected` | `INSPECTOR_SNIPPET` | local dev |
+| `forge-preview:console` | `INSPECTOR_SNIPPET` | all proxied HTML |
+| `forge-inspector:selected` | `INSPECTOR_SNIPPET` | all proxied HTML |
 | `forge-preview:scroll` / `:scroll-ready` | `SCROLL_SNIPPET` | all |
 | `forge-preview:media` / `:media-ready` | `MEDIA_SNIPPET` | all |
 | `forge-preview:location` | `NAV_SNIPPET` (external), `LOCAL_LOCATION_SNIPPET` (local dev) | all |

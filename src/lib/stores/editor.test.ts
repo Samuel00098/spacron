@@ -178,3 +178,18 @@ describe('media files', () => {
     expect(invoke).toHaveBeenLastCalledWith('fs_read_binary', { path: 'C:\proj\song.mp3' });
   });
 });
+
+describe('document previews', () => {
+  beforeEach(() => { resetEditorSession(); vi.mocked(invoke).mockReset(); });
+  it.each(['pdf', 'docx'])('loads %s as read-only binary instead of text', async (extension) => {
+    vi.mocked(invoke).mockResolvedValueOnce([1, 2, 3]);
+    const path = `C:/project/document.${extension}`;
+    await openFile(path);
+    const file = get(fileCache).get(path);
+    expect(file?.kind).toBe(extension);
+    expect(file?.documentData).toEqual(new Uint8Array([1, 2, 3]));
+    expect(file?.isDirty).toBe(false);
+    expect(invoke).toHaveBeenCalledWith('fs_read_binary', { path });
+    expect(invoke).not.toHaveBeenCalledWith('fs_read_file', expect.anything());
+  });
+});

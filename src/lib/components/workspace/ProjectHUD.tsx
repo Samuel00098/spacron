@@ -406,7 +406,7 @@ export default function ProjectHUD() {
     });
   }
 
-  // ── Thread drag & drop reorder ─────────────────────────────────────────────
+  // â”€â”€ Thread drag & drop reorder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Pointer-based (HTML5 DnD is unreliable inside Tauri). Press on a thread row,
   // drag past the arm threshold, release on another row to move before it.
   const [dragThreadId, setDragThreadId] = useState<string | null>(null);
@@ -421,7 +421,7 @@ export default function ProjectHUD() {
     if (!id || id === draggedId) return null;
     const r = rowEl.getBoundingClientRect();
     if (clientY < r.top + r.height / 2) return id; // drop before this row
-    return null; // drop after — handled by the next row or end of list
+    return null; // drop after â€” handled by the next row or end of list
   }
 
   function commitThreadDrop(draggedId: string, beforeId: string | null) {
@@ -497,7 +497,7 @@ export default function ProjectHUD() {
         const recents = await invoke<KnownProject[]>('workspace_get_recent');
         if (!cancelled) setKnownProjects((prev) => mergeKnownProjects(prev, recents));
       } catch {
-        /* backend unavailable — the active workspace's projects still resolve */
+        /* backend unavailable â€” the active workspace's projects still resolve */
       }
     })();
     return () => {
@@ -930,7 +930,7 @@ export default function ProjectHUD() {
     const previewIsRunning = projectRooms.includes('preview');
     const editorIsRunning = projectRooms.includes('editor');
     const deepSeekIsRunning = projectRooms.includes('deepseek');
-    // Rooms that already have a row of their own in the list — either a bespoke
+    // Rooms that already have a row of their own in the list â€” either a bespoke
     // one above, or one per session below. The terminal room is the shells'
     // container: while it holds a session, that session IS the row, and a
     // separate "Terminal" entry beside it just reads as a second terminal. With
@@ -1046,7 +1046,7 @@ export default function ProjectHUD() {
     };
     type ThreadList = ReturnType<typeof buildThreadList>;
     // Worktree grouping: every agent, terminal and thread is listed under the
-    // worktree it works in; tools (editor, preview…) stay at the project level.
+    // worktree it works in; tools (editor, previewâ€¦) stay at the project level.
     // Every project has its master row, even before git has answered (or when
     // it is not a git repo), so its agents and terminals always list under it.
     const loadedWorktreeRows = projectId ? allWorktreeLists[projectId] ?? [] : [];
@@ -1156,7 +1156,7 @@ export default function ProjectHUD() {
     };
 
     // The DeepSeek panel is an agent without a terminal. Its row lists under the
-    // worktree it works in — the main checkout or one of the user's own — like
+    // worktree it works in â€” the main checkout or one of the user's own â€” like
     // every other agent's, instead of floating above them at project level.
     const deepSeekRoot = projectId && p.path && deepSeekIsRunning
       ? deepSeekPanelRoot(deepSeekPlacementState, projectId, p.path)
@@ -1224,7 +1224,7 @@ export default function ProjectHUD() {
                     };
                     setDragThreadId(row.id);
                   }}
-                  title={`${row.title} · ${row.provider} · ${row.model} · ${chatStatusLabel(row.status)}`}
+                  title={`${row.title} Â· ${row.provider} Â· ${row.model} Â· ${chatStatusLabel(row.status)}`}
                 >
                   <span className="project-thread-copy">
                     <span className="project-thread-title-line">
@@ -1235,10 +1235,10 @@ export default function ProjectHUD() {
                     </span>
                     <span className="project-thread-meta">
                       <span className="project-thread-status" aria-hidden="true" />
-                      <span className="project-thread-provider" title={`${row.provider} · ${row.model}`}>
-                        {row.provider} · {row.model}
+                      <span className="project-thread-provider" title={`${row.provider} Â· ${row.model}`}>
+                        {row.provider} Â· {row.model}
                       </span>
-                      <span className="project-thread-meta-sep" aria-hidden="true">·</span>
+                      <span className="project-thread-meta-sep" aria-hidden="true">Â·</span>
                       <span className="project-thread-state">{chatStatusLabel(row.status)}</span>
                     </span>
                   </span>
@@ -1321,7 +1321,7 @@ export default function ProjectHUD() {
                               setThreadMenuId(null);
                             }}
                           >
-                            Snooze · {preset.label}
+                            Snooze Â· {preset.label}
                           </button>
                         ))}
                         <button
@@ -1330,7 +1330,7 @@ export default function ProjectHUD() {
                           className="danger"
                           onClick={(event) => {
                             event.stopPropagation();
-                            if (window.confirm(`Delete “${row.thread?.title ?? 'this thread'}”?`)) {
+                            if (window.confirm(`Delete â€œ${row.thread?.title ?? 'this thread'}â€?`)) {
                               closeChatThread(row.thread!.id);
                             }
                             setThreadMenuId(null);
@@ -1491,7 +1491,7 @@ export default function ProjectHUD() {
                 className="hud-card-action-btn"
                 onClick={() => {
                   if (p.path && !isExpanded) toggleProjectExpanded(p.path);
-                  openCreateWorktree(projectId);
+                  openCreateWorktree(projectId, null, undefined, { id: projectId, name: p.name, root_path: p.path! });
                 }}
                 title="Create worktree"
                 aria-label={`Create worktree in ${p.name}`}
@@ -1702,7 +1702,7 @@ export default function ProjectHUD() {
                 {/* Covers both senses: a panel that is open, and a process
                     that is actually running inside one. */}
                 <div className="project-contents-label">Active</div>
-                {previewIsRunning && renderOpenRoomRow('preview', 'Preview', ROOM_GLYPHS.preview, 'active', 'Preview: running')}
+                {previewIsRunning && renderOpenRoomRow('preview', 'Browser', ROOM_GLYPHS.preview, 'active', 'Browser: running')}
                 {editorIsRunning && renderOpenRoomRow('editor', 'Editor', ROOM_GLYPHS.editor)}
                 {!groupByWorktree && deepSeekIsRunning && p.path && (() => {
                   // Listed like an agent: its assistant name, the product beside it.
@@ -1711,7 +1711,7 @@ export default function ProjectHUD() {
                   const name = deepSeekAgentName(dsRoot, projectSessions.map((s) => s.agentName ?? '').filter(Boolean));
                   return renderOpenRoomRow(
                     'deepseek', name, <AgentBrandMark command="dsh" name="DeepSeek Harness" />,
-                    isolated ? 'DeepSeek Harness · worktree' : 'DeepSeek Harness',
+                    isolated ? 'DeepSeek Harness Â· worktree' : 'DeepSeek Harness',
                     `${name}: DeepSeek Harness, running`,
                   );
                 })()}

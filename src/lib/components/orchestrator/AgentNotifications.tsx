@@ -10,7 +10,7 @@ import {
   sessionIsRunning,
   type ChatMessage,
 } from '$lib/stores/orchestrator';
-import { setActiveSession } from '$lib/stores/terminal';
+import { revealAgentChat } from '$lib/services/reveal-agent-chat';
 import {
   mailbox,
   mailboxSeen,
@@ -316,7 +316,7 @@ export default function AgentNotifications() {
     if (!task) return undefined;
     const sid = task.assignedSessionId ?? task.lastSessionId ?? null;
     if (sid == null || !sessionIsRunning(task.projectId, sid)) return undefined;
-    return () => setActiveSession(sid);
+    return () => { void revealAgentChat(sid); };
   }
 
   return (

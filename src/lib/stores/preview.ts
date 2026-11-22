@@ -1,5 +1,6 @@
 import { writable, get } from '$lib/stores/storeCompat';
 import { showToast } from './notification';
+import { browserOpenLinksIn, browserOpenLinksInBackground, browserPreferredHost } from './settings';
 
 export const targetPort = writable<number>(5173);
 export const proxyPort = writable<number | null>(null);
@@ -7,7 +8,6 @@ export const proxyStarted = writable<boolean>(false);
 export const isConnecting = writable<boolean>(false);
 export const preferredLocalHost = writable<string>('localhost');
 export const localDevProxyPorts = writable<Record<string, number>>({});
-
 export type PreviewTab = {
   id: string;
   title: string;
@@ -411,13 +411,25 @@ export async function ensureProxyRunning(): Promise<number | null> {
 }
 
 export async function ensureLocalDevProxy(port: number, host = 'localhost'): Promise<number | null> {
-  const key = localDevProxyKey(host, port);
+  // With a remote workspace active, "localhost" means the box: dev servers run
+  // there, next to the code. Forward the box's port to a local one first
+  // (`remote_tunnel_forward`), then proxy that like any local dev server.
+  const { remoteTarget } = await import('./remoteWorkspace');
+  const remote = get(remoteTarget);
+  const onBox = Boolean(remote) && ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'].includes(host);
+  const key = onBox ? `remote:${remote!.url}:${localDevProxyKey(host, port)}` : localDevProxyKey(host, port);
   const existing = get(localDevProxyPorts)[key];
   if (existing) return existing;
 
   try {
     const { invoke } = await import('@tauri-apps/api/core');
-    const proxy = await invoke<number>('preview_start_local_proxy', { port, host });
+    let targetPort = port;
+    let targetHost = host;
+    if (onBox) {
+      targetPort = await invoke<number>('remote_tunnel_forward', { url: remote!.url, token: remote!.token, remotePort: port });
+      targetHost = '127.0.0.1';
+    }
+    const proxy = await invoke<number>('preview_start_local_proxy', { port: targetPort, host: targetHost });
     localDevProxyPorts.update((ports) => ({ ...ports, [key]: proxy }));
     return proxy;
   } catch (err) {
@@ -486,8 +498,9 @@ export async function setTargetPort(port: number, options?: { silent?: boolean }
 export async function setPreferredLocalHost(host: string | null) {
   try {
     const { invoke } = await import('@tauri-apps/api/core');
+    host ??= get(browserPreferredHost);
     await invoke('preview_set_preferred_local_host', { host });
-    preferredLocalHost.set(host || 'localhost');
+    preferredLocalHost.set(host);
   } catch (err) {
     console.error('Failed to set preferred local host:', err);
   }
@@ -516,12 +529,22 @@ export async function clearProxyTarget() {
 }
 
 /**
- * Navigate the preview panel to an external URL (or local dev URL) instead
- * of opening the system browser.  Ensures the background proxy is running
- * and reveals the preview panel so the user sees the page immediately.
+ * Route a clicked web link using the saved browser preferences.
  */
 export async function openUrlInPreviewPanel(url: string): Promise<void> {
+  url = url.trim();
+  if (!/^https?:\/\//i.test(url)) return;
+  if (get(browserOpenLinksIn) === 'external') {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('preview_open_in_browser', { url });
+    return;
+  }
   await ensureProxyRunning();
+  if (get(browserOpenLinksInBackground)) {
+    const tab = createPreviewTab(url);
+    previewTabs.update((tabs) => [...tabs, tab]);
+    return;
+  }
   navigatePreviewTab(url);
   const { useLayoutStore } = await import('./zustand/layout');
   useLayoutStore.getState().revealPreview();

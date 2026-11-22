@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { get } from '$lib/stores/storeCompat';
+import { remoteConnections, activeRemoteId, connectionStatus, connectRemote, disconnectRemote } from '$lib/stores/remoteWorkspace';
 import { useStore } from '$lib/react/useStore';
 import { useModalFocus } from '$lib/react/useModalFocus';
 import { showToast } from '$lib/stores/notification';
 import { activeProjectId, projects } from '$lib/stores/workspace';
-import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
+import { allProjectSettings, projectConfigFor, projectIconFor, autoDetectProjectIcon } from '$lib/stores/projectSettings';
 import { getPresetRuns, filterInstalledAgents } from '$lib/stores/runs';
 import { customAgents } from '$lib/stores/customAgents';
 import { usageState, installedAgentCommands, haveAgentDetection } from '$lib/stores/usage';
 import Dropdown from '$lib/components/shared/Dropdown';
+import { ProjectIconBadge } from '$lib/components/shared/ProjectIcons';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
   createProjectWorktree,
@@ -18,6 +21,7 @@ import {
 } from '$lib/services/project-worktrees';
 import {
   closeCreateWorktree,
+  openCreateWorktree,
   createWorktreeRequest,
   refreshProjectWorktrees,
   setActiveWorktree,
@@ -87,10 +91,12 @@ const PLACEHOLDERS: Record<SourceMode, string> = {
 
 export default function CreateWorktreeModal({
   projectId,
+  project: requestedProject,
   initialParent,
   issue,
 }: {
   projectId: string;
+  project?: { id: string; name: string; root_path: string };
   initialParent?: string | null;
   issue?: WorktreeIssue;
 }) {
@@ -98,16 +104,23 @@ export default function CreateWorktreeModal({
   const nameRef = useRef<HTMLInputElement | null>(null);
   useModalFocus(cardRef, closeCreateWorktree);
 
+  const savedRemotes = useStore(remoteConnections);
+  const remoteId = useStore(activeRemoteId);
+  const [switchingComputer, setSwitchingComputer] = useState(false);
   const projectMap = useStore(projects);
   const projectSettings = useStore(allProjectSettings);
-  const currentProjectId = useStore(activeProjectId);
   const allWorktrees = useStore(worktreesByProject);
   const $customAgents = useStore(customAgents);
   const $usage = useStore(usageState);
 
-  const project = projectMap.get(projectId) ?? null;
+  const project = projectMap.get(projectId) ?? requestedProject ?? null;
   const preferredBase = project ? projectConfigFor(projectSettings, project.root_path, project.id).worktreeBase : '';
   const worktrees = allWorktrees[projectId] ?? [];
+  const projectIcon = project ? projectIconFor(projectSettings, project.root_path, project.id) : null;
+
+  useEffect(() => {
+    if (project && !projectIcon) void autoDetectProjectIcon(project.id, project.root_path);
+  }, [project?.id, project?.root_path, projectIcon]);
 
   const [bases, setBases] = useState<WorktreeBases | null>(null);
   const [baseRef, setBaseRef] = useState<string>('');
@@ -124,6 +137,7 @@ export default function CreateWorktreeModal({
   const [note, setNote] = useState('');
   const [createMore, setCreateMore] = useState(false);
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -148,18 +162,14 @@ export default function CreateWorktreeModal({
     nameRef.current?.focus();
   }, []);
 
-  // Agents only start in the project you are looking at; the spawn path works
-  // from the active project.
-  const canStartAgent = currentProjectId === projectId;
   const agentOptions = useMemo(() => {
-    if (!canStartAgent) return [];
     const all = getPresetRuns(projectId).filter((r) => r.isAgent);
     return filterInstalledAgents(all, {
       installedCommands: installedAgentCommands($usage),
       customCommands: new Set($customAgents.map((a) => a.command)),
       haveDetection: haveAgentDetection($usage),
     });
-  }, [canStartAgent, projectId, $usage, $customAgents]);
+  }, [projectId, $usage, $customAgents]);
 
   const localBranches = bases?.local ?? [];
 
@@ -207,8 +217,37 @@ export default function CreateWorktreeModal({
     nameRef.current?.focus();
   }
 
+  async function selectComputer(id: string) {
+    if (switchingComputer || busy || id === (remoteId ?? 'local')) return;
+    setSwitchingComputer(true);
+    setError(null);
+    try {
+      if (id === 'local') {
+        await disconnectRemote();
+      } else {
+        await connectRemote(id);
+        if (get(activeRemoteId) !== id || get(connectionStatus) !== 'connected') {
+          throw new Error('Could not connect to the selected computer.');
+        }
+      }
+      const targetProjectId = get(activeProjectId);
+      if (!targetProjectId) throw new Error('Open a project on the selected computer first.');
+      // Reload branch and parent choices for the selected computer's workspace.
+      openCreateWorktree(targetProjectId, null, issue);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setSwitchingComputer(false);
+    }
+  }
+
   async function submit() {
-    if (busy) return;
+    if (submitting.current || switchingComputer) return;
+    const expectedRemote = projectId.startsWith('remote:') ? projectId.slice('remote:'.length) : null;
+    if (get(activeRemoteId) !== expectedRemote) {
+      setError('The computer connection changed. Select Run on again before creating the worktree.');
+      return;
+    }
     const trimmed = name.trim();
     if (!trimmed) {
       setError(mode === 'branch' ? 'Pick a branch to open.' : 'Give the worktree a name.');
@@ -216,11 +255,12 @@ export default function CreateWorktreeModal({
       return;
     }
     // In Branch mode the typed text must be a branch you picked.
-    const reuse = mode === 'branch' ? (reuseBranch ?? (localBranches.includes(trimmed) ? trimmed : null)) : reuseBranch;
+    const reuse = mode !== 'name' ? (reuseBranch ?? (localBranches.includes(trimmed) ? trimmed : null)) : null;
     if (mode === 'branch' && !reuse) {
-      setError(`No local branch named “${trimmed}”. Pick one from the list, or switch to Name.`);
+      setError(`No local branch named â€œ${trimmed}â€. Pick one from the list, or switch to Name.`);
       return;
     }
+    submitting.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -237,14 +277,16 @@ export default function CreateWorktreeModal({
       setActiveWorktree(projectId, result.worktree.path);
       showToast(`Created worktree ${result.worktree.name} on ${result.worktree.branch ?? 'a detached HEAD'}`, 'success', 3000);
 
-      if (agent && canStartAgent) {
+      if (agent) {
         const { quickSpawnAgent } = await import('$lib/services/quick-spawn');
-        // The new worktree is now the active one, so the agent starts there.
-        await quickSpawnAgent(agent, issue ? {
+        // Pass the created folder explicitly because the active selection can change.
+        const launched = await quickSpawnAgent(agent, {
+          projectId,
           worktreePath: result.worktree.path,
-          prompt: [`Work on Linear issue ${issue.identifier}: ${issue.title}`, issue.url, issue.description]
-            .filter(Boolean).join('\n\n'),
-        } : undefined);
+          ...(issue ? { prompt: [`Work on Linear issue ${issue.identifier}: ${issue.title}`, issue.url, issue.description]
+            .filter(Boolean).join('\n\n') } : {}),
+        });
+        if (launched === null) showToast('Worktree created. The agent could not start. Open the worktree to try again.', 'warning');
       }
 
       if (createMore) {
@@ -259,6 +301,7 @@ export default function CreateWorktreeModal({
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -299,18 +342,23 @@ export default function CreateWorktreeModal({
                 </span>
               </div>
               <div className="cwt-select is-static" title={project?.root_path}>
-                <span className="cwt-project-dot" aria-hidden="true" />
+                <ProjectIconBadge icon={projectIcon} size={16} />
                 <span className="cwt-select-value">{project?.name ?? 'Project'}</span>
-                <Icon size={13}><path d="m6 9 6 6 6-6" /></Icon>
               </div>
             </div>
             <div className="cwt-field">
               <span className="cwt-label">Run on</span>
-              <div className="cwt-select is-static" title="Worktrees are created on this computer">
-                <Icon size={14}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></Icon>
-                <span className="cwt-select-value">This computer</span>
-                <Icon size={13}><path d="m6 9 6 6 6-6" /></Icon>
-              </div>
+              <Dropdown
+                options={[
+                  { value: 'local', label: 'This computer' },
+                  ...savedRemotes.map((connection) => ({ value: connection.id, label: connection.name })),
+                ]}
+                value={remoteId ?? 'local'}
+                onChange={(value) => { void selectComputer(value); }}
+                ariaLabel="Run worktree on"
+                disabled={busy || switchingComputer}
+              />
+              {switchingComputer && <span className="cwt-help" role="status">Connecting to computer?</span>}
             </div>
           </div>
 
@@ -327,7 +375,7 @@ export default function CreateWorktreeModal({
                   aria-expanded={basePickerOpen}
                 >
                   <Icon size={12}>{BranchGlyph}</Icon>
-                  <span>{reuseBranch ?? (selectedBase || '…')}</span>
+                  <span>{reuseBranch ?? (selectedBase || 'â€¦')}</span>
                   <Icon size={11}>{UpDownGlyph}</Icon>
                 </button>
                 {basePickerOpen && !reuseBranch && (
@@ -446,7 +494,7 @@ export default function CreateWorktreeModal({
 
           <div className="cwt-field">
             <span className="cwt-label">Agent <em>[Optional]</em></span>
-            {canStartAgent ? (
+            {(
               <div className={`cwt-agent-row${agent ? ' has-agent' : ''}`}>
                 {agent && (
                   <span className="cwt-agent-mark">
@@ -463,8 +511,6 @@ export default function CreateWorktreeModal({
                   ariaLabel="Agent to start in the new worktree"
                 />
               </div>
-            ) : (
-              <div className="cwt-select is-static muted">Open this project to start an agent in the new worktree.</div>
             )}
           </div>
 
@@ -512,7 +558,6 @@ export default function CreateWorktreeModal({
                   <span className="cwt-label">Sparse checkout</span>
                   <div className="cwt-select is-static" title="Every file is checked out">
                     <span className="cwt-select-value">Full checkout</span>
-                    <Icon size={12}>{UpDownGlyph}</Icon>
                   </div>
                 </div>
               </div>
@@ -535,10 +580,10 @@ export default function CreateWorktreeModal({
             className="cwt-create"
             style={issue ? { marginLeft: 'auto' } : undefined}
             onClick={() => void submit()}
-            disabled={busy || !name.trim()}
+            disabled={busy || switchingComputer || !name.trim()}
           >
-            {busy ? 'Creating…' : 'Create'}
-            <kbd>Ctrl ↵</kbd>
+            {busy ? 'Creatingâ€¦' : 'Create'}
+            <kbd>Ctrl â†µ</kbd>
           </button>
         </div>
       </div>
@@ -555,6 +600,7 @@ export function CreateWorktreeDialog() {
     <CreateWorktreeModal
       key={`${request.projectId}:${request.parent ?? ''}:${request.issue?.id ?? ''}`}
       projectId={request.projectId}
+      project={request.project}
       initialParent={request.parent}
       issue={request.issue}
     />

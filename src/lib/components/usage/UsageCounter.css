@@ -66,10 +66,12 @@
 }
 
 .usage-dock-agent {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  min-width: max-content;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* The brand mark is the part that says *whose* number this is, so it is sized
@@ -218,19 +220,71 @@
 }
 
 /* ── Small footer button ─────────────────────────────────────────────────
-   The icons, numbers and caret are deliberately tiny so every agent fits on
-   one line beside the theme and settings buttons. Last in the file so it wins
-   over the container-query steps above. */
-.usage-dock { min-height: 22px; padding: 2px 5px; gap: 1px 5px; border-radius: 6px; flex-wrap: nowrap; }
-.usage-dock-agent { gap: 3px; }
+   The icons, numbers and caret are deliberately sized so every shown agent
+   fits cleanly beside the theme and settings buttons with zero overlap. */
+.usage-dock {
+  min-height: 24px;
+  padding: 2px 6px;
+  gap: 1px 6px;
+  border-radius: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 100%;
+}
+.usage-dock-agent {
+  gap: 3.5px;
+  flex-shrink: 0;
+  min-width: max-content;
+  white-space: nowrap;
+}
 .usage-dock-mark,
 .usage-dock-mark svg,
-.usage-dock-mark img { width: 12px; height: 12px; }
-.usage-dock-window { gap: 1.5px; }
-.usage-dock-num { font-size: 9px; }
-.usage-dock-win { font-size: 7.5px; }
-.usage-dock-sep { font-size: 8px; margin: 0 2px 0 1px; }
-.usage-dock-more { font-size: 8px; padding: 1px 4px; }
-.usage-dock-caret { width: 9px; height: 9px; margin-left: 2px; }
-.usage-dock-empty-label { font-size: 9px; }
-.usage-dock-empty-label ~ *, .usage-dock > svg:first-child { width: 12px; height: 12px; }
+.usage-dock-mark img {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+.usage-dock-window {
+  gap: 2px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.usage-dock-num {
+  font-size: 9.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.usage-dock-win {
+  font-size: 8px;
+  font-weight: 500;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.usage-dock-sep {
+  font-size: 8px;
+  margin: 0 2px 0 1px;
+  flex-shrink: 0;
+}
+.usage-dock-more {
+  font-size: 8px;
+  padding: 1px 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.usage-dock-caret {
+  width: 9px;
+  height: 9px;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+.usage-dock-empty-label {
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.usage-dock-empty-label ~ *, .usage-dock > svg:first-child {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}

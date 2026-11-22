@@ -76,6 +76,7 @@ short enough that it says what the note is *about*, never what it says.
 - [server-artifact-download](server-artifact-download.md) — how the wizard downloads a server build for another OS
 - [vps-deploy-cross-platform](vps-deploy-cross-platform.md) — how a matching `spacron-server` build is resolved for the target OS
 - [mobile-companion-plan](mobile-companion-plan.md) — where the phone app goes, and why not a Tauri mobile target
+- [mobile-3d-device-viewer](mobile-3d-device-viewer.md) — 3D phone model and perspective raycasting for mobile streams
 
 ## AI providers & model requests
 
@@ -115,4 +116,5 @@ short enough that it says what the note is *about*, never what it says.
 - [windows-pathext-shims](windows-pathext-shims.md) — PATHEXT variants must outrank a bare bash script; `.cmd` needs `cmd /c`
 - [cargo-check-in-agent-shell](cargo-check-in-agent-shell.md) — why whisper-rs-sys fails to build in a sandboxed agent shell, and the env var that fixes it
 - [windows-arm64-whisper-build](windows-arm64-whisper-build.md) — why whisper needs clang-cl for Windows ARM64, and the env recipe that builds it
+- [webview2-grey-tile-glitch](webview2-grey-tile-glitch.md) — grey squares over the Windows app: what ruled out CSS, and the GPU/restart lead
 - [tauri-dev-restarts](tauri-dev-restarts.md) — why the dev app seems to close itself, and the no-watch script / ignore file that stop it

@@ -10,7 +10,8 @@
  * - In-app Toast with "View chat" button when the user is in another pane/room
  */
 import { get } from '$lib/stores/storeCompat';
-import { activeSessionId, getAgentDisplayName, setActiveSession } from '$lib/stores/terminal';
+import { revealAgentChat } from '$lib/services/reveal-agent-chat';
+import { activeSessionId, getAgentDisplayName } from '$lib/stores/terminal';
 import { announceAgentCompletions, speakAgentCompletions } from '$lib/stores/settings';
 import { playNudge } from '$lib/services/nudge';
 import { speakText } from '$lib/services/read-aloud';
@@ -60,11 +61,7 @@ export function handleStructuredNotificationEvent(paneId: number, event: Structu
       } else if (typeof showToast === 'function') {
         showToast(`${agentName} finished its turn.`, 'success', 5000, false, {
           label: 'View chat',
-          onClick: () => {
-            if (typeof setActiveSession === 'function') {
-              setActiveSession(paneId);
-            }
-          },
+          onClick: () => { void revealAgentChat(paneId); },
         });
       }
     }
@@ -94,11 +91,7 @@ export function handleStructuredNotificationEvent(paneId: number, event: Structu
       } else if (typeof showToast === 'function') {
         showToast(`${agentName} needs your approval: ${title}`, 'warning', 7000, false, {
           label: 'Review',
-          onClick: () => {
-            if (typeof setActiveSession === 'function') {
-              setActiveSession(paneId);
-            }
-          },
+          onClick: () => { void revealAgentChat(paneId); },
         });
       }
     }
@@ -129,11 +122,7 @@ export function handleStructuredNotificationEvent(paneId: number, event: Structu
       } else if (typeof showToast === 'function') {
         showToast(`${agentName} could not finish: ${msg}`, 'error', 7000, false, {
           label: 'View chat',
-          onClick: () => {
-            if (typeof setActiveSession === 'function') {
-              setActiveSession(paneId);
-            }
-          },
+          onClick: () => { void revealAgentChat(paneId); },
         });
       }
     }

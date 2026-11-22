@@ -560,7 +560,7 @@ fn handle_control(
             // answers when done. The desktop's project id means nothing here:
             // the box searches its own workspace.
             let out = out.clone();
-            let root = state.workspace.to_string_lossy().to_string();
+            let root = active_root(state).to_string_lossy().to_string();
             tokio::spawn(async move {
                 let flag = |k: &str| args.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
                 let num = |k: &str| args.get(k).and_then(|v| v.as_u64()).map(|n| n as usize);
@@ -585,7 +585,12 @@ fn handle_control(
         ClientMsg::Invoke { req_id, cmd, args } => {
             // A couple of commands need server state (LSP), so they're handled here;
             // everything else is a stateless file-system op routed to the fs core.
+            // The project folder the desktop has open: the box folder itself or
+            // a folder inside it (see `remote_set_project_root`).
+            let root = active_root(state);
             let result = match cmd.as_str() {
+                "remote_set_project_root" => set_project_root(&args, state),
+                "remote_list_folders" => list_folders(&args, state),
                 "lsp_check_server" => lsp_check_server(args),
                 "lsp_start" => lsp_start(args, state),
                 "workspace_info" => workspace_info(state),
@@ -595,25 +600,25 @@ fn handle_control(
                 "box_automations_sync" => automations::sync(args, &state.workspace),
                 "box_automations_state" => automations::state(&state.workspace),
                 "box_automation_run_now" => automations::run_now(args, &state.workspace),
-                "workspace_git_log" => git_log(args, &state.workspace),
-                "workspace_git_status" => git_status(&state.workspace),
-                "workspace_git_diff" => git_diff(args, &state.workspace),
-                "workspace_git_create_worktree" => git_create_worktree(args, &state.workspace),
-                "project_worktree_list" => project_worktree_list(&state.workspace),
+                "workspace_git_log" => git_log(args, &root),
+                "workspace_git_status" => git_status(&root),
+                "workspace_git_diff" => git_diff(args, &root),
+                "workspace_git_create_worktree" => git_create_worktree(args, &root),
+                "project_worktree_list" => project_worktree_list(&root),
                 "project_worktree_review_metadata" => crate::commands::project_worktrees::review_metadata(
-                    &state.workspace, str_arg(&args, "worktreePath").as_deref(),
+                    &root, str_arg(&args, "worktreePath").as_deref(),
                 ).and_then(|metadata| serde_json::to_value(metadata).map_err(|e| e.to_string())),
-                "project_worktree_bases" => project_worktree_bases(&state.workspace),
-                "project_worktree_create" => project_worktree_create(args, &state.workspace),
-                "project_worktree_delete" => project_worktree_delete(args, &state.workspace),
-                "project_worktree_update" => project_worktree_update(args, &state.workspace),
-                "workspace_git_remove_worktree" => git_remove_worktree(args, &state.workspace),
-                "workspace_git_worktree_status" => git_worktree_status(args, &state.workspace),
-                "workspace_git_worktree_has_changes" => git_worktree_has_changes(args, &state.workspace),
-                "workspace_git_worktree_delta" => git_worktree_delta(args, &state.workspace),
-                "workspace_git_stage_worktree" => git_stage_worktree(args, &state.workspace),
-                "workspace_git_merge_worktree" => git_merge_worktree(args, &state.workspace),
-                "workspace_git_rename_worktree" => git_rename_worktree(args, &state.workspace),
+                "project_worktree_bases" => project_worktree_bases(&root),
+                "project_worktree_create" => project_worktree_create(args, &root),
+                "project_worktree_delete" => project_worktree_delete(args, &root),
+                "project_worktree_update" => project_worktree_update(args, &root),
+                "workspace_git_remove_worktree" => git_remove_worktree(args, &root),
+                "workspace_git_worktree_status" => git_worktree_status(args, &root),
+                "workspace_git_worktree_has_changes" => git_worktree_has_changes(args, &root),
+                "workspace_git_worktree_delta" => git_worktree_delta(args, &root),
+                "workspace_git_stage_worktree" => git_stage_worktree(args, &root),
+                "workspace_git_merge_worktree" => git_merge_worktree(args, &root),
+                "workspace_git_rename_worktree" => git_rename_worktree(args, &root),
                 _ => dispatch_invoke(&cmd, args, &[state.workspace.clone()]),
             };
             match result {
@@ -772,6 +777,72 @@ fn lsp_start(args: Value, state: &ServerState) -> Result<Value, String> {
 /// at it (Step 4 "open the remote root" — the file tree/editor then read/write
 /// through the same socket via the fs core). The root is already canonicalized
 /// and `\\?\`-stripped in `serve()`; `name` is just the leaf folder for display.
+/// The project folder the desktop opened, or the box folder when it opened none.
+/// Global rather than per connection: one desktop drives a server at a time,
+/// and a reconnect must land back in the same folder.
+fn active_root_cell() -> &'static std::sync::Mutex<Option<PathBuf>> {
+    static CELL: std::sync::OnceLock<std::sync::Mutex<Option<PathBuf>>> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn active_root(state: &ServerState) -> PathBuf {
+    active_root_cell()
+        .lock()
+        .ok()
+        .and_then(|r| r.clone())
+        .filter(|r| r.starts_with(&state.workspace) && r.is_dir())
+        .unwrap_or_else(|| state.workspace.clone())
+}
+
+/// Resolve a folder the desktop named to a canonical path inside the box folder.
+fn folder_in_workspace(path: &str, state: &ServerState) -> Result<PathBuf, String> {
+    let canonical = std::fs::canonicalize(path).map_err(|e| format!("Folder not found on the box: {e}"))?;
+    let canonical = crate::commands::clean_path_buf(canonical);
+    if !canonical.starts_with(&state.workspace) {
+        return Err(format!("Only folders inside {} can be opened on this box.", state.workspace.display()));
+    }
+    if !canonical.is_dir() {
+        return Err("That is not a folder.".into());
+    }
+    Ok(canonical)
+}
+
+/// `remote_set_project_root`: make a folder inside the box folder the active project.
+fn set_project_root(args: &Value, state: &ServerState) -> Result<Value, String> {
+    let path = str_arg(args, "path").ok_or("Missing folder path.")?;
+    let folder = folder_in_workspace(&path, state)?;
+    if let Ok(mut cell) = active_root_cell().lock() {
+        *cell = Some(folder.clone());
+    }
+    let name = folder.file_name().and_then(|n| n.to_str()).unwrap_or("workspace").to_string();
+    Ok(json!({ "root": folder.to_string_lossy(), "name": name }))
+}
+
+/// `remote_list_folders`: the folders directly inside `path` (default: the box
+/// folder), for the desktop's folder picker. Hidden folders are skipped.
+fn list_folders(args: &Value, state: &ServerState) -> Result<Value, String> {
+    let dir = match str_arg(args, "path") {
+        Some(p) if !p.is_empty() => folder_in_workspace(&p, state)?,
+        _ => state.workspace.clone(),
+    };
+    let mut folders: Vec<Value> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Could not read {}: {e}", dir.display()))?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "node_modules" {
+                return None;
+            }
+            let path = e.path();
+            Some(json!({ "name": name, "path": path.to_string_lossy(), "isRepo": path.join(".git").exists() }))
+        })
+        .collect();
+    folders.sort_by_key(|f| f["name"].as_str().unwrap_or_default().to_lowercase());
+    let parent = (dir != state.workspace).then(|| dir.parent().map(|p| p.to_string_lossy().to_string())).flatten();
+    Ok(json!({ "path": dir.to_string_lossy(), "root": state.workspace.to_string_lossy(), "parent": parent, "folders": folders }))
+}
+
 fn workspace_info(state: &ServerState) -> Result<Value, String> {
     let root = state.workspace.to_string_lossy().to_string();
     let name = state

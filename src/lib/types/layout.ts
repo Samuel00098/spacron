@@ -24,6 +24,7 @@ export type SettingsTab =
   | 'mcp'
   | 'stats'
   | 'shortcuts'
+  | 'automations'
   | 'cleanup'
   | 'about';
 

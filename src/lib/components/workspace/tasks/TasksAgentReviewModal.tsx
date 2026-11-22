@@ -1,3 +1,4 @@
+import { launchViewFor } from '$lib/services/terminal-chat';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getAgentRoster } from '$lib/stores/runs';
@@ -99,9 +100,13 @@ export default function TasksAgentReviewModal({
 
   const roster = getAgentRoster();
   const [selectedAgent, setSelectedAgent] = useState(roster[0] ?? { command: 'codex', name: 'Codex' });
-  const [launchTarget, setLaunchTarget] = useState<'terminal' | 'chat'>('terminal');
+  const [launchTarget, setLaunchTarget] = useState<'terminal' | 'chat'>(() => launchViewFor(selectedAgent.command));
   const structuredAgent = structuredChatAgentFor(selectedAgent.command);
   const supportsChat = Boolean(structuredAgent);
+
+  useEffect(() => {
+    if (isOpen) setLaunchTarget(supportsChat ? launchViewFor(selectedAgent.command) : 'terminal');
+  }, [isOpen, selectedAgent.command, supportsChat]);
 
   useEffect(() => {
     if (!supportsChat && launchTarget === 'chat') {
@@ -320,6 +325,8 @@ export default function TasksAgentReviewModal({
           </button>
         </header>
 
+        <div className="tasks-review-body">
+        <div className="tasks-review-settings">
         {/* Agent Roster Selector */}
         {roster.length > 0 && (
           <div className="tasks-modal-section">
@@ -426,8 +433,9 @@ export default function TasksAgentReviewModal({
           />
         </div>
 
+        </div>
         {/* Review Instructions & Prompt Box */}
-        <div className="tasks-modal-section">
+        <div className="tasks-modal-section tasks-review-prompt">
           <div className="tasks-modal-section-label">
             <span>Review Instructions & Prompt</span>
             <span className="tasks-modal-section-sub">Delivered directly to the agent</span>
@@ -441,8 +449,9 @@ export default function TasksAgentReviewModal({
           />
         </div>
 
+        </div>
         {/* Footer actions */}
-        <footer className="apm-footer" style={{ margin: '4px 0 0', padding: '12px 20px 0' }}>
+        <footer className="apm-footer">
           <span className="apm-hint">
             <kbd>Esc</kbd> to cancel · <kbd>Ctrl+Enter</kbd> to launch
           </span>

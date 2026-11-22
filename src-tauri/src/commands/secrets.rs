@@ -190,7 +190,7 @@ fn base_url_provider_label(provider: &str) -> String {
 const MEDIA_KEY_PROVIDERS: &[&str] = &["fal", "replicate", "typesafe"];
 
 // Keys only the chat's Read aloud voices use (`commands::speech`).
-const SPEECH_KEY_PROVIDERS: &[&str] = &["elevenlabs", "minimax"];
+const SPEECH_KEY_PROVIDERS: &[&str] = &["elevenlabs", "minimax", "fish"];
 
 fn is_key_provider(provider: &str) -> bool {
     is_known_provider(provider) || MEDIA_KEY_PROVIDERS.contains(&provider) || SPEECH_KEY_PROVIDERS.contains(&provider)

@@ -15,6 +15,7 @@ import {
   type ConnectionStatus,
 } from '$lib/stores/remoteWorkspace';
 import RemoteSetupWizard from './RemoteSetupWizard';
+import RemoteFolderPicker from './RemoteFolderPicker';
 import './RemoteStatus.css';
 
 /**
@@ -49,6 +50,7 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   // Two-click remove: the id whose trash button is armed, waiting for a second
   // click that actually deletes. Removing a remote destroys its keychain token,
   // so the first click asks and the second confirms.
@@ -303,6 +305,15 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
             </button>
           )}
 
+          {active && (
+            <button type="button" className="rs-add" onClick={() => { setForm(null); setFolderPickerOpen(true); }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2Z" />
+              </svg>
+              Open folder on {active.name}…
+            </button>
+          )}
+
           {/* One-flow deploy: the app uploads its bundled spacron-server to a
               fresh VPS over SSH, starts it, and connects — see the wizard. */}
           <button
@@ -321,6 +332,8 @@ export default function RemoteStatus({ dropdownUp = true }: RemoteStatusProps) {
           </button>
         </div>
       )}
+
+      {folderPickerOpen && active && <RemoteFolderPicker remoteName={active.name} onClose={() => setFolderPickerOpen(false)} />}
 
       <RemoteSetupWizard
         open={setupOpen}

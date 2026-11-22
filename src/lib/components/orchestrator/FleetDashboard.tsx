@@ -38,6 +38,9 @@
  * outstanding and re-asks git before removing anything.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { structuredChatPanes } from '$lib/services/structured-chat/panes';
+import { revealAgentView } from '$lib/services/reveal-agent-chat';
+import { chatViewSessions } from '$lib/services/terminal-chat';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
 import { activeProject } from '$lib/stores/workspace';
@@ -331,6 +334,8 @@ export default function FleetDashboard() {
   // non-dev panes only, `devSessions` never reaches `allProjectSessions`, and
   // an agent spawned into the Development ambient lives solely in the latter.
   // Reading one store alone silently drops whole agents from the fleet.
+  const chatViews = useStore(chatViewSessions);
+  const structuredViews = useStore(structuredChatPanes);
   const activeSessions = useStore(sessions);
   const devProjectSessions = useStore(devSessions);
   const crossProjectSessions = useStore(allProjectSessions);
@@ -1102,14 +1107,11 @@ export default function FleetDashboard() {
                   <button
                     className="fc-btn quiet"
                     onClick={() => {
-                      const sessionId = row.sessionId!;
-                      setActiveSession(sessionId);
-                      showTerminal();
-                      requestStageExpansion(`agent:${sessionId}`);
+                      void revealAgentView(row.sessionId!).catch((error) => showToast(String(error), 'error'));
                     }}
-                    title="Expand this agent's terminal"
+                    title="Bring this agent's current view to the front"
                   >
-                    Terminal
+                    {chatViews.has(row.sessionId) || structuredViews[row.sessionId] ? 'Open chat' : 'Open terminal'}
                   </button>
                 )}
                 {worktree && (

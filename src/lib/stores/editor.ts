@@ -122,15 +122,25 @@ export function isVideoPath(path: string): boolean {
   return extOf(path) in VIDEO_MIME;
 }
 
+export function isDocumentPath(path: string): boolean {
+  return ['pdf', 'docx'].includes(extOf(path));
+}
+
 /** Files the editor shows in a viewer rather than as text. */
 export function isViewerPath(path: string): boolean {
-  return isImagePath(path) || isAudioPath(path) || isVideoPath(path);
+  return isImagePath(path) || isAudioPath(path) || isVideoPath(path) || isDocumentPath(path);
 }
 
 /** Read an image, audio or video file into an editor entry. Audio and video
  *  stream from disk over the asset protocol where possible (no size limit,
  *  and seeking works); otherwise, and for images, the bytes become a blob. */
 async function loadViewerFile(path: string): Promise<EditorFile> {
+  if (isDocumentPath(path)) {
+    const bytes = await invoke<number[]>('fs_read_binary', { path });
+    const kind = extOf(path) === 'pdf' ? 'pdf' : 'docx';
+    return { path, kind, language: kind, content: '', originalContent: '', isDirty: false,
+      documentData: new Uint8Array(bytes), size: bytes.length };
+  }
   const kind = isImagePath(path) ? 'image' : isVideoPath(path) ? 'video' : 'audio';
   const mimeType = kind === 'image'
     ? getImageMimeType(path)

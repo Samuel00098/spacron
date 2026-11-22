@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { get } from 'svelte/store';
 import { autoSettleStaleThreads, AUTO_SETTLE_IDLE_MS, forkChatThreadFrom, getChatThread, resetChatThreadsForTests, chatThreadState } from './chatThreads';
 import type { ChatThread } from './chatThreads';
 
@@ -133,5 +134,22 @@ describe('forkChatThreadFrom', () => {
     expect(fork!.claudeSdkSessionId).toBe('forked_sdk_session');
     const stored = getChatThread(fork!.id);
     expect(stored?.claudeSdkSessionId).toBe('forked_sdk_session');
+  });
+
+  it('includes the selected message and makes the fork active', async () => {
+    const source = baseThread({ id: 'source-3', claudeSdkSessionId: null });
+    chatThreadState.set({
+      version: 1,
+      threadsByProject: { p1: [source] },
+      messagesByThread: { 'source-3': [
+        { id: 'm1', threadId: 'source-3', role: 'user', type: 'user', text: 'first', ts: 1 },
+        { id: 'm2', threadId: 'source-3', role: 'assistant', type: 'assistant', text: 'second', ts: 2 },
+      ] },
+      activeThreadByProject: { p1: 'source-3' },
+    });
+    const fork = await forkChatThreadFrom('source-3', 'm2');
+    expect(fork).not.toBeNull();
+    expect(get(chatThreadState).messagesByThread[fork!.id].map((message) => message.text)).toEqual(['first', 'second']);
+    expect(get(chatThreadState).activeThreadByProject.p1).toBe(fork!.id);
   });
 });

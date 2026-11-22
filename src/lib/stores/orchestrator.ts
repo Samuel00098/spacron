@@ -1635,6 +1635,29 @@ async function completeLeasedTask(
   const task = get(orchestratorTasks).find((t) => t.id === taskId);
   if (!task || task.status !== 'in-progress' || task.assignedSessionId !== sessionId) return;
 
+  // Capture the agent's actual changed paths before releasing its lease. Use
+  // its isolated worktree when present so unrelated project edits aren't
+  // presented as this agent's work.
+  const changedFiles = await (async (): Promise<ChatFileRef[]> => {
+    const rootPath = task.worktree?.path ?? projectPaths.get(task.projectId);
+    if (!rootPath) return [];
+    try {
+      const status = task.worktree
+        ? await backendInvoke<{ changed_files: number }>('workspace_git_worktree_status', { worktreePath: rootPath })
+        : await backendInvoke<{ modified: string[]; added: string[]; deleted: string[]; untracked: string[] }>('workspace_git_status', { projectId: task.projectId });
+      const paths = new Map<string, ChatFileRef['action']>();
+      if ('modified' in status) {
+        for (const path of status.modified ?? []) paths.set(path, 'edited');
+        for (const path of status.deleted ?? []) paths.set(path, 'edited');
+        for (const path of status.added ?? []) paths.set(path, 'created');
+        for (const path of status.untracked ?? []) paths.set(path, 'created');
+      }
+      return [...paths].map(([path, action]) => ({ path, action }));
+    } catch {
+      return [];
+    }
+  })();
+
   // A turn that stopped on a usage limit is not a turn that ended. The work is
   // unfinished and nothing is wrong with it, so the first thing to try is
   // moving it to an account that can finish it — the hard-stop case the

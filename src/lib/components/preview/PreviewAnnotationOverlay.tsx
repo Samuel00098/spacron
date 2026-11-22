@@ -1,3 +1,6 @@
+import BrowserActionIcon from './BrowserActionIcon';
+import Dropdown from '$lib/components/shared/Dropdown';
+import { useAgentTargets } from '$lib/react/useAgentTargets';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   getActiveAgentTargets,
@@ -22,7 +25,7 @@ export type AnnotationItem =
 export type PreviewAnnotationOverlayProps = {
   viewportWidth: number;
   viewportHeight: number;
-  captureUnderlyingScreenshot: () => Promise<string | null>;
+  captureUnderlyingScreenshot: () => Promise<{ dataUrl: string; x: number; y: number; width: number; height: number } | null>;
   onClose: () => void;
 };
 
@@ -75,13 +78,25 @@ export default function PreviewAnnotationOverlay({
   const [userPrompt, setUserPrompt] = useState('');
   const [isSending, setIsSending] = useState(false);
 
+  useEffect(() => {
+    if (!isPromptModalOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setIsPromptModalOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isPromptModalOpen]);
+
   // Agent target selection
-  const availableTargets = useMemo(() => getActiveAgentTargets(), [isPromptModalOpen]);
+  const availableTargets = useAgentTargets();
   const defaultTarget = useMemo(() => resolveDefaultTarget(availableTargets), [availableTargets]);
   const [selectedTargetId, setSelectedTargetId] = useState<number | null>(defaultTarget?.id ?? null);
 
   const currentTarget = useMemo(() => {
-    return availableTargets.find((t) => t.id === selectedTargetId) ?? defaultTarget ?? null;
+    return selectedTargetId === null ? defaultTarget : availableTargets.find((t) => t.id === selectedTargetId) ?? null;
   }, [availableTargets, selectedTargetId, defaultTarget]);
 
   // Redraw canvas whenever items change
@@ -184,6 +199,9 @@ export default function PreviewAnnotationOverlay({
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     if (textInputPos) {
       commitText();
       return;
@@ -249,7 +267,9 @@ export default function PreviewAnnotationOverlay({
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing || !startPointRef.current) return;
     const pt = getCanvasCoords(e);
+    const start = { ...startPointRef.current };
     setIsDrawing(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
 
     if (activeTool === 'pen') {
       const pts = currentPathRef.current;
@@ -266,7 +286,7 @@ export default function PreviewAnnotationOverlay({
           ...prev,
           {
             type: 'arrow',
-            start: startPointRef.current!,
+            start,
             end: pt,
             color: activeColor,
             width: activeStrokeWidth,
@@ -279,7 +299,7 @@ export default function PreviewAnnotationOverlay({
           ...prev,
           {
             type: 'rect',
-            start: startPointRef.current!,
+            start,
             end: pt,
             color: activeColor,
             width: activeStrokeWidth,
@@ -319,35 +339,24 @@ export default function PreviewAnnotationOverlay({
   const generateCompositeSnapshot = async (): Promise<string | null> => {
     setIsCapturing(true);
     try {
-      const bgDataUrl = await captureUnderlyingScreenshot();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const capture = await captureUnderlyingScreenshot();
+      if (!capture) return null;
       const canvas = canvasRef.current;
       if (!canvas) return null;
 
       const offscreen = document.createElement('canvas');
-      offscreen.width = canvas.width;
-      offscreen.height = canvas.height;
+      const image = new Image();
+      image.src = capture.dataUrl;
+      await image.decode();
+      offscreen.width = image.naturalWidth;
+      offscreen.height = image.naturalHeight;
       const oCtx = offscreen.getContext('2d');
       if (!oCtx) return null;
 
-      // Draw background if captured
-      if (bgDataUrl) {
-        await new Promise<void>((resolve) => {
-          const img = new Image();
-          img.onload = () => {
-            oCtx.drawImage(img, 0, 0, offscreen.width, offscreen.height);
-            resolve();
-          };
-          img.onerror = () => resolve();
-          img.src = bgDataUrl;
-        });
-      } else {
-        // Fallback canvas background
-        oCtx.fillStyle = '#0f172a';
-        oCtx.fillRect(0, 0, offscreen.width, offscreen.height);
-      }
-
-      // Draw annotation layer over top
-      oCtx.drawImage(canvas, 0, 0);
+      oCtx.drawImage(image, 0, 0);
+      oCtx.drawImage(canvas, capture.x * canvas.width, capture.y * canvas.height,
+        capture.width * canvas.width, capture.height * canvas.height, 0, 0, offscreen.width, offscreen.height);
       return offscreen.toDataURL('image/png');
     } catch {
       return null;
@@ -362,6 +371,10 @@ export default function PreviewAnnotationOverlay({
       return;
     }
     const snap = await generateCompositeSnapshot();
+    if (!snap) {
+      showToast('Could not capture the page screenshot.', 'error');
+      return;
+    }
     setCompositeSnapshot(snap);
     setIsPromptModalOpen(true);
   };
@@ -406,7 +419,21 @@ export default function PreviewAnnotationOverlay({
   };
 
   return (
-    <div className="preview-annotation-container" aria-label="Web page drawing overlay">
+    <div className={`preview-annotation-container${isCapturing ? ' is-capturing' : ''}`} aria-label="Web page drawing overlay">
+      {items.some((item) => item.type === 'text') && !isPromptModalOpen && (
+        <section className="annotation-notes-tray" aria-label="Page annotations" onPointerDown={(event) => event.stopPropagation()}>
+          <strong>Page notes</strong>
+          {items.map((item, index) => item.type === 'text' ? (
+            <div className="annotation-note-row" key={index}>
+              <input aria-label={`Annotation ${index + 1}`} value={item.text} onChange={(event) => {
+                const text = event.target.value;
+                setItems((previous) => previous.map((entry, position) => position === index && entry.type === 'text' ? { ...entry, text } : entry));
+              }} />
+              <button type="button" aria-label={`Remove annotation ${index + 1}`} onClick={() => setItems((previous) => previous.filter((_, position) => position !== index))}>Remove</button>
+            </div>
+          ) : null)}
+        </section>
+      )}
       {/* Floating Drawing Toolbar */}
       <div className="annotation-toolbar" role="toolbar" aria-label="Drawing tools">
         {/* Tools */}
@@ -414,6 +441,7 @@ export default function PreviewAnnotationOverlay({
           <button
             type="button"
             className={`annotation-tool-btn${activeTool === 'pen' ? ' active' : ''}`}
+            aria-pressed={activeTool === 'pen'}
             onClick={() => setActiveTool('pen')}
             title="Freehand Draw (Pen)"
             aria-label="Pen tool"
@@ -430,6 +458,7 @@ export default function PreviewAnnotationOverlay({
           <button
             type="button"
             className={`annotation-tool-btn${activeTool === 'arrow' ? ' active' : ''}`}
+            aria-pressed={activeTool === 'arrow'}
             onClick={() => setActiveTool('arrow')}
             title="Arrow tool (click and drag to point)"
             aria-label="Arrow tool"
@@ -444,6 +473,7 @@ export default function PreviewAnnotationOverlay({
           <button
             type="button"
             className={`annotation-tool-btn${activeTool === 'rectangle' ? ' active' : ''}`}
+            aria-pressed={activeTool === 'rectangle'}
             onClick={() => setActiveTool('rectangle')}
             title="Rectangle / Box tool"
             aria-label="Rectangle tool"
@@ -457,6 +487,7 @@ export default function PreviewAnnotationOverlay({
           <button
             type="button"
             className={`annotation-tool-btn${activeTool === 'text' ? ' active' : ''}`}
+            aria-pressed={activeTool === 'text'}
             onClick={() => setActiveTool('text')}
             title="Text note (click on page to write)"
             aria-label="Text note tool"
@@ -481,6 +512,8 @@ export default function PreviewAnnotationOverlay({
               className={`annotation-color-dot${activeColor === c.color ? ' active' : ''}`}
               style={{ backgroundColor: c.color }}
               onClick={() => setActiveColor(c.color)}
+              role="radio"
+              aria-checked={activeColor === c.color}
               title={c.label}
               aria-label={c.label}
             />
@@ -497,6 +530,8 @@ export default function PreviewAnnotationOverlay({
               type="button"
               className={`annotation-stroke-btn${activeStrokeWidth === s.width ? ' active' : ''}`}
               onClick={() => setActiveStrokeWidth(s.width)}
+              aria-label={s.label}
+              aria-pressed={activeStrokeWidth === s.width}
               title={s.label}
             >
               <span
@@ -516,7 +551,8 @@ export default function PreviewAnnotationOverlay({
             className="annotation-action-btn"
             onClick={handleUndo}
             disabled={items.length === 0}
-            title="Undo last stroke"
+            title={items.length ? "Undo last annotation" : "Draw or add a note to enable Undo"}
+            aria-label="Undo last annotation"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 7v6h6" />
@@ -529,7 +565,8 @@ export default function PreviewAnnotationOverlay({
             className="annotation-action-btn"
             onClick={handleClear}
             disabled={items.length === 0}
-            title="Clear all drawings"
+            title={items.length ? "Clear all drawings" : "No drawings to clear"}
+            aria-label="Clear all drawings"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="3 6 5 6 21 6" />
@@ -546,7 +583,7 @@ export default function PreviewAnnotationOverlay({
           className="annotation-send-btn"
           onClick={handleOpenSendModal}
           disabled={items.length === 0 || isCapturing}
-          title="Send drawing and prompt to AI agent"
+          title={items.length ? "Send drawing and prompt to AI agent" : "Draw or add a note before sending"}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
@@ -562,7 +599,7 @@ export default function PreviewAnnotationOverlay({
           title="Exit draw mode"
           aria-label="Exit draw mode"
         >
-          ✕
+          <BrowserActionIcon name="close" />
         </button>
       </div>
 
@@ -573,6 +610,12 @@ export default function PreviewAnnotationOverlay({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={() => {
+          setIsDrawing(false);
+          startPointRef.current = null;
+          currentPathRef.current = [];
+          redrawCanvas();
+        }}
       />
 
       {/* Inline Text Input overlay when clicking with Text tool */}
@@ -603,10 +646,10 @@ export default function PreviewAnnotationOverlay({
       {/* Send Prompt & Target Selector Modal */}
       {isPromptModalOpen && (
         <div className="annotation-modal-backdrop" onClick={() => setIsPromptModalOpen(false)}>
-          <div className="annotation-modal-card" onClick={(e) => e.stopPropagation()}>
+          <div className="annotation-modal-card" role="dialog" aria-label="Send drawing to agent" onClick={(e) => e.stopPropagation()}>
             <div className="annotation-modal-header">
               <div className="annotation-modal-title">
-                <span className="annotation-modal-icon">🎨</span>
+                <span className="annotation-modal-icon"><BrowserActionIcon name="draw" /></span>
                 <h3>Send Drawing to AI Agent</h3>
               </div>
               <button
@@ -614,7 +657,7 @@ export default function PreviewAnnotationOverlay({
                 className="annotation-modal-close"
                 onClick={() => setIsPromptModalOpen(false)}
               >
-                ✕
+                <BrowserActionIcon name="close" />
               </button>
             </div>
 
@@ -623,7 +666,7 @@ export default function PreviewAnnotationOverlay({
               {compositeSnapshot && (
                 <div className="annotation-snapshot-preview" title="Composite drawing on site">
                   <img src={compositeSnapshot} alt="Site drawing snapshot" />
-                  <span className="annotation-snapshot-tag">Annotated Preview</span>
+                  <span className="annotation-snapshot-tag">Annotated Browser</span>
                 </div>
               )}
 
@@ -643,23 +686,21 @@ export default function PreviewAnnotationOverlay({
 
                 {availableTargets.length > 1 && (
                   <div className="annotation-target-dropdown-wrap">
-                    <select
-                      className="annotation-target-dropdown"
-                      value={selectedTargetId ?? ''}
-                      onChange={(e) => setSelectedTargetId(Number(e.target.value))}
-                    >
-                      {availableTargets.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} ({t.isChatView ? 'Chat UI' : 'Terminal'})
-                        </option>
-                      ))}
-                    </select>
+                  <Dropdown
+                    options={availableTargets.map((target) => ({ value: String(target.id), label: target.name, sublabel: target.isChatView ? 'Chat' : 'Terminal' }))}
+                    value={currentTarget ? String(currentTarget.id) : ''}
+                    onChange={(value) => setSelectedTargetId(Number(value))}
+                    placeholder="Choose an agent"
+                    ariaLabel="Target AI agent"
+                    boundarySelector=".annotation-modal-card"
+                    disableTooltips
+                  />
                   </div>
                 )}
 
                 {availableTargets.length === 0 && (
                   <div className="annotation-no-target-warning">
-                    <span>⚠️ No AI agent is currently running. Start an agent in Terminal to send directly.</span>
+                    <span>No AI agent is currently running. Start an agent in Terminal to send directly.</span>
                   </div>
                 )}
               </div>
@@ -702,7 +743,7 @@ export default function PreviewAnnotationOverlay({
                 onClick={handleCopyImage}
                 title="Copy drawing base64"
               >
-                📋 Copy Image
+                <BrowserActionIcon name="copy" /> Copy Image
               </button>
 
               <button

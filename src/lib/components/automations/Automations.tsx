@@ -86,17 +86,18 @@ export function AutomationDialog({ close }: { close: () => void }) {
   useEffect(() => {
     if (!remote || tab !== 'history') return;
     let alive = true;
-    const load = () => fetchBoxRuns().then(list => { if (alive) { setBoxRuns(list); setBoxError(''); } })
+    const mine = new Set(automations.filter(a => a.runOn === 'box' && a.projectId === project?.id).map(a => a.id));
+    const load = () => fetchBoxRuns().then(list => { if (alive) { setBoxRuns(list.filter(r => mine.has(r.automationId))); setBoxError(''); } })
       .catch(e => { if (alive) setBoxError(String(e)); });
     void load();
     const timer = window.setInterval(load, 15_000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [remote, tab]);
+  }, [remote, tab, automations, project?.id]);
   async function showLog(run: BoxRun) {
     if (openLog?.id === run.id) { setOpenLog(null); return; }
     if (!run.log || !project) return;
     try {
-      const text = await backendInvoke<string>('fs_read_file', { path: `${project.root_path}/${run.log}` });
+      const text = await backendInvoke<string>('fs_read_file', { path: run.logPath ?? `${project.root_path}/${run.log}` });
       setOpenLog({ id: run.id, text: text.length > 20_000 ? `… ${text.length - 20_000} earlier characters hidden …\n${text.slice(-20_000)}` : text || '(The run printed nothing.)' });
     } catch (e) { setOpenLog({ id: run.id, text: `Could not read the log: ${String(e)}` }); }
   }

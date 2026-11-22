@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock Tauri-dependent notification module before importing preview
 vi.mock('./notification', () => ({
@@ -19,11 +19,43 @@ import {
   previewTabs,
   activePreviewTabId,
   currentUrl,
+  openUrlInPreviewPanel,
+  proxyPort,
   parseLocalPreviewUrl,
   parseLocalFilePreviewUrl,
   type PreviewTab,
 } from './preview';
 import { get } from '$lib/stores/storeCompat';
+import { browserOpenLinksIn, browserOpenLinksInBackground } from './settings';
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+
+describe('browser link preferences', () => {
+  beforeEach(resetStores);
+  afterEach(() => {
+    browserOpenLinksIn.set('preview');
+    browserOpenLinksInBackground.set(false);
+    proxyPort.set(null);
+    invoke.mockClear();
+  });
+
+  it('routes links to the system browser without a mounted preview', async () => {
+    browserOpenLinksIn.set('external');
+    await openUrlInPreviewPanel('https://example.com/');
+    expect(invoke).toHaveBeenCalledWith('preview_open_in_browser', { url: 'https://example.com/' });
+    expect(get(previewTabs)).toHaveLength(1);
+  });
+
+  it('opens a background tab without replacing the active page', async () => {
+    browserOpenLinksInBackground.set(true);
+    proxyPort.set(7234);
+    await openUrlInPreviewPanel('https://example.com/');
+    expect(getActiveTab().id).toBe('test-tab-1');
+    expect(get(currentUrl)).toBe('/');
+    expect(get(previewTabs).at(-1)?.url).toBe('https://example.com/');
+  });
+});
 
 /**
  * Create a fresh singleton state for each test.

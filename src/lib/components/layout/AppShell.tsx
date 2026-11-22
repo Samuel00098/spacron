@@ -170,7 +170,7 @@ const ROOM_TITLES: Record<Exclude<RoomId, AgentRoomId>, string> = {
   terminal: 'Terminal',
   'dev-terminal': 'Terminal',
   editor: 'Editor',
-  preview: 'Preview',
+  preview: 'Browser',
   review: 'Review',
   http: 'HTTP',
   tasks: 'Tasks',
@@ -1237,7 +1237,7 @@ export default function AppShell() {
           // The raw launch command too: `roomKind` shows the product name now,
           // and "focus claude" must still find the Claude Code room.
           const command = isAgentRoomId(id) ? getAgentSessionForRoom(id)?.agentPreset ?? '' : '';
-          const labels = [roomTitle(id), roomKind(id), id, command].filter(Boolean).map((label) => label.toLowerCase());
+          const labels = [roomTitle(id), roomKind(id), id, command].filter((label): label is string => Boolean(label)).map((label) => label.toLowerCase());
           return labels.some((label) => label === wanted || label.includes(wanted) || wanted.includes(label));
         }) ?? null
       );
@@ -2003,6 +2003,7 @@ export default function AppShell() {
 
   /** Point the layout stores at a tab's surface. */
   function applyRightTab(tab: RightSidebarTabItem) {
+    if (tab.surface === 'preview' && layoutState.previewVisible && !layoutState.previewDocked) return;
     if (tab.surface === 'preview') {
       if (tab.previewTabId && get(previewTabs).some((p) => p.id === tab.previewTabId)) {
         selectPreviewBrowserTab(tab.previewTabId);
@@ -2023,6 +2024,7 @@ export default function AppShell() {
 
   /** "+" menu / picker: always opens a new tab, even for a surface already open. */
   function openRightSurfaceTab(surface: RightSurfaceId) {
+    if (surface === 'preview' && layoutState.previewVisible && !layoutState.previewDocked) return;
     setSurfaceMenuAnchor(null);
     let previewTabId: string | undefined;
     if (surface === 'preview') {
@@ -2037,7 +2039,11 @@ export default function AppShell() {
     activateRightTab(tab);
   }
 
+  const mobileExplicitlyClosedRef = useRef(false);
   function closeRightTab(tab: RightSidebarTabItem) {
+    if (tab.surface === 'mobile') {
+      mobileExplicitlyClosedRef.current = true;
+    }
     const index = rightTabs.findIndex((t) => t.id === tab.id);
     const remaining = rightTabs.filter((t) => t.id !== tab.id);
     setRightTabs(remaining);
@@ -2075,6 +2081,17 @@ export default function AppShell() {
     rightSyncRef.current = { open: rightSidebarOpen, surface: storeRightSurface };
     if (!rightSidebarOpen) {
       rightSurfaceChosenRef.current = false;
+      // When right sidebar is closed while mobile device was open, auto-float it over chat
+      if (prev.open && (activeRightTab?.surface === 'mobile' || prev.surface === 'mobile')) {
+        const explicitlyClosed =
+          sessionStorage.getItem('spacron:mobile:explicitly-closed') === '1' || mobileExplicitlyClosedRef.current;
+        if (!explicitlyClosed) {
+          localStorage.setItem('spacron.mobile.openDeviceOnMount', '1');
+          window.dispatchEvent(new CustomEvent('spacron:mobile-float-device'));
+        }
+        sessionStorage.removeItem('spacron:mobile:explicitly-closed');
+        mobileExplicitlyClosedRef.current = false;
+      }
       return;
     }
     const opened = !prev.open;
@@ -2145,7 +2162,8 @@ export default function AppShell() {
 
   function renderSurfaceList(itemClass: string) {
     return rightSurfaces.map((surface) => {
-      const available = surfaceAvailable(surface);
+      const inRoom = surface.id === 'preview' && layoutState.previewVisible && !layoutState.previewDocked;
+      const available = surfaceAvailable(surface) && !inRoom;
       return (
         <li key={surface.id} role="none">
           <button
@@ -2154,7 +2172,7 @@ export default function AppShell() {
             className={itemClass}
             onClick={() => openRightSurfaceTab(surface.id)}
             disabled={!available}
-            title={available ? `${surface.title} (${surface.shortcut})` : `${surface.title} — open a project first`}
+            title={inRoom ? 'Browser is open in the main room' : available ? `${surface.title} (${surface.shortcut})` : `${surface.title} — open a project first`}
             aria-keyshortcuts={surface.shortcut}
           >
             <span className="right-surface-icon" aria-hidden="true">{surface.icon}</span>
@@ -2237,7 +2255,7 @@ export default function AppShell() {
         />
         <header className={`drawer-header right-sidebar-header${rightTabs.length === 0 ? ' is-picker' : ''}`}>
           <div className="right-sidebar-tabs" role="tablist" aria-label="Open surfaces">
-            {rightTabs.map((tab) => {
+            {rightTabs.filter((tab) => tab.surface !== 'preview' || !layoutState.previewVisible || layoutState.previewDocked).map((tab) => {
               const meta = surfaceMeta(tab.surface);
               const active = tab.id === activeRightTabId;
               return (
@@ -2924,7 +2942,7 @@ export default function AppShell() {
     },
     {
       id: 'preview',
-      title: 'Preview',
+      title: 'Browser',
       active: layoutState.previewVisible,
       onClick: () => togglePanelRoom('preview'),
       icon: <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>,
@@ -3294,7 +3312,7 @@ export default function AppShell() {
     if (id === 'terminal' || id === 'dev-terminal') return 'terminal';
     if (id === 'workspace') return layoutState.sidebarTab;
     if (id === 'deepseek') return 'DeepSeek Harness';
-    return 'tool';
+    return undefined;
   }
 
   function roomIcon(id: RoomId) {
@@ -3545,7 +3563,7 @@ export default function AppShell() {
                 {roomGlyph}
               </span>
             )}
-            <span className="room-kind">{roomKind(id)}</span>
+            {roomKind(id) && <span className="room-kind">{roomKind(id)}</span>}
             <span className="room-name">{title}</span>
           </button>
           <div className="room-actions">
