@@ -1,5 +1,25 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { get } from '$lib/stores/storeCompat';
+import { remoteTarget } from '$lib/stores/remoteWorkspace';
+import { backendInvoke } from '$lib/services/backend';
+import { onRemoteEvent } from '$lib/services/pty-bridge-remote';
+
+type Subscribe = <T>(name: string, handler: (event: { payload: T }) => void) => Promise<UnlistenFn>;
+
+/**
+ * On a remote workspace the agent runs on the box (spacron-server's
+ * acp_bridge), so its calls go over the remote socket and its events come back
+ * as remote events. Chosen once per session: a session never changes host.
+ */
+function chatTransport(): { call: typeof invoke; subscribe: Subscribe } {
+  if (!get(remoteTarget)) return { call: invoke, subscribe: listen as unknown as Subscribe };
+  return {
+    call: ((cmd: string, args?: Record<string, unknown>) => backendInvoke(cmd, args)) as typeof invoke,
+    subscribe: (async <T>(name: string, handler: (event: { payload: T }) => void) =>
+      onRemoteEvent(name, (payload) => handler({ payload: payload as T }))) as Subscribe,
+  };
+}
 
 export type AcpNotification = Record<string, unknown>;
 export type AcpServerRequest = {
@@ -25,17 +45,18 @@ export interface AcpSession {
 let nextRequestId = 0;
 
 export async function openAcpSession(command: string, args: string[], cwd: string, env: Record<string, string> = {}, rawArgs?: string): Promise<AcpSession> {
+  const { call, subscribe } = chatTransport();
   // Fields inside `args` keep their Rust (snake_case) names: Tauri only renames
   // a command's top-level parameters. `rawArgs` here was silently dropped and
   // `cmd.exe` started as an idle shell with no command.
-  const { id } = await invoke<{ id: number }>('acp_start', { args: { command, args, cwd, env, raw_args: rawArgs ?? null } });
+  const { id } = await call<{ id: number }>('acp_start', { args: { command, args, cwd, env, raw_args: rawArgs ?? null } });
   let closed = false;
   return {
     id,
     async request<T>(method: string, params: Record<string, unknown>) {
       if (closed) throw new Error('ACP session is closed');
       const requestId = `spacron-${Date.now()}-${++nextRequestId}`;
-      const response = await invoke<Record<string, unknown>>('acp_request', {
+      const response = await call<Record<string, unknown>>('acp_request', {
         id,
         requestId,
         method,
@@ -48,44 +69,47 @@ export async function openAcpSession(command: string, args: string[], cwd: strin
       return response.result as T;
     },
     onNotification(handler: (notification: AcpNotification) => void) {
-      return listen<AcpNotification>(`acp://${id}/notification`, (event) => handler(event.payload));
+      return subscribe<AcpNotification>(`acp://${id}/notification`, (event) => handler(event.payload));
     },
     onRequest(handler: (request: AcpServerRequest) => void) {
-      return listen<AcpServerRequest>(`acp://${id}/request`, (event) => handler(event.payload));
+      return subscribe<AcpServerRequest>(`acp://${id}/request`, (event) => handler(event.payload));
     },
     onStderr(handler: (text: string) => void) {
-      return listen<{ text?: string }>(`acp://${id}/stderr`, (event) => {
+      return subscribe<{ text?: string }>(`acp://${id}/stderr`, (event) => {
         if (typeof event.payload.text === 'string') handler(event.payload.text);
       });
     },
     onRawLine(handler: (text: string) => void) {
-      return listen<{ text?: string }>(`acp://${id}/raw`, (event) => {
+      return subscribe<{ text?: string }>(`acp://${id}/raw`, (event) => {
         if (typeof event.payload.text === 'string') handler(event.payload.text);
       });
     },
     onExit(handler: () => void) {
-      return listen<Record<string, unknown>>(`acp://${id}/exit`, () => handler());
+      return subscribe<Record<string, unknown>>(`acp://${id}/exit`, () => handler());
     },
     async respond(requestId, result, error) {
-      await invoke('acp_respond', { id, requestId, result, error: error ?? null });
+      await call('acp_respond', { id, requestId, result, error: error ?? null });
     },
     async notify(method, params) {
       if (closed) return;
-      await invoke('acp_notify', { id, method, params });
+      await call('acp_notify', { id, method, params });
     },
     async writeRaw(text) {
       if (closed) throw new Error('ACP session is closed');
-      await invoke('acp_write_raw', { id, text });
+      await call('acp_write_raw', { id, text });
     },
     async close() {
       if (closed) return;
       closed = true;
-      await invoke('acp_close', { id });
+      await call('acp_close', { id });
     },
   };
 }
 
 function windowsHost(): boolean {
+  // The agent runs on the box when a remote is active, and the box is not
+  // this Windows machine, so no `cmd.exe` shim there.
+  if (get(remoteTarget)) return false;
   return typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
 }
 

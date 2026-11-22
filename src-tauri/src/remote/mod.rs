@@ -41,6 +41,7 @@ use crate::pty::session::{self, DataSink, ExitSink};
 use crate::pty::shell::{self, ShellConfig};
 use crate::state::WriteRateLimiter;
 
+mod acp_bridge;
 mod automations;
 mod tunnel;
 
@@ -376,6 +377,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<ServerState>) {
     // dead so the still-running PTY sessions shed them (output keeps buffering for
     // a later re-attach — sessions intentionally survive a disconnect).
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
+    // Chat-view agents running here send their events to every connected desktop.
+    acp_bridge::attach_client(out_tx.clone());
     let writer = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
             if sender.send(msg).await.is_err() {
@@ -541,6 +544,16 @@ fn handle_control(
                 out,
                 json!({ "t": "shells", "reqId": req_id, "list": shell::available_shells() }),
             );
+        }
+        ClientMsg::Invoke { req_id, cmd, args } if cmd.starts_with("acp_") => {
+            let reply_out = out.clone();
+            let handled = acp_bridge::handle(&cmd, &args, &state.workspace, move |result| match result {
+                Ok(value) => send_json(&reply_out, json!({ "t": "invokeOk", "reqId": req_id, "value": value })),
+                Err(e) => send_json(&reply_out, json!({ "t": "invokeErr", "reqId": req_id, "message": e })),
+            });
+            if handled.is_none() {
+                send_json(out, json!({ "t": "invokeErr", "reqId": req_id, "message": format!("unsupported remote command: {cmd}") }));
+            }
         }
         ClientMsg::Invoke { req_id, cmd, args } if cmd == "search_in_project" => {
             // Project search walks the whole tree, so it runs off this loop and

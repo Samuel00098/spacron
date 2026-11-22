@@ -267,7 +267,12 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
   const runtime: Runtime = { session: null, unlisten: [], turnId: null, cwd };
   runtimes.set(sessionId, runtime);
   try {
-    const launch = await invoke<{ command: string; args: string[]; env: Record<string, string> }>('codex_app_server_launch');
+    // On a remote the app server runs on the box, found on its own PATH.
+    const { remoteTarget } = await import('$lib/stores/remoteWorkspace');
+    const { get: readStore } = await import('$lib/stores/storeCompat');
+    const launch = readStore(remoteTarget)
+      ? { command: 'codex', args: ['app-server'], env: {} as Record<string, string> }
+      : await invoke<{ command: string; args: string[]; env: Record<string, string> }>('codex_app_server_launch');
     const accountEnv = await accountEnvFor('codex', opts.accountId ?? null);
     const session = await openAcpSession(launch.command, launch.args, cwd, { ...launch.env, ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
     runtime.session = session;

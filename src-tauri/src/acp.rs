@@ -47,6 +47,9 @@ impl Drop for AcpRequest {
     }
 }
 
+/// Where an agent process's events go: `(event name, payload)`.
+pub type AcpEmit = Arc<dyn Fn(&str, Value) + Send + Sync>;
+
 #[derive(Default)]
 pub struct AcpManager {
     processes: Mutex<HashMap<u32, Arc<AcpProcess>>>,
@@ -153,6 +156,22 @@ impl AcpManager {
         args: AcpStartArgs,
         app: tauri::AppHandle,
     ) -> Result<AcpStartResult, String> {
+        self.start_with(
+            args,
+            Arc::new(move |name: &str, payload: Value| {
+                drop(tauri::Emitter::emit(&app, name, payload));
+            }),
+        )
+    }
+
+    /// Start an agent process, delivering its events through `emit` as
+    /// `(event name, payload)`. The desktop emits Tauri events; the remote
+    /// server forwards them over its WebSocket (`remote/acp_bridge.rs`).
+    pub fn start_with(
+        self: &Arc<Self>,
+        args: AcpStartArgs,
+        emit: AcpEmit,
+    ) -> Result<AcpStartResult, String> {
         let command = args.command.trim();
         if command.is_empty() || args.cwd.trim().is_empty() {
             return Err("ACP command and working directory are required".into());
@@ -209,17 +228,13 @@ impl AcpManager {
         });
         let reader_process = Arc::clone(&process);
         let manager = Arc::clone(self);
-        let stderr_app = app.clone();
+        let stderr_emit = Arc::clone(&emit);
         thread::Builder::new()
             .name(format!("spacron-acp-stderr-{id}"))
             .spawn(move || {
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                     if !line.trim().is_empty() {
-                        let _ = tauri::Emitter::emit(
-                            &stderr_app,
-                            &format!("acp://{id}/stderr"),
-                            json!({ "text": line }),
-                        );
+                        stderr_emit(&format!("acp://{id}/stderr"), json!({ "text": line }));
                     }
                 }
             })
@@ -231,9 +246,7 @@ impl AcpManager {
                     let Ok(line) = line else { break };
                     let Ok(message) = serde_json::from_str::<Value>(&line) else {
                         if !line.trim().is_empty() {
-                            let _ = tauri::Emitter::emit(
-                                &app,
-                                &format!("acp://{id}/raw"),
+                            emit(&format!("acp://{id}/raw"),
                                 json!({ "text": line }),
                             );
                         }
@@ -245,9 +258,7 @@ impl AcpManager {
                             .get("method")
                             .and_then(Value::as_str)
                             .unwrap_or_default();
-                        let _ = tauri::Emitter::emit(
-                            &app,
-                            &format!("acp://{id}/request"),
+                        emit(&format!("acp://{id}/request"),
                             json!({
                                 "requestId": request_id,
                                 "method": method,
@@ -269,16 +280,12 @@ impl AcpManager {
                             // `{type: "response", id, …}` to commands written
                             // with `acp_write_raw`) would otherwise be dropped
                             // here silently ("Pi did not answer get_state").
-                            let _ = tauri::Emitter::emit(
-                                &app,
-                                &format!("acp://{id}/notification"),
+                            emit(&format!("acp://{id}/notification"),
                                 message,
                             );
                         }
                     } else {
-                        let _ = tauri::Emitter::emit(
-                            &app,
-                            &format!("acp://{id}/notification"),
+                        emit(&format!("acp://{id}/notification"),
                             message,
                         );
                     }
@@ -289,7 +296,7 @@ impl AcpManager {
                 if let Ok(mut processes) = manager.processes.lock() {
                     processes.remove(&id);
                 }
-                let _ = tauri::Emitter::emit(&app, &format!("acp://{id}/exit"), json!({}));
+                emit(&format!("acp://{id}/exit"), json!({}));
             })
             .map_err(|error| format!("Could not start ACP reader: {error}"))?;
         self.processes

@@ -301,6 +301,13 @@ class RemotePtyConnection {
       case 'invokeErr':
         if (reqId !== null) this.reject(reqId, new Error(String(msg.message ?? 'remote error')));
         break;
+      case 'event': {
+        // Events from processes the box runs for us (chat-view agents, see
+        // remote/acp_bridge.rs), addressed by the same names Tauri events use.
+        const listeners = remoteEventListeners.get(String(msg.name));
+        if (listeners) for (const listener of [...listeners]) listener(msg.payload);
+        break;
+      }
       case 'fsChange':
         for (const listener of this.fsChangeListeners) listener(String(msg.path));
         break;
@@ -449,6 +456,20 @@ class RemotePtyConnection {
 }
 
 let conn: RemotePtyConnection | null = null;
+
+/** Module-level so a subscription outlives a reconnect's new connection object. */
+const remoteEventListeners = new Map<string, Set<(payload: unknown) => void>>();
+
+/** Subscribe to a named event from the box. Returns the unsubscribe function. */
+export function onRemoteEvent(name: string, listener: (payload: unknown) => void): () => void {
+  let set = remoteEventListeners.get(name);
+  if (!set) remoteEventListeners.set(name, (set = new Set()));
+  set.add(listener);
+  return () => {
+    set!.delete(listener);
+    if (!set!.size) remoteEventListeners.delete(name);
+  };
+}
 
 function activeConn(): RemotePtyConnection {
   const target = get(remoteTarget);
