@@ -14,7 +14,7 @@ export function useGlobalTooltips() {
     }
 
     let activeElement: HTMLElement | null = null;
-    let showTimeout: any = null;
+    let showTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const positionTooltip = (trigger: HTMLElement, tooltip: HTMLElement) => {
       const triggerRect = trigger.getBoundingClientRect();
@@ -70,13 +70,13 @@ export function useGlobalTooltips() {
 
       if (!content || !tooltipEl) return;
 
-      // Schedule the tooltip to show after a short delay
+      // Wait for a deliberate hover so passing across controls stays quiet.
       showTimeout = setTimeout(() => {
         if (!tooltipEl || !target) return;
         tooltipEl.textContent = content;
         tooltipEl.classList.add('visible');
         positionTooltip(target, tooltipEl);
-      }, 300); // 300ms premium delay
+      }, 700);
     };
 
     const handleMouseOut = (e: MouseEvent) => {

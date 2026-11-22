@@ -128,7 +128,23 @@ function VisualFrame({ src, title, height, onHeight, onCompose, className }: {
 }) {
   const channel = useMemo(() => crypto.randomUUID(), []);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
-  const theme = useMemo(() => encodeURIComponent(JSON.stringify(themeTokens())), []);
+  const [theme, setTheme] = useState(() => encodeURIComponent(JSON.stringify(themeTokens())));
+
+  useEffect(() => {
+    let pending = false;
+    const refreshTheme = () => {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        setTheme(encodeURIComponent(JSON.stringify(themeTokens())));
+      });
+    };
+    const observer = new MutationObserver(refreshTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {

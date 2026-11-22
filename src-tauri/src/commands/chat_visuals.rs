@@ -70,7 +70,7 @@ pub fn is_safe_visual_file(name: &str) -> bool {
 /// (passed in the URL fragment so it updates without a reload), and a height
 /// report so the chat can size the frame to the content.
 const SHELL_HEAD: &str = r#"<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;padding:0;background:transparent}body{color:var(--foreground,#e5e7eb);font-family:var(--font-sans,system-ui,sans-serif);font-size:14px;line-height:1.5;padding:12px}</style>
+<style>html,body{margin:0;padding:0;background:var(--background,#0f0f12);color:var(--foreground,#e5e7eb)}body{font-family:var(--font-sans,system-ui,sans-serif);font-size:14px;line-height:1.5;padding:12px}button,input,select,textarea{font:inherit;color:var(--foreground,#e5e7eb);background:var(--card,#16161a);border:1px solid var(--border,#27272f);border-radius:var(--radius,10px)}button{cursor:pointer}button:hover{background:var(--muted,#1c1c22)}input::placeholder,textarea::placeholder{color:var(--muted-foreground,#9ca3af)}a{color:var(--accent,#7c6af7)}</style>
 <script>(function(){
 var channel=new URLSearchParams(location.search).get('c')||'';
 function applyTheme(){try{var t=JSON.parse(decodeURIComponent(location.hash.slice(1)||'%7B%7D'));var r=document.documentElement;for(var k in t){if(/^--[a-z0-9-]+$/.test(k))r.style.setProperty(k,String(t[k]).replace(/[;{}<>]/g,''))}if(t['color-scheme'])r.style.colorScheme=t['color-scheme']}catch(e){}}
