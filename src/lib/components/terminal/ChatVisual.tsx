@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import type { ChatVisualsSpot } from '$lib/stores/terminal';
 
 /**
@@ -213,9 +213,9 @@ export function ChatVisual({ visual, spot, onCompose }: {
         <button
           type="button"
           className="chat-visual-btn"
-          title="Open in your browser"
-          aria-label="Open in your browser"
-          onClick={() => void invoke('preview_open_in_browser', { url: src }).catch(() => window.open(src, '_blank', 'noopener'))}
+          title="Open in app browser"
+          aria-label="Open in app browser"
+          onClick={() => void openUrlInPreviewPanel(src)}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
         </button>

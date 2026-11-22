@@ -8,6 +8,7 @@ import { loadLanguageExtension } from '$lib/components/editor/CodeEditor';
 import { detectLanguage } from '$lib/stores/editor';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import { isTauriRuntime } from '$lib/utils/tauri';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import './ChatDocument.css';
 
 /** Fence names models use that are not file extensions `detectLanguage` knows. */
@@ -139,7 +140,8 @@ export default function ChatDocument({ source, filePath, onOpenFile }: {
         if (href.startsWith('#')) {
           ref.current?.querySelector(`#${CSS.escape(decodeURIComponent(href.slice(1)))}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } else if (/^(?:https?:|mailto:)/i.test(href)) {
-          void invoke('preview_open_in_browser', { url: href }).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
+          if (/^https?:/i.test(href)) void openUrlInPreviewPanel(href);
+          else void invoke('preview_open_in_browser', { url: href }).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
         } else if (href && onOpenFile) {
           const path = decodeURI(href.split('#')[0]);
           onOpenFile(isAbsolutePath(path) ? path : `${folder}/${path.replace(/^\.\//, '')}`);

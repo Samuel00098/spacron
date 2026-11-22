@@ -1,3 +1,4 @@
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -53,11 +54,7 @@ export function useGithubSignIn() {
   }, [load]);
 
   async function openInBrowser(url: string) {
-    try {
-      await invoke('preview_open_in_browser', { url });
-    } catch {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    }
+    await openUrlInPreviewPanel(url);
   }
 
   /** Start a device-flow sign-in: shows the code, opens the approval page,

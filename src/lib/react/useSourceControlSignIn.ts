@@ -1,3 +1,4 @@
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -102,9 +103,7 @@ export function useSourceControlSignIn(provider: 'github' | 'gitlab' | 'bitbucke
     saveToken,
     signOut,
     openInBrowser: (url: string) => {
-      void invoke('preview_open_in_browser', { url }).catch(() => {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      });
+      void openUrlInPreviewPanel(url);
     },
   };
 }

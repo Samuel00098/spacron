@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import MarkdownPreview from '$lib/components/preview/MarkdownPreview';
 import { useStore } from '$lib/react/useStore';
 import {
@@ -156,7 +156,7 @@ function LinearIssueDetail({ issueId, projectId, onBack }: { issueId: string; pr
                 <span>{issue.state.name}</span>
                 {issue.assignee && <span>{issue.assignee.name}</span>}
                 <button type="button" className="tasks-action-btn" onClick={() => {
-                  void invoke('preview_open_in_browser', { url: issue.url })
+                  void openUrlInPreviewPanel(issue.url)
                     .catch((failure) => setError(linearError(failure)));
                 }}>Open in Linear</button>
               </div>

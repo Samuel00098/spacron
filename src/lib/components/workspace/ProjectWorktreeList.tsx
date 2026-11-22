@@ -1,3 +1,4 @@
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { linkedLinearIssueUrl } from '$lib/services/linear';
@@ -348,7 +349,7 @@ export default function ProjectWorktreeList({
                     {linearIssueUrl && (
                       <button type="button" role="menuitem" onClick={() => {
                         setMenuPath(null);
-                        void invoke('preview_open_in_browser', { url: linearIssueUrl })
+                        void openUrlInPreviewPanel(linearIssueUrl)
                           .catch(() => showToast('Could not open the Linear issue', 'error'));
                       }}>
                         Open Linear issue

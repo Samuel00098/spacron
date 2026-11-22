@@ -151,6 +151,7 @@ import {
 import { ToolRun } from './TerminalChatToolRun';
 import TerminalChatContextMenu, { type ChatMenuAgent, type ChatMenuPoint } from './TerminalChatContextMenu';
 import './TerminalChatView.css';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 
 /** What tool rows deep in the thread need from the view. */
 export type RichContextValue = {
@@ -2761,8 +2762,22 @@ export function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (im
       img.classList.add('terminal-chat-md-image');
       const src = img.getAttribute('src') ?? '';
       if (src && !/^(data:|blob:|https?:)/i.test(src)) {
-        const path = decodeURI(src.replace(/^file:\/\/\/?/i, ''));
-        void invoke<string>('chat_image_preview', { path }).then((url) => { img.src = url; }).catch(() => {});
+        let path = src.replace(/^file:\/\/\/?/i, '');
+        try { path = decodeURI(path); } catch { /* Keep the literal filename. */ }
+        const candidates = [resolvePath(rich?.cwd ?? null, path)];
+        if (rich?.cwd && !/^(?:[a-zA-Z]:[\\/]|[\\/])/.test(path) && !path.startsWith('generations/')) {
+          candidates.push(resolvePath(rich.cwd, `generations/${path}`));
+        }
+        void (async () => {
+          for (const candidate of candidates) {
+            try {
+              img.src = await invoke<string>('chat_image_preview', { path: candidate });
+              img.dataset.localPath = candidate;
+              return;
+            } catch { /* Try the next location. */ }
+          }
+          img.alt = `${img.alt || 'Image'} (preview unavailable)`;
+        })();
       }
     });
     root.querySelectorAll('table').forEach((table) => {
@@ -2810,8 +2825,11 @@ export function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (im
       onClick={(event) => {
         const target = event.target as HTMLElement;
         if (target instanceof HTMLImageElement) {
-          const images = Array.from(ref.current?.querySelectorAll<HTMLImageElement>('img') ?? []).map((i) => i.src);
-          onOpenImage(images, Math.max(0, images.indexOf(target.src)));
+          const elements = Array.from(ref.current?.querySelectorAll<HTMLImageElement>('img') ?? [])
+            .filter((image) => image.complete && image.naturalWidth > 0);
+          const images = elements.map((image) => image.src);
+          const index = elements.indexOf(target);
+          if (index >= 0) onOpenImage(images, index);
           return;
         }
         const anchor = target.closest('a');
@@ -2819,7 +2837,8 @@ export function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (im
         event.preventDefault();
         const href = anchor.getAttribute('href') ?? '';
         if (/^(?:https?:|mailto:)/i.test(href)) {
-          void invoke('preview_open_in_browser', { url: href }).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
+          if (/^https?:/i.test(href)) void openUrlInPreviewPanel(href);
+          else void invoke('preview_open_in_browser', { url: href }).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
         }
       }}
       dangerouslySetInnerHTML={innerHtml}

@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import { highlightLines, languageForPath } from '$lib/services/chat-highlight';
 import {
@@ -27,7 +28,7 @@ import type { QueuedMessage } from '$lib/services/terminal-chat-queue';
 import './TerminalChatRich.css';
 
 function openExternal(url: string) {
-  void invoke('preview_open_in_browser', { url }).catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
+  void openUrlInPreviewPanel(url);
 }
 
 function baseName(path: string): string {

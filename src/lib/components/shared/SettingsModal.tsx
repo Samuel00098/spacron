@@ -1,3 +1,4 @@
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalFocus } from '$lib/react/useModalFocus';
@@ -432,17 +433,9 @@ function GitBrandIcon() {
   );
 }
 
-/** Open a provider/help URL in the system default browser. A plain
- *  `<a href target="_blank">` is swallowed by the Tauri WebView, so route
- *  through the backend opener with a window.open fallback. */
+/** Open provider and help pages in the app browser. */
 function openExternalUrl(url: string) {
-  void (async () => {
-    try {
-      await invoke('preview_open_in_browser', { url });
-    } catch {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    }
-  })();
+  void openUrlInPreviewPanel(url);
 }
 
 /** Human-readable byte size, e.g. 654311424 -> "624 MB". */
