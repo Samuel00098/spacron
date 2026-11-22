@@ -57,10 +57,10 @@ use tokio_rustls::rustls::ClientConfig;
 
 /// A dialed upstream, plaintext or TLS-wrapped. Boxed because the two variants
 /// are different concrete types; `copy_bidirectional` only needs the traits.
-trait UpstreamIo: AsyncRead + AsyncWrite + Unpin + Send {}
+pub(crate) trait UpstreamIo: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> UpstreamIo for T {}
 
-type Upstream = Box<dyn UpstreamIo>;
+pub(crate) type Upstream = Box<dyn UpstreamIo>;
 
 /// Live relays keyed by upstream `scheme://host:port`, so reconnecting to the
 /// same remote reuses one listener instead of leaking a new one per attempt.
@@ -73,7 +73,7 @@ fn relays() -> &'static Mutex<HashMap<String, u16>> {
 
 /// Split a `ws://`/`wss://` URL into `(scheme, authority)` where authority is
 /// the `host:port` we dial (default ports: 80 for ws, 443 for wss).
-fn upstream_authority(url: &str) -> Result<(String, String), String> {
+pub(crate) fn upstream_authority(url: &str) -> Result<(String, String), String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("Invalid remote URL: {e}"))?;
     let scheme = match parsed.scheme() {
         "ws" | "wss" => parsed.scheme().to_string(),
@@ -97,7 +97,7 @@ fn upstream_authority(url: &str) -> Result<(String, String), String> {
 /// Default TLS client config: verify against the OS trust store, so both public
 /// CAs and operator-installed private CAs validate. `with_platform_verifier` is
 /// the rustls builder integration from rustls-platform-verifier.
-fn default_tls_config() -> Result<ClientConfig, String> {
+pub(crate) fn default_tls_config() -> Result<ClientConfig, String> {
     crate::remote::ensure_crypto_provider();
     use rustls_platform_verifier::BuilderVerifierExt;
     Ok(ClientConfig::builder()
@@ -108,7 +108,7 @@ fn default_tls_config() -> Result<ClientConfig, String> {
 /// Dial `authority`, wrapping the stream in TLS when `scheme == "wss"`.
 /// `tls_config` is only consulted for `wss://` — the plaintext path is a bare
 /// TCP connect, so no config is needed (or built) there.
-async fn connect_upstream(
+pub(crate) async fn connect_upstream(
     _scheme: &str,
     authority: &str,
     tls_config: Option<&ClientConfig>,

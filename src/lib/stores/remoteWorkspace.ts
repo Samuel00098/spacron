@@ -302,6 +302,34 @@ export function setReconnectOnStartup(id: string, value: boolean) {
   );
 }
 
+/**
+ * True while the reverse tunnel that gives agents on the box the Spacron MCP
+ * server is up (`remote_tunnel_open_mcp`). Agents there can then report their
+ * own status, so inferred pauses no longer need to stand in for them.
+ */
+export const remoteMcpTunnelOpen = writable(false);
+
+/** Open the MCP tunnel for the active remote. Failure is reported, not fatal:
+ *  terminals and files still work, agents just lose the Spacron tools. */
+async function openMcpTunnel(conn: RemoteConnection): Promise<void> {
+  try {
+    const { getMcpPort } = await import('./mcpBridge');
+    const mcpPort = await getMcpPort();
+    await invoke('remote_tunnel_open_mcp', { url: conn.url, token: conn.token, mcpPort });
+    remoteMcpTunnelOpen.set(true);
+  } catch (err) {
+    remoteMcpTunnelOpen.set(false);
+    console.warn('[remoteWorkspace] MCP tunnel unavailable:', err);
+    const { showToast } = await import('./notification');
+    showToast(`Agents on ${conn.name} won't have Spacron tools: ${(err as Error)?.message ?? String(err)}`, 'warning', 8000);
+  }
+}
+
+function closeTunnels(): void {
+  remoteMcpTunnelOpen.set(false);
+  void invoke('remote_tunnel_close_all').catch(() => { /* nothing was open */ });
+}
+
 /** The remote flagged to auto-reconnect on startup, if any. */
 export function startupRemote(): RemoteConnection | null {
   return get(remoteConnections).find((c) => c.reconnectOnStartup) ?? null;
@@ -346,6 +374,7 @@ export async function connectRemote(id: string): Promise<void> {
     await ensureRemoteConnected();
     const workspace = await import('./workspace');
     await workspace.openRemoteRoot(conn);
+    void openMcpTunnel({ ...conn, token: tokenCache.get(id) ?? conn.token });
   } catch (err) {
     console.error('Failed to connect to remote workspace:', err);
     // Roll back cleanly to Local so we don't leave a half-connected state.
@@ -391,6 +420,7 @@ export async function maybeAutoReconnectRemote(): Promise<void> {
  */
 export async function disconnectRemote(): Promise<void> {
   if (!get(activeRemoteId)) return;
+  closeTunnels();
   closeRemoteConnection();
   activeRemoteId.set(null);
   connectionStatus.set('disconnected');

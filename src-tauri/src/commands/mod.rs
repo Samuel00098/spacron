@@ -56,6 +56,7 @@ pub mod project_state;
 pub mod project_worktrees;
 pub mod remote_deploy;
 pub mod remote_relay;
+pub mod remote_tunnel;
 pub mod search;
 pub mod speech;
 pub mod secrets;

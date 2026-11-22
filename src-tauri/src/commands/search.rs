@@ -82,12 +82,32 @@ pub async fn search_in_project(
         return Err("The selected project is no longer open.".to_string());
     }
 
+    let roots: Vec<String> = projects.iter().map(|p| p.root_path.to_string_lossy().to_string()).collect();
+    search_roots(roots, &query, case_sensitive, whole_word, use_regex, include_glob, offset, limit).await
+}
+
+/// The search itself, over explicit roots. Shared by the desktop command above
+/// and the remote server, which searches its own workspace (`remote/mod.rs`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn search_roots(
+    roots: Vec<String>,
+    query: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+    use_regex: bool,
+    include_glob: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<SearchResponse, String> {
+    if query.is_empty() {
+        return Ok(SearchResponse { files: Vec::new(), total_matches: 0, truncated: false });
+    }
     // Build the matcher: escape the query unless the user opted into regex,
     // then optionally anchor it to word boundaries.
     let mut pattern = if use_regex {
-        query.clone()
+        query.to_string()
     } else {
-        regex::escape(&query)
+        regex::escape(query)
     };
     if whole_word {
         pattern = format!(r"\b(?:{})\b", pattern);
@@ -106,8 +126,8 @@ pub async fn search_in_project(
         let page_limit = limit.unwrap_or(MAX_TOTAL_MATCHES).clamp(1, MAX_TOTAL_MATCHES);
         let mut truncated = false;
 
-        'roots: for project in &projects {
-            let root = &project.root_path;
+        'roots: for root in &roots {
+            let root = Path::new(root);
 
             let mut builder = WalkBuilder::new(root);
             // Search dotfiles (.github, .env.example, …) but never descend into .git.

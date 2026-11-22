@@ -27,7 +27,7 @@
 import { agentExecutable } from './agent-rules-file';
 import { hasAnyTurnSignalChannel } from './agent-hook-signals';
 import { get } from '$lib/stores/storeCompat';
-import { remoteTarget } from '$lib/stores/remoteWorkspace';
+import { remoteMcpTunnelOpen, remoteTarget } from '$lib/stores/remoteWorkspace';
 
 /**
  * Executables Spacron writes an MCP server config for.
@@ -82,7 +82,9 @@ export function agentCanReport(
   // and not the laptop's server. An agent over there is silent because we gave
   // it no way to speak, so a pause we infer from its screen must not be
   // swallowed as a report it chose not to make.
-  if (get(remoteTarget)) return false;
+  // With the MCP tunnel up, an agent on the box reaches report_status like a
+  // local one, so only a remote without it is speechless.
+  if (get(remoteTarget) && !get(remoteMcpTunnelOpen)) return false;
   // The shell status channel reaches every agent Spacron spawned, whatever its
   // CLI — so in practice this is the branch that answers true for the ~30 CLIs
   // with no MCP config surface. Checked first because it is the specific fact

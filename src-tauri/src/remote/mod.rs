@@ -41,6 +41,8 @@ use crate::pty::session::{self, DataSink, ExitSink};
 use crate::pty::shell::{self, ShellConfig};
 use crate::state::WriteRateLimiter;
 
+mod tunnel;
+
 /// Binary frame kinds (first byte of a server→client binary message).
 const KIND_DATA: u8 = 0;
 const KIND_REPLAY: u8 = 1;
@@ -139,6 +141,11 @@ pub async fn serve(cfg: ServerConfig) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/pty", any(ws_handler))
         .route("/lsp", any(lsp_ws_handler))
+        // TCP tunnels: agents on the box reach the desktop's MCP server, and the
+        // preview reaches dev servers on the box. See `tunnel.rs`.
+        .route("/tunnel/listen", any(tunnel::listen_handler))
+        .route("/tunnel/accept", any(tunnel::accept_handler))
+        .route("/tunnel/dial", any(tunnel::dial_handler))
         .with_state(state.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
@@ -524,6 +531,33 @@ fn handle_control(
                 out,
                 json!({ "t": "shells", "reqId": req_id, "list": shell::available_shells() }),
             );
+        }
+        ClientMsg::Invoke { req_id, cmd, args } if cmd == "search_in_project" => {
+            // Project search walks the whole tree, so it runs off this loop and
+            // answers when done. The desktop's project id means nothing here:
+            // the box searches its own workspace.
+            let out = out.clone();
+            let root = state.workspace.to_string_lossy().to_string();
+            tokio::spawn(async move {
+                let flag = |k: &str| args.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+                let num = |k: &str| args.get(k).and_then(|v| v.as_u64()).map(|n| n as usize);
+                let result = crate::commands::search::search_roots(
+                    vec![root],
+                    args.get("query").and_then(|v| v.as_str()).unwrap_or(""),
+                    flag("caseSensitive"),
+                    flag("wholeWord"),
+                    flag("useRegex"),
+                    args.get("includeGlob").and_then(|v| v.as_str()).map(str::to_string),
+                    num("offset"),
+                    num("limit"),
+                )
+                .await
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()));
+                match result {
+                    Ok(value) => send_json(&out, json!({ "t": "invokeOk", "reqId": req_id, "value": value })),
+                    Err(e) => send_json(&out, json!({ "t": "invokeErr", "reqId": req_id, "message": e })),
+                }
+            });
         }
         ClientMsg::Invoke { req_id, cmd, args } => {
             // A couple of commands need server state (LSP), so they're handled here;

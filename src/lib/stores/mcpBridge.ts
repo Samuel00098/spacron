@@ -10,8 +10,10 @@
  *   4. Provide the MCP server port for writing agent config files.
  */
 import { invoke } from '@tauri-apps/api/core';
+import { backendInvoke } from '$lib/services/backend';
 import { listen } from '@tauri-apps/api/event';
 import { get } from './storeCompat';
+import { remoteTarget } from './remoteWorkspace';
 import {
   getSessionLabel,
   getActiveTerminalProjectId,
@@ -1078,6 +1080,12 @@ const CLAUDE_EXECUTABLES = new Set(['claude']);
  * Returns `''` on any failure: an agent with no cross-agent tools is worse than
  * one with them, but far better than one that fails to launch.
  */
+async function writeRemoteLaunchConfig(projectRoot: string, sessionId: number | undefined, content: string): Promise<string> {
+  const path = `${projectRoot}/.spacron/mcp-launch-${sessionId ?? 'shared'}.json`;
+  await backendInvoke('fs_write_file', { path, content });
+  return path;
+}
+
 export async function mcpLaunchFlags(
   preset: string,
   projectRoot?: string,
@@ -1124,9 +1132,13 @@ export async function mcpLaunchFlags(
     for (const { key, server } of enabledServers(userServers())) {
       servers[key] = standardEntry(server);
     }
-    const configPath = await invoke<string>('mcp_write_launch_config', {
-      content: JSON.stringify({ mcpServers: servers }, null, 2),
-    });
+    const content = JSON.stringify({ mcpServers: servers }, null, 2);
+    // On a remote the agent runs on the box, so its config has to be there too.
+    // It goes in `.spacron/` (excluded from git by ensureMcpConfigsIgnored), one
+    // file per session so concurrent launches never read each other's token.
+    const configPath = get(remoteTarget)
+      ? await writeRemoteLaunchConfig(projectRoot, sessionId, content)
+      : await invoke<string>('mcp_write_launch_config', { content });
     return ` --mcp-config "${configPath}"`;
   } catch (e) {
     console.warn('[mcp] Could not write Claude MCP config; agent launches without Spacron tools:', e);
@@ -1205,7 +1217,7 @@ async function removeLegacyClaudeConfig(projectRoot: string): Promise<void> {
   const root = projectRoot?.replace(/[\\/]+$/, '');
   if (!root) return;
   try {
-    await invoke('fs_delete', { path: `${root}/.spacron/mcp/claude.json` });
+    await backendInvoke('fs_delete', { path: `${root}/.spacron/mcp/claude.json` });
   } catch {
     // Never existed, or already cleaned up.
   }
@@ -1293,7 +1305,7 @@ export async function ensureMcpConfigsIgnored(projectRoot: string): Promise<void
   try {
     let current = '';
     try {
-      current = await invoke<string>('fs_read_file', { path: excludePath });
+      current = await backendInvoke<string>('fs_read_file', { path: excludePath });
     } catch {
       // No exclude file (or no .git at all) — a fresh one is still valid.
     }
@@ -1319,7 +1331,7 @@ export async function ensureMcpConfigsIgnored(projectRoot: string): Promise<void
     const body = current.includes(header) ? missing.join('\n') : [header, ...missing].join('\n');
     const separator = current.length && !current.endsWith('\n') ? '\n' : '';
 
-    await invoke('fs_write_file', {
+    await backendInvoke('fs_write_file', {
       path: excludePath,
       content: `${current}${separator}${body}\n`,
     });
@@ -1342,7 +1354,7 @@ async function injectProjectMcpJson(
   try {
     let config: Record<string, unknown> = {};
     try {
-      const existing = await invoke<string>('fs_read_file', { path: configPath });
+      const existing = await backendInvoke<string>('fs_read_file', { path: configPath });
       config = JSON.parse(existing);
     } catch {
       // File doesn't exist or isn't valid JSON — start fresh
@@ -1358,7 +1370,7 @@ async function injectProjectMcpJson(
     }
     config['mcpServers'] = servers;
 
-    await invoke('fs_write_file', {
+    await backendInvoke('fs_write_file', {
       path: configPath,
       content: JSON.stringify(config, null, 2) + '\n',
     });
@@ -1390,7 +1402,7 @@ async function mergeJsonMcpConfig(
   try {
     let config: Record<string, unknown> = {};
     try {
-      const existing = await invoke<string>('fs_read_file', { path: configPath });
+      const existing = await backendInvoke<string>('fs_read_file', { path: configPath });
       config = JSON.parse(existing);
     } catch {
       // File doesn't exist or isn't valid JSON — start fresh
@@ -1408,7 +1420,7 @@ async function mergeJsonMcpConfig(
     }
     config[section] = servers;
 
-    await invoke('fs_write_file', {
+    await backendInvoke('fs_write_file', {
       path: configPath,
       content: JSON.stringify(config, null, 2) + '\n',
     });

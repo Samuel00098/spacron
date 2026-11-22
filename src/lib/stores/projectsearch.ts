@@ -1,5 +1,6 @@
 import { writable, get } from '$lib/stores/storeCompat';
-import { invoke } from '@tauri-apps/api/core';
+// Routed: on a remote workspace the box searches its own files.
+import { backendInvoke } from '$lib/services/backend';
 import { useWorkspaceStore } from './zustand/workspace';
 import { DEFAULT_PROJECT_SEARCH_STATE, useProjectSearchStore, type SearchResponse } from './zustand/projectsearch';
 
@@ -56,7 +57,7 @@ export async function runProjectSearch(projectId: string | null): Promise<boolea
   }
   useProjectSearchStore.setState({ searchLoading: true, searchError: null });
   try {
-    const response = await invoke<SearchResponse>('search_in_project', {
+    const response = await backendInvoke<SearchResponse>('search_in_project', {
       projectId,
       query: state.searchQuery,
       caseSensitive: state.searchCaseSensitive,
