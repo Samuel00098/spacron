@@ -266,6 +266,12 @@ pub struct SpawnRequest {
     /// since nothing correlates a returned name with the task it was given.
     /// Empty string means "assign one for me".
     pub name: String,
+    /// Where the agent runs, as the user chose it: "new_worktree" (a fresh
+    /// isolated worktree and branch), "main" (the project's main checkout,
+    /// shared with the user) or "existing" (the worktree in `worktree_path`).
+    pub workspace: String,
+    /// Absolute path of the chosen existing worktree; empty otherwise.
+    pub worktree_path: String,
 }
 
 /// Always-managed wrapper around the server handle.
@@ -1265,11 +1271,75 @@ async fn assign_agent_name(state: &ServerState, requested: &str) -> Result<Strin
     Ok(assigned)
 }
 
+/// The placement choice is the user's, not the calling agent's: a worker in the
+/// main checkout edits the same files the user (and other agents) are editing,
+/// while a new worktree keeps it on its own branch. So it is a required
+/// argument, and the description tells the agent to ask.
+const WORKSPACE_PARAM_DESCRIPTION: &str = "Where the new agent works. ASK THE USER before calling — do not choose for them. Offer: 'new_worktree' = a fresh isolated git worktree on its own branch (safest; its changes are reviewed and merged back), 'main' = the project's main checkout, shared with the user and other agents (changes land directly, no branch), 'existing' = an existing worktree the user names (pass it in 'worktree').";
+const WORKTREE_PARAM_DESCRIPTION: &str = "Required when workspace is 'existing': the worktree's name, branch or path, as the user gave it.";
+
+/// Read and validate `workspace` / `worktree`. Returns (workspace, absolute
+/// worktree path or "") or a message telling the caller to ask the user.
+fn resolve_workspace(
+    args: Option<&serde_json::Map<String, serde_json::Value>>,
+    project_root: Option<&str>,
+) -> Result<(String, String), String> {
+    let workspace = args
+        .and_then(|a| a.get("workspace"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match workspace.as_str() {
+        "new_worktree" | "main" => Ok((workspace, String::new())),
+        "existing" => {
+            let wanted = args
+                .and_then(|a| a.get("worktree"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if wanted.is_empty() {
+                return Err("workspace 'existing' needs 'worktree': ask the user which worktree, by name, branch or path.".to_string());
+            }
+            let root = project_root.ok_or("No project is open, so there are no worktrees to choose from.")?;
+            let trees = crate::commands::project_worktrees::list_worktrees(std::path::Path::new(root))?;
+            let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+            let found = trees.iter().find(|t| {
+                !t.is_main
+                    && (t.name.eq_ignore_ascii_case(&wanted)
+                        || t.branch.as_deref().is_some_and(|b| b.eq_ignore_ascii_case(&wanted) || b.trim_start_matches("refs/heads/").eq_ignore_ascii_case(&wanted))
+                        || norm(&t.path) == norm(&wanted))
+            });
+            match found {
+                Some(t) => Ok((workspace, t.path.clone())),
+                None => {
+                    let names: Vec<String> = trees.iter().filter(|t| !t.is_main).map(|t| t.name.clone()).collect();
+                    Err(format!(
+                        "No worktree matches '{wanted}'. Existing worktrees: {}. Ask the user to pick one, or use 'new_worktree' or 'main'.",
+                        if names.is_empty() { "none".to_string() } else { names.join(", ") }
+                    ))
+                }
+            }
+        }
+        "" => Err("Missing 'workspace'. Ask the user where the new agent should work — a new isolated worktree ('new_worktree'), the main checkout ('main'), or an existing worktree ('existing' plus 'worktree') — then call again with their answer.".to_string()),
+        other => Err(format!("Unknown workspace '{other}'. Use 'new_worktree', 'main' or 'existing'.")),
+    }
+}
+
+fn workspace_label(workspace: &str) -> &'static str {
+    match workspace {
+        "main" => "the main checkout",
+        "existing" => "the chosen worktree",
+        _ => "a new isolated worktree",
+    }
+}
+
 fn tool_spawn_agent(presets: &[AgentPreset]) -> serde_json::Value {
     serde_json::json!({
         "name": "spawn_agent",
         "description": format!(
-            "Launch a new AI coding agent with an optional prompt. The new agent appears in its own terminal pane. Agents available in this workspace: {}.",
+            "Launch a new AI coding agent with an optional prompt. The new agent appears in its own terminal pane. Before calling, ask the user whether it should work in a new isolated worktree, the main checkout, or an existing worktree, and pass their answer as 'workspace'. Agents available in this workspace: {}.",
             describe_presets(presets).unwrap_or_else(|| "not reported yet — pass any preset command the user has configured".to_string())
         ),
         "inputSchema": {
@@ -1286,9 +1356,18 @@ fn tool_spawn_agent(presets: &[AgentPreset]) -> serde_json::Value {
                 "name": {
                     "type": "string",
                     "description": "Optional. The name to give the new agent, so you can address it with send_to_agent without calling list_agents first. Must not match an agent that is already running. Omit it unless the name means something to the user — a real name is assigned for you, and a generic label like 'agent-1' or 'claude-2' is replaced by one. The reply tells you the name that was used."
+                },
+                "workspace": {
+                    "type": "string",
+                    "enum": ["new_worktree", "main", "existing"],
+                    "description": WORKSPACE_PARAM_DESCRIPTION
+                },
+                "worktree": {
+                    "type": "string",
+                    "description": WORKTREE_PARAM_DESCRIPTION
                 }
             },
-            "required": ["preset"]
+            "required": ["preset", "workspace"]
         }
     })
 }
@@ -1451,7 +1530,7 @@ fn delegate_result(
 fn tool_delegate_task(presets: &[AgentPreset]) -> serde_json::Value {
     serde_json::json!({
         "name": "delegate_task",
-        "description": "Delegate a piece of work to a NEW agent and wait for its result. Prefer this over your own in-process sub-agents whenever the work WRITES CODE: the worker gets its own visible pane and its own git branch, so the user can watch it, steer it, and review its diff — none of which is possible for an in-process sub-agent. (For read-only research your own sub-agents are fine.) Returns the worker's report when it finishes, or status 'working' with a handle if it is still going — then call check_task with that handle.",
+        "description": "Delegate a piece of work to a NEW agent and wait for its result. Prefer this over your own in-process sub-agents whenever the work WRITES CODE: the worker gets its own visible pane and its own git branch, so the user can watch it, steer it, and review its diff — none of which is possible for an in-process sub-agent. (For read-only research your own sub-agents are fine.) Before calling, ask the user whether the worker should use a new isolated worktree, the main checkout, or an existing worktree, and pass their answer as 'workspace'. Returns the worker's report when it finishes, or status 'working' with a handle if it is still going — then call check_task with that handle.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1475,9 +1554,18 @@ fn tool_delegate_task(presets: &[AgentPreset]) -> serde_json::Value {
                 "wait_seconds": {
                     "type": "number",
                     "description": "Optional. How long to wait before returning 'working' (default 25, max 600)."
+                },
+                "workspace": {
+                    "type": "string",
+                    "enum": ["new_worktree", "main", "existing"],
+                    "description": WORKSPACE_PARAM_DESCRIPTION
+                },
+                "worktree": {
+                    "type": "string",
+                    "description": WORKTREE_PARAM_DESCRIPTION
                 }
             },
-            "required": ["preset", "prompt"]
+            "required": ["preset", "prompt", "workspace"]
         }
     })
 }
@@ -2507,6 +2595,12 @@ async fn handle_tool_call(
             // rather than silently renamed — `send_to_agent` resolves by name, so
             // two agents answering to one makes every later message ambiguous —
             // and a generic label is replaced by a real name from the app's pool.
+            let root = state.project_root.lock().await.clone();
+            let (workspace, worktree_path) = match resolve_workspace(args, root.as_deref()) {
+                Ok(w) => w,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
+            };
+
             let name = match assign_agent_name(&state, name).await {
                 Ok(n) => n,
                 Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
@@ -2516,6 +2610,8 @@ async fn handle_tool_call(
                 preset: preset.to_string(),
                 prompt: prompt.to_string(),
                 name: name.clone(),
+                workspace: workspace.clone(),
+                worktree_path,
             };
 
             let _ = state.spawn_tx.send(req.clone());
@@ -2527,9 +2623,10 @@ async fn handle_tool_call(
                 id,
                 serde_json::json!({ "content": [
                     { "type": "text", "text": format!(
-                        "Spawning '{}' as '{}'{}... It will appear in a new terminal. Address it as '{}'.",
+                        "Spawning '{}' as '{}' in {}{}... It will appear in a new terminal. Address it as '{}'.",
                         preset,
                         name,
+                        workspace_label(&workspace),
                         if prompt.is_empty() { String::new() } else { format!(" with prompt: {}", prompt) },
                         name
                     )}
@@ -2584,6 +2681,11 @@ async fn handle_tool_call(
                 }
             };
 
+            let (workspace, worktree_path) = match resolve_workspace(args, Some(&root)) {
+                Ok(w) => w,
+                Err(msg) => return Json(JsonRpcResponse::error(id, -32602, &msg)),
+            };
+
             // The worker's name is also its report filename and its handle, so it
             // has to be unique across running agents — a collision would make two
             // workers write over one report and make `send_to_agent` ambiguous.
@@ -2621,13 +2723,21 @@ async fn handle_tool_call(
                     files.join(", ")
                 )
             };
+            // A worker in the main checkout shares it with the user: committing
+            // there would put half-finished work on their branch.
+            let commit_rule = if workspace == "main" {
+                "You are working in the project's main checkout, shared with the user and other agents. Do not commit unless told to; leave your changes in the working tree."
+            } else {
+                "Commit your work on your branch as you go."
+            };
             let full_prompt = format!(
-                "{prompt}{ownership}\n\nCommit your work on your branch as you go.\n\
+                "{prompt}{ownership}\n\n{commit_rule}\n\
                  When you are FINISHED, write your summary to this exact absolute path:\n  {done}\n\
                  Say what you changed, which files, and how you verified it. Writing that file is how you signal you are done — nothing else counts.\n\
                  If you get stuck or need a decision, write what you need to this exact absolute path instead and stop:\n  {blocked}",
                 prompt = prompt,
                 ownership = ownership,
+                commit_rule = commit_rule,
                 done = done_path.display(),
                 blocked = blocked_path.display(),
             );
@@ -2636,6 +2746,8 @@ async fn handle_tool_call(
                 preset: preset.to_string(),
                 prompt: full_prompt,
                 name: name.clone(),
+                workspace,
+                worktree_path,
             };
             let _ = state.spawn_tx.send(req.clone());
             (state.spawn_fn)(req);
@@ -5229,5 +5341,61 @@ mod tests {
         )
         .await;
         assert_eq!(listed_agents(&state).await[0]["status"], "unknown");
+    }
+
+    // --- workspace choice for spawned agents ----------------------------------
+
+    fn ws_args(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn spawn_and_delegate_require_the_users_workspace_choice() {
+        for tool in all_tools(&[]) {
+            let name = tool["name"].as_str().unwrap();
+            if name != "spawn_agent" && name != "delegate_task" { continue; }
+            let required: Vec<&str> = tool["inputSchema"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+            assert!(required.contains(&"workspace"), "{name} must require workspace");
+            assert!(tool["description"].as_str().unwrap().contains("ask the user"), "{name} must tell the agent to ask");
+        }
+    }
+
+    #[test]
+    fn a_missing_workspace_tells_the_agent_to_ask_the_user() {
+        let err = resolve_workspace(Some(&ws_args(serde_json::json!({}))), None).unwrap_err();
+        assert!(err.contains("Ask the user"), "{err}");
+    }
+
+    #[test]
+    fn new_worktree_and_main_need_no_worktree_argument() {
+        for choice in ["new_worktree", "main", "MAIN"] {
+            let (ws, path) = resolve_workspace(Some(&ws_args(serde_json::json!({ "workspace": choice }))), None).unwrap();
+            assert_eq!(ws, choice.to_ascii_lowercase());
+            assert!(path.is_empty());
+        }
+    }
+
+    #[test]
+    fn existing_needs_a_named_worktree_and_rejects_unknown_choices() {
+        let err = resolve_workspace(Some(&ws_args(serde_json::json!({ "workspace": "existing" }))), Some("/repo")).unwrap_err();
+        assert!(err.contains("worktree"), "{err}");
+        assert!(resolve_workspace(Some(&ws_args(serde_json::json!({ "workspace": "anywhere" }))), None).is_err());
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_without_a_workspace_is_refused_before_anything_launches() {
+        let spawned = Arc::new(std::sync::Mutex::new(0));
+        let counter = spawned.clone();
+        let mut state = state_with_names(&["Iris"]).await;
+        state.spawn_fn = Arc::new(move |_| *counter.lock().unwrap() += 1);
+        let Json(resp) = handle_tool_call(
+            Some(serde_json::json!(1)),
+            Some(serde_json::json!({ "name": "spawn_agent", "arguments": { "preset": "claude" } })),
+            &state,
+            Caller { session_id: None },
+        )
+        .await;
+        assert!(resp.error.is_some());
+        assert_eq!(*spawned.lock().unwrap(), 0);
     }
 }

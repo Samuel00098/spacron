@@ -396,6 +396,14 @@ export interface SpawnRequest {
   prompt: string;
   /** Name the requesting agent asked for; empty means "assign one". */
   name: string;
+  /**
+   * Where the user chose for it to run, asked by the calling agent:
+   * 'new_worktree' | 'main' | 'existing'. Older servers omit it, which keeps
+   * the previous isolated-by-default behaviour.
+   */
+  workspace?: string;
+  /** Absolute path of the existing worktree (already validated by the server). */
+  worktree_path?: string;
 }
 
 export interface SendToAgentRequest {
@@ -572,7 +580,7 @@ export function initMcpBridge(): void {
   });
 
   listen<SpawnRequest>('mcp:spawn-agent', async (event) => {
-    const { preset, prompt, name: requestedName } = event.payload;
+    const { preset, prompt, name: requestedName, workspace = 'new_worktree', worktree_path: existingPath } = event.payload;
     console.log(`[mcp] Spawning agent: ${preset}${prompt ? ` (prompt: ${prompt})` : ''}`);
 
     try {
@@ -582,16 +590,19 @@ export function initMcpBridge(): void {
         throw new Error('DeepSeek Harness needs a task to start. Use delegate_task with a prompt.');
       }
 
-      // An agent-driven spawn is isolated by default. Without this every worker
-      // an orchestrator spawns edits the SAME working tree concurrently, and two
-      // workers touching one file silently clobber each other — the exact thing
-      // worktree isolation exists to prevent. There is no user in this path to
-      // ask (the placement dialog is interactive and this spawn arrives from a
-      // background process), and isolation is the safe default: the reconciler
-      // stages the branch back into the main checkout on its own.
+      // The calling agent asks the user where this agent should work and passes
+      // the answer (the MCP server refuses a spawn without one). 'new_worktree'
+      // is the isolated default: without it every worker edits the SAME working
+      // tree concurrently, and two workers touching one file clobber each other;
+      // the reconciler stages the branch back into the main checkout on its own.
+      // 'main' runs in the project root, and 'existing' in a worktree the user
+      // named — neither is registered for reconcile or cleanup, because the
+      // user owns those checkouts and closing the pane must not delete them.
       const projectId = getActiveTerminalProjectId();
       let worktree: WorktreeInfo | null = null;
-      if (projectId) {
+      const cwd = workspace === 'existing' ? existingPath || undefined : undefined;
+      if (workspace === 'existing' && !cwd) throw new Error('The chosen worktree was not found.');
+      if (projectId && workspace === 'new_worktree') {
         worktree = await createTaskWorktree({
           projectId,
           // No OrchestratorTask backs an MCP spawn, so synthesize the id the
@@ -615,7 +626,7 @@ export function initMcpBridge(): void {
       // in there: an agent gets its own room, and two xterms on one session id
       // is not renderable, so a claimed mosaic cell degrades to a dead
       // "<name> is open in its own room / Free this pane" placeholder.
-      const sessionId = await spawnAgentPreset(preset, worktree?.path, {
+      const sessionId = await spawnAgentPreset(preset, worktree?.path ?? cwd, {
         activate: false,
         projectId: projectId ?? undefined,
         // Registered before the CLI starts: this is what makes the reconciler
