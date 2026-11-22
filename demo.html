@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spacron Demo Preview Page</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --border: rgba(255, 255, 255, 0.1);
+      --success: #10b981;
+      --radius: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --accent: #4f46e5;
+        --accent-hover: #4338ca;
+        --border: rgba(0, 0, 0, 0.1);
+        --success: #059669;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+      line-height: 1.6;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    header {
+      text-align: center;
+      padding: 24px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 1rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    .card h3 {
+      font-size: 1.15rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      flex-grow: 1;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--accent);
+      width: fit-content;
+    }
+
+    .badge.success {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 18px;
+      background: var(--accent);
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background-color 0.15s ease;
+      width: fit-content;
+    }
+
+    .btn:hover {
+      background: var(--accent-hover);
+    }
+
+    .interactive-section {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .counter-wrap {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .counter-value {
+      font-size: 2rem;
+      font-weight: 700;
+      min-width: 48px;
+      text-align: center;
+    }
+
+    footer {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <span class="badge">Spacron Preview Ready</span>
+      <h1>Interactive Demo Page</h1>
+      <p class="subtitle">Use this page to test Orca Design Mode inspection, drawing annotations, and element prompt workflows.</p>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <span class="badge">Feature</span>
+        <h3>🎨 Design Mode</h3>
+        <p>Inspect DOM hierarchy, computed CSS styles, and generate structured prompts for agents directly.</p>
+        <button class="btn" onclick="alert('Inspect this button using Design Mode (Alt+D)!')">Inspect Element</button>
+      </div>
+
+      <div class="card">
+        <span class="badge">Annotation</span>
+        <h3>✏️ Live Drawing</h3>
+        <p>Use the Draw overlay to sketch arrows, draw rectangles, and write callouts over any section.</p>
+        <button class="btn" onclick="alert('Click Draw in the preview toolbar to annotate!')">Annotate Page</button>
+      </div>
+
+      <div class="card">
+        <span class="badge success">Targeting</span>
+        <h3>🤖 Dual Dispatch</h3>
+        <p>Send prompts and captured visual context automatically to Terminal or Chat UI agents.</p>
+        <button class="btn" onclick="alert('Select your target agent in the prompt panel!')">Target Agent</button>
+      </div>
+    </div>
+
+    <div class="interactive-section">
+      <h3>Interactive Counter Widget</h3>
+      <p style="color: var(--text-muted); font-size: 0.9rem;">Test button states, font rendering, and layout spacing adjustments:</p>
+      <div class="counter-wrap">
+        <button class="btn" id="dec-btn" style="background: rgba(255, 255, 255, 0.1); color: var(--text);">-</button>
+        <span class="counter-value" id="count-display">0</span>
+        <button class="btn" id="inc-btn">+</button>
+      </div>
+    </div>
+
+    <footer>
+      Spacron Workspace &bull; Created for testing preview inspection &bull; <span id="time-display"></span>
+    </footer>
+  </div>
+
+  <script>
+    let count = 0;
+    const countDisplay = document.getElementById('count-display');
+    document.getElementById('inc-btn').addEventListener('click', () => {
+      count++;
+      countDisplay.textContent = count;
+    });
+    document.getElementById('dec-btn').addEventListener('click', () => {
+      count--;
+      countDisplay.textContent = count;
+    });
+    document.getElementById('time-display').textContent = new Date().toLocaleTimeString();
+  </script>
+</body>
+</html>
