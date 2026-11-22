@@ -54,7 +54,7 @@ import { useStore } from '$lib/react/useStore';
 import { toggleTerminalTranscription, transcriptionActive } from '$lib/services/transcription-hotkey';
 import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
-import { getSessionVisuals, requestTerminalInput, terminalInputRequest } from '$lib/stores/terminal';
+import { getSessionVisuals, requestTerminalInput, terminalInputRequest, terminalChatInputRequest } from '$lib/stores/terminal';
 import { ChatVisual, splitReply } from './ChatVisual';
 import { AgentModeChip, AnswerReceipts, GoalPanel, SignInNotice, looksLikeAuthError } from './StructuredChatExtras';
 import { readChatDraft, writeChatDraft } from '$lib/services/structured-chat/drafts';
@@ -280,6 +280,8 @@ function useStructuredRuntime(agent: StructuredChatAgent | null | undefined, ses
  * Terminal sessions read/write the CLI transcript and PTY; structured sessions
  * read/write the provider runtime while the same pane and composer remain.
  */
+const forkedChatSessions = new Set<number>();
+
 export default function TerminalChatView({
   sessionId,
   agentPreset,
@@ -1279,7 +1281,12 @@ export default function TerminalChatView({
       permissionArgsOverride: `${args} ${permissionArgs(agent, permissionMode)}`.trim(),
     });
     if (id == null) setError(`Couldn't start a forked ${agentLabel}.`);
-    else applyLaunchView(id, agentPreset, 'chat');
+    else {
+      applyLaunchView(id, agentPreset, 'chat');
+      // A fork continues the existing conversation, so don't show the empty
+      // chat onboarding prompt cards over the inherited context.
+      forkedChatSessions.add(id);
+    }
   }
 
   async function rewindHere() {
@@ -1506,6 +1513,27 @@ export default function TerminalChatView({
     });
   }
 
+  // Receive prompts and element/drawing context from the web preview inspector or annotation overlay
+  useEffect(() => {
+    const unsub = terminalChatInputRequest.subscribe((req) => {
+      if (req && req.sessionId === sessionId) {
+        if (req.text) {
+          setDraft((current) => (current.trim() ? `${current.trim()}\n\n${req.text}` : req.text));
+        }
+        if (req.image) {
+          addAttachment({
+            path: req.image.path,
+            name: req.image.name,
+            preview: req.image.dataUrl ?? null,
+          });
+        }
+        terminalChatInputRequest.set(null);
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
+    });
+    return () => unsub();
+  }, [sessionId]);
+
   // A pasted image is saved to disk (the CLI gets its path) and shown as a chip;
   // text pastes are left to the textarea.
   async function onPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -1626,6 +1654,18 @@ export default function TerminalChatView({
     <div
       ref={viewRef}
       className="terminal-chat-view"
+      onMouseOver={(event) => {
+        const target = event.target instanceof Element ? event.target.closest('[title]') as HTMLElement | null : null;
+        if (!target || !event.currentTarget.contains(target)) return;
+        target.dataset.chatTooltipTitle ??= target.getAttribute('title') ?? '';
+        target.removeAttribute('title');
+      }}
+      onMouseOut={(event) => {
+        const target = event.target instanceof Element ? event.target.closest('[data-chat-tooltip-title]') as HTMLElement | null : null;
+        if (!target || target.contains(event.relatedTarget as Node | null)) return;
+        target.setAttribute('title', target.dataset.chatTooltipTitle ?? '');
+        delete target.dataset.chatTooltipTitle;
+      }}
       data-timestamps={showTimestamps ? '' : undefined}
       data-match-terminal={appearance.matchTerminal ? '' : undefined}
       data-contrast={appearance.contrast !== 100 ? '' : undefined}
@@ -1675,7 +1715,7 @@ export default function TerminalChatView({
         <div className="terminal-chat-thread" ref={setThreadEl}>
           {truncated && <div className="terminal-chat-notice">Earlier messages are in the terminal history</div>}
           {!loaded && <div className="terminal-chat-loading"><Dots /></div>}
-          {empty && isRunning && suggestedPrompts && !structuredMode && (
+          {empty && isRunning && suggestedPrompts && !structuredMode && !forkedChatSessions.has(sessionId) && (
             <div className="tcr-empty">
               <span>Ask {agentLabel} anything about {folderName ?? 'this folder'}</span>
               <SuggestedPrompts onPick={(text) => { setDraft(text); requestAnimationFrame(() => textareaRef.current?.focus()); }} />

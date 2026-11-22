@@ -61,6 +61,8 @@ import {
 import { promptBarImage, focusPromptBar, getActiveAgentSessionId, requestTerminalInput } from '$lib/stores/terminal';
 import { buildElementPrompt, type SelectedElementInfo } from '$lib/services/element-prompt';
 import DesignModePanel from './DesignModePanel';
+import PreviewAnnotationOverlay from './PreviewAnnotationOverlay';
+import { dispatchPromptToAgent } from '$lib/services/agent-target';
 import {
   browserDefaultPort,
   browserPreferredHost,
@@ -362,6 +364,7 @@ export default function PreviewPanel() {
   const [tempPort, setTempPort] = useState(String(port));
   const [inputUrl, setInputUrl] = useState(() => previewAddressBarValue(currentUrlValue));
   const [inspectMode, setInspectMode] = useState(false);
+  const [annotateMode, setAnnotateMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showPreviewThemeMenu, setShowPreviewThemeMenu] = useState(false);
   const [previewThemeMode, setPreviewThemeMode] = useProjectPanelState<PreviewThemeMode>('preview.themeMode', 'system');
@@ -885,6 +888,18 @@ export default function PreviewPanel() {
     }
   }, [getActiveIframeElement]);
 
+  const toggleAnnotateMode = useCallback(() => {
+    setAnnotateMode((prev) => {
+      const next = !prev;
+      if (next && inspectModeRef.current) {
+        setInspectMode(false);
+        inspectModeRef.current = false;
+        postInspectorState();
+      }
+      return next;
+    });
+  }, [postInspectorState]);
+
   const toggleInspectMode = useCallback(() => {
     setInspectMode((prev) => {
       const next = !prev;
@@ -892,6 +907,7 @@ export default function PreviewPanel() {
       setSelectedElementInfo(null);
       setSelectedElementScreenshot(null);
       if (next) {
+        setAnnotateMode(false);
         ensureProxyRunning();
         injectInspectorIfNeeded();
       }
@@ -976,6 +992,25 @@ export default function PreviewPanel() {
     },
     [getActiveIframeElement],
   );
+
+  const captureViewportScreenshot = useCallback(async (): Promise<string | null> => {
+    try {
+      const target = deviceMode ? viewportFrameRef.current : previewContentRef.current;
+      if (!target) return null;
+      const rect = target.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const pngBytes = await invoke<number[]>('preview_capture_screenshot', {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        scale,
+      });
+      return pngBytesToDataUrl(pngBytes);
+    } catch {
+      return null;
+    }
+  }, [deviceMode]);
 
   const addElementToAgent = useCallback((info: SelectedElementInfo) => {
     const text = buildElementPrompt(info).trim();
@@ -1833,6 +1868,19 @@ export default function PreviewPanel() {
             {inspectMode && <span className="design-mode-on-dot" />}
           </button>
           <button
+            className={`nav-btn inspect-btn annotate-mode-btn${annotateMode ? ' active' : ''}`}
+            onClick={toggleAnnotateMode}
+            title={annotateMode ? 'Exit Draw Mode' : 'Draw Mode: Draw or write on page & prompt agent'}
+            aria-pressed={annotateMode}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 19l7-7 3 3-7 7-3-3z" />
+              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+            </svg>
+            <span className="design-mode-label">Draw</span>
+            {annotateMode && <span className="design-mode-on-dot" />}
+          </button>
+          <button
             className={`nav-btn console-btn${showConsole ? ' active' : ''}`}
             onClick={() => setShowConsole((prev) => !prev)}
             title={
@@ -2282,19 +2330,29 @@ export default function PreviewPanel() {
               toggleInspectMode();
             }
           }}
-          onSendToAgent={(promptText, screenshot) => {
-            const sessionId = getActiveAgentSessionId();
-            if (sessionId === null) {
-              showToast('No active agent terminal found', 'warning');
-              return;
+          onSendToAgent={async (promptText, screenshot, target) => {
+            if (target) {
+              await dispatchPromptToAgent(target, promptText, {
+                imageDataUrl: screenshot,
+                imageName: `${selectedElementInfo.tag.toLowerCase()}-snapshot.png`,
+              });
+              setSelectedElementInfo(null);
+              setSelectedElementScreenshot(null);
+              showToast(`Element context sent to ${target.displayName}`, 'success');
+            } else {
+              const sessionId = getActiveAgentSessionId();
+              if (sessionId === null) {
+                showToast('No active agent terminal found', 'warning');
+                return;
+              }
+              if (screenshot) {
+                addImageToPrompt(screenshot, `${selectedElementInfo.tag.toLowerCase()}-snapshot.png`);
+              }
+              requestTerminalInput(sessionId, promptText);
+              setSelectedElementInfo(null);
+              setSelectedElementScreenshot(null);
+              showToast('Element context sent to active agent input', 'success');
             }
-            if (screenshot) {
-              addImageToPrompt(screenshot, `${selectedElementInfo.tag.toLowerCase()}-snapshot.png`);
-            }
-            requestTerminalInput(sessionId, promptText);
-            setSelectedElementInfo(null);
-            setSelectedElementScreenshot(null);
-            showToast('Element context sent to active agent input', 'success');
           }}
         />
       )}
@@ -2385,6 +2443,15 @@ export default function PreviewPanel() {
                     );
                   })}
                 </div>
+
+                {annotateMode && (
+                  <PreviewAnnotationOverlay
+                    viewportWidth={deviceMode ? viewportSize.width : (viewportFrameRef.current?.clientWidth || 800)}
+                    viewportHeight={deviceMode ? viewportSize.height : (viewportFrameRef.current?.clientHeight || 600)}
+                    captureUnderlyingScreenshot={captureViewportScreenshot}
+                    onClose={() => setAnnotateMode(false)}
+                  />
+                )}
               </div>
 
               {deviceMode && (

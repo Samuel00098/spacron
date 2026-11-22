@@ -178,6 +178,27 @@ export function requestTerminalInput(sessionId: number, text: string) {
   terminalInputRequest.set({ sessionId, text });
 }
 
+export type TerminalChatInputRequest = {
+  sessionId: number;
+  text: string;
+  image?: {
+    path: string;
+    name: string;
+    dataUrl?: string | null;
+  } | null;
+};
+
+export const terminalChatInputRequest = writable<TerminalChatInputRequest | null>(null);
+
+export function requestTerminalChatInput(
+  sessionId: number,
+  text: string,
+  image?: { path: string; name: string; dataUrl?: string | null } | null
+) {
+  if (!text && !image) return;
+  terminalChatInputRequest.set({ sessionId, text, image: image ?? null });
+}
+
 // Inject text directly into the FloatingPromptBar textarea
 export const promptBarInput = writable<string | null>(null);
 

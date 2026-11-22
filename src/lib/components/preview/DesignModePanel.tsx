@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback } from 'react';
 import type { SelectedElementInfo } from '$lib/services/element-prompt';
 import { buildElementPrompt } from '$lib/services/element-prompt';
+import type { AgentTarget } from '$lib/services/agent-target';
+import { getActiveAgentTargets, resolveDefaultTarget } from '$lib/services/agent-target';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
 import { showToast } from '$lib/stores/notification';
 import './DesignModePanel.css';
@@ -10,7 +12,7 @@ export type DesignModePanelProps = {
   screenshotUrl: string | null;
   onClose: () => void;
   onReselect: () => void;
-  onSendToAgent: (prompt: string, screenshotUrl: string | null) => void;
+  onSendToAgent: (prompt: string, screenshotUrl: string | null, target?: AgentTarget | null) => void;
 };
 
 type DesignTab = 'prompt' | 'styles' | 'html' | 'attributes';
@@ -57,6 +59,15 @@ export default function DesignModePanel({
   const [styleFilter, setStyleFilter] = useState('');
   const [showImageZoom, setShowImageZoom] = useState(false);
 
+  // Agent target resolution
+  const availableTargets = useMemo(() => getActiveAgentTargets(), []);
+  const defaultTarget = useMemo(() => resolveDefaultTarget(availableTargets), [availableTargets]);
+  const [selectedTargetId, setSelectedTargetId] = useState<number | null>(defaultTarget?.id ?? null);
+
+  const currentTarget = useMemo(() => {
+    return availableTargets.find((t) => t.id === selectedTargetId) ?? defaultTarget ?? null;
+  }, [availableTargets, selectedTargetId, defaultTarget]);
+
   // Filtered computed styles
   const filteredStyles = useMemo(() => {
     const raw = elementInfo.styles || {};
@@ -87,8 +98,8 @@ export default function DesignModePanel({
       includeStyles,
       includeHtml,
     });
-    onSendToAgent(promptText, includeScreenshot ? screenshotUrl : null);
-  }, [elementInfo, userInstructions, includeStyles, includeHtml, onSendToAgent, includeScreenshot, screenshotUrl]);
+    onSendToAgent(promptText, includeScreenshot ? screenshotUrl : null, currentTarget);
+  }, [elementInfo, userInstructions, includeStyles, includeHtml, onSendToAgent, includeScreenshot, screenshotUrl, currentTarget]);
 
   const handleCopyFullContext = useCallback(async () => {
     const promptText = buildElementPrompt(elementInfo, {
@@ -254,6 +265,45 @@ export default function DesignModePanel({
         {/* Tab 1: Prompt Agent */}
         {activeTab === 'prompt' && (
           <div className="design-prompt-tab">
+            {/* Target Agent Selection */}
+            <div className="design-agent-target-row">
+              <span className="design-target-label">Target Agent:</span>
+              {availableTargets.length === 1 && currentTarget && (
+                <div className="design-target-auto-pill" title="Automatically selected single open agent">
+                  <span className="design-target-dot" />
+                  <span className="design-target-name">{currentTarget.name}</span>
+                  <span className={`design-target-mode ${currentTarget.isChatView ? 'chat' : 'terminal'}`}>
+                    {currentTarget.isChatView ? 'Chat UI' : 'Terminal'}
+                  </span>
+                  <span className="design-target-auto-badge">Auto</span>
+                </div>
+              )}
+
+              {availableTargets.length > 1 && (
+                <div className="design-target-select-wrap">
+                  <select
+                    id="design-agent-select"
+                    className="design-target-select"
+                    value={selectedTargetId ?? ''}
+                    onChange={(e) => setSelectedTargetId(Number(e.target.value))}
+                    aria-label="Target AI Agent"
+                  >
+                    {availableTargets.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} ({t.isChatView ? 'Chat UI' : 'Terminal'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {availableTargets.length === 0 && (
+                <div className="design-target-warning-pill">
+                  <span>⚠️ No active agent running</span>
+                </div>
+              )}
+            </div>
+
             <div className="design-input-group">
               <label htmlFor="design-prompt-instructions">What should the AI agent change about this element?</label>
               <textarea
@@ -318,12 +368,13 @@ export default function DesignModePanel({
                 type="button"
                 className="design-btn-primary"
                 onClick={handleSend}
-                title="Send context and instructions to the active agent terminal"
+                disabled={!currentTarget}
+                title={!currentTarget ? 'No active agent found' : `Send context to ${currentTarget.name} (${currentTarget.isChatView ? 'Chat UI' : 'Terminal'})`}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
-                <span>Send to Agent</span>
+                <span>Send to {currentTarget ? currentTarget.name : 'Agent'}</span>
               </button>
 
               <button
