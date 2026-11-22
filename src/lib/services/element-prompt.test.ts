@@ -74,4 +74,21 @@ describe('buildElementPrompt', () => {
     const out = buildElementPrompt({ ...base, selector: '   ', page: undefined });
     expect(out.startsWith('Selected `button`')).toBe(true);
   });
+
+  it('prepends user instructions for Orca Design Mode', () => {
+    const out = buildElementPrompt(base, { userInstructions: 'Make this button primary blue with 8px radius' });
+    expect(out.startsWith('Task: Make this button primary blue with 8px radius\n\nSelected `div.app > main > button.primary`')).toBe(true);
+  });
+
+  it('respects includeStyles: false and includeHtml: false', () => {
+    const out = buildElementPrompt(base, { includeStyles: false, includeHtml: false });
+    expect(out).not.toContain('Computed styles:');
+    expect(out).not.toContain('```html');
+    expect(out).toContain('Text: "Save changes"');
+  });
+
+  it('respects custom maxHtml limits', () => {
+    const out = buildElementPrompt(base, { maxHtml: 10 });
+    expect(out).toContain('<button cl…');
+  });
 });

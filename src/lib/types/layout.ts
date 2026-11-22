@@ -13,6 +13,7 @@ export type SettingsTab =
   | 'project'
   | 'general'
   | 'appearance'
+  | 'browser'
   | 'models'
   | 'voice'
   | 'terminal'

@@ -60,13 +60,20 @@ import {
 } from '$lib/stores/previewHistory';
 import { promptBarImage, focusPromptBar, getActiveAgentSessionId, requestTerminalInput } from '$lib/stores/terminal';
 import { buildElementPrompt, type SelectedElementInfo } from '$lib/services/element-prompt';
+import DesignModePanel from './DesignModePanel';
+import {
+  browserDefaultPort,
+  browserPreferredHost,
+  browserThemeMode,
+  browserDesignModeAutoScreenshot,
+  browserConsoleAutoOpenOnError,
+} from '$lib/stores/settings';
 import { activeProject } from '$lib/stores/workspace';
 import { activeTheme } from '$lib/stores/theme';
 import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 
-
 import { useLayoutStore } from '$lib/stores/zustand/layout';
-import { setPreviewDocked } from '$lib/stores/layout';
+import { setPreviewDocked, openSettings } from '$lib/stores/layout';
 import './PreviewPanel.css';
 
 /** Explicit percentage, or 'fit' to auto-scale the viewport into the pane. */
@@ -374,6 +381,10 @@ export default function PreviewPanel() {
   const [widthDraft, setWidthDraft] = useState<string | null>(null);
   const [heightDraft, setHeightDraft] = useState<string | null>(null);
   const [selectedElementInfo, setSelectedElementInfo] = useState<SelectedElementInfo | null>(null);
+  const [selectedElementScreenshot, setSelectedElementScreenshot] = useState<string | null>(null);
+  const autoScreenshotSetting = useStore(browserDesignModeAutoScreenshot);
+  const consoleAutoOpenSetting = useStore(browserConsoleAutoOpenOnError);
+  const globalBrowserTheme = useStore(browserThemeMode);
   const consoleLogs = useStore(previewConsoleLogs);
   const [showConsole, setShowConsole] = useProjectPanelState('preview.showConsole', false);
   const [consoleFilter, setConsoleFilter] = useProjectPanelState<ConsoleFilter>('preview.consoleFilter', 'all');
@@ -384,7 +395,10 @@ export default function PreviewPanel() {
   const appThemeMode: 'light' | 'dark' =
     appThemeValue?.type ??
     (typeof document !== 'undefined' && document.documentElement.classList.contains('light-theme') ? 'light' : 'dark');
-  const effectivePreviewTheme: 'light' | 'dark' = previewThemeMode === 'system' ? appThemeMode : previewThemeMode;
+  const effectivePreviewTheme: 'light' | 'dark' =
+    previewThemeMode === 'system'
+      ? (globalBrowserTheme === 'system' ? appThemeMode : globalBrowserTheme)
+      : previewThemeMode;
   const previewThemeLabel = previewThemeMode === 'system' ? `Follow app (${effectivePreviewTheme})` : previewThemeMode;
 
   // One slow-load timer per tab: a single shared timer meant navigating in one
@@ -876,6 +890,7 @@ export default function PreviewPanel() {
       const next = !prev;
       inspectModeRef.current = next;
       setSelectedElementInfo(null);
+      setSelectedElementScreenshot(null);
       if (next) {
         ensureProxyRunning();
         injectInspectorIfNeeded();
@@ -884,6 +899,22 @@ export default function PreviewPanel() {
       return next;
     });
   }, [injectInspectorIfNeeded, postInspectorState]);
+
+  // Alt+D shortcut to toggle Orca Design Mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'd') {
+        const active = document.activeElement;
+        const inInput = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+        if (!inInput) {
+          e.preventDefault();
+          toggleInspectMode();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleInspectMode]);
 
   const revealPromptBar = useCallback(() => {
     // The floating prompt bar overlays every aux view, so just focus it.
@@ -1153,6 +1184,9 @@ export default function PreviewPanel() {
             url: payload.url,
             timestamp: payload.timestamp || new Date().toISOString(),
           });
+          if (level === 'error' && consoleAutoOpenSetting) {
+            setShowConsole(true);
+          }
         }
         // Deliberately no auto-open: a single warning used to yank the console
         // panel back over the page every time, even right after the user closed
@@ -1216,11 +1250,13 @@ export default function PreviewPanel() {
       setInspectMode(false);
       inspectModeRef.current = false;
       postInspectorState();
-      if (info?.selector) {
-        void addElementToAgent(info);
+      if (autoScreenshotSetting) {
+        void captureElementScreenshot(info).then((dataUrl) => {
+          setSelectedElementScreenshot(dataUrl);
+        });
       }
     },
-    [expectedOriginForTab, postInspectorState, addElementToAgent, updateTabLoadState, clearLoadFeedbackTimer],
+    [expectedOriginForTab, postInspectorState, autoScreenshotSetting, captureElementScreenshot, updateTabLoadState, clearLoadFeedbackTimer],
   );
 
   const handleInputKeydown = useCallback(
@@ -1784,13 +1820,17 @@ export default function PreviewPanel() {
             )}
           </div>
           <button
-            className={`nav-btn inspect-btn${inspectMode ? ' active' : ''}`}
+            className={`nav-btn inspect-btn design-mode-btn${inspectMode ? ' active' : ''}`}
             onClick={toggleInspectMode}
-            title={inspectMode ? 'Exit Add Element to Agent' : 'Add Element to Agent'}
+            title={inspectMode ? 'Exit Design Mode (Alt+D)' : 'Design Mode: Inspect elements & prompt agent (Alt+D)'}
+            aria-pressed={inspectMode}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 3l7 18 2.5-7.5L20 13 3 3z" />
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
             </svg>
+            <span className="design-mode-label">Design Mode</span>
+            {inspectMode && <span className="design-mode-on-dot" />}
           </button>
           <button
             className={`nav-btn console-btn${showConsole ? ' active' : ''}`}
@@ -1937,6 +1977,19 @@ export default function PreviewPanel() {
                 <circle cx="9.5" cy="16" r="0.6" fill="currentColor" />
               </svg>
             )}
+          </button>
+
+          {/* Browser Settings */}
+          <button
+            className="nav-btn browser-settings-btn"
+            onClick={() => openSettings('browser')}
+            title="Browser Settings (Dev Server, Theme, Orca Design Mode & Network)"
+            aria-label="Browser Settings"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
           </button>
         </div>
 
@@ -2195,31 +2248,55 @@ export default function PreviewPanel() {
         </div>
       )}
 
-      {selectedElementInfo && (
-        <div className="inspect-banner">
-          <div className="inspect-copy">
-            <span className="inspect-label">Selected</span>
-            <strong>{selectedElementInfo.selector}</strong>
-            <span className="inspect-meta">
-              {selectedElementInfo.tag} {selectedElementInfo.rect.width}x{selectedElementInfo.rect.height}
-            </span>
-          </div>
-          <button className="inspect-add-btn" onClick={() => selectedElementInfo && addElementToAgent(selectedElementInfo)}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            Add to agent input
-          </button>
+      {inspectMode && !selectedElementInfo && (
+        <div className="design-mode-status-bar">
+          <span className="design-mode-live-pill">
+            <span className="design-mode-dot-live" />
+            <span>Design Mode Active</span>
+          </span>
+          <span className="design-mode-instruction">
+            Hover and click any element in the web page to inspect and prompt an AI agent.
+          </span>
           <button
-            className="inspect-copy-btn"
-            onClick={async () => {
-              await copyTextToClipboard(selectedElementInfo?.selector || '');
-              showToast('Selector copied to clipboard', 'success');
-            }}
+            type="button"
+            className="design-mode-cancel-btn"
+            onClick={toggleInspectMode}
           >
-            Copy selector
+            Exit Design Mode
           </button>
         </div>
+      )}
+
+      {selectedElementInfo && (
+        <DesignModePanel
+          elementInfo={selectedElementInfo}
+          screenshotUrl={selectedElementScreenshot}
+          onClose={() => {
+            setSelectedElementInfo(null);
+            setSelectedElementScreenshot(null);
+          }}
+          onReselect={() => {
+            setSelectedElementInfo(null);
+            setSelectedElementScreenshot(null);
+            if (!inspectMode) {
+              toggleInspectMode();
+            }
+          }}
+          onSendToAgent={(promptText, screenshot) => {
+            const sessionId = getActiveAgentSessionId();
+            if (sessionId === null) {
+              showToast('No active agent terminal found', 'warning');
+              return;
+            }
+            if (screenshot) {
+              addImageToPrompt(screenshot, `${selectedElementInfo.tag.toLowerCase()}-snapshot.png`);
+            }
+            requestTerminalInput(sessionId, promptText);
+            setSelectedElementInfo(null);
+            setSelectedElementScreenshot(null);
+            showToast('Element context sent to active agent input', 'success');
+          }}
+        />
       )}
 
       {showYoutubeHomepageWarning && (

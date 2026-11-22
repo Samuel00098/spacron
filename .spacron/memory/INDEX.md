@@ -53,6 +53,7 @@ short enough that it says what the note is *about*, never what it says.
 - [preview-iframe-bridge](preview-iframe-bridge.md) — the preview iframe is cross-origin; the postMessage contract
 - [preview-room-is-persistent](preview-room-is-persistent.md) — preview is hidden, not unmounted, so the page survives a room switch
 - [preview-responsive-viewport](preview-responsive-viewport.md) — phone/tablet preview is a scaled viewport, with no device chassis
+- [orca-design-mode-and-browser-settings](orca-design-mode-and-browser-settings.md) — Orca Design Mode inspection, visual prompt packaging, and dedicated browser settings
 - [terminal-cell-measure-stuck](terminal-cell-measure-stuck.md) — a pane opened at 0x0 wedges the grid at 80x24 for its whole life
 - [onboarding-walkthrough-removed](onboarding-walkthrough-removed.md) — the walkthrough is deleted; leftover `onboardingCompleted` keys are dead, and `app_flags` now has no callers
 - [quick-capture-removed](quick-capture-removed.md) — the Quick Capture modal, its `quickCaptureOpen` plumbing and the Ctrl+Shift+Space shortcut are deleted

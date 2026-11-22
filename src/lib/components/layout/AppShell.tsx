@@ -3171,6 +3171,7 @@ export default function AppShell() {
     const settingsSections: { tab: SettingsTab; name: string }[] = [
       { tab: 'general', name: 'Settings: General' },
       { tab: 'appearance', name: 'Settings: Appearance' },
+      { tab: 'browser', name: 'Settings: Browser' },
       { tab: 'models', name: 'Settings: AI Providers' },
       { tab: 'voice', name: 'Settings: Voice' },
       { tab: 'terminal', name: 'Settings: Terminal' },

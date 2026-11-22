@@ -27,6 +27,17 @@ export type SelectedElementInfo = {
   rect: { x: number; y: number; width: number; height: number };
 };
 
+export type ElementPromptOptions = {
+  /** Optional user prompt or instructions for the agent (Orca Design Mode prompt). */
+  userInstructions?: string;
+  /** Whether to include computed CSS styles (default: true). */
+  includeStyles?: boolean;
+  /** Whether to include the raw HTML snippet (default: true). */
+  includeHtml?: boolean;
+  /** Max length of the HTML snippet (default: 2000). */
+  maxHtml?: number;
+};
+
 /** The inspector caps outerHTML at 3000; the prompt bar is a textarea a human
  *  also reads, so it gets a tighter budget. */
 const MAX_HTML = 2000;
@@ -104,11 +115,20 @@ function orderedStyles(styles: Record<string, string>): [string, string][] {
 /**
  * Build the prompt text for a picked element. The cropped screenshot is attached
  * separately by the caller — this is only the part the agent can read as code.
+ *
+ * Supports optional Orca Design Mode options to prepend user instructions,
+ * toggle computed styles, and toggle or limit HTML snippet content.
  */
-export function buildElementPrompt(info: SelectedElementInfo): string {
+export function buildElementPrompt(info: SelectedElementInfo, options?: ElementPromptOptions): string {
   const tag = (info.tag || 'element').toLowerCase();
   const selector = info.selector?.trim() || tag;
   const lines: string[] = [];
+
+  const instructions = options?.userInstructions?.trim();
+  if (instructions) {
+    lines.push(`Task: ${instructions}`);
+    lines.push('');
+  }
 
   const pageUrl = info.page?.url?.trim();
   lines.push(pageUrl ? `Selected \`${selector}\` on ${pageUrl}` : `Selected \`${selector}\``);
@@ -133,18 +153,23 @@ export function buildElementPrompt(info: SelectedElementInfo): string {
   // and the last one is just `selector` again. `selector` already carries the
   // chain; printing the path too would be redundant noise in the prompt.
 
-  const styles = orderedStyles(info.styles || {});
-  if (styles.length) {
-    lines.push('');
-    lines.push('Computed styles:');
-    for (const [prop, value] of styles) lines.push(`  ${prop}: ${value}`);
+  const includeStyles = options?.includeStyles !== false;
+  if (includeStyles) {
+    const styles = orderedStyles(info.styles || {});
+    if (styles.length) {
+      lines.push('');
+      lines.push('Computed styles:');
+      for (const [prop, value] of styles) lines.push(`  ${prop}: ${value}`);
+    }
   }
 
+  const includeHtml = options?.includeHtml !== false;
+  const maxHtml = options?.maxHtml ?? MAX_HTML;
   const html = info.html?.trim();
-  if (html) {
+  if (includeHtml && html) {
     lines.push('');
     lines.push('```html');
-    lines.push(truncate(html, MAX_HTML));
+    lines.push(truncate(html, maxHtml));
     lines.push('```');
   }
 

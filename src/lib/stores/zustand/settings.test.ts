@@ -183,3 +183,47 @@ describe('smartVadEnabled defaults to off', () => {
     expect(second.useSettingsStore.getState().smartVadEnabled).toBe(true);
   });
 });
+
+describe('browser and Orca design mode settings', () => {
+  it('falls back to expected default browser preferences when nothing is persisted', async () => {
+    stubWebStorage();
+
+    const { useSettingsStore } = await import('./settings');
+    const s = useSettingsStore.getState();
+    expect(s.browserDefaultPort).toBe(3000);
+    expect(s.browserPreferredHost).toBe('localhost');
+    expect(s.browserThemeMode).toBe('system');
+    expect(s.browserOpenLinksIn).toBe('preview');
+    expect(s.browserDesignModeAutoScreenshot).toBe(true);
+    expect(s.browserDesignModeIncludeStyles).toBe(true);
+    expect(s.browserDesignModeIncludeHtml).toBe(true);
+    expect(s.browserDesignModeMaxHtmlLength).toBe(2000);
+    expect(s.browserConsoleAutoOpenOnError).toBe(false);
+  });
+
+  it('rehydrates saved browser and design mode settings at boot', async () => {
+    const storage = stubWebStorage();
+    storage.set('forge_setting_browserDefaultPort', JSON.stringify(5173));
+    storage.set('forge_setting_browserThemeMode', JSON.stringify('dark'));
+    storage.set('forge_setting_browserDesignModeAutoScreenshot', JSON.stringify(false));
+    storage.set('forge_setting_browserDesignModeMaxHtmlLength', JSON.stringify(3000));
+
+    const { useSettingsStore } = await import('./settings');
+    const s = useSettingsStore.getState();
+    expect(s.browserDefaultPort).toBe(5173);
+    expect(s.browserThemeMode).toBe('dark');
+    expect(s.browserDesignModeAutoScreenshot).toBe(false);
+    expect(s.browserDesignModeMaxHtmlLength).toBe(3000);
+  });
+
+  it('round-trips browser settings updates through updateSetting into persisted storage', async () => {
+    const storage = stubWebStorage();
+
+    const { useSettingsStore } = await import('./settings');
+    useSettingsStore.getState().updateSetting('browserDefaultPort', 8080);
+    useSettingsStore.getState().updateSetting('browserThemeMode', 'light');
+
+    expect(storage.get('forge_setting_browserDefaultPort')).toBe('8080');
+    expect(storage.get('forge_setting_browserThemeMode')).toBe('"light"');
+  });
+});

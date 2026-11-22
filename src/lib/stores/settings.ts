@@ -125,6 +125,28 @@ export const globalWorkspaceCleanupRule = persistentWritable<WorkspaceCleanupRul
 export type PreviewPlacement = 'sidebar' | 'room';
 export const previewPlacement = persistentWritable<PreviewPlacement>('previewPlacement', 'sidebar');
 
+// Browser & Preview Settings
+export type BrowserThemeMode = 'system' | 'light' | 'dark';
+export type BrowserLinkRouting = 'preview' | 'external';
+
+export const browserDefaultPort = persistentWritable<number>('browserDefaultPort', 3000);
+export const browserPreferredHost = persistentWritable<'localhost' | '127.0.0.1'>('browserPreferredHost', 'localhost');
+export const browserThemeMode = persistentWritable<BrowserThemeMode>('browserThemeMode', 'system');
+export const browserOpenLinksIn = persistentWritable<BrowserLinkRouting>('browserOpenLinksIn', 'preview');
+export const browserOpenLinksInBackground = persistentWritable<boolean>('browserOpenLinksInBackground', false);
+
+// Design Mode Settings (Orca ADE)
+export const browserDesignModeAutoScreenshot = persistentWritable<boolean>('browserDesignModeAutoScreenshot', true);
+export const browserDesignModeIncludeStyles = persistentWritable<boolean>('browserDesignModeIncludeStyles', true);
+export const browserDesignModeIncludeHtml = persistentWritable<boolean>('browserDesignModeIncludeHtml', true);
+export const browserDesignModeMaxHtmlLength = persistentWritable<number>('browserDesignModeMaxHtmlLength', 2000);
+
+// Preview Console & Diagnostics
+export const browserConsoleAutoOpenOnError = persistentWritable<boolean>('browserConsoleAutoOpenOnError', false);
+export const browserConsolePreserveLog = persistentWritable<boolean>('browserConsolePreserveLog', false);
+export const browserDefaultZoom = persistentWritable<string>('browserDefaultZoom', 'fit');
+export const browserDefaultViewport = persistentWritable<string>('browserDefaultViewport', 'desktop');
+
 // Notifications
 export const notificationsEnabled = persistentWritable('notificationsEnabled', true);
 

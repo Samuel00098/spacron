@@ -651,6 +651,114 @@
   border-color: var(--accent);
 }
 
+/* Orca Design Mode toolbar button & status */
+.preview-panel .design-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.preview-panel .design-mode-btn.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.preview-panel .design-mode-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.preview-panel .design-mode-on-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: pulseDot 1.6s infinite ease-in-out;
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* Active Design Mode top status banner */
+.preview-panel .design-mode-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-secondary));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  font-size: 12px;
+  color: var(--text-primary);
+  gap: 10px;
+  z-index: 25;
+  flex-shrink: 0;
+}
+
+.preview-panel .design-mode-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.preview-panel .design-mode-dot-live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: pulseDot 1.5s infinite;
+}
+
+.preview-panel .design-mode-instruction {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-panel .design-mode-cancel-btn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.preview-panel .design-mode-cancel-btn:hover {
+  background: var(--bg-hover);
+}
+
+.preview-panel .browser-settings-btn {
+  color: var(--text-muted);
+}
+
+.preview-panel .browser-settings-btn:hover {
+  color: var(--text-primary);
+}
+
 .preview-panel .preview-frame-stack {
   position: relative;
   width: 100%;

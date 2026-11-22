@@ -173,6 +173,7 @@ import {
 } from '$lib/services/orchestrator/agent-rules-file';
 import Dropdown, { type DropdownOption } from '$lib/components/shared/Dropdown.tsx';
 import ChatSettingsPane from './ChatSettingsPane';
+import BrowserSettingsSection from './BrowserSettingsSection';
 import ProjectSettingsSection from './ProjectSettingsSection';
 import WorkspaceCleanupSection from './WorkspaceCleanupSection';
 import { ProjectIconBadge } from '$lib/components/shared/ProjectIcons';
@@ -222,6 +223,7 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'project', label: 'Project', kicker: 'Project workspace', description: 'Per-project configuration, scripts, source control and rules.' },
   { id: 'general', label: 'General', kicker: 'Editor and app', description: 'Editor behaviour and everyday app preferences.' },
   { id: 'appearance', label: 'Appearance', kicker: 'Window and media', description: 'Visual style.' },
+  { id: 'browser', label: 'Browser', kicker: 'Web preview & navigation', description: 'Built-in browser preview, dev server defaults, and Orca Design Mode preferences.' },
   { id: 'models', label: 'AI Providers', kicker: 'Accounts and keys', description: 'Your agent accounts, plus the API keys Spacron’s own AI features use.' },
   { id: 'voice', label: 'Voice', kicker: 'Transcription, conversation', description: 'Dictation, transcription and voice conversation.' },
   { id: 'terminal', label: 'Terminal', kicker: 'Shell and rendering', description: 'Default shell and how terminals render.' },
@@ -237,7 +239,7 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
 ];
 
 const settingsNavGroups: { label?: string; tabs: Tab[] }[] = [
-  { tabs: ['general', 'appearance', 'chat', 'voice', 'terminal', 'shortcuts', 'stats'] },
+  { tabs: ['general', 'appearance', 'browser', 'chat', 'voice', 'terminal', 'shortcuts', 'stats'] },
   // 'orchestrator' is left out while there is no Chat mode to configure; its
   // pane and search entries are kept so it can be listed here again.
   { label: 'Agents', tabs: ['agents', 'mcp'] },
@@ -251,6 +253,7 @@ const settingsTabIconPaths: Record<Tab, string> = {
   project: 'M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2Z',
   general: 'M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M8 14v6',
   appearance: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3c0-5.1-4-9.2-9-9.2Z M7.5 10h.01M10 7h.01M15 7.5h.01',
+  browser: 'M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm0 0a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10ZM2 12h20',
   models: 'M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',
   voice: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM5 11a7 7 0 0 0 14 0M12 18v4M8 22h8',
   terminal: 'm5 7 5 5-5 5M13 17h6',
@@ -297,6 +300,13 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'ui-contrast', tab: 'appearance', section: 'Colour', label: 'Contrast', keywords: 'color colour sharp readability' },
   { id: 'custom-background', tab: 'appearance', section: 'Background', label: 'Custom background', keywords: 'wallpaper image' },
   { id: 'background-blur', tab: 'appearance', section: 'Background', label: 'Blur', keywords: 'wallpaper image' },
+  { id: 'browser-port', tab: 'browser', section: 'Dev server & Connection', label: 'Default port', keywords: 'preview port localhost server web' },
+  { id: 'browser-host', tab: 'browser', section: 'Dev server & Connection', label: 'Preferred local host', keywords: 'preview localhost 127.0.0.1 ip' },
+  { id: 'browser-theme', tab: 'browser', section: 'Appearance & Themes', label: 'Browser color scheme', keywords: 'preview theme dark light color scheme orca' },
+  { id: 'browser-viewport', tab: 'browser', section: 'Appearance & Themes', label: 'Default device viewport', keywords: 'preview mobile responsive iphone ipad desktop' },
+  { id: 'browser-design-mode', tab: 'browser', section: 'Orca Design Mode', label: 'Orca Design Mode', keywords: 'orca design mode element inspect screenshot prompt agent visual' },
+  { id: 'browser-routing', tab: 'browser', section: 'Link routing & Tabs', label: 'Open web links in', keywords: 'preview open external browser links tabs' },
+  { id: 'browser-cache', tab: 'browser', section: 'Data, Cache & History', label: 'Preview cookies & cache', keywords: 'preview cookies cache history clear' },
   { id: 'agent-accounts', tab: 'models', section: 'Accounts', label: 'Accounts', keywords: 'account sign in login switch claude codex email add remove', target: 'section' },
   { id: 'ai-provider', tab: 'models', section: 'API keys', label: 'Provider', keywords: 'ai model service connection' },
   { id: 'ai-api-key', tab: 'models', section: 'API keys', label: 'API key', keywords: 'token secret credentials subscription', target: 'section' },
@@ -4712,6 +4722,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 </Section>}
               </>
             )}
+
+            {activeTab === 'browser' && <BrowserSettingsSection />}
 
             {activeTab === 'chat' && <ChatSettingsPane onOpenAgents={() => setActiveTab('agents')} />}
 
