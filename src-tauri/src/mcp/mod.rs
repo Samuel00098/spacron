@@ -88,6 +88,73 @@ pub struct Caller {
 /// holds the lock for a single map lookup with no await in between.
 pub type AgentTokens = Arc<std::sync::Mutex<HashMap<String, Option<u32>>>>;
 
+/// What each agent session is doing, keyed by session id, so one agent can ask
+/// `list_agents` whether another is working or done instead of guessing from
+/// its terminal. Fed from two places: an agent's own `report_status` (which
+/// carries its one-line summary), and the frontend's turn tracker through
+/// `mcp_set_agent_status` (which also covers agents that report through hooks
+/// or the turn file and never call the MCP tool).
+pub type AgentStatuses = Arc<std::sync::Mutex<HashMap<u32, AgentStatus>>>;
+
+/// Phases mirror the frontend's `AgentTurnPhase`.
+pub const AGENT_PHASES: [&str; 6] = ["idle", "working", "quiet", "finished", "blocked", "failed"];
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentStatus {
+    pub phase: String,
+    /// The last prompt the agent was given, one line.
+    pub task: Option<String>,
+    /// The agent's own summary from its last `report_status`, kept only while
+    /// the phase it was reported with still holds.
+    pub detail: Option<String>,
+    /// When the current phase began, epoch milliseconds.
+    pub since_ms: u64,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Merge a phase update. A summary survives only while the phase is unchanged,
+/// so a stale "done: added the tests" never sits next to a new `working`.
+fn record_agent_status(
+    statuses: &AgentStatuses,
+    session_id: u32,
+    phase: &str,
+    task: Option<String>,
+    detail: Option<String>,
+    since_ms: Option<u64>,
+) {
+    let Ok(mut map) = statuses.lock() else { return };
+    let prev = map.get(&session_id).cloned().unwrap_or_default();
+    let same_phase = prev.phase == phase;
+    map.insert(
+        session_id,
+        AgentStatus {
+            phase: phase.to_string(),
+            task: task.or(prev.task),
+            detail: detail.or(if same_phase { prev.detail } else { None }),
+            since_ms: since_ms.unwrap_or(if same_phase { prev.since_ms } else { now_ms() }),
+        },
+    );
+}
+
+/// The status fields `list_agents` adds to an agent.
+fn agent_status_json(status: Option<&AgentStatus>, now: u64) -> serde_json::Value {
+    match status {
+        None => serde_json::json!({ "status": "unknown" }),
+        Some(s) => serde_json::json!({
+            "status": s.phase,
+            "status_for_seconds": now.saturating_sub(s.since_ms) / 1000,
+            "task": s.task,
+            "last_report": s.detail,
+        }),
+    }
+}
+
 /// A pending prompt delivery awaiting the frontend's verdict.
 ///
 /// A delivery may legitimately sit for half a minute waiting for a booting CLI
@@ -250,6 +317,8 @@ pub struct McpServerHandle {
     pub project_root: Arc<Mutex<Option<String>>>,
     /// Launchable agents, shared with the server. See `ServerState`.
     pub agent_presets: Arc<Mutex<Vec<AgentPreset>>>,
+    /// Latest known status per session. See [`AgentStatuses`].
+    pub agent_statuses: AgentStatuses,
     /// The app's assistant-name pool, shared with the server. See `ServerState`.
     pub assistant_names: Arc<Mutex<Vec<String>>>,
     /// Media provider settings, shared with the server. See `ServerState`.
@@ -287,11 +356,24 @@ impl McpServerHandle {
         let _ = self.notify_tx.send(());
     }
 
+    /// Record what the frontend's turn tracker says a session is doing.
+    pub fn set_agent_status(&self, session_id: u32, phase: &str, task: Option<String>, since_ms: Option<u64>) -> Result<(), String> {
+        if !AGENT_PHASES.contains(&phase) {
+            return Err(format!("Unknown agent phase '{phase}'"));
+        }
+        let task = task.map(|t| t.chars().take(200).collect::<String>()).filter(|t| !t.trim().is_empty());
+        record_agent_status(&self.agent_statuses, session_id, phase, task, None, since_ms);
+        Ok(())
+    }
+
     /// Unregister an agent by session id.
     pub async fn unregister_agent(&self, session_id: u32) {
         let mut map = self.registry.lock().await;
         map.retain(|_, v| v.session_id != session_id);
         drop(map);
+        if let Ok(mut statuses) = self.agent_statuses.lock() {
+            statuses.remove(&session_id);
+        }
         // A dead session's token must stop authenticating: it was written into
         // a config file that outlives the launch, and nothing else revokes it.
         self.forget_agent_session(session_id);
@@ -517,6 +599,7 @@ pub fn start(
     // launch would be a config file authenticating as an agent that no longer
     // exists. These die with the process, and every agent gets a fresh one.
     let agent_tokens: AgentTokens = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let agent_statuses: AgentStatuses = Arc::new(std::sync::Mutex::new(HashMap::new()));
     let desktop = crate::desktop::DesktopState::new(desktop_hooks);
 
     let server_state = Arc::new(ServerState {
@@ -529,6 +612,7 @@ pub fn start(
         port: actual_port,
         token: token.clone(),
         agent_tokens: agent_tokens.clone(),
+        agent_statuses: agent_statuses.clone(),
         read_cb,
         spawn_fn,
         deliver_emit_fn,
@@ -622,6 +706,7 @@ pub fn start(
         pending_sends,
         project_root,
         agent_presets,
+        agent_statuses,
         assistant_names,
         media_settings,
         reserved_names,
@@ -647,6 +732,8 @@ struct ServerState {
     /// Per-launch tokens that additionally identify *which* agent is calling.
     /// See [`McpServerHandle::mint_agent_token`].
     agent_tokens: AgentTokens,
+    /// Shared with [`McpServerHandle::agent_statuses`].
+    agent_statuses: AgentStatuses,
     read_cb: ReadFn,
     spawn_fn: SpawnFn,
     /// Asks the frontend to type a prompt into an agent's TUI. See
@@ -778,7 +865,7 @@ fn tool_report_status() -> serde_json::Value {
 fn tool_list_agents() -> serde_json::Value {
     serde_json::json!({
         "name": "list_agents",
-        "description": "List all running AI coding agents with their names, presets, and session IDs.",
+        "description": "List all running AI coding agents with their names, presets and session IDs, plus what each is doing: `status` is working, finished, blocked (waiting on the user), failed, quiet (stopped without confirming), idle (never prompted) or unknown; `status_for_seconds` is how long it has been in that state; `task` is the last prompt it was given; `last_report` is its own one-line summary from report_status, when it gave one. Use this to answer whether another agent is done; read_agent_output shows the detail.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -2224,6 +2311,15 @@ async fn handle_tool_call(
                 state.agent_tokens.lock().ok()?.get(claimed).copied().flatten()
             });
 
+            if let Some(sid) = session_id {
+                let phase = match state_arg.as_str() {
+                    "needs_input" => "blocked",
+                    "done" => "finished",
+                    other => other,
+                };
+                let summary = Some(detail.clone()).filter(|d| !d.is_empty());
+                record_agent_status(&state.agent_statuses, sid, phase, None, summary, None);
+            }
             (state.report_fn)(AgentReport {
                 session_id,
                 state: state_arg.clone(),
@@ -2251,17 +2347,25 @@ async fn handle_tool_call(
 
         "list_agents" => {
             let registry = state.registry.lock().await;
+            let statuses = state.agent_statuses.lock().map(|m| m.clone()).unwrap_or_default();
+            let now = now_ms();
             let agents: Vec<serde_json::Value> = registry
                 .values()
                 .map(|e| {
-                    serde_json::json!({
+                    let mut entry = serde_json::json!({
                         "name": e.name,
                         "preset": e.preset,
                         "label": e.label,
                         "session_id": e.session_id,
                         // Absent when the agent runs in the main checkout.
                         "branch": e.branch,
-                    })
+                    });
+                    if let (Some(obj), serde_json::Value::Object(extra)) =
+                        (entry.as_object_mut(), agent_status_json(statuses.get(&e.session_id), now))
+                    {
+                        obj.extend(extra);
+                    }
+                    entry
                 })
                 .collect();
             let text = if agents.is_empty() {
@@ -3830,6 +3934,7 @@ mod tests {
             port: 1234,
             token: token.to_string(),
             agent_tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_statuses: Arc::new(std::sync::Mutex::new(HashMap::new())),
             read_cb: Arc::new(|_| Vec::new()),
             spawn_fn: Arc::new(|_| {}),
             deliver_emit_fn: Arc::new(|_, _, _| {}),
@@ -5053,5 +5158,76 @@ mod tests {
                 .status(),
             reqwest::StatusCode::FORBIDDEN
         );
+    }
+
+    // --- agent status in list_agents -----------------------------------------
+
+    async fn listed_agents(state: &ServerState) -> Vec<serde_json::Value> {
+        let Json(resp) = handle_tool_call(
+            Some(serde_json::json!(1)),
+            Some(serde_json::json!({ "name": "list_agents" })),
+            state,
+            Caller { session_id: None },
+        )
+        .await;
+        let text = resp.result.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    #[tokio::test]
+    async fn list_agents_says_unknown_before_any_status_arrives() {
+        let state = state_with_token("t");
+        register(&state, "Iris").await;
+        assert_eq!(listed_agents(&state).await[0]["status"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn a_report_shows_up_as_the_agents_status_with_its_summary() {
+        let (state, _seen) = state_with_reports("t");
+        register(&state, "Iris").await; // session 1
+        let _ = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call("done", Some("Added the retry backoff; 12 tests pass.")),
+            &state,
+            Caller { session_id: Some(1) },
+        )
+        .await;
+        let agent = &listed_agents(&state).await[0];
+        assert_eq!(agent["status"], "finished");
+        assert_eq!(agent["last_report"], "Added the retry backoff; 12 tests pass.");
+    }
+
+    #[tokio::test]
+    async fn a_new_phase_drops_the_previous_summary_but_keeps_the_task() {
+        let (state, _seen) = state_with_reports("t");
+        register(&state, "Iris").await;
+        record_agent_status(&state.agent_statuses, 1, "working", Some("Fix login".into()), None, None);
+        let _ = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call("needs_input", Some("Which database?")),
+            &state,
+            Caller { session_id: Some(1) },
+        )
+        .await;
+        assert_eq!(listed_agents(&state).await[0]["status"], "blocked");
+        record_agent_status(&state.agent_statuses, 1, "working", None, None, None);
+        let agent = &listed_agents(&state).await[0];
+        assert_eq!(agent["status"], "working");
+        assert_eq!(agent["task"], "Fix login");
+        assert!(agent["last_report"].is_null());
+    }
+
+    #[tokio::test]
+    async fn an_unattributed_report_changes_nobodys_status() {
+        let (state, _seen) = state_with_reports("t");
+        register(&state, "Iris").await;
+        let _ = handle_tool_call(
+            Some(serde_json::json!(1)),
+            report_call("done", Some("x")),
+            &state,
+            Caller { session_id: None },
+        )
+        .await;
+        assert_eq!(listed_agents(&state).await[0]["status"], "unknown");
     }
 }

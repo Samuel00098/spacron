@@ -190,6 +190,19 @@ pub async fn mcp_register_agent(
     Ok(())
 }
 
+/// Mirror the frontend's turn tracker into the MCP server, so `list_agents`
+/// can tell one agent whether another is working, blocked or done.
+#[tauri::command]
+pub fn mcp_set_agent_status(
+    handle: State<'_, McpServer>,
+    session_id: u32,
+    phase: String,
+    task: Option<String>,
+    since: Option<u64>,
+) -> Result<(), String> {
+    handle.get()?.set_agent_status(session_id, &phase, task, since)
+}
+
 /// Unregister an agent by session id (called when the agent's terminal exits).
 #[tauri::command]
 pub async fn mcp_unregister_agent(

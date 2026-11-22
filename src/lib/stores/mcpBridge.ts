@@ -475,9 +475,30 @@ async function deliverMcpPrompt(payload: DeliverPromptRequest): Promise<void> {
  * Initialize the MCP bridge: start listening for spawn-agent events.
  * Call this once during app startup.
  */
+/**
+ * Mirror every agent's turn phase into the MCP server, so `list_agents` can
+ * tell one agent whether another is working, blocked or done. `agentTurnStates`
+ * already merges every report path (MCP report_status, CLI hooks, the turn
+ * file), so agents that never call the MCP tool still show a real status.
+ */
+function syncAgentStatusesToMcp(): void {
+  const sent = new Map<number, string>();
+  agentTurnStates.subscribe((all) => {
+    for (const [key, turn] of Object.entries(all)) {
+      const sessionId = Number(key);
+      const signature = `${turn.phase}|${turn.since}|${turn.task ?? ''}`;
+      if (sent.get(sessionId) === signature) continue;
+      sent.set(sessionId, signature);
+      void invoke('mcp_set_agent_status', { sessionId, phase: turn.phase, task: turn.task ?? null, since: turn.since })
+        .catch((e) => console.warn('Could not share agent status with the MCP server:', e));
+    }
+  });
+}
+
 export function initMcpBridge(): void {
   if (initialized) return;
   initialized = true;
+  syncAgentStatusesToMcp();
 
   // Keep the server's agent roster live. The stores fire immediately on
   // subscribe, so this doubles as the initial push, and again on every add,
