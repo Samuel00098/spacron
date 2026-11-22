@@ -45,6 +45,16 @@ describe('persisted stage arrangement', () => {
     expect(sanitise({})?.ptyInstance).toBeNull();
     expect(sanitise({ ptyInstance: 7 })?.ptyInstance).toBeNull();
   });
+  it('keeps the task that owned each restored agent pane', () => {
+    // Without it a re-attached agent on a remote box comes back unowned and its
+    // task card resets to todo while the agent keeps working.
+    const panes = sanitise({ terminalPanes: [
+      { backendSessionId: 3, agentPreset: 'claude', ownerTaskId: 'task_abc-1', hasSession: true },
+      { backendSessionId: 4, agentPreset: 'codex', ownerTaskId: '../../evil', hasSession: true },
+    ] })?.terminalPanes;
+    expect(panes?.[0].ownerTaskId).toBe('task_abc-1');
+    expect(panes?.[1].ownerTaskId).toBeNull();
+  });
   it('brings the tiling and the primary room back', () => {
     const state = sanitise({
       openFiles: [],

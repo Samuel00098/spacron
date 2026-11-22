@@ -348,6 +348,12 @@ async fn ws_handler(
         .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
+/// A random id for this server process, minted once.
+fn server_instance_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
+}
+
 /// Constant-time byte comparison, so token validation doesn't leak length-prefix
 /// match progress via timing. (The length check leaks only the length, which is
 /// standard and acceptable here.)
@@ -570,6 +576,9 @@ fn handle_control(
                 "lsp_check_server" => lsp_check_server(args),
                 "lsp_start" => lsp_start(args, state),
                 "workspace_info" => workspace_info(state),
+                // This server's run: saved terminal ids are only meaningful
+                // against the same run, which outlives the desktop app.
+                "terminal_instance_id" => Ok(json!(server_instance_id())),
                 "box_automations_sync" => automations::sync(args, &state.workspace),
                 "box_automations_state" => automations::state(&state.workspace),
                 "box_automation_run_now" => automations::run_now(args, &state.workspace),

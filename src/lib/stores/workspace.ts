@@ -1,7 +1,7 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import type { Project, Workspace } from '$lib/types/workspace';
 import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles, resetEditorSession } from './editor';
-import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, setSessionCwd, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
+import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, setSessionOwnerTask, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, setSessionCwd, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
 import { expandedPaths, selectedPath, selectedPaths, cancelCreate, cancelRename, hideContextMenu } from './explorer';
 import { resetSettingsToDefault } from './settings';
@@ -299,12 +299,22 @@ let isRestoringProjectState = false;
 // project's agent pane another project's (or another agent's) shell, and the
 // saved agent was never relaunched. Only a webview reload, where the backend
 // kept its shells alive, may re-attach.
+//
+// On a remote workspace the shells live in the box's spacron-server, not in
+// this app, so the run that matters is the server's: it keeps running while the
+// laptop is closed or the app restarts, and its saved ids stay valid. The id is
+// therefore asked of whichever backend is active, and cached per backend.
 let ptyInstanceId: string | null = null;
+const ptyInstanceIds = new Map<string, string>();
 async function loadPtyInstanceId(): Promise<string | null> {
-  if (ptyInstanceId) return ptyInstanceId;
+  const { remoteTarget } = await import('./remoteWorkspace');
+  const backendKey = get(remoteTarget)?.url ?? 'local';
+  const cached = ptyInstanceIds.get(backendKey);
+  if (cached) return (ptyInstanceId = cached);
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    ptyInstanceId = await invoke<string>('terminal_instance_id');
+    const { backendInvoke } = await import('$lib/services/backend');
+    ptyInstanceId = await backendInvoke<string>('terminal_instance_id');
+    if (ptyInstanceId) ptyInstanceIds.set(backendKey, ptyInstanceId);
   } catch {
     ptyInstanceId = null;
   }
@@ -408,6 +418,9 @@ interface PersistedTerminalPane {
   agentPreset?: string | null;
   taskSummary?: string | null;
   worktree?: PersistedWorktree | null;
+  /** The orchestrator task that leased this terminal, so a restored agent is
+   *  handed back to its task card instead of the card resetting to todo. */
+  ownerTaskId?: string | null;
 }
 
 interface PersistedProjectState {
@@ -522,16 +535,16 @@ function rebaseProjectPathValues(value: unknown, oldRoot: string, newRoot: strin
 
 export const __rebaseProjectPathValues = rebaseProjectPathValues;
 
-/** Remote-workspace projects use a `remote:<id>` project id. Their state lives
- *  on the server and they're never auto-reopened locally, so we keep them out of
- *  localStorage to avoid orphaned per-project entries. */
+/** Remote-workspace projects use a `remote:<id>` project id (stable per saved
+ *  remote). Their pane state IS saved: the box keeps its shells running while
+ *  the app is closed, and this is what lets a reconnect re-attach them and hand
+ *  each agent back to its task. Their ids are stamped with the server's run. */
 function isRemoteProjectId(projectId: string): boolean {
   return projectId.startsWith('remote:');
 }
 
 function saveProjectStateToStorage(projectId: string) {
   if (typeof window === 'undefined') return;
-  if (isRemoteProjectId(projectId)) return;
   const terminalState = getTerminalProjectState(projectId);
   const terminalPanes: PersistedTerminalPane[] = terminalState.sessions
     .filter((session) => session.isRunning && session.agentPreset)
@@ -546,6 +559,7 @@ function saveProjectStateToStorage(projectId: string) {
         agentName: session.agentName ?? null,
         agentPreset: session.agentPreset ?? null,
         taskSummary: session.taskSummary ?? null,
+        ownerTaskId: session.ownerTaskId ?? null,
         worktree: session.worktree
           ? {
               path: session.worktree.path,
@@ -700,10 +714,11 @@ function sanitisePersistedProjectState(raw: unknown): PersistedProjectState | nu
     const agentPreset = isSafeLabel(pane.agentPreset, 128) && /^[\w\-./:@ ]{1,128}$/.test(pane.agentPreset) ? pane.agentPreset : null;
     const taskSummary = isSafeLabel(pane.taskSummary, 256) ? pane.taskSummary : null;
     const worktree = sanitisePersistedWorktree(pane.worktree);
+    const ownerTaskId = typeof pane.ownerTaskId === 'string' && /^[\w\-]{1,80}$/.test(pane.ownerTaskId) ? pane.ownerTaskId : null;
     // Back-compat: entries persisted before hasSession existed are treated as
     // occupied panes so previously-saved terminals still get recreated.
     const hasSession = pane.hasSession === undefined ? true : Boolean(pane.hasSession);
-    return { backendSessionId, role, cwd, hasSession, title, paneTitle, agentName, agentPreset, taskSummary, worktree };
+    return { backendSessionId, role, cwd, hasSession, title, paneTitle, agentName, agentPreset, taskSummary, worktree, ownerTaskId };
   });
 
   const terminalLayout = typeof r.terminalLayout === 'string' ? r.terminalLayout : undefined;
@@ -1251,6 +1266,8 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
                 ? await attachTerminalSession(pane.backendSessionId, pane.cwd || rootPath, undefined, projectId, metadata, { assignPane: false })
                 : null;
               if (attachedId !== null) {
+                // Same live process, so the same task still owns it.
+                if (pane.ownerTaskId) setSessionOwnerTask(attachedId, pane.ownerTaskId);
                 return attachedId;
               }
               const roomId = await createTerminalSession(pane.cwd || rootPath, undefined, projectId, { assignPane: false, agentPreset: pane.agentPreset });
