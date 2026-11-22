@@ -16,6 +16,21 @@ export interface Automation {
   agent: string; schedule: Schedule; time: string; day: number;
   model?: string | null; reasoningEffort?: ChatReasoningEffort;
   enabled: boolean; nextRunAt: number;
+  /**
+   * 'box': saved while a remote workspace was active, so it runs on that box
+   * (spacron-server's runner) and fires while this laptop is closed. The desktop
+   * scheduler leaves it alone and keeps the box's copy in sync instead.
+   */
+  runOn?: 'box';
+}
+
+/** A run recorded by the box's runner (`.spacron/automations/runs.json`). */
+export interface BoxRun {
+  id: string; automationId: string; name: string; startedAt: number; finishedAt?: number | null;
+  status: 'running' | 'completed' | 'failed' | 'missed' | 'interrupted';
+  detail?: string | null;
+  /** Workspace-relative log path. */
+  log?: string | null;
 }
 export interface AutomationRun {
   id: string; automationId: string; name: string; startedAt: number; finishedAt?: number;
@@ -46,8 +61,54 @@ const active = (run: AutomationRun) => ['starting', 'running', 'needs_input'].in
 function commit(next: State) {
   // A failed durable claim must never start an agent.
   localStorage.setItem(KEY, JSON.stringify(next));
+  const boxChanged = JSON.stringify(boxView(next)) !== JSON.stringify(boxView(state));
   state = next;
   listeners.forEach(fn => fn());
+  if (boxChanged && get(remoteTarget)) void syncBoxAutomations().catch(error => console.warn('[automations] Could not sync to the box:', error));
+}
+
+/** The part of the state the box cares about, to skip no-op syncs. */
+function boxView(s: State) {
+  return { a: s.automations.filter(a => a.runOn === 'box'), e: s.settings?.enabled, c: s.settings?.catchUpMinutes };
+}
+
+/** How far ahead run times are sent to the box. The desktop recomputes them on
+ *  every connect and change, so this only bounds how long the laptop may stay away. */
+const BOX_WINDOW_MS = 14 * 24 * 60 * 60_000;
+const BOX_MAX_OCCURRENCES = 400;
+
+/** Upcoming run times in this computer's time zone, as epoch ms. */
+export function upcomingOccurrences(a: Pick<Automation, 'schedule' | 'time' | 'day'>, from: number): number[] {
+  const out: number[] = [];
+  let t = from;
+  while (out.length < BOX_MAX_OCCURRENCES) {
+    t = nextOccurrence(a.schedule, a.time, a.day, t);
+    if (t > from + BOX_WINDOW_MS) break;
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Send the active remote's box automations, with their upcoming run times, to
+ * the box. Called on connect and after every change.
+ */
+export async function syncBoxAutomations(): Promise<void> {
+  const project = get(activeProject);
+  if (!get(remoteTarget) || !project) return;
+  const now = Date.now();
+  const automations = state.automations
+    .filter(a => a.runOn === 'box' && a.projectId === project.id && a.root === project.root_path)
+    .map(a => ({ id: a.id, name: a.name, prompt: a.prompt, agent: a.agent, model: a.model ?? null, enabled: a.enabled, occurrences: upcomingOccurrences(a, now) }));
+  const { backendInvoke } = await import('$lib/services/backend');
+  await backendInvoke('box_automations_sync', { automations, enabled: state.settings.enabled, catchUpMinutes: state.settings.catchUpMinutes });
+}
+
+/** Runs the box recorded, newest first; empty when no remote is active. */
+export async function fetchBoxRuns(): Promise<BoxRun[]> {
+  if (!get(remoteTarget)) return [];
+  const { backendInvoke } = await import('$lib/services/backend');
+  return backendInvoke<BoxRun[]>('box_automations_state');
 }
 export function loadAutomations() {
   if (loaded) return;
@@ -105,6 +166,13 @@ function canRun(a: Automation) {
 export async function runAutomation(id: string, scheduled = false): Promise<void> {
   const a = state.automations.find(item => item.id === id);
   if (!a || (scheduled && !a.enabled)) return;
+  if (a.runOn === 'box') {
+    if (scheduled) return; // the box's own runner fires it
+    await syncBoxAutomations();
+    const { backendInvoke } = await import('$lib/services/backend');
+    await backendInvoke('box_automation_run_now', { id });
+    return;
+  }
   if (!canRun(a)) throw new Error('Open this automation’s local project to run it');
   if (state.runs.some(r => r.automationId === id && active(r))) throw new Error('This automation already has an active run');
   const now = Date.now();
@@ -208,6 +276,7 @@ export function startAutomationScheduler(onError: (message: string) => void, onN
   const tick = () => {
     if (!state.settings.enabled) return;
     for (const a of state.automations) {
+      if (a.runOn === 'box') continue;
       if (a.enabled && a.nextRunAt <= Date.now() && canRun(a) && !state.runs.some(r => r.automationId === a.id && active(r))) void runAutomation(a.id, true).catch(error => onError(String(error)));
     }
   };

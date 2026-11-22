@@ -16,7 +16,8 @@ import AgentLaunchConfigFields from '$lib/components/shared/AgentLaunchConfigFie
 import { freshLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import type { ChatReasoningEffort } from '$lib/types/chat';
-import { automationSnapshot, subscribeAutomations, startAutomationScheduler, saveAutomation, toggleAutomation, removeAutomation, runAutomation, type Automation } from '$lib/services/automations/automations';
+import { automationSnapshot, subscribeAutomations, startAutomationScheduler, saveAutomation, toggleAutomation, removeAutomation, runAutomation, fetchBoxRuns, type Automation, type BoxRun } from '$lib/services/automations/automations';
+import { backendInvoke } from '$lib/services/backend';
 import { nextOccurrence, type Schedule } from '$lib/services/automations/schedule';
 import './Automations.css';
 
@@ -77,6 +78,28 @@ export function AutomationDialog({ close }: { close: () => void }) {
   const [error, setError] = useState('');
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const local = Boolean(project && !remote);
+  // On a remote workspace automations run on the box itself (see runOn: 'box').
+  const canSave = Boolean(project);
+  const [boxRuns, setBoxRuns] = useState<BoxRun[]>([]);
+  const [boxError, setBoxError] = useState('');
+  const [openLog, setOpenLog] = useState<{ id: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!remote || tab !== 'history') return;
+    let alive = true;
+    const load = () => fetchBoxRuns().then(list => { if (alive) { setBoxRuns(list); setBoxError(''); } })
+      .catch(e => { if (alive) setBoxError(String(e)); });
+    void load();
+    const timer = window.setInterval(load, 15_000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [remote, tab]);
+  async function showLog(run: BoxRun) {
+    if (openLog?.id === run.id) { setOpenLog(null); return; }
+    if (!run.log || !project) return;
+    try {
+      const text = await backendInvoke<string>('fs_read_file', { path: `${project.root_path}/${run.log}` });
+      setOpenLog({ id: run.id, text: text.length > 20_000 ? `… ${text.length - 20_000} earlier characters hidden …\n${text.slice(-20_000)}` : text || '(The run printed nothing.)' });
+    } catch (e) { setOpenLog({ id: run.id, text: `Could not read the log: ${String(e)}` }); }
+  }
   const agentAvailable = agents.some(a => a.command === agent);
   const modelAvailable = !model || (modelCatalog.agent === agent && modelCatalog.models.some(entry => entry.id === model && entry.supported !== false));
   useEffect(() => { if (!agent && agents.length) setAgent(agents[0].command); }, [agent, usage.lastFetchedAt, agents.length]);
@@ -114,10 +137,10 @@ export function AutomationDialog({ close }: { close: () => void }) {
       <div className="automation-body">
       {error && <p role="alert" className="automation-error">{error}</p>}
       {editor ? <form onSubmit={e => { e.preventDefault(); action(() => {
-        if (!project || remote) throw new Error('Open a local project first');
+        if (!project) throw new Error('Open a project first');
         if (model && (modelsLoading || !modelAvailable)) throw new Error('Choose a model from this agent’s current model list');
         if (editing && (editing.projectId !== project.id || editing.root !== project.root_path)) throw new Error('Open the saved project to edit this automation');
-        saveAutomation({ id: editing?.id, name, prompt, agent, model, reasoningEffort: effort, schedule, time, day, projectId: project.id, root: project.root_path, enabled: editing?.enabled ?? true }); reset();
+        saveAutomation({ id: editing?.id, name, prompt, agent, model, reasoningEffort: effort, schedule, time, day, projectId: project.id, root: project.root_path, enabled: editing?.enabled ?? true, ...(remote || editing?.runOn === 'box' ? { runOn: 'box' as const } : {}) }); reset();
       }); }}>
         <div className="automation-editor-heading"><h3>{editing ? 'Edit automation' : 'New automation'}</h3><span className="automation-project" title={project?.root_path}>{project?.name ?? 'No project open'}</span></div>
         <div className="automation-editor-grid"><div className="automation-instructions">
@@ -133,11 +156,13 @@ export function AutomationDialog({ close }: { close: () => void }) {
           <div className="automation-time-row"><div><label htmlFor="automation-time">{schedule === 'hourly' ? 'Minute past the hour' : 'Time'}</label>{schedule === 'hourly' ? <input id="automation-time" required type="number" min={0} max={59} value={Number(time.slice(3))} onChange={e => setTime(`09:${e.target.value.padStart(2, '0')}`)}/> : <input id="automation-time" required type="time" value={time} onChange={e => setTime(e.target.value)}/>}</div>{schedule === 'weekly' && <div><span className="automation-field-label">Day</span><Dropdown ariaLabel="Automation weekday" value={String(day)} onChange={value => setDay(Number(value))} options={weekdays.map((label, i) => ({ value: String(i), label }))}/></div>}</div>
           <div className="automation-next"><Clock size={15}/><div><span>Next run</span><strong>{next || 'Choose a time'}</strong><small>{timezone}</small></div></div>
         </aside></div>
-        {!local && <p className="automation-error">Open a local project to create an automation.</p>}
-        <footer className="automation-editor-footer"><span>Runs while this project is active.</span><button type="button" onClick={reset}>Cancel</button><button className="automation-primary" type="submit" disabled={!local || !agentAvailable || (Boolean(model) && (modelsLoading || !modelAvailable))}>{editing ? 'Save changes' : 'Create automation'}</button></footer>
+        {!canSave && <p className="automation-error">Open a project to create an automation.</p>}
+        {remote && <p className="automation-box-note">Runs on the remote box, even while this laptop is closed. The agent runs in its headless mode and cannot stop to ask for approval, so give it read-and-report work. Claude Code, Codex, Gemini CLI and opencode are supported.</p>}
+        <footer className="automation-editor-footer"><span>{remote ? 'Runs on the remote box.' : 'Runs while this project is active.'}</span><button type="button" onClick={reset}>Cancel</button><button className="automation-primary" type="submit" disabled={!canSave || !agentAvailable || (Boolean(model) && (modelsLoading || !modelAvailable))}>{editing ? 'Save changes' : 'Create automation'}</button></footer>
       </form> : tab === 'saved' ? <>
-        {!automations.length ? <div className="automation-empty"><div className="automation-empty-icon"><Clock size={30}/></div><h3>A little less on your to-do list</h3><p>Schedule reviews, daily summaries, or routine checks.<br/>Pick an agent, give it instructions, and choose when.</p><button className="automation-primary" onClick={newAutomation}>+ Create your first automation</button><div className="automation-templates"><span>Or start from a template</span><div className="automation-template-grid">{templates.map(t => <button key={t.id} type="button" className="automation-template" onClick={() => startFromTemplate(t)}><strong>{t.name}</strong><small>{t.blurb}</small></button>)}</div></div></div> : <div className="automation-list">{automations.map(a => <article className="automation-item" key={a.id}><div className="automation-item-icon"><AgentBrandMark command={a.agent} name={agents.find(p => p.command === a.agent)?.name ?? a.agent}/></div><div className="automation-item-content"><div className="automation-item-title"><strong>{a.name}</strong><span className={`automation-status ${a.enabled ? 'enabled' : ''}`}>{a.enabled ? 'Active' : 'Paused'}</span></div><p>{scheduleLabel(a)} <span>· {agents.find(p => p.command === a.agent)?.name ?? a.agent}</span></p><small title={a.root}>{a.enabled ? `Next ${new Date(a.nextRunAt).toLocaleString()}` : 'Schedule paused'} · {a.root.split(/[\\/]/).pop()}</small><div className="automation-item-actions"><button onClick={() => edit(a)}>Edit</button><button onClick={() => action(() => toggleAutomation(a.id))}>{a.enabled ? 'Pause' : 'Resume'}</button><button disabled={!local || a.projectId !== project?.id || a.root !== project?.root_path} onClick={() => action(() => runAutomation(a.id))}>Run now</button>{pendingDelete === a.id ? <><span>Delete this automation?</span><button className="automation-danger" onClick={() => action(() => { removeAutomation(a.id); setPendingDelete(null); })}>Delete</button><button onClick={() => setPendingDelete(null)}>Keep</button></> : <button className="automation-delete" onClick={() => setPendingDelete(a.id)}>Delete</button>}</div></div></article>)}</div>}
+        {!automations.length ? <div className="automation-empty"><div className="automation-empty-icon"><Clock size={30}/></div><h3>A little less on your to-do list</h3><p>Schedule reviews, daily summaries, or routine checks.<br/>Pick an agent, give it instructions, and choose when.</p><button className="automation-primary" onClick={newAutomation}>+ Create your first automation</button><div className="automation-templates"><span>Or start from a template</span><div className="automation-template-grid">{templates.map(t => <button key={t.id} type="button" className="automation-template" onClick={() => startFromTemplate(t)}><strong>{t.name}</strong><small>{t.blurb}</small></button>)}</div></div></div> : <div className="automation-list">{automations.map(a => <article className="automation-item" key={a.id}><div className="automation-item-icon"><AgentBrandMark command={a.agent} name={agents.find(p => p.command === a.agent)?.name ?? a.agent}/></div><div className="automation-item-content"><div className="automation-item-title"><strong>{a.name}</strong><span className={`automation-status ${a.enabled ? 'enabled' : ''}`}>{a.enabled ? 'Active' : 'Paused'}</span></div><p>{scheduleLabel(a)} <span>· {agents.find(p => p.command === a.agent)?.name ?? a.agent}</span></p><small title={a.root}>{a.enabled ? `Next ${new Date(a.nextRunAt).toLocaleString()}` : 'Schedule paused'} · {a.root.split(/[\\/]/).pop()}{a.runOn === 'box' ? ' · on the remote box' : ''}</small><div className="automation-item-actions"><button onClick={() => edit(a)}>Edit</button><button onClick={() => action(() => toggleAutomation(a.id))}>{a.enabled ? 'Pause' : 'Resume'}</button><button disabled={(a.runOn === 'box' ? !remote : !local) || a.projectId !== project?.id || a.root !== project?.root_path} onClick={() => action(() => runAutomation(a.id))}>Run now</button>{pendingDelete === a.id ? <><span>Delete this automation?</span><button className="automation-danger" onClick={() => action(() => { removeAutomation(a.id); setPendingDelete(null); })}>Delete</button><button onClick={() => setPendingDelete(null)}>Keep</button></> : <button className="automation-delete" onClick={() => setPendingDelete(a.id)}>Delete</button>}</div></div></article>)}</div>}
       </> : <section className="automation-history">
+        {remote && <div className="automation-box-runs"><h4>On the remote box</h4>{boxError && <p className="automation-error">{boxError}</p>}{!boxRuns.length && !boxError ? <p className="automation-helper">No runs on the box yet.</p> : boxRuns.map(run => <article key={run.id} className="automation-run"><span className={`automation-run-dot ${run.status}`}/><div><strong>{run.name}</strong><p>{new Date(run.startedAt).toLocaleString()} · {run.status}</p>{run.detail && <small>{run.detail}</small>}{openLog?.id === run.id && <pre className="automation-log">{openLog.text}</pre>}</div>{run.log && <button onClick={() => void showLog(run)}>{openLog?.id === run.id ? 'Hide log' : 'View log'}</button>}</article>)}</div>}
         {!runs.length ? <div className="automation-empty"><div className="automation-empty-icon"><Clock size={30}/></div><h3>Every run, in one place</h3><p>Results, approval requests, and run details<br/>will appear here once an automation starts.</p></div> : runs.map(run => <article key={run.id} className="automation-run"><span className={`automation-run-dot ${run.status}`}/><div><strong>{run.name}</strong><p>{new Date(run.startedAt).toLocaleString()} · {run.status === 'quiet' ? 'Went quiet' : run.status.replace(/_/g, ' ')}</p>{run.detail && <small>{run.detail}</small>}</div>{run.sessionId !== undefined && <button onClick={() => { setActiveSession(run.sessionId!); requestRoomControl('focus', `agent:${run.sessionId}`); close(); }}>Open session ↗</button>}</article>)}
       </section>}
       </div>

@@ -41,6 +41,7 @@ use crate::pty::session::{self, DataSink, ExitSink};
 use crate::pty::shell::{self, ShellConfig};
 use crate::state::WriteRateLimiter;
 
+mod automations;
 mod tunnel;
 
 /// Binary frame kinds (first byte of a server→client binary message).
@@ -161,6 +162,9 @@ pub async fn serve(cfg: ServerConfig) -> anyhow::Result<()> {
             "auto-commit enabled (interval: {interval_dur:?}) — periodically saves uncommitted changes"
         );
     }
+
+    // Automations that run here, so they fire while the laptop is closed.
+    tokio::spawn(automations::run_loop(state.workspace.clone()));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     if let Some((cert, key)) = cfg.tls {
@@ -566,6 +570,9 @@ fn handle_control(
                 "lsp_check_server" => lsp_check_server(args),
                 "lsp_start" => lsp_start(args, state),
                 "workspace_info" => workspace_info(state),
+                "box_automations_sync" => automations::sync(args, &state.workspace),
+                "box_automations_state" => automations::state(&state.workspace),
+                "box_automation_run_now" => automations::run_now(args, &state.workspace),
                 "workspace_git_log" => git_log(args, &state.workspace),
                 "workspace_git_status" => git_status(&state.workspace),
                 "workspace_git_diff" => git_diff(args, &state.workspace),

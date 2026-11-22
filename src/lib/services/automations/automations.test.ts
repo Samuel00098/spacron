@@ -175,3 +175,35 @@ it('notifies on completion and clears only finished history', async () => {
   api.clearAutomationHistory();
   expect(api.automationSnapshot().runs).toHaveLength(0);
 });
+const backend = vi.hoisted(() => ({ calls: [] as Array<{ cmd: string; args: unknown }> }));
+vi.mock('$lib/services/backend', () => ({ backendInvoke: vi.fn(async (cmd: string, args: unknown) => { backend.calls.push({ cmd, args }); return cmd === 'box_automations_state' ? [] : { ok: true }; }) }));
+it('lists two weeks of run times for the box', async () => {
+  const api = await import('./automations');
+  const from = new Date(2026, 10, 20, 8).getTime();
+  const daily = api.upcomingOccurrences({ schedule: 'daily', time: '09:00', day: 1 }, from);
+  expect(daily).toHaveLength(14);
+  expect(daily[0]).toBe(new Date(2026, 10, 20, 9).getTime());
+  expect(api.upcomingOccurrences({ schedule: 'hourly', time: '09:15', day: 1 }, from)).toHaveLength(336);
+});
+it('leaves box automations to the box and syncs them while remote', async () => {
+  vi.useFakeTimers();
+  try {
+    backend.calls = [];
+    mock.remote = {};
+    vi.setSystemTime(new Date(2026, 10, 20, 8));
+    const api = await import('./automations');
+    api.loadAutomations();
+    api.saveAutomation({ name: 'Box review', prompt: 'Review', projectId: 'p', root: '/repo', agent: 'codex', schedule: 'daily', time: '09:00', day: 1, enabled: true, runOn: 'box' });
+    await vi.advanceTimersByTimeAsync(0);
+    const sync = backend.calls.find(c => c.cmd === 'box_automations_sync');
+    expect(sync).toBeDefined();
+    expect((sync!.args as { automations: Array<{ occurrences: number[] }> }).automations[0].occurrences.length).toBe(14);
+    vi.setSystemTime(new Date(2026, 10, 20, 9, 5));
+    const stop = api.startAutomationScheduler(() => {});
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mock.spawn).not.toHaveBeenCalled();
+    await api.runAutomation(api.automationSnapshot().automations[0].id);
+    expect(backend.calls.some(c => c.cmd === 'box_automation_run_now')).toBe(true);
+    stop();
+  } finally { vi.useRealTimers(); }
+});

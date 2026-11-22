@@ -375,6 +375,10 @@ export async function connectRemote(id: string): Promise<void> {
     const workspace = await import('./workspace');
     await workspace.openRemoteRoot(conn);
     void openMcpTunnel({ ...conn, token: tokenCache.get(id) ?? conn.token });
+    // Refresh the box's run times: it only knows about two weeks ahead.
+    void import('$lib/services/automations/automations')
+      .then(({ syncBoxAutomations }) => syncBoxAutomations())
+      .catch((err) => console.warn('[remoteWorkspace] Could not sync automations to the box:', err));
   } catch (err) {
     console.error('Failed to connect to remote workspace:', err);
     // Roll back cleanly to Local so we don't leave a half-connected state.
