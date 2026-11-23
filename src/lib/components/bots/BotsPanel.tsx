@@ -135,7 +135,7 @@ export default function BotsPanel() {
         <span className="bots-header-icon"><BotIcon size={22} /></span>
         <div>
           <h2>Bots</h2>
-          <p>Agents with a standing job, outside every project. Chat with them, or let them work on a schedule. {remote ? 'Bots on your box keep working while this laptop is closed.' : 'They run on this PC while Spacron is open, or on a box once you connect one.'}</p>
+          <p>Chat with your bots or give them a job to run on a schedule.</p>
         </div>
         {selected !== NEW_BOT && <button type="button" className="bots-primary" onClick={() => selectedBotId.set(NEW_BOT)}>+ New bot</button>}
         <CloseButton />
@@ -176,42 +176,41 @@ function NoHost() {
 function BotList({ bots: list }: { bots: Bot[] }) {
   const state = useStore(botHostState);
   const hostName = useHostName();
-  if (!list.length) return (
-    <div className="bots-empty">
-      <BotAvatar avatar="robot" size={72} className="bots-empty-avatar" />
-      <h3>Put an agent on the night shift</h3>
-      <p>Give a bot a job, chat with it, or put it on a schedule. It keeps its own folder between runs, so it remembers what it did. It runs with the agent CLIs you already have installed.</p>
-      <button type="button" className="bots-primary" onClick={() => selectedBotId.set(NEW_BOT)}>+ Create your first bot</button>
-      <TemplateGrid />
-    </div>
-  );
   const groups = [...new Set(list.map((b) => b.boxId))].sort((a, b) => (a === LOCAL_HOST ? -1 : b === LOCAL_HOST ? 1 : 0));
-  return <>{groups.map((host) => (
-    <section key={host} className="bots-group">
-      <h4>{hostName(host)}</h4>
-      <div className="bots-grid">
-        {list.filter((b) => b.boxId === host).sort((a, b) => a.name.localeCompare(b.name)).map((b) => {
-          const run = latestRun(state, b);
-          const next = nextBotRun(b);
-          return (
-            <button key={b.id} type="button" className="bots-card" onClick={() => selectedBotId.set(b.id)}>
-              <div className="bots-card-top">
-                <BotAvatar avatar={b.avatar} size={40} />
-                <div className="bots-card-title">
-                  <strong>{b.name}</strong>
-                  <small>{botScheduleLabel(b)}{next ? ` · next ${when(next)}` : ''}</small>
+  return <div className="bots-library">
+    {!list.length && <div className="bots-empty bots-list-empty">
+      <BotAvatar avatar="robot" size={64} />
+      <h3>Create your first bot</h3>
+      <p>Start with a template below or create a bot with your own instructions.</p>
+    </div>}
+    {groups.map((host) => (
+      <section key={host} className="bots-group">
+        <h4>{hostName(host)}</h4>
+        <div className="bots-grid">
+          {list.filter((b) => b.boxId === host).sort((a, b) => a.name.localeCompare(b.name)).map((b) => {
+            const run = latestRun(state, b);
+            const next = nextBotRun(b);
+            const tools = [b.canCreateBots && 'Creates bots', b.computerUse && 'Computer use', b.browser && 'Browser', ...botConnectorNames(b)].filter(Boolean);
+            return (
+              <button key={b.id} type="button" className="bots-card" onClick={() => selectedBotId.set(b.id)}>
+                <div className="bots-card-top">
+                  <BotAvatar avatar={b.avatar} size={40} />
+                  <div className="bots-card-title">
+                    <strong>{b.name}</strong>
+                    {b.schedule !== 'manual' && <small>{botScheduleLabel(b)}{next ? ` · next ${when(next)}` : ''}</small>}
+                  </div>
+                  <StatusChip bot={b} run={run} />
                 </div>
-                <StatusChip bot={b} run={run} />
-              </div>
-              <p>{b.instructions}</p>
-              <small>{[b.canCreateBots && 'Creates bots', b.computerUse && 'Computer use', b.browser && 'Browser', ...botConnectorNames(b)].filter(Boolean).join(' · ') || ' '}</small>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  ))}
-  <TemplateGrid title="Add another from a template" /></>;
+                <p>{b.instructions}</p>
+                {tools.length > 0 && <small className="bots-card-tools">{tools.join(' · ')}</small>}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    ))}
+    <TemplateGrid title="Start from a template" />
+  </div>;
 }
 
 function StatusChip({ bot, run }: { bot: Bot; run?: BotRun }) {
@@ -228,7 +227,7 @@ let pendingTemplate: BotTemplate | null = null;
 function TemplateGrid({ onPick, title = 'Or start from a template', selectedId }: { onPick?: (t: BotTemplate) => void; title?: string; selectedId?: string }) {
   return (
     <div className="bots-templates">
-      {title && <span>{title}</span>}
+      {title && <h4>{title}</h4>}
       <div className="bots-template-grid">
         {BOT_TEMPLATES.map((t) => <button key={t.id} type="button" className="bots-template" aria-pressed={onPick ? t.id === selectedId : undefined} onClick={() => {
           if (onPick) onPick(t);
