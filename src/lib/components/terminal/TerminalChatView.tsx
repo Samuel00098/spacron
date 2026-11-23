@@ -1618,18 +1618,22 @@ export default function TerminalChatView({
     let revision = 0;
     const overComposer = (x: number, y: number) =>
       document.elementFromPoint(x, y)?.closest('.terminal-chat-composer') === composerRef.current;
+    const overPanel = (x: number, y: number) => {
+      const panel = composerRef.current?.closest('.terminal-chat-view');
+      return Boolean(panel && document.elementFromPoint(x, y)?.closest('.terminal-chat-view') === panel);
+    };
     const attach = (paths: string[]) => {
       void attachDroppedPaths(paths);
       textareaRef.current?.focus();
     };
     const onExplorerMove = (event: Event) => {
       const { clientX, clientY } = (event as CustomEvent<{ clientX: number; clientY: number }>).detail;
-      setDropOver(overComposer(clientX, clientY));
+      setDropOver(overPanel(clientX, clientY));
     };
     const onExplorerEnd = (event: Event) => {
       const { path, clientX, clientY } = (event as CustomEvent<{ path?: string; clientX: number; clientY: number }>).detail;
       setDropOver(false);
-      if (path && overComposer(clientX, clientY)) attach([path]);
+      if (path && overPanel(clientX, clientY)) attach([path]);
     };
     window.addEventListener('spacron-explorer-drag-move', onExplorerMove);
     window.addEventListener('spacron-explorer-drag-end', onExplorerEnd);

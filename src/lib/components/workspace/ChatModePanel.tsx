@@ -701,6 +701,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
   const editingTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLFormElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
 
   const projectThreads = project ? threadState.threadsByProject[project.id] ?? [] : [];
   const activeThreadId = project ? threadState.activeThreadByProject[project.id] ?? null : null;
@@ -1667,24 +1668,27 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     await handleFiles(files);
   }
 
-  // OS file-manager drops (Tauri intercepts before HTML5 events reach the
-  // webview) plus in-app explorer drags (custom pointer events carrying a
-  // project path). Both hit-test against the composer so drops elsewhere on
-  // the page don't attach.
+  // Explorer drags can land anywhere on the visible chat panel.
   useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const onExplorerEnd = (event: Event) => {
-      const custom = event as CustomEvent<{ path?: string; clientX?: number; clientY?: number }>;
-      const path = custom.detail?.path?.trim();
-      if (!path) return;
-      const cx = custom.detail?.clientX;
-      const cy = custom.detail?.clientY;
-      if (typeof cx !== 'number' || typeof cy !== 'number') return;
-      if (!isEventOverComposer(cx, cy)) return;
-      void handleDroppedPaths([path]);
+    const overPanel = (x: number, y: number) =>
+      document.elementFromPoint(x, y)?.closest('.chat-mode-panel') === panelRef.current;
+    const onExplorerMove = (event: Event) => {
+      const { clientX, clientY } = (event as CustomEvent<{ clientX: number; clientY: number }>).detail;
+      setIsComposerDragOver(overPanel(clientX, clientY));
     };
-    window.addEventListener('spacron-explorer-drag-end', onExplorerEnd as EventListener);
-    return () => window.removeEventListener('spacron-explorer-drag-end', onExplorerEnd as EventListener);
+    const onExplorerEnd = (event: Event) => {
+      const { path, clientX, clientY } = (event as CustomEvent<{ path: string; clientX: number; clientY: number }>).detail;
+      setIsComposerDragOver(false);
+      if (!path || !overPanel(clientX, clientY)) return;
+      void handleDroppedPaths([path]);
+      textareaRef.current?.focus();
+    };
+    window.addEventListener('spacron-explorer-drag-move', onExplorerMove);
+    window.addEventListener('spacron-explorer-drag-end', onExplorerEnd);
+    return () => {
+      window.removeEventListener('spacron-explorer-drag-move', onExplorerMove);
+      window.removeEventListener('spacron-explorer-drag-end', onExplorerEnd);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1913,6 +1917,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
 
   return (
     <section
+      ref={panelRef}
       className={`chat-mode-panel${standalone ? ' standalone-chat-panel' : ''}${messages.length === 0 ? ' empty' : ''}${viewerFile ? ' has-file-viewer' : ''}`}
       aria-label="Chat"
       onMouseOver={(event) => {

@@ -1155,9 +1155,9 @@ function TerminalPane({
         const barRect = barEl.getBoundingClientRect();
         overBar = cx >= barRect.left && cx <= barRect.right && cy >= barRect.top && cy <= barRect.bottom;
       }
-      const overComposer = typeof cx === 'number' && typeof cy === 'number'
-        && document.elementFromPoint(cx, cy)?.closest('.terminal-chat-composer');
-      if (endedPath && overPane && !overBar && !overComposer) {
+      const overChat = typeof cx === 'number' && typeof cy === 'number'
+        && document.elementFromPoint(cx, cy)?.closest('.terminal-chat-view, .chat-mode-panel');
+      if (endedPath && overPane && !overBar && !overChat) {
         const text = endedPath.replace(/\\/g, '/');
         pasteIntoTerminal(text);
       }
