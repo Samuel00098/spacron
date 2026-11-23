@@ -355,6 +355,51 @@ fn bot_agent_command(agent: &str, prompt: &str, model: Option<&str>) -> Result<V
     Ok(argv)
 }
 
+/// The run's connectors as Codex `-c mcp_servers.<key>.…` overrides. Codex has
+/// no `--mcp-config`; it reads servers from `~/.codex/config.toml`, but accepts
+/// the same keys per launch. Args are passed as argv, so no shell quoting.
+///
+/// Codex speaks only streamable HTTP, so Spacron's own SSE address is swapped
+/// for its `/mcp` twin (same port and token), and a server that needs custom
+/// headers is skipped: Codex cannot carry them (the desktop's agent launcher
+/// skips the same ones).
+fn codex_mcp_flags(path: &Path) -> Vec<String> {
+    let Some(servers) = std::fs::read_to_string(path).ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.get("mcpServers").and_then(|s| s.as_object()).cloned()) else { return Vec::new() };
+    let toml = |v: &str| serde_json::to_string(v).unwrap_or_default();
+    let mut flags: Vec<String> = Vec::new();
+    let mut add = |key: &str, field: &str, value: String| {
+        flags.extend(["-c".to_string(), format!("mcp_servers.{key}.{field}={value}")]);
+    };
+    for (key, server) in &servers {
+        // A key outside bare-TOML characters would need quoting; skip it.
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            continue;
+        }
+        if let Some(command) = server.get("command").and_then(Value::as_str).filter(|c| !c.trim().is_empty()) {
+            add(key, "command", toml(command.trim()));
+            let args: Vec<String> = server.get("args").and_then(Value::as_array).into_iter().flatten()
+                .filter_map(Value::as_str).map(toml).collect();
+            if !args.is_empty() {
+                add(key, "args", format!("[{}]", args.join(", ")));
+            }
+            let env: Vec<String> = server.get("env").and_then(Value::as_object).into_iter().flatten()
+                .filter_map(|(k, v)| v.as_str().map(|v| format!("{} = {}", toml(k), toml(v)))).collect();
+            if !env.is_empty() {
+                add(key, "env", format!("{{ {} }}", env.join(", ")));
+            }
+        } else if let Some(url) = server.get("url").and_then(Value::as_str).filter(|u| !u.trim().is_empty()) {
+            if server.get("headers").and_then(Value::as_object).is_some_and(|h| !h.is_empty()) {
+                continue;
+            }
+            let url = if key == SPACRON_TOOLS_KEY { url.replacen("/sse?", "/mcp?", 1) } else { url.to_string() };
+            add(key, "url", toml(url.trim()));
+        }
+    }
+    flags
+}
+
 /// The full headless command for one run: the agent's own headless form plus
 /// the flags for the bot's access level and connectors.
 pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[String])>) -> Result<Vec<String>, String> {
@@ -410,11 +455,16 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
                 Access::Full => flags.extend(["--permission-mode".into(), "bypassPermissions".into()]),
             }
         }
-        "codex" => flags.extend(match bot.access {
-            Access::Research => vec!["--sandbox".into(), "read-only".into()],
-            Access::Folder => vec!["--sandbox".into(), "workspace-write".into()],
-            Access::Full => vec!["--dangerously-bypass-approvals-and-sandbox".into()],
-        }),
+        "codex" => {
+            flags.extend(match bot.access {
+                Access::Research => vec!["--sandbox".into(), "read-only".into()],
+                Access::Folder => vec!["--sandbox".into(), "workspace-write".into()],
+                Access::Full => vec!["--dangerously-bypass-approvals-and-sandbox".into()],
+            });
+            if let Some((path, _)) = mcp {
+                flags.extend(codex_mcp_flags(path));
+            }
+        }
         "gemini" => flags.extend(match bot.access {
             Access::Research => vec![],
             Access::Folder => vec!["--approval-mode".into(), "auto_edit".into()],
@@ -956,6 +1006,29 @@ mod tests {
         let n = gemini.len();
         assert_eq!(gemini[n - 3], "--yolo");
         assert_eq!(gemini[n - 2], "-p", "-p still sits right before its prompt");
+    }
+
+    #[test]
+    fn codex_bots_get_their_connectors_as_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        std::fs::write(&path, json!({ "mcpServers": {
+            "spacron-mcp": { "type": "sse", "url": "http://127.0.0.1:9/sse?token=t" },
+            "gmail": { "type": "http", "url": "https://x/mcp" },
+            "keyed": { "type": "http", "url": "https://y/mcp", "headers": { "Authorization": "k" } },
+            "files": { "command": "npx", "args": ["-y", "pkg"], "env": { "A": "b" } },
+        } }).to_string()).unwrap();
+        let flags = codex_mcp_flags(&path);
+        assert!(flags.contains(&"mcp_servers.spacron-mcp.url=\"http://127.0.0.1:9/mcp?token=t\"".to_string()));
+        assert!(flags.contains(&"mcp_servers.gmail.url=\"https://x/mcp\"".to_string()));
+        assert!(flags.contains(&"mcp_servers.files.args=[\"-y\", \"pkg\"]".to_string()));
+        assert!(flags.contains(&"mcp_servers.files.env={ \"A\" = \"b\" }".to_string()));
+        assert!(flags.iter().all(|f| !f.contains("keyed")), "headers cannot reach Codex");
+        let mut b = parsed(bot("a", vec![]));
+        b.agent = "codex".into();
+        let argv = bot_command(&b, "p", Some((&path, &["gmail".to_string()]))).unwrap();
+        assert_eq!(argv.last().unwrap(), "p", "the prompt stays last");
+        assert!(argv.contains(&"-c".to_string()));
     }
 
     #[test]
