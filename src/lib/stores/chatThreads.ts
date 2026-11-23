@@ -2,6 +2,7 @@ import { deleteAgentCheckpoint } from '$lib/services/orchestrator/agent-checkpoi
 import { forkClaudeSession } from '$lib/services/claude-agent-sdk';
 import { derived, get, writable } from '$lib/stores/storeCompat';
 import { loadJson } from '$lib/utils/storage';
+import { idbAvailable, idbGet, idbSet, requestPersistentStorage } from '$lib/services/idb-kv';
 import { invoke } from '@tauri-apps/api/core';
 import {
   aiProvider,
@@ -649,11 +650,28 @@ let lastPersistAt = 0;
 let pendingPersist: ReturnType<typeof setTimeout> | null = null;
 let latestState: ChatThreadState | null = null;
 
+// Chat history outgrows localStorage's ~5 MB, so it lives in IndexedDB. Until
+// the saved copy has been read back, nothing is written: a write of the empty
+// starting state would replace the history. Without IndexedDB (tests, odd
+// webviews) it stays in localStorage as before.
+let idbUsable = idbAvailable();
+let idbHydrated = !idbUsable;
+
 function persistState(state: ChatThreadState): void {
   if (typeof window === 'undefined') return;
   lastPersistAt = Date.now();
+  const json = JSON.stringify(state, (key, value) => key === 'agentCheckpoint' ? undefined : value);
+  if (idbUsable) {
+    if (!idbHydrated) return;
+    idbSet(CHAT_THREADS_STORAGE_KEY, json)
+      .then(() => { try { window.localStorage.removeItem(CHAT_THREADS_STORAGE_KEY); } catch { /* nothing to remove */ } })
+      .catch(() => {
+        try { window.localStorage.setItem(CHAT_THREADS_STORAGE_KEY, json); } catch { /* live state remains usable */ }
+      });
+    return;
+  }
   try {
-    window.localStorage.setItem(CHAT_THREADS_STORAGE_KEY, JSON.stringify(state, (key, value) => key === 'agentCheckpoint' ? undefined : value));
+    window.localStorage.setItem(CHAT_THREADS_STORAGE_KEY, json);
   } catch {
     // Storage is best effort; live state remains usable when quota is full.
   }
@@ -702,10 +720,47 @@ function loadInitialState(): ChatThreadState {
   return migrated;
 }
 
-export const chatThreadState = writable<ChatThreadState>(loadInitialState());
+const initialChatState = loadInitialState();
+export const chatThreadState = writable<ChatThreadState>(initialChatState);
+
+/** Merge history read from IndexedDB with threads the user touched while it loaded. */
+function mergeHydrated(saved: ChatThreadState, current: ChatThreadState): ChatThreadState {
+  const threadsByProject = { ...saved.threadsByProject };
+  const messagesByThread = { ...saved.messagesByThread };
+  for (const [projectId, threads] of Object.entries(current.threadsByProject)) {
+    const known = new Set((threadsByProject[projectId] ?? []).map((t) => t.id));
+    const fresh = threads.filter((t) => !known.has(t.id));
+    const updated = new Map(threads.map((t) => [t.id, t]));
+    threadsByProject[projectId] = [...(threadsByProject[projectId] ?? []).map((t) => updated.get(t.id) ?? t), ...fresh];
+  }
+  for (const [threadId, messages] of Object.entries(current.messagesByThread)) messagesByThread[threadId] = messages;
+  return { ...saved, threadsByProject, messagesByThread, activeThreadByProject: { ...saved.activeThreadByProject, ...current.activeThreadByProject } };
+}
+
+async function hydrateFromIdb(): Promise<void> {
+  if (!idbUsable || typeof window === 'undefined') return;
+  requestPersistentStorage();
+  try {
+    const raw = await idbGet(CHAT_THREADS_STORAGE_KEY);
+    const saved = raw ? normalizeState(JSON.parse(raw)) : null;
+    idbHydrated = true;
+    if (saved) {
+      chatThreadState.update((current) => (current === initialChatState ? saved : mergeHydrated(saved, current)));
+    } else {
+      // First run on IndexedDB: the sync copy (older localStorage) moves over.
+      persistState(get(chatThreadState));
+    }
+  } catch {
+    // IndexedDB unreadable: keep working from localStorage.
+    idbUsable = false;
+    idbHydrated = true;
+    try { window.localStorage.setItem(CHAT_THREADS_STORAGE_KEY, JSON.stringify(get(chatThreadState))); } catch { /* quota */ }
+  }
+}
 
 claimStoreInstance();
 chatThreadState.subscribe(schedulePersist);
+void hydrateFromIdb();
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('pagehide', flushChatThreadPersistence);
 }

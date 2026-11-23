@@ -47,7 +47,7 @@ export function avatarUrl(avatar: string | null | undefined): string {
  * Shrink an uploaded picture to a square avatar (cropped to the centre) and
  * return it as a WebP data URL small enough to keep with the bot.
  */
-export function resizeAvatar(file: File, size = 160): Promise<string> {
+export function resizeAvatar(file: File, size = 128): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) { reject(new Error('Choose a PNG, JPEG, WebP or GIF picture.')); return; }
     if (file.size > 15 * 1024 * 1024) { reject(new Error('That picture is over 15 MB.')); return; }
@@ -61,7 +61,7 @@ export function resizeAvatar(file: File, size = 160): Promise<string> {
       const side = Math.min(img.naturalWidth, img.naturalHeight);
       ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
       URL.revokeObjectURL(url);
-      const webp = canvas.toDataURL('image/webp', 0.86);
+      const webp = canvas.toDataURL('image/webp', 0.8);
       resolve(webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png'));
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read the picture.')); };

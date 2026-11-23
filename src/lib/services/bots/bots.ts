@@ -127,6 +127,8 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
 };
 
 const KEY = 'spacron_bots_v1';
+/** Uploaded pictures live under their own key so a full picture store can never stop a bot from saving. */
+const AVATAR_KEY = 'spacron_bot_avatars_v1';
 /** Agent CLIs with a headless mode the runner knows (see `agent_command`). */
 const HEADLESS = new Set([
   'claude', 'codex', 'gemini', 'opencode', 'agy', 'pi', 'cursor-agent', 'grok', 'dsh', 'kilo',
@@ -145,11 +147,33 @@ function load(): Saved {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { bots: [], settings: DEFAULT_BOT_SETTINGS };
     const parsed = JSON.parse(raw) as { bots?: unknown; settings?: Partial<BotSettings> };
-    const list = Array.isArray(parsed.bots) ? (parsed.bots as Bot[]).filter(isBot).map(upgrade) : [];
+    const pictures = loadAvatars();
+    const list = Array.isArray(parsed.bots)
+      ? (parsed.bots as Bot[]).filter(isBot).map((b) => upgrade(pictures[b.id] && validAvatar(pictures[b.id]) ? { ...b, avatar: pictures[b.id] } : b))
+      : [];
     return { bots: list, settings: { ...DEFAULT_BOT_SETTINGS, ...(parsed.settings ?? {}) } };
   } catch {
     return { bots: [], settings: DEFAULT_BOT_SETTINGS };
   }
+}
+
+function loadAvatars(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AVATAR_KEY) ?? '{}');
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, string> : {};
+  } catch { return {}; }
+}
+
+/** The biggest localStorage keys, for an error that says what is using the space. */
+function storageHogs(): string {
+  const sizes: [string, number][] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key) sizes.push([key, (localStorage.getItem(key)?.length ?? 0) + key.length]);
+    }
+  } catch { /* unreadable storage: report nothing */ }
+  return sizes.sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `${k} (${Math.round(n / 1024)} KB)`).join(', ');
 }
 
 function isBot(b: Bot): boolean {
@@ -219,7 +243,26 @@ export function closeBots(): void {
 
 function persist(next: Saved) {
   // Persist first: a bot that was not saved must never reach a host.
-  localStorage.setItem(KEY, JSON.stringify(next));
+  // Uploaded pictures are kept apart from the bots. If they do not fit, the
+  // bots still save, with a built-in picture in their place.
+  const pictures: Record<string, string> = {};
+  let slim = next.bots.map((b) => {
+    if (!b.avatar.startsWith('data:image/')) return b;
+    pictures[b.id] = b.avatar;
+    return { ...b, avatar: DEFAULT_AVATAR };
+  });
+  try {
+    localStorage.setItem(AVATAR_KEY, JSON.stringify(pictures));
+  } catch {
+    slim = next.bots.map((b) => (b.avatar.startsWith('data:image/') ? { ...b, avatar: DEFAULT_AVATAR } : b));
+    next = { ...next, bots: slim };
+    notice?.('Browser storage is full, so uploaded bot pictures were not saved. Choose a built-in picture or remove old bots.', 'warning');
+  }
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ bots: slim, settings: next.settings }));
+  } catch {
+    throw new Error(`Browser storage is full, so this bot could not be saved. Largest items: ${storageHogs() || 'unknown'}. Remove old bots or other saved data and try again.`);
+  }
   bots.set(next.bots);
   botSettings.set(next.settings);
 }
