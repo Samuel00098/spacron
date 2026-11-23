@@ -45,6 +45,7 @@ mod acp_bridge;
 mod receive;
 mod automations;
 pub(crate) mod bots;
+mod box_agents;
 mod box_mcp;
 mod box_proxy;
 mod tunnel;
@@ -633,6 +634,10 @@ fn handle_control(
                 "box_bot_file" => bots::file(args, &state.workspace),
                 "box_mcp_grants_sync" => box_proxy::grants_sync(args),
                 "box_mcp_info" => box_proxy::mcp_info(&state.workspace),
+                "box_agents_config_sync" => box_agents::config_sync(args, &state.workspace),
+                "box_agents_list" => box_agents::list(state),
+                "box_global_agent_config_read" => crate::commands::mcp::mcp_read_global_agent_config(str_arg(&args, "agent").unwrap_or_default()).map(Value::String),
+                "box_global_agent_config_write" => crate::commands::mcp::mcp_write_global_agent_config(str_arg(&args, "agent").unwrap_or_default(), str_arg(&args, "content").unwrap_or_default()).map(|_| json!({ "ok": true })),
                 "workspace_git_log" => git_log(args, &root),
                 "workspace_git_status" => git_status(&root),
                 "workspace_git_diff" => git_diff(args, &root),

@@ -62,9 +62,13 @@ const BOX_DESKTOP_TOOLS: [&str; 7] = [
     "desktop_screenshot", "desktop_list_windows", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "desktop_launch",
 ];
 const BOX_TOOLS: &[&str] = &[
-    "list_agents", "read_agent_output", "send_to_agent", "desktop_screenshot", "desktop_list_windows",
-    "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "desktop_launch",
+    "list_agents", "read_agent_output", "send_to_agent", "report_status", "plugin_creator_guide",
+    "spawn_agent", "delegate_task", "check_task", "bounce_task",
+    "desktop_screenshot", "desktop_list_windows", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "desktop_launch",
 ];
+/// Box tools that start programs or agents, which could hold more access
+/// than the bot itself: Full access only.
+const FULL_ONLY_TOOLS: &[&str] = &["desktop_launch", "spawn_agent", "delegate_task", "check_task", "bounce_task"];
 /// How much of the conversation each run sees: the last few exchanges, each
 /// reply trimmed to its end.
 const CONTEXT_RUNS: usize = 6;
@@ -276,6 +280,7 @@ fn conversation(root: &Path, bot_id: &str, skip_run: &str) -> String {
 
 /// Everything one run is told: who it is and its job, what it may do, what
 /// has been said so far, and the user's new message if there is one.
+#[cfg(test)]
 pub(crate) fn run_prompt(bot: &BoxBot, history: &str, message: Option<&str>) -> String {
     run_prompt_with(bot, history, message, &[])
 }
@@ -317,7 +322,8 @@ and use web pages), \"connectors\" (a list of connector names it needs, from the
 bot for the user right after this run, with its schedule off until the user turns it on. Ask the user a question \
 instead if you do not know enough to write a good bot, and tell them which bots you created.";
 
-/// The MCP server keys in an `mcp.json` body, for Claude's allow list.
+/// The MCP server keys in an `mcp.json` body.
+#[cfg(test)]
 fn mcp_keys(config: &str) -> Vec<String> {
     serde_json::from_str::<Value>(config)
         .ok()
@@ -353,7 +359,7 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
                         // Starting programs is running commands: full access only.
                         allowed.extend(BOX_TOOLS.iter()
                             .filter(|t| bot.computer_use || !t.starts_with("desktop_"))
-                            .filter(|t| **t != "desktop_launch")
+                            .filter(|t| !FULL_ONLY_TOOLS.contains(t))
                             .map(|t| format!("mcp__{key}__{t}")));
                     } else {
                         allowed.push(format!("mcp__{key}"));
@@ -880,6 +886,8 @@ mod tests {
         assert!(argv.contains(&"mcp__spacron-box__desktop_click".to_string()));
         assert!(argv.contains(&"mcp__spacron-box__list_agents".to_string()));
         assert!(!argv.iter().any(|a| a == "mcp__spacron-box" || a.ends_with("desktop_launch")));
+        assert!(!argv.iter().any(|a| a.ends_with("__spawn_agent") || a.ends_with("__delegate_task")), "limited bots cannot start agents");
+        assert!(argv.contains(&"mcp__spacron-box__report_status".to_string()));
         b.access = Access::Full;
         assert!(bot_command(&b, "p", Some((Path::new("/m.json"), &keys))).unwrap().iter().all(|a| !a.starts_with("mcp__")), "full access needs no allow list");
         // Full access still keeps the desktop off unless computer use is on.

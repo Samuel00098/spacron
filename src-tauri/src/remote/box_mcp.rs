@@ -19,7 +19,7 @@
 //! responses.
 
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::{
@@ -35,6 +35,7 @@ use super::ServerState;
 const PROTOCOL_VERSION: &str = "2025-03-26";
 const MAX_TYPE_CHARS: usize = 4096;
 const MAX_READ_LINES: usize = 400;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const SCREEN: &str = "1280x800x24";
 
 fn server() -> &'static OnceLock<Arc<ServerState>> {
@@ -51,17 +52,17 @@ pub(super) fn init(state: Arc<ServerState>) {
 
 /// POST `/mcp`: one JSON-RPC message (or a batch). The caller is already
 /// authenticated by the proxy listener's secret check.
-pub(super) async fn handle(body: Value) -> Response {
+pub(super) async fn handle(body: Value, caller: Option<String>) -> Response {
     if let Some(batch) = body.as_array() {
         let mut out = Vec::new();
         for msg in batch {
-            if let Some(reply) = respond(msg).await {
+            if let Some(reply) = respond(msg, caller.clone()).await {
                 out.push(reply);
             }
         }
         return if out.is_empty() { StatusCode::ACCEPTED.into_response() } else { Json(Value::Array(out)).into_response() };
     }
-    match respond(&body).await {
+    match respond(&body, caller).await {
         Some(reply) => Json(reply).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -73,7 +74,7 @@ pub(super) async fn no_stream(_headers: HeaderMap) -> Response {
 }
 
 /// The reply to one JSON-RPC message; `None` for notifications.
-async fn respond(msg: &Value) -> Option<Value> {
+async fn respond(msg: &Value, caller: Option<String>) -> Option<Value> {
     let id = msg.get("id").cloned()?;
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
     let params = msg.get("params").cloned().unwrap_or(json!({}));
@@ -89,7 +90,7 @@ async fn respond(msg: &Value) -> Option<Value> {
         "tools/call" => {
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            Ok(tokio::task::spawn_blocking(move || call(&name, &args)).await.unwrap_or_else(|e| error_content(&e.to_string())))
+            Ok(tokio::task::spawn_blocking(move || call(&name, &args, caller.as_deref())).await.unwrap_or_else(|e| error_content(&e.to_string())))
         }
         _ => Err(json!({ "code": -32601, "message": format!("Method not found: {method}") })),
     };
@@ -100,8 +101,25 @@ async fn respond(msg: &Value) -> Option<Value> {
 }
 
 fn tools() -> Value {
-    let agent = json!({ "type": "integer", "description": "The agent's id, from list_agents." });
+    let agent = json!({ "type": ["integer", "string"], "description": "The agent's name or id, from list_agents." });
+    let presets = server().get().map(|st| super::box_agents::preset_names(&st.workspace)).unwrap_or_default();
+    let preset = json!({ "type": "string", "description": format!("Which agent to start. Available on this box: {}.", if presets.is_empty() { "claude, codex, gemini, opencode".to_string() } else { presets.join(", ") }) });
+    let workspace = json!({ "type": "string", "enum": ["main", "new_worktree", "existing"], "description": "Where it works: the main checkout, a new git worktree (its own branch), or an existing worktree folder." });
+    let handle = json!({ "type": "string", "description": "The handle delegate_task returned (the worker's name)." });
+    let wait = json!({ "type": "number", "description": "How long to wait for the result before returning (default 25, at most 600 seconds)." });
     json!([
+        { "name": "spawn_agent", "description": "Start a new AI coding agent on this box in its own terminal, with an optional first prompt. It shows up as a pane in Spacron when the desktop connects.",
+          "inputSchema": { "type": "object", "properties": { "preset": preset, "prompt": { "type": "string" }, "name": { "type": "string", "description": "Optional name; a unique one is picked if omitted." }, "workspace": workspace, "worktree": { "type": "string" } }, "required": ["preset"] } },
+        { "name": "delegate_task", "description": "Delegate work to a NEW agent on this box and wait for its result. It reports back through report_status; use check_task to keep waiting and bounce_task for another round.",
+          "inputSchema": { "type": "object", "properties": { "preset": preset, "prompt": { "type": "string" }, "name": { "type": "string" }, "workspace": workspace, "worktree": { "type": "string" }, "wait_seconds": wait }, "required": ["preset", "prompt"] } },
+        { "name": "check_task", "description": "Keep waiting for a worker started with delegate_task.",
+          "inputSchema": { "type": "object", "properties": { "handle": handle, "wait_seconds": wait }, "required": ["handle"] } },
+        { "name": "bounce_task", "description": "Send a worker back to fix its work, and wait for the new result.",
+          "inputSchema": { "type": "object", "properties": { "handle": handle, "feedback": { "type": "string" }, "wait_seconds": wait }, "required": ["handle", "feedback"] } },
+        { "name": "report_status", "description": "Tell Spacron what you are doing: 'done' when you finish, 'needs_input' when you are blocked, 'failed' when you cannot complete it. Pass your agent name if you were told it.",
+          "inputSchema": { "type": "object", "properties": { "state": { "type": "string", "enum": ["working", "needs_input", "done", "failed"] }, "summary": { "type": "string" }, "agent": { "type": "string" } }, "required": ["state"] } },
+        { "name": "plugin_creator_guide", "description": "Get the exact instructions for creating a Spacron plugin (MCP servers and skills for Spacron, Claude Code and Codex).",
+          "inputSchema": { "type": "object", "properties": {} } },
         { "name": "list_agents", "description": "List the agents and terminals running on this box: id, what is running, folder, and the last line they printed.",
           "inputSchema": { "type": "object", "properties": {} } },
         { "name": "read_agent_output", "description": "Read the recent output of another agent or terminal on this box.",
@@ -133,8 +151,14 @@ fn error_content(text: &str) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": true })
 }
 
-fn call(name: &str, args: &Value) -> Value {
+fn call(name: &str, args: &Value, caller: Option<&str>) -> Value {
     let result = match name {
+        "spawn_agent" => spawn_agent(args),
+        "delegate_task" => delegate_task(args),
+        "check_task" => check_task(args),
+        "bounce_task" => bounce_task(args),
+        "report_status" => report_status(args, caller),
+        "plugin_creator_guide" => Ok(text_content(super::box_agents::guide())),
         "list_agents" => list_agents(),
         "read_agent_output" => read_agent_output(args),
         "send_to_agent" => send_to_agent(args),
@@ -204,14 +228,20 @@ fn list_agents() -> Result<Value, String> {
         let last = plain_text(&sess.output_tail(4096)).lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(160).collect::<String>();
         let program = running_program(sess.pid).unwrap_or_else(|| "shell".into());
         let status = if sess.has_exited() { "exited" } else { "running" };
-        rows.push(format!("- id {id}: {program} ({status}) in {}\n  last line: {last}", sess.cwd.display()));
+        let named = super::box_agents::find(state, &id.to_string());
+        let label = named.as_ref().map(|r| format!("{} ({}, {})", r.name, r.preset, if r.state.is_empty() { "working" } else { &r.state })).unwrap_or(program);
+        rows.push(format!("- id {id}: {label} ({status}) in {}\n  last line: {last}", sess.cwd.display()));
     }
     Ok(text_content(if rows.is_empty() { "No agents or terminals are running on this box.".into() } else { rows.join("\n") }))
 }
 
 fn agent_id(args: &Value) -> Result<u32, String> {
-    args.get("agent").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
-        .map(|v| v as u32).ok_or_else(|| "Give the agent's id from list_agents.".to_string())
+    if let Some(id) = args.get("agent").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))) {
+        return Ok(id as u32);
+    }
+    let name = args.get("agent").and_then(|v| v.as_str()).ok_or("Give the agent's name or id from list_agents.")?;
+    let state = server().get().ok_or("The box server is still starting.")?;
+    super::box_agents::find(state, name).map(|r| r.id).ok_or_else(|| format!("No agent named {name}. Call list_agents."))
 }
 
 fn read_agent_output(args: &Value) -> Result<Value, String> {
@@ -243,6 +273,91 @@ fn send_to_agent(args: &Value) -> Result<Value, String> {
         sess.write("\r")?;
     }
     Ok(text_content(format!("Sent to agent {id}.")))
+}
+
+// ── starting and managing agents (box_agents.rs) ─────────────────────────────
+
+fn state() -> Result<&'static Arc<ServerState>, String> {
+    server().get().ok_or_else(|| "The box server is still starting.".to_string())
+}
+
+fn spawn_agent(args: &Value) -> Result<Value, String> {
+    let rec = super::box_agents::spawn(state()?, args)?;
+    Ok(text_content(format!("Started {} ({}) as agent id {} in {}. Use send_to_agent or read_agent_output with its name.", rec.name, rec.preset, rec.id, rec.cwd)))
+}
+
+fn task_result(rec: &super::box_agents::AgentRecord, exited: bool) -> Value {
+    let state = if exited && !["done", "failed"].contains(&rec.state.as_str()) { "exited" } else if rec.state.is_empty() { "working" } else { rec.state.as_str() };
+    let mut text = format!("handle: {}\nstate: {state}", rec.name);
+    if let Some(summary) = &rec.summary {
+        text.push_str(&format!("\nsummary: {summary}"));
+    }
+    if state == "working" {
+        text.push_str("\nStill working. Call check_task with this handle to keep waiting.");
+    }
+    text_content(text)
+}
+
+fn delegate_task(args: &Value) -> Result<Value, String> {
+    let st = state()?;
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).map(str::trim).filter(|p| !p.is_empty()).ok_or("Give the task (prompt).")?;
+    // Spawn first to learn the worker's name, then give it the task with the reporting instructions.
+    let mut spawn_args = args.clone();
+    spawn_args["prompt"] = json!("");
+    let rec = super::box_agents::spawn(st, &spawn_args)?;
+    let task = format!("{prompt}{}", super::box_agents::worker_instructions(&rec.name));
+    send_when_ready(rec.id, task);
+    let (rec, exited) = super::box_agents::wait(st, &rec.name, super::box_agents::wait_seconds(args))?;
+    Ok(task_result(&rec, exited))
+}
+
+/// Type a task into a freshly started agent once it has settled.
+fn send_when_ready(id: u32, text: String) {
+    let Some(sess) = server().get().and_then(|st| st.pty.get(id)) else { return };
+    std::thread::spawn(move || {
+        let (mut last, mut quiet) = (0usize, 0u32);
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(250));
+            let len = sess.output_tail(1 << 20).len();
+            if len > 0 && len == last { quiet += 1 } else { quiet = 0 }
+            last = len;
+            if quiet >= 6 && len > 0 { break; }
+        }
+        let _ = sess.write(&if text.contains('\n') { format!("\x1b[200~{text}\x1b[201~") } else { text });
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = sess.write("\r");
+    });
+}
+
+fn check_task(args: &Value) -> Result<Value, String> {
+    let handle = args.get("handle").and_then(|v| v.as_str()).ok_or("Give the handle from delegate_task.")?;
+    let (rec, exited) = super::box_agents::wait(state()?, handle, super::box_agents::wait_seconds(args))?;
+    Ok(task_result(&rec, exited))
+}
+
+fn bounce_task(args: &Value) -> Result<Value, String> {
+    let st = state()?;
+    let handle = args.get("handle").and_then(|v| v.as_str()).ok_or("Give the handle from delegate_task.")?;
+    let feedback = args.get("feedback").and_then(|v| v.as_str()).map(str::trim).filter(|f| !f.is_empty()).ok_or("Say what to fix (feedback).")?;
+    let rec = super::box_agents::find(st, handle).ok_or(format!("{handle} is not running any more."))?;
+    super::box_agents::clear_report(st, &rec.name);
+    let sess = st.pty.get(rec.id).ok_or(format!("{handle} is not running any more."))?;
+    let text = format!("{feedback}{}", super::box_agents::worker_instructions(&rec.name));
+    sess.write(&if text.contains('\n') { format!("\x1b[200~{text}\x1b[201~") } else { text })?;
+    std::thread::sleep(Duration::from_millis(150));
+    sess.write("\r")?;
+    let (rec, exited) = super::box_agents::wait(st, &rec.name, super::box_agents::wait_seconds(args))?;
+    Ok(task_result(&rec, exited))
+}
+
+fn report_status(args: &Value, caller: Option<&str>) -> Result<Value, String> {
+    let status = args.get("state").and_then(|v| v.as_str()).ok_or("Give the state.")?;
+    let summary = args.get("summary").and_then(|v| v.as_str()).map(str::to_string);
+    let who = caller.map(str::to_string).or_else(|| args.get("agent").and_then(|v| v.as_str()).map(str::to_string));
+    match who {
+        Some(agent) => Ok(text_content(super::box_agents::report(state()?, &agent, status, summary)?)),
+        None => Ok(text_content("Noted.")),
+    }
 }
 
 // ── desktop ─────────────────────────────────────────────────────────────────
@@ -292,6 +407,7 @@ fn checked_keys(args: &Value) -> Result<Vec<String>, String> {
     Ok(keys.split_whitespace().map(str::to_string).collect())
 }
 
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", windows)), allow(dead_code))]
 fn screenshot_content(png: Vec<u8>, what: &str) -> Value {
     json!({ "content": [
         { "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(&png), "mimeType": "image/png" },
@@ -341,6 +457,7 @@ fn launch(args: &Value) -> Result<Value, String> {
 
 /// AppleScript for one key combo: a key code for named keys, a keystroke
 /// for characters, with modifiers.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn mac_key_script(combo: &str) -> Result<String, String> {
     let mut mods = Vec::new();
     let mut key = None;
@@ -371,6 +488,7 @@ pub(crate) fn mac_key_script(combo: &str) -> Result<String, String> {
 }
 
 /// JavaScript for Automation that clicks at a point (in screen points).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn mac_click_jxa(x: f64, y: f64, button: u8, double: bool) -> String {
     // CGEventType and CGMouseButton values, numeric so the bridge has nothing to resolve.
     let (down, up, btn) = match button { 3 => (3, 4, 1), 2 => (25, 26, 2), _ => (1, 2, 0) };
@@ -381,6 +499,7 @@ post(5, 0); for (var i = 1; i <= {clicks}; i++) {{ post({down}, i); post({up}, i
 }
 
 /// SendKeys text with its special characters made literal.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn win_sendkeys_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -395,6 +514,7 @@ pub(crate) fn win_sendkeys_text(text: &str) -> String {
 }
 
 /// SendKeys for one key combo (`ctrl+l` -> `^l`, `Return` -> `{ENTER}`).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn win_sendkeys_combo(combo: &str) -> Result<String, String> {
     let mut mods = String::new();
     let mut key = None;
@@ -425,6 +545,7 @@ pub(crate) fn win_sendkeys_combo(combo: &str) -> Result<String, String> {
 }
 
 /// PowerShell that makes the process DPI-aware and loads screen and input helpers.
+#[cfg_attr(not(windows), allow(dead_code))]
 const WIN_PRELUDE: &str = r#"$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -Namespace Spacron -Name Input -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);'
@@ -432,6 +553,7 @@ Add-Type -Namespace Spacron -Name Input -MemberDefinition '[DllImport("user32.dl
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 "#;
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn win_click_script(x: f64, y: f64, button: u8, double: bool) -> String {
     let (down, up) = match button { 3 => (0x08, 0x10), 2 => (0x20, 0x40), _ => (0x02, 0x04) };
     let clicks = if double { 2 } else { 1 };
@@ -445,6 +567,7 @@ for ($i = 0; $i -lt {clicks}; $i++) {{ [Spacron.Input]::mouse_event({down}, 0, 0
 mod backend {
     //! Linux: an Xvfb virtual desktop.
     use super::*;
+    use std::sync::Mutex;
 
     struct Desktop {
         display: String,
@@ -747,14 +870,14 @@ mod tests {
 
     #[tokio::test]
     async fn it_speaks_mcp() {
-        let init = respond(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } })).await.unwrap();
+        let init = respond(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } }), None).await.unwrap();
         assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(init["result"]["serverInfo"]["name"], "spacron-box");
-        assert!(respond(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await.is_none());
-        let list = respond(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).await.unwrap();
+        assert!(respond(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), None).await.is_none());
+        let list = respond(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }), None).await.unwrap();
         let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"list_agents") && names.contains(&"desktop_screenshot") && names.contains(&"desktop_launch"));
-        let missing = respond(&json!({ "jsonrpc": "2.0", "id": 3, "method": "nope" })).await.unwrap();
+        let missing = respond(&json!({ "jsonrpc": "2.0", "id": 3, "method": "nope" }), None).await.unwrap();
         assert_eq!(missing["error"]["code"], -32601);
     }
 

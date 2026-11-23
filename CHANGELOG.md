@@ -19,6 +19,8 @@ All notable changes to Spacron will be documented here.
 - **Spacron tools on your box, laptop closed** — the box now serves its own Spacron tools (`spacron-box`): agents and bots there can list the other agents on the box, read their output and send them messages, and use the virtual desktop, all without the laptop connected.
 - **Attachments in bot chat** — attach files to a message with the paperclip, by pasting, or by dropping them on the chat (up to 10 files, 8 MB each). They are saved in the bot's own folder on this PC or your box and the bot is told where; images show as thumbnails in the chat.
 - **Desktop tools on every box OS** — on a Linux box bots get a virtual desktop; on a macOS box they operate the Mac's own screen with built-in tools (allow Screen Recording and Accessibility once); on a Windows box they operate the logged-in desktop through PowerShell. The box also tells the app its OS, so setup hints match it.
+- **Start and manage agents on your box, laptop closed** — the box's own Spacron tools now include `spawn_agent`, `delegate_task`, `check_task`, `bounce_task`, `report_status` and `plugin_creator_guide`. Agents the box starts get your connectors, run in their own box terminal (main checkout or a new worktree), and show up as panes when you connect. For bots, starting agents needs Full access.
+- **Droid and Antigravity on your box** — Spacron now writes their global MCP configs (and Codex's) on the box as well, so agents you start there by hand also get your connectors.
 - **Settings > Bots** — pause all schedules, catch up missed runs, cap how long a run may take, pick the default permission level and turn on notices when a scheduled run finishes, fails or is missed.
 
 ## [v5.1.7] - 2026-11-23

@@ -973,6 +973,62 @@ function isRemote(): boolean {
 }
 
 /**
+ * Tell a connected box which agents exist and which MCP servers agents it
+ * starts on its own should get (`remote/box_agents.rs`): Claude's
+ * `mcpServers`, and the same servers as Codex `-c` flags. Spacron's own
+ * server goes in too; it answers while this laptop is connected, and the
+ * box's own tools (`spacron-box`) are added by the box per agent.
+ */
+export async function syncBoxAgentsConfig(sseUrl?: string | null, httpUrl?: string | null): Promise<void> {
+  if (!isRemote()) return;
+  try {
+    const servers = enabledServers(projectServers()).filter(({ key }) => key !== 'spacron-box');
+    const mcpServers: Record<string, unknown> = {};
+    for (const { key, server } of servers) mcpServers[key] = standardEntry(server);
+    if (sseUrl) mcpServers[SPACRON_OWN_KEY] = { type: 'sse', url: sseUrl };
+    const { getAgentRoster } = await import('./runs');
+    const presets = getAgentRoster().map((a) => ({ command: a.command, name: a.name }));
+    await backendInvoke('box_agents_config_sync', { presets, mcpServers, codexFlags: codexServerFlags(servers, httpUrl ?? null).trim() });
+  } catch (e) {
+    console.warn('[mcp] Could not tell the box about agents and connectors:', e);
+  }
+}
+
+/**
+ * Where a CLI's global MCP config is written: this computer, and the
+ * connected box. Droid, Antigravity and Codex only read a file in the home
+ * folder, so on a box Spacron writes the box's own copy (through
+ * `box_global_agent_config_*`, which only reach those known files), with the
+ * servers as the box sees them and a browser that runs there.
+ */
+interface GlobalTarget {
+  kind: 'local' | 'box';
+  read(agent: string): Promise<string>;
+  write(agent: string, content: string): Promise<void>;
+  servers(): McpServer[];
+  browser(): Promise<{ command: string; args: string[] }>;
+}
+
+function globalTargets(): GlobalTarget[] {
+  const local: GlobalTarget = {
+    kind: 'local',
+    read: (agent) => invoke<string>('mcp_read_global_agent_config', { agent }),
+    write: (agent, content) => invoke('mcp_write_global_agent_config', { agent, content }),
+    servers: () => userServers(),
+    browser: () => playwrightStdioEntry(null),
+  };
+  if (!isRemote()) return [local];
+  const box: GlobalTarget = {
+    kind: 'box',
+    read: (agent) => backendInvoke<string>('box_global_agent_config_read', { agent }),
+    write: (agent, content) => backendInvoke('box_global_agent_config_write', { agent, content }),
+    servers: () => projectServers(),
+    browser: () => botBrowserEntry(false),
+  };
+  return [local, box];
+}
+
+/**
  * Codex reads MCP servers only from its global config, which Spacron writes
  * on this computer, never on a box. When Codex is launched on a box, the
  * same servers go on its command line instead, as `-c` overrides (TOML
@@ -1276,6 +1332,7 @@ export async function ensureMcpConfigs(projectRoot: string): Promise<void> {
       injectDroidConfig(httpUrl),
       injectAntigravityConfig(httpUrl),
       injectDeepSeekServers(),
+      syncBoxAgentsConfig(sseUrl, httpUrl),
     ]);
   } catch (e) {
     console.warn('[mcp] Could not write agent MCP configs on project open:', e);
@@ -1689,10 +1746,10 @@ async function injectDeepSeekServers(): Promise<void> {
  * file `agy mcp add` writes; it has no project scope. Same global-file caveats
  * as droid.
  */
-async function injectAntigravityConfig(httpUrl: string): Promise<void> {
+async function injectAntigravityConfigInto(httpUrl: string, target: GlobalTarget): Promise<void> {
   try {
-    await warnIfGlobalConfigPortIsEphemeral('agy');
-    const existing = await invoke<string>('mcp_read_global_agent_config', { agent: 'agy' });
+    if (target.kind === 'local') await warnIfGlobalConfigPortIsEphemeral('agy');
+    const existing = await target.read('agy');
     let config: Record<string, unknown> = {};
     try {
       config = existing.trim() ? JSON.parse(existing) : {};
@@ -1704,20 +1761,22 @@ async function injectAntigravityConfig(httpUrl: string): Promise<void> {
     }
     const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
     servers['spacron-mcp'] = { serverUrl: httpUrl, disabled: false };
-    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(null);
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await target.browser();
     else delete servers[BROWSER_SERVER_KEY];
-    for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), antigravityEntry))) {
+    for (const [key, entry] of Object.entries(mergeMap(target.servers(), Object.keys(servers), antigravityEntry))) {
       if (entry === null) delete servers[key];
       else servers[key] = entry;
     }
     config['mcpServers'] = servers;
-    await invoke('mcp_write_global_agent_config', {
-      agent: 'agy',
-      content: JSON.stringify(config, null, 2) + '\n',
-    });
+    await target.write('agy', JSON.stringify(config, null, 2) + '\n');
   } catch (e) {
     console.warn('[mcp] Failed to write Antigravity config:', e);
   }
+}
+
+/** Antigravity: this computer's global config, and the connected box's. */
+async function injectAntigravityConfig(httpUrl: string): Promise<void> {
+  for (const target of globalTargets()) await injectAntigravityConfigInto(httpUrl, target);
 }
 
 /**
@@ -1727,10 +1786,10 @@ async function injectAntigravityConfig(httpUrl: string): Promise<void> {
  * Goes through the dedicated Rust commands rather than `fs_write_file`, which
  * rejects everything outside an open project. See `global_agent_config_path`.
  */
-async function injectDroidConfig(httpUrl: string): Promise<void> {
+async function injectDroidConfigInto(httpUrl: string, target: GlobalTarget): Promise<void> {
   try {
-    await warnIfGlobalConfigPortIsEphemeral('droid');
-    const existing = await invoke<string>('mcp_read_global_agent_config', { agent: 'droid' });
+    if (target.kind === 'local') await warnIfGlobalConfigPortIsEphemeral('droid');
+    const existing = await target.read('droid');
 
     let config: Record<string, unknown> = {};
     try {
@@ -1741,21 +1800,23 @@ async function injectDroidConfig(httpUrl: string): Promise<void> {
 
     const servers = (config['mcpServers'] as Record<string, unknown>) ?? {};
     servers['spacron-mcp'] = { type: 'http', url: httpUrl, disabled: false };
-    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(null);
+    if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await target.browser();
     else delete servers[BROWSER_SERVER_KEY];
-    for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), droidEntry))) {
+    for (const [key, entry] of Object.entries(mergeMap(target.servers(), Object.keys(servers), droidEntry))) {
       if (entry === null) delete servers[key];
       else servers[key] = entry;
     }
     config['mcpServers'] = servers;
 
-    await invoke('mcp_write_global_agent_config', {
-      agent: 'droid',
-      content: JSON.stringify(config, null, 2) + '\n',
-    });
+    await target.write('droid', JSON.stringify(config, null, 2) + '\n');
   } catch (e) {
     console.warn('[mcp] Failed to write droid config:', e);
   }
+}
+
+/** Droid: this computer's global config, and the connected box's. */
+async function injectDroidConfig(httpUrl: string): Promise<void> {
+  for (const target of globalTargets()) await injectDroidConfigInto(httpUrl, target);
 }
 
 /**
@@ -1856,10 +1917,10 @@ function codexServerKey(header: string): string | null {
  * model settings), so this replaces just our own table and appends if absent.
  * Appending a table header at EOF is always valid TOML, whatever precedes it.
  */
-async function injectCodexConfig(httpUrl: string): Promise<void> {
+async function injectCodexConfigInto(httpUrl: string, target: GlobalTarget): Promise<void> {
   try {
-    await warnIfGlobalConfigPortIsEphemeral('codex');
-    let content = await invoke<string>('mcp_read_global_agent_config', { agent: 'codex' });
+    if (target.kind === 'local') await warnIfGlobalConfigPortIsEphemeral('codex');
+    let content = await target.read('codex');
 
     // Drop every block we own — each header plus its keys, up to the next
     // table — then write the wanted ones back. Rewriting from scratch is also
@@ -1882,14 +1943,14 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
       // TOML wants the argv split into `command` + `args`, unlike opencode's
       // single array. Codex's config is global, so no project sign-in. Paths
       // may hold backslashes: JSON string escaping is valid TOML escaping.
-      const argv = await playwrightStdioEntry(null);
+      const argv = await target.browser();
       const args = argv.args.map((a) => JSON.stringify(a)).join(', ');
       content +=
         `\n[mcp_servers.${BROWSER_SERVER_KEY}]\ncommand = ${JSON.stringify(argv.command)}\nargs = [${args}]\n` +
         `startup_timeout_sec = ${BROWSER_STARTUP_TIMEOUT_SEC}\n`;
     }
 
-    for (const { key, server } of enabledServers(userServers())) {
+    for (const { key, server } of enabledServers(target.servers())) {
       if (headersLostOnCodex(server)) {
         console.warn(
           `[mcp] Codex has no config key for request headers, so "${server.name}" is written ` +
@@ -1900,11 +1961,13 @@ async function injectCodexConfig(httpUrl: string): Promise<void> {
       content += `\n${codexTable(key, server)}`;
     }
 
-    await invoke('mcp_write_global_agent_config', {
-      agent: 'codex',
-      content: content.trimStart(),
-    });
+    await target.write('codex', content.trimStart());
   } catch (e) {
     console.warn('[mcp] Failed to write Codex config:', e);
   }
+}
+
+/** Codex: this computer's global config, and the connected box's. */
+async function injectCodexConfig(httpUrl: string): Promise<void> {
+  for (const target of globalTargets()) await injectCodexConfigInto(httpUrl, target);
 }

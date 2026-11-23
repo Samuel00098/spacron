@@ -1884,7 +1884,7 @@ async fn generate_media_tool(
 /// The Plugin Creator's instructions, the same file the built-in plugin ships
 /// as its skill (`services/plugin-creator-skill.md`). Served as a tool so every
 /// agent can build plugins, not only the ones that read skill folders.
-const PLUGIN_CREATOR_GUIDE: &str = include_str!("../../../src/lib/services/plugin-creator-skill.md");
+pub(crate) const PLUGIN_CREATOR_GUIDE: &str = include_str!("../../../src/lib/services/plugin-creator-skill.md");
 
 fn tool_plugin_creator_guide() -> serde_json::Value {
     serde_json::json!({

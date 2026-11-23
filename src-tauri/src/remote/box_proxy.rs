@@ -46,6 +46,10 @@ fn info() -> &'static OnceLock<Info> {
 struct TokenQuery {
     #[serde(default)]
     token: Option<String>,
+    /// Which agent this MCP address was given to (box_agents.rs), so
+    /// report_status knows who is calling.
+    #[serde(default)]
+    agent: Option<String>,
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -73,7 +77,7 @@ async fn mcp_handler(Query(query): Query<TokenQuery>, body: axum::body::Bytes) -
         return (StatusCode::UNAUTHORIZED, "invalid or missing token").into_response();
     }
     match serde_json::from_slice::<Value>(&body) {
-        Ok(message) => super::box_mcp::handle(message).await,
+        Ok(message) => super::box_mcp::handle(message, query.agent.clone()).await,
         Err(e) => (StatusCode::BAD_REQUEST, format!("Invalid JSON-RPC: {e}")).into_response(),
     }
 }
