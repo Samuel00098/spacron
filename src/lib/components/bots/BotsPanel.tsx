@@ -493,8 +493,8 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
         <button type="button" className="bots-back" onClick={() => selectedBotId.set(null)} aria-label="All bots">←</button>
         <BotAvatar avatar={bot.avatar} size={40} />
         <div className="bots-view-title">
-          <h3>{bot.name} <StatusChip bot={bot} run={runs[0]} /></h3>
-          <p>{hostName(bot.boxId)} · {botScheduleLabel(bot)}{next ? ` · next ${when(next)}` : ''}{bot.createdBy ? ` · made by ${bot.createdBy}` : ''}</p>
+          <h3><span title={bot.name}>{bot.name}</span> <StatusChip bot={bot} run={runs[0]} /></h3>
+          <p>{hostName(bot.boxId)}{bot.schedule !== 'manual' ? ` · ${botScheduleLabel(bot)}` : ''}{next ? ` · next ${when(next)}` : ''}{bot.createdBy ? ` · made by ${bot.createdBy}` : ''}</p>
         </div>
         <div className="bots-tabs" role="tablist" aria-label="Bot views">
           <button type="button" role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Chat</button>
@@ -595,8 +595,17 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
     try { await stopBotRun(bot, active.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
   const suggestions = bot.canCreateBots
-    ? ['Make me a bot that sends me a daily AI news digest', 'I want a bot that checks my inbox every morning', 'Build a bot that finds YouTube video ideas weekly']
-    : ['Do your job now', 'What can you do for me?', 'What did you do last time?'];
+    ? [
+      { label: 'Daily AI news digest', prompt: 'Make me a bot that sends me a daily AI news digest' },
+      { label: 'Morning inbox check', prompt: 'I want a bot that checks my inbox every morning' },
+      { label: 'Weekly YouTube ideas', prompt: 'Build a bot that finds YouTube video ideas weekly' },
+    ]
+    : [
+      { label: 'Run now', prompt: 'Do your job now' },
+      { label: 'What can you do?', prompt: 'What can you do for me?' },
+      { label: 'Review the last run', prompt: 'What did you do last time?' },
+    ];
+  const agentName = getAgentRoster().find((agent) => agent.command === bot.agent)?.name ?? agentProgram(bot.agent);
   return (
     <div
       className={`terminal-chat-view structured-chat-view bots-structured-chat${dragging ? ' bots-dropping' : ''}`}
@@ -620,9 +629,16 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
             {!shown.length && <div className="bots-chat-empty">
               <BotAvatar avatar={bot.avatar} size={64} />
               <h3>{bot.name}</h3>
-              <p>{bot.instructions.length > 220 ? `${bot.instructions.slice(0, 220)}…` : bot.instructions}</p>
-              <div className="bots-chat-suggestions">
-                {suggestions.map((text) => <button key={text} type="button" className="terminal-chat-pill" onClick={() => { setDraft(text); textarea.current?.focus(); }}>{text}</button>)}
+              <p>{bot.canCreateBots
+                ? 'Describe a recurring task, a schedule, or a workflow you want a bot to handle.'
+                : 'Ask this bot what it can do, or give it a task to start.'}</p>
+              <div className="bots-chat-suggestions" role="group" aria-label="Starter prompts">
+                {suggestions.map(({ label, prompt }) => (
+                  <button key={label} type="button" disabled={Boolean(active) || busy !== null} onClick={() => { setDraft(prompt); textarea.current?.focus(); }}>
+                    <span>{label}</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+                  </button>
+                ))}
               </div>
             </div>}
             {shown.map((run) => {
@@ -681,8 +697,9 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>
             </button>
             <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ''; }} />
-            <span className="terminal-chat-pill" title="The agent CLI this bot runs on">
-              <span className="terminal-chat-pill-label">{agentProgram(bot.agent)}{bot.model ? ` · ${bot.model}` : ''}</span>
+            <span className="terminal-chat-pill bots-chat-agent" title={bot.model ? `${agentName} · ${bot.model}` : agentName}>
+              <AgentBrandMark command={bot.agent} name={agentName} className="bots-agent-mark" />
+              <span className="terminal-chat-pill-label">{agentName}{bot.model ? ` · ${bot.model}` : ''}</span>
             </span>
             {(() => {
               const tools = [bot.computerUse && 'Computer use', bot.browser && 'Browser', ...botConnectorNames(bot)].filter(Boolean) as string[];

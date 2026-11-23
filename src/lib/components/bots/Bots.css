@@ -225,6 +225,7 @@
 .bots-panel .bots-view-header .bots-back { margin: 0; padding: 6px 10px; }
 .bots-view-title { flex: 1; min-width: 0; }
 .bots-view-title h3 { display: flex; align-items: center; gap: 8px; }
+.bots-view-title h3 > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bots-view-title p { margin-top: 2px; color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bots-tabs { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--bg-tertiary); }
 .bots-panel .bots-tabs button { padding: 5px 12px; background: transparent; color: var(--text-muted); }
@@ -232,10 +233,49 @@
 
 .bots-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .bots-chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 24px max(20px, calc((100% - 820px) / 2)); }
-.bots-chat-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 560px; margin: 8vh auto 0; text-align: center; }
-.bots-chat-empty p { color: var(--text-muted); line-height: 1.6; }
-.bots-chat-suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; }
-.bots-panel .bots-chat-suggestions button { border-radius: 999px; font-size: 12px; box-shadow: var(--surface-outline); }
+.bots-chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 620px;
+  margin: clamp(24px, 9vh, 104px) auto 24px;
+  text-align: center;
+}
+#app .bots-chat-empty h3 {
+  margin: 2px 0 0;
+  font-size: 1.65em !important;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.bots-chat-empty p { max-width: 44ch; color: var(--text-muted); line-height: 1.6; }
+.bots-chat-suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 176px), 1fr));
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+}
+.bots-panel .bots-chat-suggestions button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 5%, var(--app-surface));
+  box-shadow: var(--surface-outline) !important;
+  text-align: start;
+  line-height: 1.35;
+}
+.bots-panel .bots-chat-suggestions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 9%, var(--app-surface));
+}
+.bots-chat-suggestions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bots-chat-suggestions svg { flex: none; color: var(--text-muted); }
 .bots-exchange { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
 .bots-event { align-self: center; padding: 3px 10px; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-muted); font-size: 11px; }
 .bots-msg { display: flex; align-items: flex-end; gap: 8px; max-width: 100%; }
@@ -274,9 +314,8 @@
    Here it sits under the bot header instead. */
 .bots-view > .terminal-chat-view.bots-structured-chat { position: relative; inset: auto; flex: 1; min-height: 0; height: auto; }
 .bots-structured-chat .bots-exchange { display: contents; }
-.bots-structured-chat .bots-chat-empty { margin: 10vh auto 24px; }
-.bots-structured-chat .bots-chat-empty h3 { margin: 4px 0 0; }
-.bots-structured-chat .bots-chat-suggestions .terminal-chat-pill { cursor: pointer; }
+.bots-structured-chat .bots-chat-agent { cursor: default; background: var(--tc-surface-strong, var(--bg-tertiary)); }
+.bots-chat-agent .bots-agent-mark { width: 14px; height: 14px; min-width: 14px; flex-basis: 14px; }
 .bots-structured-chat.bots-dropping .terminal-chat-composer { box-shadow: 0 0 0 2px var(--accent); }
 .bots-sent-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-self: flex-end; max-width: min(82%, 600px); margin-top: -10px; }
 .bots-sent-files .terminal-chat-pill { padding: 4px 10px; border-radius: 999px; background: var(--tc-surface-strong, var(--bg-tertiary)); font-size: 12px; }
