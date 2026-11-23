@@ -118,6 +118,11 @@
 .bots-editor-grid .bots-editor-section { margin-top: 20px; padding-top: 16px; box-shadow: 0 -1px 0 var(--border); }
 .bots-editor textarea { display: block; margin-bottom: 0; }
 .bots-editor textarea + .bots-helper { margin-top: 10px; }
+.bots-starter-settings { margin-top: 18px; }
+.bots-starter-settings summary { cursor: pointer; }
+.bots-starter-settings > .bots-helper { margin: 8px 0 12px; }
+.bots-starter-settings > input { margin-bottom: 8px; }
+.bots-starter-settings > input:last-child { margin-bottom: 0; }
 .bots-editor-side .dropdown, .bots-editor-side .dd-trigger { width: 100%; box-sizing: border-box; }
 .bots-editor-side > .dropdown { margin-bottom: 16px; }
 .bots-panel label, .bots-field-label { display: block; margin: 0 0 8px; }
@@ -327,6 +332,7 @@
 }
 .bots-chat-suggestions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bots-chat-suggestions svg { flex: none; color: var(--text-muted); }
+.bots-chat-suggestions button > span { min-width: 0; overflow-wrap: anywhere; }
 .bots-exchange { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
 .bots-event { align-self: center; padding: 3px 10px; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-muted); font-size: 11px; }
 .bots-msg { display: flex; align-items: flex-end; gap: 8px; max-width: 100%; }

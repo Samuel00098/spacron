@@ -14,7 +14,7 @@ import Dropdown from '$lib/components/shared/Dropdown';
 import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
 import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
-  BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, canRunHeadless, closeBots,
+  BOT_TEMPLATES, LOCAL_HOST, MAX_BOT_STARTER_LENGTH, MAX_BOT_STARTER_PROMPTS, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, botStarterPrompts, bots, canRunHeadless, closeBots,
   connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
   attachToBot, attachmentPreview, botVisualSpot, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
   saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
@@ -323,6 +323,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [host, setHost] = useState(bot?.boxId ?? hosts[0]?.value ?? LOCAL_HOST);
   const [name, setName] = useState(start?.name ?? '');
   const [instructions, setInstructions] = useState(start?.instructions ?? '');
+  const [starterPrompts, setStarterPrompts] = useState(start?.starterPrompts ?? []);
   const [avatar, setAvatar] = useState(() => bot?.avatar ?? suggestBotAvatar(template?.avatar));
   const [agent, setAgent] = useState(bot?.agent ?? agents[0]?.command ?? '');
   const [model, setModel] = useState(bot?.model ?? '');
@@ -361,13 +362,14 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const missing = template?.connectors?.filter((id) => !connectorChoices(host).some((c) => c.usable && c.catalogId === id)) ?? [];
   function applyTemplate(t: BotTemplate) {
     setTemplate(t); setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day);
+    setStarterPrompts(t.starterPrompts);
     setAccess(t.access); setAvatar(suggestBotAvatar(t.avatar)); setBrowser(t.browser ?? false); setBuilder(t.canCreateBots ?? false); setComputer(t.computerUse ?? false); setKeys(templateKeys(t, host));
   }
   function submit() {
     setError('');
     try {
       const saved = saveBot({
-        id: bot?.id, boxId: host, name, instructions, agent, model: model.trim() || null, schedule, time, day, access,
+        id: bot?.id, boxId: host, name, instructions, starterPrompts, agent, model: model.trim() || null, schedule, time, day, access,
         connectors: keys.length > 0, mcpKeys: keys, browser, canCreateBots: builder, computerUse: computer, avatar, enabled: bot?.enabled ?? true,
         ...(bot?.createdBy ? { createdBy: bot.createdBy } : {}),
       });
@@ -398,6 +400,22 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
               <label htmlFor="bot-job">Job</label>
               <textarea id="bot-job" aria-describedby="bot-job-help" required rows={8} maxLength={20_000} placeholder="What is this bot for? Say what result you want, and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
               <p id="bot-job-help" className="bots-helper">Each run starts a fresh agent with access to the bot’s saved files and recent chat.</p>
+              <details className="bots-starter-settings">
+                <summary>Suggested prompts</summary>
+                <p className="bots-helper">Add up to three messages people can pick in an empty chat. Leave all fields blank to use suggestions based on the bot’s job.</p>
+                {botStarterPrompts({ name, instructions }).slice(0, MAX_BOT_STARTER_PROMPTS).map((prompt, index) => (
+                  <input key={index} type="text" aria-label={`Suggested prompt ${index + 1}`} maxLength={MAX_BOT_STARTER_LENGTH}
+                    placeholder={prompt} value={starterPrompts[index] ?? ''}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setStarterPrompts((previous) => {
+                        const next = [...previous];
+                        next[index] = value;
+                        return next;
+                      });
+                    }} />
+                ))}
+              </details>
               <h4 className="bots-editor-section">Tools and connectors</h4>
               <span className="bots-field-label">Connectors</span>
               <ConnectorPicker host={host} value={keys} onChange={setKeys} />
@@ -615,17 +633,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
     setBusy('stop'); setError('');
     try { await stopBotRun(bot, active.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
-  const suggestions = bot.canCreateBots
-    ? [
-      { label: 'Daily AI news digest', prompt: 'Make me a bot that sends me a daily AI news digest' },
-      { label: 'Morning inbox check', prompt: 'I want a bot that checks my inbox every morning' },
-      { label: 'Weekly YouTube ideas', prompt: 'Build a bot that finds YouTube video ideas weekly' },
-    ]
-    : [
-      { label: 'Run now', prompt: 'Do your job now' },
-      { label: 'What can you do?', prompt: 'What can you do for me?' },
-      { label: 'Review the last run', prompt: 'What did you do last time?' },
-    ];
+  const suggestions = botStarterPrompts(bot);
   const agentName = getAgentRoster().find((agent) => agent.command === bot.agent)?.name ?? agentProgram(bot.agent);
   return (
     <div
@@ -654,9 +662,9 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
                 ? 'Describe a recurring task, a schedule, or a workflow you want a bot to handle.'
                 : 'Ask this bot what it can do, or give it a task to start.'}</p>
               {showStarters && <div className="bots-chat-suggestions" role="group" aria-label="Starter prompts">
-                {suggestions.map(({ label, prompt }) => (
-                  <button key={label} type="button" disabled={Boolean(active) || busy !== null} onClick={() => { setDraft(prompt); textarea.current?.focus(); }}>
-                    <span>{label}</span>
+                {suggestions.map((prompt) => (
+                  <button key={prompt} type="button" disabled={Boolean(active) || busy !== null} onClick={() => { setDraft(prompt); textarea.current?.focus(); }}>
+                    <span>{prompt}</span>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
                   </button>
                 ))}

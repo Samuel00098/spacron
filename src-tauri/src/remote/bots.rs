@@ -336,7 +336,8 @@ pub(crate) fn run_prompt_with(bot: &BoxBot, history: &str, message: Option<&str>
 
 const BUILDER_PROMPT: &str = "\n\nYou can create new bots for the user. To create one, write a JSON file in the \
 new-bots folder of your home folder (for example new-bots/morning-digest.json), one file per bot, with these fields: \
-\"name\" (short), \"instructions\" (that bot's standing job, written as instructions to it), \"schedule\" \
+\"name\" (short), \"instructions\" (that bot's standing job, written as instructions to it), \
+\"starterPrompts\" (three distinct example messages the user could send to this bot for its specific job, each at most 160 characters), \"schedule\" \
 (\"manual\", \"hourly\", \"daily\", \"weekdays\" or \"weekly\"), \"time\" (\"HH:MM\"), \"day\" (0 = Sunday, for weekly), \
 \"access\" (\"research\", \"folder\" or \"full\"; never more than your own access), \"browser\" (true if it needs to open \
 and use web pages), \"connectors\" (a list of connector names it needs, from the ones listed below), \"avatar\" \

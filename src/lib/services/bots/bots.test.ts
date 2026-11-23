@@ -208,6 +208,25 @@ it('ignores corrupt saved data and upgrades old bots', async () => {
   expect(again.get(again.api.bots)).toEqual([]);
 });
 
+it('persists authored starter prompts and gives older bots job-specific defaults', async () => {
+  const { api } = await setup();
+  const bot = api.saveBot({ ...input, starterPrompts: ['  Find today’s top stories.  ', '', 'Find today’s top stories.', 'Focus on AI news.'] });
+  expect(bot.starterPrompts).toEqual(['Find today’s top stories.', 'Focus on AI news.']);
+  await vi.waitFor(() => expect(lastSync(mock.local, 'local_bots_sync')).toBeTruthy());
+  expect(lastSync(mock.local, 'local_bots_sync').args!.bots).not.toContainEqual(expect.objectContaining({ starterPrompts: expect.anything() }));
+  const saved = JSON.parse(localStorage.getItem('spacron_bots_v1')!);
+  expect(saved.bots[0].starterPrompts).toEqual(bot.starterPrompts);
+  expect(api.botStarterPrompts({ name: 'Inbox triage', instructions: 'Sort my unread mail by urgency.' })[0]).toBe('Sort my unread mail by urgency.');
+  for (const template of api.BOT_TEMPLATES) {
+    expect(api.botStarterPrompts({ name: template.name, instructions: template.instructions })).toEqual(template.starterPrompts);
+    expect(new Set(template.starterPrompts).size).toBe(3);
+  }
+  vi.resetModules();
+  const reloaded = await import('./bots');
+  const { get } = await import('$lib/stores/storeCompat');
+  expect(reloaded.botStarterPrompts(get(reloaded.bots)[0])).toEqual(bot.starterPrompts);
+});
+
 const servers = [
   { id: '1', name: 'linear', transport: 'http', url: 'https://mcp.linear.app/sse', enabled: true },
   { id: '2', name: 'Gmail', transport: 'http', url: 'https://gmailmcp.googleapis.com/mcp/v1', enabled: true, oauth: true, catalogId: 'gmail' },
@@ -272,10 +291,11 @@ it('bots a builder proposes are capped, paused and never builders themselves', a
   const builder = api.saveBot({ ...input, name: 'Bot Builder', access: 'folder', canCreateBots: true });
   const made = api.botFromProposal('local', {
     id: 'p1', createdBy: builder.id, createdByName: 'Bot Builder', creatorAccess: 'full', createdAt: 1,
-    spec: { name: 'Inbox bot', instructions: 'Triage mail', schedule: 'daily', time: '07:30', access: 'full', connectors: ['gmail'], browser: true, avatar: 'mail', canCreateBots: true },
+    spec: { name: 'Inbox bot', instructions: 'Triage mail', starterPrompts: ['Flag urgent emails.'], schedule: 'daily', time: '07:30', access: 'full', connectors: ['gmail'], browser: true, avatar: 'mail', canCreateBots: true },
   });
   expect(made).toMatchObject({ name: 'Inbox bot', access: 'folder', enabled: false, canCreateBots: false, browser: true, avatar: 'mail', schedule: 'daily', time: '07:30', createdBy: 'Bot Builder' });
   expect((made as { mcpKeys: string[] }).mcpKeys).toEqual(['spacron-gmail']);
+  expect(made).toMatchObject({ starterPrompts: ['Flag urgent emails.'] });
   expect(api.botFromProposal('local', { id: 'p2', createdBy: 'x', createdByName: '', creatorAccess: 'research', createdAt: 1, spec: { name: '' } })).toBe('it had no name or job');
   const odd = api.botFromProposal('local', { id: 'p3', createdBy: 'gone', createdByName: 'Old', creatorAccess: 'research', createdAt: 1, spec: { name: 'X', instructions: 'Y', schedule: 'every minute', avatar: 'nope', access: 'folder' } });
   expect(odd).toMatchObject({ schedule: 'manual', avatar: 'brain', access: 'research' });

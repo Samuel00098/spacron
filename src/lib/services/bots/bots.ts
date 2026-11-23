@@ -28,6 +28,7 @@ import { sharedWith } from '$lib/services/box-signins';
 import { catalogIconFor } from '$lib/services/mcp-catalog';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { BOT_AVATARS, DEFAULT_AVATAR, isBuiltInAvatar } from './avatars';
+import { BOT_TEMPLATES } from './templates';
 
 export type BotSchedule = 'manual' | Schedule;
 /** What a bot may do unattended. Turned into each CLI's own flags on the host. */
@@ -37,12 +38,15 @@ export const LOCAL_HOST = 'local';
 /** The box's own MCP server (`remote/box_mcp.rs`): agents on the box, virtual desktop. */
 export const BOX_TOOLS_KEY = 'spacron-box';
 const ACCESS_RANK: Record<BotAccess, number> = { research: 0, folder: 1, full: 2 };
+export const MAX_BOT_STARTER_PROMPTS = 3;
+export const MAX_BOT_STARTER_LENGTH = 160;
 
 export interface Bot {
   id: string;
   name: string;
   /** The bot's standing job, sent on every run. */
   instructions: string;
+  starterPrompts?: string[];
   /** Agent launch command, e.g. `claude`. */
   agent: string;
   model?: string | null;
@@ -158,6 +162,7 @@ function isBot(b: Bot): boolean {
 function upgrade(b: Bot): Bot {
   return {
     ...b,
+    starterPrompts: normalizeStarterPrompts(b.starterPrompts),
     access: ['research', 'folder', 'full'].includes(b.access) ? b.access : 'research',
     connectors: b.connectors ?? true,
     mcpKeys: Array.isArray(b.mcpKeys) ? b.mcpKeys.filter((k) => typeof k === 'string') : undefined,
@@ -376,6 +381,36 @@ function keysFor(b: Bot): string[] | null {
 
 export type BotInput = Omit<Bot, 'id' | 'createdAt'> & { id?: string };
 
+function normalizeStarterPrompts(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const prompts = value.flatMap((entry) => {
+    if (typeof entry !== 'string') return [];
+    const prompt = entry.trim().replace(/\s+/g, ' ');
+    return prompt && prompt.length <= MAX_BOT_STARTER_LENGTH ? [prompt] : [];
+  });
+  const unique = [...new Set(prompts)].slice(0, MAX_BOT_STARTER_PROMPTS);
+  return unique.length ? unique : undefined;
+}
+
+/** Resolve authored prompts, original template prompts, or defaults for a custom job. */
+export function botStarterPrompts(bot: Pick<Bot, 'name' | 'instructions' | 'starterPrompts'>): string[] {
+  if (bot.starterPrompts?.length) return bot.starterPrompts;
+  const template = BOT_TEMPLATES.find((entry) => entry.instructions === bot.instructions.trim());
+  if (template) return template.starterPrompts;
+
+  const name = bot.name.trim().slice(0, 80) || 'this bot';
+  const firstLine = bot.instructions.trim().split(/\r?\n/, 1)[0] ?? '';
+  const firstSentence = firstLine.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? firstLine;
+  const instruction = firstSentence.trim();
+  return [
+    instruction.length > 0 && instruction.length <= 100 && !/^you (?:are|will|must)\b/i.test(instruction)
+      ? instruction
+      : `Run the ${name} job and summarize the result.`,
+    `Show me an example of what ${name} can deliver.`,
+    `What do you need from me to run ${name}?`,
+  ];
+}
+
 /** Create or update a bot on a reachable host. */
 export function saveBot(input: BotInput): Bot {
   const existing = input.id ? get(bots).find((b) => b.id === input.id) : undefined;
@@ -399,6 +434,7 @@ export function saveBot(input: BotInput): Bot {
     ...input,
     name,
     instructions,
+    starterPrompts: normalizeStarterPrompts(input.starterPrompts),
     model: input.model || null,
     mcpKeys,
     connectors: mcpKeys === undefined ? input.connectors : mcpKeys.length > 0,
@@ -666,7 +702,7 @@ export function botFromProposal(host: string, p: BotProposal): BotInput | string
   const mcpKeys = choices.filter((c) => names.some((n) => c.name.toLowerCase() === n || c.key === n || c.catalogId === n)).map((c) => c.key);
   const avatar = suggestBotAvatar(isBuiltInAvatar(str(spec.avatar)) ? str(spec.avatar) : DEFAULT_AVATAR);
   return {
-    boxId: host, name, instructions, agent, model: null, schedule, time, day, enabled: false, access,
+    boxId: host, name, instructions, starterPrompts: normalizeStarterPrompts(spec.starterPrompts), agent, model: null, schedule, time, day, enabled: false, access,
     connectors: mcpKeys.length > 0, mcpKeys, browser: spec.browser === true, canCreateBots: false, avatar,
     computerUse: spec.computerUse === true && creator?.computerUse === true,
     createdBy: p.createdByName || p.createdBy,
