@@ -862,7 +862,7 @@
   border: none;
   cursor: pointer;
   background: color-mix(in srgb, var(--success, #16a34a) 16%, transparent);
-  color: var(--foreground);
+  color: var(--text-primary);
   transition: background-color 0.15s ease;
   white-space: nowrap;
 }
