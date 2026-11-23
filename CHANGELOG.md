@@ -6,7 +6,7 @@ All notable changes to Spacron will be documented here.
 
 ## [v5.1.11] - 2026-11-23
 
-A follow-up to 5.1.10: bots stop opening terminal windows, and you can now watch a bot's browser work.
+A follow-up to 5.1.10: bots stop opening terminal windows, you can now watch a bot's browser work, and GitHub avatars show again.
 
 ### Added
 
@@ -15,6 +15,7 @@ A follow-up to 5.1.10: bots stop opening terminal windows, and you can now watch
 
 ### Fixed
 
+- **GitHub avatars show again** — profile pictures next to pull requests, issues and Actions runs were blocked by the app's image policy and showed as empty circles. Pictures from GitHub are now allowed.
 - **Terminal windows no longer pop up when bots run** — on Windows, running a bot or automation with OpenCode, Antigravity and other command-line agents opened a visible console window for every run. They now run hidden, as do the stop commands.
 
 ## [v5.1.10] - 2026-11-23
