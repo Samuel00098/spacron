@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import type { ChatVisualsSpot } from '$lib/stores/terminal';
+import { useModalFocus } from '$lib/react/useModalFocus';
 
 /**
  * Inline interactive visuals in agent replies (Orca's convention, Spacron's
@@ -80,71 +81,88 @@ function themeTokens(): Record<string, string> {
   const css = getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
   const light = document.documentElement.classList.contains('light-theme');
+  const background = v('--app-surface', light ? '#efefef' : '#101010');
+  const foreground = v('--chat-visual-ink', light ? '#171717' : '#f4f4f5');
   const themeAccent = v('--accent', '#7c6af7');
-  const accent = isColourful(themeAccent) ? themeAccent : '#6366f1';
+  const onAccent = v('--on-accent', light ? '#ffffff' : '#101010');
+  const tint = (amount: number) => `color-mix(in srgb, ${foreground} ${amount}%, ${background})`;
   return {
     'color-scheme': light ? 'light' : 'dark',
-    '--background': v('--bg-primary', light ? '#ffffff' : '#0f0f12'),
-    '--foreground': v('--text-primary', light ? '#171717' : '#e5e7eb'),
-    '--card': v('--bg-secondary', light ? '#f8fafc' : '#16161a'),
-    '--card-foreground': v('--text-primary', light ? '#171717' : '#e5e7eb'),
-    '--popover': v('--bg-secondary', light ? '#ffffff' : '#16161a'),
-    '--popover-foreground': v('--text-primary', light ? '#171717' : '#e5e7eb'),
+    '--background': background,
+    '--foreground': foreground,
+    '--card': tint(5),
+    '--card-foreground': foreground,
+    '--popover': tint(8),
+    '--popover-foreground': foreground,
     '--primary': themeAccent,
-    '--primary-foreground': '#ffffff',
-    '--secondary': light ? '#f1f5f9' : '#1f2937',
-    '--secondary-foreground': v('--text-primary', light ? '#171717' : '#e5e7eb'),
-    '--muted': light ? '#f1f5f9' : '#1c1c22',
-    '--muted-foreground': v('--text-muted', light ? '#64748b' : '#9ca3af'),
+    '--primary-foreground': onAccent,
+    '--secondary': tint(8),
+    '--secondary-foreground': foreground,
+    '--muted': tint(10),
+    '--muted-foreground': v('--chat-visual-muted', light ? '#495467' : '#b0bac9'),
     '--accent': themeAccent,
-    '--accent-foreground': '#ffffff',
+    '--accent-foreground': onAccent,
     '--destructive': v('--error', '#ef4444'),
     '--destructive-foreground': '#ffffff',
-    '--border': v('--border', light ? '#e2e8f0' : '#27272f'),
-    '--input': v('--border', light ? '#e2e8f0' : '#27272f'),
+    '--border': tint(16),
+    '--input': tint(16),
     '--ring': themeAccent,
-    '--radius': '10px',
+    '--radius': v('--radius-lg', '12px'),
     '--font-sans': v('--font-sans', 'system-ui, sans-serif'),
     '--font-mono': v('--terminal-font-family', 'ui-monospace, monospace'),
-    '--chart-1': accent,
-    '--chart-2': v('--success', '#22c55e'),
-    '--chart-3': '#f59e0b',
-    '--chart-4': '#06b6d4',
-    '--chart-5': '#ec4899',
+    '--chart-1': isColourful(themeAccent) ? themeAccent : light ? '#5345c7' : '#a49aff',
+    '--chart-2': light ? '#08795d' : '#5cdbad',
+    '--chart-3': light ? '#a75b00' : '#ffc76c',
+    '--chart-4': light ? '#03788f' : '#59c8ef',
+    '--chart-5': light ? '#b12d72' : '#f584b3',
   };
 }
 
 const MIN_HEIGHT = 60;
 const MAX_INLINE_HEIGHT = 900;
 
-function VisualFrame({ src, title, height, onHeight, onCompose, className }: {
+function VisualFrame({ src, title, height, onHeight, onCompose, onEscape, className }: {
   src: string;
   title: string;
   height: number | null;
   onHeight?: (h: number) => void;
   /** The page's `window.spacron.compose(text)`: a request handed back to the chat composer. */
   onCompose?: (text: string) => void;
+  onEscape?: () => void;
   className: string;
 }) {
   const channel = useMemo(() => crypto.randomUUID(), []);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
-  const [theme, setTheme] = useState(() => encodeURIComponent(JSON.stringify(themeTokens())));
+  const [initialTheme] = useState(() => encodeURIComponent(JSON.stringify(themeTokens())));
+  const lastTheme = useRef('');
+
+  function sendTheme(force = false) {
+    const theme = themeTokens();
+    const value = JSON.stringify(theme);
+    if (!force && value === lastTheme.current) return;
+    lastTheme.current = value;
+    // Sandboxed documents have an opaque origin. The channel and window
+    // identity are checked on both sides of the bridge.
+    frameRef.current?.contentWindow?.postMessage({ spacronVisual: channel, action: 'theme', theme }, '*');
+  }
 
   useEffect(() => {
-    let pending = false;
+    let pending: number | undefined;
     const refreshTheme = () => {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(() => {
-        pending = false;
-        setTheme(encodeURIComponent(JSON.stringify(themeTokens())));
+      if (pending !== undefined) return;
+      pending = requestAnimationFrame(() => {
+        pending = undefined;
+        sendTheme();
       });
     };
     const observer = new MutationObserver(refreshTheme);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
     observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
-    return () => observer.disconnect();
-  }, []);
+    return () => {
+      observer.disconnect();
+      if (pending !== undefined) cancelAnimationFrame(pending);
+    };
+  }, [channel]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -154,24 +172,50 @@ function VisualFrame({ src, title, height, onHeight, onCompose, className }: {
         if (typeof data.text === 'string' && data.text.trim()) onCompose?.(data.text.slice(0, 4000));
         return;
       }
+      if (data.action === 'escape') {
+        onEscape?.();
+        return;
+      }
       if (onHeight && typeof data.height === 'number' && Number.isFinite(data.height)) onHeight(data.height);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [channel, onHeight, onCompose]);
+  }, [channel, onHeight, onCompose, onEscape]);
 
   return (
     <iframe
       ref={frameRef}
       className={className}
       title={title}
-      src={`${src}?c=${channel}#${theme}`}
+      tabIndex={0}
+      src={`${src}?c=${channel}#${initialTheme}`}
+      onLoad={() => sendTheme(true)}
       // Scripts run so the page can be interactive; no allow-same-origin, so it
       // cannot reach the app, its storage or the chat around it.
       sandbox="allow-scripts allow-downloads"
       referrerPolicy="no-referrer"
       style={height ? { height } : undefined}
     />
+  );
+}
+
+function VisualTitle({ title }: { title: string }) {
+  return (
+    <div className="chat-visual-title">
+      <span className="chat-visual-mark" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M7 15v-3m5 3V8m5 7v-5" /></svg>
+      </span>
+      <strong title={title}>{title}</strong>
+    </div>
+  );
+}
+
+export function ChatVisualStatus({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="chat-visual missing" role="status">
+      <div className="chat-visual-bar"><VisualTitle title={title} /></div>
+      <p className="chat-visual-status">{text}</p>
+    </div>
   );
 }
 
@@ -183,44 +227,29 @@ export function ChatVisual({ visual, spot, onCompose }: {
 }) {
   const [height, setHeight] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const title = visual.title ?? visual.file;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const close = () => setExpanded(false);
+  const title = visual.title ?? visual.file.replace(/\.html$/, '').replace(/[-_]+/g, ' ');
+  useModalFocus(dialogRef, close, expanded);
 
-  useEffect(() => {
-    if (!expanded) return undefined;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        setExpanded(false);
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [expanded]);
-
-  if (!spot) {
-    return (
-      <div className="chat-visual missing">
-        <span>{title}</span>
-        <em>This visual can't be shown: the agent wasn't started from Spacron's launcher, so it has no visuals folder.</em>
-      </div>
-    );
-  }
+  if (!spot) return <ChatVisualStatus title={title} text="This agent needs a Spacron visuals folder to display the interactive page." />;
   const src = `${spot.baseUrl}${visual.file}`;
   return (
     <div className="chat-visual">
       <div className="chat-visual-bar">
-        <span className="chat-visual-title" title={visual.file}>{title}</span>
+        <VisualTitle title={title} />
         <button
           type="button"
           className="chat-visual-btn"
           title="Open in app browser"
           aria-label="Open in app browser"
-          onClick={() => void openUrlInPreviewPanel(src)}
+          onClick={() => void openUrlInPreviewPanel(`${src}#${encodeURIComponent(JSON.stringify(themeTokens()))}`)}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
         </button>
-        <button type="button" className="chat-visual-btn" title="Full size" aria-label="Full size" onClick={() => setExpanded(true)}>
+        <button type="button" className="chat-visual-btn expand" aria-haspopup="dialog" aria-expanded={expanded} onClick={() => setExpanded(true)}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+          Expand
         </button>
       </div>
       <VisualFrame
@@ -232,11 +261,11 @@ export function ChatVisual({ visual, spot, onCompose }: {
         onHeight={(h) => setHeight(Math.min(MAX_INLINE_HEIGHT, Math.max(MIN_HEIGHT, h)))}
       />
       {expanded && createPortal(
-        <div className="chat-visual-overlay" role="dialog" aria-label={title} onMouseDown={(e) => { if (e.target === e.currentTarget) setExpanded(false); }}>
-          <div className="chat-visual-modal">
+        <div className="chat-visual-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
+          <div className="chat-visual-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-label={title}>
             <div className="chat-visual-bar">
-              <span className="chat-visual-title">{title}</span>
-              <button type="button" className="chat-visual-btn" title="Close (Esc)" aria-label="Close" onClick={() => setExpanded(false)}>
+              <VisualTitle title={title} />
+              <button type="button" className="chat-visual-btn" title="Close (Esc)" aria-label="Close visual" onClick={close}>
                 <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2 2 10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
               </button>
             </div>
@@ -245,9 +274,10 @@ export function ChatVisual({ visual, spot, onCompose }: {
               title={title}
               className="chat-visual-frame full"
               height={null}
+              onEscape={close}
               onCompose={(text) => {
                 onCompose?.(text);
-                setExpanded(false);
+                close();
               }}
             />
           </div>

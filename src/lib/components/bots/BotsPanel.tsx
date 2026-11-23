@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
+import { isModalOpen } from '$lib/react/useModalFocus';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { usageState } from '$lib/stores/usage';
@@ -30,7 +31,7 @@ import {
   botChatTimestamps,
   botChatVisuals,
 } from '$lib/stores/botChatSettings';
-import { ChatVisual, splitReply } from '$lib/components/terminal/ChatVisual';
+import { ChatVisual, ChatVisualStatus, splitReply } from '$lib/components/terminal/ChatVisual';
 import type { ChatVisualsSpot } from '$lib/stores/terminal';
 import '$lib/components/terminal/TerminalChatRich.css';
 import '$lib/components/terminal/TerminalChatView.css';
@@ -129,7 +130,7 @@ export default function BotsPanel() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (e.key !== 'Escape' || e.defaultPrevented || isModalOpen()) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       closeBots();
@@ -627,7 +628,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
   // A visual's "send to the bot" button fills the message box for review.
   function composeFromVisual(text: string) {
     setDraft((cur) => (cur.trim() ? `${cur.trim()}\n${text}` : text));
-    textarea.current?.focus();
+    requestAnimationFrame(() => textarea.current?.focus());
   }
   async function stop() {
     if (!active) return;
@@ -787,10 +788,8 @@ function BotVisual({ bot, visual, status, onCompose }: {
     return () => { alive = false; };
   }, [bot.id, bot.boxId, visual.file, status]);
   if (state && 'spot' in state) return <ChatVisual visual={visual} spot={state.spot} onCompose={onCompose} />;
-  return <div className="chat-visual missing">
-    <span>{visual.title ?? visual.file}</span>
-    <em>{state ? (status === 'running' ? 'Waiting for the bot to finish this visual…' : `This visual can't be shown: ${state.error}`) : 'Loading visual…'}</em>
-  </div>;
+  return <ChatVisualStatus title={visual.title ?? visual.file}
+    text={state ? (status === 'running' ? 'Waiting for the bot to finish this visual…' : `Could not load this visual. ${state.error}`) : 'Loading visual…'} />;
 }
 
 function SentTurn({ bot, run }: { bot: Bot; run: BotRun }) {

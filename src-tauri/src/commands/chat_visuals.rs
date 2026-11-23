@@ -67,15 +67,40 @@ pub fn is_safe_visual_file(name: &str) -> bool {
 }
 
 /// Added to every page, ahead of its own markup: base styles, the app theme
-/// (passed in the URL fragment so it updates without a reload), and a height
+/// (initially in the URL fragment, with live updates over the bridge), and a height
 /// report so the chat can size the frame to the content.
 const SHELL_HEAD: &str = r#"<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;padding:0;background:var(--background,#0f0f12);color:var(--foreground,#e5e7eb)}body{font-family:var(--font-sans,system-ui,sans-serif);font-size:14px;line-height:1.5;padding:12px}button,input,select,textarea{font:inherit;color:var(--foreground,#e5e7eb);background:var(--card,#16161a);border:1px solid var(--border,#27272f);border-radius:var(--radius,10px)}button{cursor:pointer}button:hover{background:var(--muted,#1c1c22)}input::placeholder,textarea::placeholder{color:var(--muted-foreground,#9ca3af)}a{color:var(--accent,#7c6af7)}</style>
+<style>
+html{color-scheme:light dark}
+html,body{margin:0;background:var(--background,light-dark(#efefef,#101010));color:var(--foreground,light-dark(#171717,#e5e7eb))}
+body{font-family:var(--font-sans,system-ui,sans-serif);font-size:14px;line-height:1.55;padding:16px}
+button,input,select,textarea{box-sizing:border-box;max-width:100%;font:inherit;color:var(--foreground,light-dark(#171717,#e5e7eb));accent-color:var(--accent,light-dark(#5345c7,#a49aff));background:var(--card,light-dark(#f8f8f8,#191919));border:1px solid var(--border,light-dark(#d2d2d2,#3a3a3a));border-radius:var(--radius,10px)}
+button,select{padding:.4em .7em}
+button{cursor:pointer}
+button:hover:not(:disabled){background:var(--muted,light-dark(#e4e4e7,#29292d))}
+button:disabled{cursor:default;opacity:.55}
+:where(button,input,textarea,select,a):focus-visible{outline:2px solid var(--ring,light-dark(#5345c7,#a49aff));outline-offset:2px}
+input::placeholder,textarea::placeholder{color:var(--muted-foreground,light-dark(#495467,#b0bac9))}
+a{color:var(--accent,light-dark(#5345c7,#a49aff))}
+</style>
 <script>(function(){
 var channel=new URLSearchParams(location.search).get('c')||'';
-function applyTheme(){try{var t=JSON.parse(decodeURIComponent(location.hash.slice(1)||'%7B%7D'));var r=document.documentElement;for(var k in t){if(/^--[a-z0-9-]+$/.test(k))r.style.setProperty(k,String(t[k]).replace(/[;{}<>]/g,''))}if(t['color-scheme'])r.style.colorScheme=t['color-scheme']}catch(e){}}
-applyTheme();window.addEventListener('hashchange',applyTheme);
-window.spacron={compose:function(t){parent.postMessage({spacronVisual:channel,action:'compose',text:String(t==null?'':t).slice(0,4000)},'*')}};
+var currentTheme={}, lastTheme='';
+function applyTheme(t){
+  if(!t||typeof t!=='object')return;
+  var next=JSON.stringify(t);if(next===lastTheme)return;lastTheme=next;
+  var r=document.documentElement;
+  Object.keys(t).forEach(function(k){if(/^--[a-z0-9-]+$/.test(k)&&typeof t[k]==='string')r.style.setProperty(k,t[k].replace(/[;{}<>]/g,''))});
+  var scheme=t['color-scheme'];
+  if(scheme==='light'||scheme==='dark'){r.style.colorScheme=scheme;r.dataset.theme=scheme}
+  currentTheme=t;
+  window.dispatchEvent(new CustomEvent('spacron:theme',{detail:t}));
+}
+function applyFragment(){try{applyTheme(JSON.parse(decodeURIComponent(location.hash.slice(1)||'%7B%7D')))}catch(e){}}
+window.spacron={get theme(){return Object.assign({},currentTheme)},compose:function(t){parent.postMessage({spacronVisual:channel,action:'compose',text:String(t==null?'':t).slice(0,4000)},'*')}};
+applyFragment();window.addEventListener('hashchange',applyFragment);
+window.addEventListener('message',function(e){var d=e.data;if(channel&&e.source===parent&&d&&d.spacronVisual===channel&&d.action==='theme')applyTheme(d.theme)});
+window.addEventListener('keydown',function(e){if(channel&&e.key==='Escape'&&!e.defaultPrevented)parent.postMessage({spacronVisual:channel,action:'escape'},'*')});
 var last=0;function report(){var b=document.body;if(!b)return;var h=Math.ceil(b.getBoundingClientRect().height+parseFloat(getComputedStyle(b).marginTop||0)+parseFloat(getComputedStyle(b).marginBottom||0));if(Math.abs(h-last)>1){last=h;parent.postMessage({spacronVisual:channel,height:h},'*')}}
 var ro=new ResizeObserver(report);ro.observe(document.documentElement);document.addEventListener('DOMContentLoaded',function(){ro.observe(document.body);report()});window.addEventListener('load',report);setInterval(report,1000);
 })();</script>"#;
