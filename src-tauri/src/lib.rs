@@ -179,6 +179,8 @@ pub fn run() {
             let pty_manager = app_state.pty_manager.clone();
             let app_handle = app.handle().clone();
             app.manage(app_state);
+            // Bots on this PC, for people without a box yet.
+            commands::local_bots::start(&config_dir);
             // Learn every configured provider's model capabilities in the
             // background (and again when a key is saved); see agent_turn/capabilities.rs.
             commands::secrets::agent_turn::start_capability_refresh(app.handle().clone());
@@ -386,6 +388,11 @@ pub fn run() {
             commands::workspace::workspace_open_project,
             commands::workspace::workspace_create_project,
             commands::chat_workspace::chat_workspace_open,
+            commands::local_bots::local_bots_sync,
+            commands::local_bots::local_bots_state,
+            commands::local_bots::local_bot_run_now,
+            commands::local_bots::local_bot_log,
+            commands::local_bots::local_bot_stop,
             commands::chat_workspace::chat_workspace_reveal,
             commands::chat_workspace::chat_workspace_export,
             commands::workspace::workspace_rename_project,

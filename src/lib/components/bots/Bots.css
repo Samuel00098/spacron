@@ -33,7 +33,7 @@
 
 .bots-header { display: flex; align-items: center; gap: 14px; padding: 24px 28px 18px; box-shadow: 0 1px 0 var(--border); }
 .bots-header > div { min-width: 0; flex: 1; }
-.bots-header h2 { font-size: 18px; font-weight: 600; letter-spacing: -.4px; }
+.bots-header h2 { letter-spacing: -.2px; }
 .bots-header p { margin-top: 4px; color: var(--text-muted); }
 .bots-header-icon, .bots-empty-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: var(--bg-tertiary); border-radius: 12px; box-shadow: var(--surface-outline); }
 .bots-header-icon { width: 44px; height: 44px; }
@@ -48,7 +48,7 @@
 .bots-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; max-width: 560px; margin: 0 auto; min-height: 320px; padding: 24px; text-align: center; }
 .bots-panel > .bots-empty { margin: auto; }
 .bots-empty-icon { width: 64px; height: 64px; color: var(--text-muted); }
-.bots-empty h3 { font-size: 17px; letter-spacing: -.3px; }
+.bots-empty h3 { letter-spacing: -.2px; }
 .bots-empty p { color: var(--text-muted); line-height: 1.7; }
 .bots-connect-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 
@@ -62,18 +62,21 @@
 .bots-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .bots-panel .bots-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 16px; border-radius: 12px; text-align: left; box-shadow: var(--surface-outline); }
 .bots-card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.bots-card-top strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bots-card-top strong { font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bots-card p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-muted); line-height: 1.5; }
 .bots-card small { color: var(--text-muted); font-size: 11px; }
-.bots-agent-mark { width: 18px; height: 18px; flex-shrink: 0; }
-.bots-agent-mark.large { width: 32px; height: 32px; }
+.bots-agent-mark { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; min-width: 18px; flex: 0 0 18px; overflow: hidden; }
+.bots-agent-mark.large { width: 26px; height: 26px; min-width: 26px; flex-basis: 26px; }
+/* Same rule the Automations list uses: the brand svg has no size of its own. */
+.bots-agent-mark > svg, .bots-agent-mark > img { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; }
+.bots-detail-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; background: var(--bg-tertiary); box-shadow: var(--surface-outline); }
 
 .bots-chip { flex-shrink: 0; padding: 2px 8px; border-radius: 999px; background: var(--bg-hover); color: var(--text-muted); font-size: 11px; font-weight: 500; }
 .bots-chip.scheduled { background: color-mix(in srgb, var(--success, #3fb950) 15%, transparent); color: var(--success, #3fb950); }
 .bots-chip.running { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 
 .bots-editor-heading { margin-bottom: 16px; }
-.bots-editor-heading h3 { font-size: 15px; }
+.bots-editor-heading h3 { }
 .bots-editor-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 28px; }
 .bots-editor-side { padding-left: 24px; box-shadow: -1px 0 0 var(--border); }
 .bots-editor-side .dropdown, .bots-editor-side .dd-trigger { width: 100%; box-sizing: border-box; }
@@ -90,7 +93,7 @@
 .bots-detail { max-width: 860px; }
 .bots-panel .bots-back { margin-bottom: 16px; padding: 6px 10px; background: transparent; color: var(--text-muted); }
 .bots-detail-head { display: flex; align-items: center; gap: 14px; }
-.bots-detail-head h3 { display: flex; align-items: center; gap: 10px; font-size: 17px; }
+.bots-detail-head h3 { display: flex; align-items: center; gap: 10px; }
 .bots-detail-head p { margin-top: 4px; color: var(--text-muted); }
 .bots-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 18px 0 8px; }
 .bots-confirm { color: var(--text-muted); }
@@ -115,3 +118,20 @@
 .bots-layer > .bots-panel { flex: 1; min-width: 0; }
 .bots-panel .bots-close { flex-shrink: 0; width: 30px; height: 30px; padding: 0; background: transparent; color: var(--text-muted); font-size: 22px; line-height: 1; }
 .bots-panel-close { display: flex; justify-content: flex-end; padding: 16px 20px 0; }
+
+/* Groups (This PC / a box), stop button, permission and connector bits. */
+.bots-group + .bots-group { margin-top: 26px; }
+.bots-group > h4 { margin: 0 0 10px; font-size: 12px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase; color: var(--text-muted); }
+.bots-panel .bots-stop { display: inline-flex; align-items: center; gap: 7px; background: color-mix(in srgb, var(--error, #f85149) 16%, transparent); color: var(--error, #f85149); font-weight: 600; }
+.bots-panel .bots-stop:hover { background: color-mix(in srgb, var(--error, #f85149) 26%, transparent); }
+.bots-panel .bots-stop.small { padding: 6px 10px; }
+.bots-run-actions { display: flex; flex-shrink: 0; gap: 6px; }
+.bots-dot.stopped { background: var(--text-muted); opacity: 1; }
+.bots-helper.bots-warn { color: var(--warning, #d29922); }
+.bots-panel label.bots-check { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; cursor: pointer; }
+.bots-panel .bots-check input { width: 16px; height: 16px; margin: 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
+.bots-facts { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; color: var(--text-muted); font-size: 12px; }
+.bots-facts strong { color: var(--text-primary); font-weight: 500; margin-right: 4px; }
+/* Breathing room between a field's helper text and the next field. */
+.bots-editor-side .bots-helper { margin-bottom: 18px; }
+.bots-editor-side label.bots-check + .bots-helper { margin-top: 6px; }

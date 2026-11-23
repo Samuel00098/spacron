@@ -44,7 +44,7 @@ use crate::state::WriteRateLimiter;
 mod acp_bridge;
 mod receive;
 mod automations;
-mod bots;
+pub(crate) mod bots;
 mod tunnel;
 
 /// Binary frame kinds (first byte of a server→client binary message).
@@ -620,6 +620,7 @@ fn handle_control(
                 "box_bots_state" => bots::state(&state.workspace),
                 "box_bot_run_now" => bots::run_now(args, &state.workspace),
                 "box_bot_log" => bots::log(args, &state.workspace),
+                "box_bot_stop" => bots::stop(args, &state.workspace),
                 "workspace_git_log" => git_log(args, &root),
                 "workspace_git_status" => git_status(&root),
                 "workspace_git_diff" => git_diff(args, &root),

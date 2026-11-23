@@ -3,12 +3,15 @@ import { useStore } from '$lib/react/useStore';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { usageState } from '$lib/stores/usage';
+import { mcpServers } from '$lib/stores/settings';
 import { showToast } from '$lib/stores/notification';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import Dropdown from '$lib/components/shared/Dropdown';
+import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
 import {
-  BOT_TEMPLATES, botAgents, botBoxState, bots, botsOnActiveBox, fetchBotLog, latestRun, nextBotRun, refreshBotState,
-  closeBots, removeBot, runBotNow, saveBot, selectedBotId, toggleBot, type Bot, type BotRun, type BotSchedule,
+  BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botHostState, botSettings, bots, closeBots, connectorNames, fetchBotLog,
+  latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor, saveBot, selectedBotId, stopBotRun,
+  toggleBot, visibleBots, type Bot, type BotAccess, type BotRun, type BotSchedule,
 } from '$lib/services/bots/bots';
 import './Bots.css';
 
@@ -47,29 +50,36 @@ function duration(run: BotRun): string {
 }
 
 const STATUS_LABEL: Record<BotRun['status'], string> = {
-  running: 'Running', completed: 'Done', failed: 'Failed', missed: 'Missed', interrupted: 'Interrupted',
+  running: 'Running', completed: 'Done', failed: 'Failed', stopped: 'Stopped', missed: 'Missed', interrupted: 'Interrupted',
 };
+
+/** "This PC" or the box's name. */
+function useHostName() {
+  const box = useStore(activeConnection);
+  return (host: string) => (host === LOCAL_HOST ? 'This PC' : box && box.id === host ? box.name : 'a box');
+}
 
 export default function BotsPanel() {
   const list = useStore(bots);
   const selected = useStore(selectedBotId);
   const remote = useStore(remoteTarget);
   const boxId = useStore(activeRemoteId);
-  const box = useStore(activeConnection);
-  const { runs, homeRoot } = useStore(botBoxState);
+  const state = useStore(botHostState);
+  useStore(botSettings);
   const [stateError, setStateError] = useState('');
-  const mine = botsOnActiveBox(list);
-  const anyRunning = runs.some((r) => r.status === 'running');
+  const mine = visibleBots(list);
+  const anyRunning = Object.values(state).some((h) => h.runs.some((r) => r.status === 'running'));
+  const canHost = localAvailable() || Boolean(remote);
 
-  // Poll the box while the panel is open: quickly while something runs.
+  // Poll while the panel is open: quickly while something runs.
   useEffect(() => {
-    if (!remote) return;
+    if (!canHost) return;
     let alive = true;
     const load = () => refreshBotState().then(() => { if (alive) setStateError(''); }).catch((e) => { if (alive) setStateError(String(e)); });
     void load();
-    const timer = window.setInterval(load, anyRunning ? 4_000 : 15_000);
+    const timer = window.setInterval(load, anyRunning ? 3_000 : 15_000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [remote, boxId, anyRunning]);
+  }, [canHost, boxId, anyRunning]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -82,7 +92,7 @@ export default function BotsPanel() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  if (!remote) return <NoBox />;
+  if (!canHost) return <NoHost />;
   const bot = mine.find((b) => b.id === selected) ?? null;
   return (
     <section className="bots-panel" aria-label="Bots">
@@ -90,16 +100,16 @@ export default function BotsPanel() {
         <span className="bots-header-icon"><BotIcon size={22} /></span>
         <div>
           <h2>Bots</h2>
-          <p>Agents that work for you on <strong>{box?.name ?? 'your box'}</strong>, even while this laptop is closed.</p>
+          <p>Agents with a standing job, outside every project. {remote ? 'Bots on your box keep working while this laptop is closed.' : 'They run on this PC while Spacron is open, or on a box once you connect one.'}</p>
         </div>
         {selected !== NEW_BOT && <button type="button" className="bots-primary" onClick={() => selectedBotId.set(NEW_BOT)}>+ New bot</button>}
         <CloseButton />
       </header>
-      {stateError && <p role="alert" className="bots-error">Could not reach the box: {stateError}</p>}
+      {stateError && <p role="alert" className="bots-error">Could not load runs: {stateError}</p>}
       <div className="bots-body">
         {selected === NEW_BOT ? <BotEditor onDone={(id) => selectedBotId.set(id)} />
-          : bot ? <BotDetail key={bot.id} bot={bot} runs={runs.filter((r) => r.botId === bot.id)} homeRoot={homeRoot} />
-          : <BotList bots={mine} runs={runs} />}
+          : bot ? <BotDetail key={bot.id} bot={bot} runs={runsFor(state, bot)} homeRoot={state[bot.boxId]?.homeRoot ?? ''} />
+          : <BotList bots={mine} />}
       </div>
     </section>
   );
@@ -109,7 +119,8 @@ function CloseButton() {
   return <button type="button" className="bots-close" aria-label="Close Bots" title="Back to the workspace (Esc)" onClick={closeBots}>×</button>;
 }
 
-function NoBox() {
+/** Only in a plain browser with no box: there is nowhere to run a bot. */
+function NoHost() {
   const connections = useStore(remoteConnections);
   const status = useStore(connectionStatus);
   return (
@@ -117,54 +128,65 @@ function NoBox() {
       <div className="bots-panel-close"><CloseButton /></div>
       <div className="bots-empty">
         <div className="bots-empty-icon"><BotIcon size={30} /></div>
-        <h3>Bots live on your box</h3>
-        <p>A bot is an agent with a standing job, like a daily digest or a weekly research report. It runs on your remote box, outside every project, so it keeps working while this laptop is closed.</p>
-        {connections.length ? <div className="bots-connect-list">
+        <h3>Bots need somewhere to run</h3>
+        <p>A bot is an agent with a standing job, like a daily digest or a weekly research report. It runs on this PC in the Spacron desktop app, or on your remote box so it keeps working while the laptop is closed.</p>
+        {connections.length > 0 && <div className="bots-connect-list">
           {connections.map((c) => <button key={c.id} type="button" disabled={status === 'connecting'} onClick={() => void connectRemote(c.id)}>
             {status === 'connecting' ? 'Connecting…' : `Connect to ${c.name}`}
           </button>)}
-        </div> : <p className="bots-helper">Set up a box from the <strong>Remote workspace</strong> menu in the status bar, then come back here.</p>}
+        </div>}
       </div>
     </section>
   );
 }
 
-function BotList({ bots: list, runs }: { bots: Bot[]; runs: BotRun[] }) {
+function BotList({ bots: list }: { bots: Bot[] }) {
+  const state = useStore(botHostState);
+  const hostName = useHostName();
   if (!list.length) return (
     <div className="bots-empty">
       <div className="bots-empty-icon"><BotIcon size={30} /></div>
       <h3>Put an agent on the night shift</h3>
-      <p>Give a bot a job and a schedule. It gets its own folder on the box that it keeps between runs, so it can remember what it did last time.</p>
+      <p>Give a bot a job and a schedule. It gets its own folder that it keeps between runs, so it can remember what it did last time. It runs with the agent CLIs you already have installed.</p>
       <button type="button" className="bots-primary" onClick={() => selectedBotId.set(NEW_BOT)}>+ Create your first bot</button>
       <TemplateGrid />
     </div>
   );
-  return (
-    <div className="bots-grid">
-      {list.slice().sort((a, b) => a.name.localeCompare(b.name)).map((b) => {
-        const run = latestRun(runs, b.id);
-        const next = nextBotRun(b);
-        return (
-          <button key={b.id} type="button" className="bots-card" onClick={() => selectedBotId.set(b.id)}>
-            <div className="bots-card-top">
-              <AgentBrandMark command={b.agent} name={b.agent} className="bots-agent-mark" />
-              <strong>{b.name}</strong>
-              <StatusChip bot={b} run={run} />
-            </div>
-            <p>{b.instructions}</p>
-            <small>{botScheduleLabel(b)}{next ? ` · next ${when(next)}` : ''}{run ? ` · last ${STATUS_LABEL[run.status].toLowerCase()} ${when(run.startedAt)}` : ''}</small>
-          </button>
-        );
-      })}
-    </div>
-  );
+  const groups = [...new Set(list.map((b) => b.boxId))].sort((a, b) => (a === LOCAL_HOST ? -1 : b === LOCAL_HOST ? 1 : 0));
+  return <>{groups.map((host) => (
+    <section key={host} className="bots-group">
+      <h4>{hostName(host)}</h4>
+      <div className="bots-grid">
+        {list.filter((b) => b.boxId === host).sort((a, b) => a.name.localeCompare(b.name)).map((b) => {
+          const run = latestRun(state, b);
+          const next = nextBotRun(b);
+          return (
+            <button key={b.id} type="button" className="bots-card" onClick={() => selectedBotId.set(b.id)}>
+              <div className="bots-card-top">
+                <AgentBrandMark command={b.agent} name={b.agent} className="bots-agent-mark" />
+                <strong>{b.name}</strong>
+                <StatusChip bot={b} run={run} />
+              </div>
+              <p>{b.instructions}</p>
+              <small>{botScheduleLabel(b)}{next ? ` · next ${when(next)}` : ''}{run ? ` · last ${STATUS_LABEL[run.status].toLowerCase()} ${when(run.startedAt)}` : ''}</small>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  ))}</>;
 }
 
 function StatusChip({ bot, run }: { bot: Bot; run?: BotRun }) {
+  const settings = useStore(botSettings);
   if (run?.status === 'running') return <span className="bots-chip running">Running</span>;
   if (bot.schedule === 'manual') return <span className="bots-chip">On demand</span>;
-  return <span className={`bots-chip ${bot.enabled ? 'scheduled' : ''}`}>{bot.enabled ? 'Scheduled' : 'Paused'}</span>;
+  const on = bot.enabled && settings.enabled;
+  return <span className={`bots-chip ${on ? 'scheduled' : ''}`}>{on ? 'Scheduled' : 'Paused'}</span>;
 }
+
+/** A template picked from the empty state, applied when the editor opens. */
+let pendingTemplate: (typeof BOT_TEMPLATES)[number] | null = null;
 
 function TemplateGrid({ onPick }: { onPick?: (t: (typeof BOT_TEMPLATES)[number]) => void }) {
   return (
@@ -180,16 +202,19 @@ function TemplateGrid({ onPick }: { onPick?: (t: (typeof BOT_TEMPLATES)[number])
   );
 }
 
-/** A template picked from the empty state, applied when the editor opens. */
-let pendingTemplate: (typeof BOT_TEMPLATES)[number] | null = null;
-
 function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => void }) {
   useStore(customAgents);
   useStore(removedPresetAgents);
   useStore(usageState);
+  useStore(mcpServers);
+  const settings = useStore(botSettings);
+  const box = useStore(activeConnection);
+  const remote = useStore(remoteTarget);
   const agents = botAgents();
   const start = bot ?? pendingTemplate;
   pendingTemplate = null;
+  const hosts = [...(localAvailable() ? [{ value: LOCAL_HOST, label: 'This PC' }] : []), ...(remote && box ? [{ value: box.id, label: box.name }] : [])];
+  const [host, setHost] = useState(bot?.boxId ?? (remote && box ? box.id : hosts[0]?.value ?? LOCAL_HOST));
   const [name, setName] = useState(start?.name ?? '');
   const [instructions, setInstructions] = useState(start?.instructions ?? '');
   const [agent, setAgent] = useState(bot?.agent ?? agents[0]?.command ?? '');
@@ -197,22 +222,27 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [schedule, setSchedule] = useState<BotSchedule>(start?.schedule ?? 'manual');
   const [time, setTime] = useState(start?.time ?? '09:00');
   const [day, setDay] = useState(start?.day ?? 1);
+  const [access, setAccess] = useState<BotAccess>(start?.access ?? settings.defaultAccess);
+  const [connectors, setConnectors] = useState(bot?.connectors ?? true);
   const [error, setError] = useState('');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const program = agentProgram(agent);
+  const tools = connectorNames(host);
   let next = '';
   try { next = when(nextBotRun({ schedule, time, day, enabled: true })); } catch { /* incomplete time input */ }
+  function applyTemplate(t: (typeof BOT_TEMPLATES)[number]) { setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day); setAccess(t.access); }
   function submit() {
     setError('');
     try {
-      const saved = saveBot({ id: bot?.id, name, instructions, agent, model: model.trim() || null, schedule, time, day, enabled: bot?.enabled ?? true });
-      showToast(bot ? `Saved "${saved.name}".` : `"${saved.name}" is on the box and ready to work.`, 'success');
+      const saved = saveBot({ id: bot?.id, boxId: host, name, instructions, agent, model: model.trim() || null, schedule, time, day, access, connectors, enabled: bot?.enabled ?? true });
+      showToast(bot ? `Saved "${saved.name}".` : `"${saved.name}" is ready to work.`, 'success');
       onDone(saved.id);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
   return (
     <form className="bots-editor" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <div className="bots-editor-heading"><h3>{bot ? `Edit ${bot.name}` : 'New bot'}</h3></div>
-      {!bot && <TemplateGrid onPick={(t) => { setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day); }} />}
+      {!bot && <TemplateGrid onPick={applyTemplate} />}
       {error && <p role="alert" className="bots-error">{error}</p>}
       <div className="bots-editor-grid">
         <div>
@@ -220,16 +250,29 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           <input id="bot-name" required maxLength={80} placeholder="e.g. Morning tech digest" value={name} onChange={(e) => setName(e.target.value)} />
           <label htmlFor="bot-job">Job</label>
           <textarea id="bot-job" required rows={9} maxLength={20_000} placeholder="What should this bot do every time it runs? Say what result you want and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
-          <p className="bots-helper">Each run starts a fresh agent in the bot's own folder on the box. Files it saves there are still there next run.</p>
+          <p className="bots-helper">Each run starts a fresh agent in the bot's own folder. Files it saves there are still there next run.</p>
         </div>
         <aside className="bots-editor-side">
+          <span className="bots-field-label">Runs on</span>
+          <Dropdown ariaLabel="Where the bot runs" value={host} onChange={setHost} disabled={Boolean(bot)} options={hosts.length ? hosts : [{ value: host, label: host === LOCAL_HOST ? 'This PC' : 'Box (not connected)' }]} />
+          <p className="bots-helper">{host === LOCAL_HOST ? 'Runs while Spacron is open on this PC.' : 'Runs on the box, even while this laptop is closed.'}</p>
           <span className="bots-field-label">Run with</span>
           <Dropdown ariaLabel="Bot agent" value={agent} onChange={setAgent} placeholder="Choose an agent"
             options={[...agents.map((a) => ({ value: a.command, label: a.name, icon: <AgentBrandMark command={a.command} name={a.name} className="bots-agent-mark" /> })),
               ...(agent && !agents.some((a) => a.command === agent) ? [{ value: agent, label: `${agent} (not installed here)`, disabled: true }] : [])]} />
+          <p className="bots-helper">{agents.length ? 'Uses the agent CLI installed where the bot runs.' : ''}</p>
           {!agents.length && <p className="bots-error">Install Claude Code, Codex, Gemini CLI or opencode. Bots need an agent that can run unattended.</p>}
           <label htmlFor="bot-model">Model <small>(optional)</small></label>
           <input id="bot-model" placeholder="Agent default" value={model} onChange={(e) => setModel(e.target.value)} />
+          <span className="bots-field-label">It may</span>
+          <Dropdown ariaLabel="What the bot may do" value={access} onChange={(v) => setAccess(v as BotAccess)} options={ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))} />
+          <p className={`bots-helper${access === 'full' ? ' bots-warn' : ''}`}>{ACCESS_OPTIONS.find((o) => o.value === access)?.detail}{program === 'opencode' ? ' opencode uses the permissions from its own config.' : ''}</p>
+          <label className="bots-check">
+            <input type="checkbox" checked={connectors} onChange={(e) => setConnectors(e.target.checked)} />
+            <span>Use my connectors</span>
+          </label>
+          <p className="bots-helper">{!connectors ? 'No MCP servers.' : tools.length ? tools.join(', ') : 'No connectors set up yet. Add them in Settings > MCP & plugins.'}
+            {connectors && tools.length > 0 && program !== 'claude' ? ' Connectors reach Claude Code bots for now; other agents use their own MCP config.' : ''}</p>
           <span className="bots-field-label">Runs</span>
           <Dropdown ariaLabel="Bot schedule" value={schedule} onChange={(v) => setSchedule(v as BotSchedule)} options={SCHEDULES} />
           {schedule !== 'manual' && <div className="bots-time-row">
@@ -242,10 +285,10 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
             {schedule === 'weekly' && <div><span className="bots-field-label">Day</span>
               <Dropdown ariaLabel="Bot weekday" value={String(day)} onChange={(v) => setDay(Number(v))} options={WEEKDAYS.map((label, i) => ({ value: String(i), label }))} /></div>}
           </div>}
-          {schedule !== 'manual' && <p className="bots-helper">Next run <strong>{next || 'choose a time'}</strong> ({timezone})</p>}
+          {schedule !== 'manual' && <p className="bots-helper">Next run <strong>{next || 'choose a time'}</strong> ({timezone}){settings.enabled ? '' : '. Schedules are paused in Settings > Bots.'}</p>}
         </aside>
       </div>
-      <p className="bots-note">Bots run headless and cannot stop to ask you for approval, so give them work they can finish on their own. Runs stop after an hour.</p>
+      <p className="bots-note">Bots run unattended and can't stop to ask you anything, so what they may do is decided here. A run stops after {settings.maxRunMinutes >= 60 ? `${settings.maxRunMinutes / 60} hour${settings.maxRunMinutes === 60 ? '' : 's'}` : `${settings.maxRunMinutes} minutes`} (Settings &gt; Bots), and you can stop it any time.</p>
       <footer className="bots-editor-footer">
         <button type="button" onClick={() => onDone(bot?.id ?? null)}>Cancel</button>
         <button type="submit" className="bots-primary" disabled={!agents.some((a) => a.command === agent)}>{bot ? 'Save changes' : 'Create bot'}</button>
@@ -255,60 +298,86 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
 }
 
 function BotDetail({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: string }) {
+  const hostName = useHostName();
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'start' | 'stop' | null>(null);
   const [error, setError] = useState('');
   const [openLog, setOpenLog] = useState<{ id: string; text: string } | null>(null);
-  const running = runs.some((r) => r.status === 'running');
+  const active = runs.find((r) => r.status === 'running');
   const next = nextBotRun(bot);
   // Keep an open log fresh while that run is still going.
   const openRunning = openLog ? runs.find((r) => r.id === openLog.id)?.status === 'running' : false;
   useEffect(() => {
     if (!openLog || !openRunning) return;
-    const timer = window.setInterval(() => { void fetchBotLog(openLog.id).then((log) => setOpenLog({ id: openLog.id, text: format(log) })).catch(() => {}); }, 4_000);
+    const timer = window.setInterval(() => { void fetchBotLog(bot, openLog.id).then((log) => setOpenLog({ id: openLog.id, text: format(log) })).catch(() => {}); }, 3_000);
     return () => window.clearInterval(timer);
   }, [openLog?.id, openRunning]);
 
   if (editing) return <BotEditor bot={bot} onDone={() => setEditing(false)} />;
 
   async function runNow() {
-    setBusy(true); setError('');
+    setBusy('start'); setError('');
     try {
       const runId = await runBotNow(bot.id);
       await refreshBotState();
       setOpenLog({ id: runId, text: '(Starting…)' });
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+      // Show the first output as soon as there is some, not on the next poll.
+      window.setTimeout(() => { void fetchBotLog(bot, runId).then((log) => setOpenLog((cur) => (cur?.id === runId ? { id: runId, text: format(log) } : cur))).catch(() => {}); }, 800);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
+  }
+  async function stop(run: BotRun) {
+    setBusy('stop'); setError('');
+    try {
+      await stopBotRun(bot, run.id);
+      // The runner records the stop as soon as the agent exits.
+      for (let i = 0; i < 10; i++) {
+        const state = await refreshBotState();
+        if (runsFor(state, bot).find((r) => r.id === run.id)?.status !== 'running') break;
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      if (openLog?.id === run.id) setOpenLog({ id: run.id, text: format(await fetchBotLog(bot, run.id)) });
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
   async function toggleLog(run: BotRun) {
     if (openLog?.id === run.id) { setOpenLog(null); return; }
-    try { setOpenLog({ id: run.id, text: format(await fetchBotLog(run.id)) }); } catch (e) { setOpenLog({ id: run.id, text: `Could not read the log: ${String(e)}` }); }
+    try { setOpenLog({ id: run.id, text: format(await fetchBotLog(bot, run.id)) }); } catch (e) { setOpenLog({ id: run.id, text: `Could not read the output: ${String(e)}` }); }
   }
+  const access = ACCESS_OPTIONS.find((o) => o.value === bot.access);
   return (
     <div className="bots-detail">
       <button type="button" className="bots-back" onClick={() => selectedBotId.set(null)}>← All bots</button>
       <div className="bots-detail-head">
-        <AgentBrandMark command={bot.agent} name={bot.agent} className="bots-agent-mark large" />
+        <span className="bots-detail-icon"><AgentBrandMark command={bot.agent} name={bot.agent} className="bots-agent-mark large" /></span>
         <div>
           <h3>{bot.name} <StatusChip bot={bot} run={runs[0]} /></h3>
-          <p>{botScheduleLabel(bot)}{next ? ` · next ${when(next)}` : ''} · {bot.agent}{bot.model ? ` (${bot.model})` : ''}</p>
+          <p>{hostName(bot.boxId)} · {botScheduleLabel(bot)}{next ? ` · next ${when(next)}` : ''} · {bot.agent}{bot.model ? ` (${bot.model})` : ''}</p>
         </div>
       </div>
       {error && <p role="alert" className="bots-error">{error}</p>}
       <div className="bots-actions">
-        <button type="button" className="bots-primary" disabled={busy || running} onClick={() => void runNow()}>{running ? 'Running…' : busy ? 'Starting…' : 'Run now'}</button>
+        {active
+          ? <button type="button" className="bots-stop" disabled={busy !== null} onClick={() => void stop(active)}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+              {busy === 'stop' ? 'Stopping…' : 'Stop'}
+            </button>
+          : <button type="button" className="bots-primary" disabled={busy !== null} onClick={() => void runNow()}>{busy === 'start' ? 'Starting…' : 'Run now'}</button>}
         {bot.schedule !== 'manual' && <button type="button" onClick={() => toggleBot(bot.id)}>{bot.enabled ? 'Pause schedule' : 'Resume schedule'}</button>}
         <button type="button" onClick={() => setEditing(true)}>Edit</button>
         {confirmDelete ? <>
-          <span className="bots-confirm">Delete this bot? Its folder stays on the box.</span>
-          <button type="button" className="bots-danger" disabled={running} onClick={() => removeBot(bot.id)}>Delete</button>
+          <span className="bots-confirm">Delete this bot? Its folder is kept.</span>
+          <button type="button" className="bots-danger" disabled={Boolean(active)} onClick={() => removeBot(bot.id)}>Delete</button>
           <button type="button" onClick={() => setConfirmDelete(false)}>Keep</button>
-        </> : <button type="button" className="bots-subtle" disabled={running} title={running ? 'Wait for the run to finish' : undefined} onClick={() => setConfirmDelete(true)}>Delete</button>}
+        </> : <button type="button" className="bots-subtle" disabled={Boolean(active)} title={active ? 'Stop the run first' : undefined} onClick={() => setConfirmDelete(true)}>Delete</button>}
       </div>
       <div className="bots-section">
         <h4>Job</h4>
         <p className="bots-job">{bot.instructions}</p>
-        {homeRoot && <p className="bots-helper">Home folder on the box: <code>{`${homeRoot}/${bot.id}`}</code></p>}
+        <div className="bots-facts">
+          <span><strong>May</strong> {access?.label.toLowerCase()}</span>
+          <span><strong>Connectors</strong> {bot.connectors ? (connectorNames(bot.boxId).join(', ') || 'none set up') : 'off'}</span>
+        </div>
+        {homeRoot && <p className="bots-helper">Home folder: <code>{`${homeRoot}/${bot.id}`}</code></p>}
       </div>
       <div className="bots-section">
         <h4>Runs</h4>
@@ -321,7 +390,10 @@ function BotDetail({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot
               {run.detail && <small>{run.detail}</small>}
               {openLog?.id === run.id && <pre className="bots-log">{openLog.text}</pre>}
             </div>
-            {run.log && <button type="button" onClick={() => void toggleLog(run)}>{openLog?.id === run.id ? 'Hide output' : 'View output'}</button>}
+            <div className="bots-run-actions">
+              {run.status === 'running' && <button type="button" className="bots-stop small" disabled={busy !== null} onClick={() => void stop(run)} aria-label="Stop this run">Stop</button>}
+              {run.log && <button type="button" onClick={() => void toggleLog(run)}>{openLog?.id === run.id ? 'Hide output' : 'View output'}</button>}
+            </div>
           </article>
         ))}
       </div>

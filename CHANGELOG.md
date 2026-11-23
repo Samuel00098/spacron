@@ -6,7 +6,10 @@ All notable changes to Spacron will be documented here.
 
 ### Added
 
-- **Bots** — agents that live outside every project and work for you from your remote box, so they keep running while your laptop is closed. Give a bot a job, pick Claude Code, Codex, Gemini CLI or opencode, and run it on demand or on a schedule (hourly, daily, weekdays, weekly). Each bot gets its own home folder on the box that persists between runs, so it can keep notes and build on earlier work. Open Bots from the new section in the sidebar to create bots, start a run, pause schedules and read each run's output. Starts with four templates: a morning tech digest, a content idea scout, a security advisory watch and an on-demand research assistant.
+- **Bots** — agents that live outside every project and work for you on a schedule or on demand, powered by the agent CLI you already have installed (Claude Code, Codex, Gemini CLI or opencode). Run them on **this PC** while Spacron is open, or on your **remote box** so they keep working while the laptop is closed. Each bot gets its own home folder that persists between runs, so it can keep notes and build on earlier work. Open Bots from the sidebar to create bots, start or **stop** a run, pause schedules and watch each run's output live. Starts with four templates.
+- **Bot permissions** — choose what each bot may do unattended: read and research, work in its own folder, or full access. Spacron turns that into each CLI's own permission flags, so nothing stalls waiting for an approval nobody can give.
+- **Bots use your connectors** — Claude Code bots get the MCP servers from Settings > MCP & plugins, and bots on this PC also get Spacron's own tools. On a box, connectors you signed in to through Spacron are left out, because that sign-in lives in the desktop app.
+- **Settings > Bots** — pause all schedules, catch up missed runs, cap how long a run may take, pick the default permission level and turn on notices when a scheduled run finishes, fails or is missed.
 
 ## [v5.1.7] - 2026-11-23
 

@@ -1,20 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { loadBoolean } from '$lib/utils/storage';
-import { activeRemoteId } from '$lib/stores/remoteWorkspace';
-import { botBoxState, bots, botsOnActiveBox, botsOpen, latestRun, openBots, selectedBotId } from '$lib/services/bots/bots';
+import { activeRemoteId, remoteTarget } from '$lib/stores/remoteWorkspace';
+import { showToast } from '$lib/stores/notification';
+import { botHostState, bots, botsOpen, latestRun, openBots, selectedBotId, startBotWatcher, visibleBots } from '$lib/services/bots/bots';
 import { BotIcon, NEW_BOT } from './BotsPanel';
 import './Bots.css';
 
-/** The Bots list in the sidebar, next to Chats: outside every project. */
+/** The Bots list in the sidebar, under Projects: outside every project. */
 export default function BotsSidebar() {
   const list = useStore(bots);
   useStore(activeRemoteId);
+  useStore(remoteTarget);
   const open = useStore(botsOpen);
   const selected = useStore(selectedBotId);
-  const { runs } = useStore(botBoxState);
+  const state = useStore(botHostState);
+  // The sidebar is always mounted, so it owns the background watcher: run
+  // state stays fresh and finished scheduled runs are announced.
+  useEffect(() => startBotWatcher((message, tone) => showToast(message, tone, 8000)), []);
   const [collapsed, setCollapsed] = useState(() => loadBoolean('spacron_bots_collapsed'));
-  const mine = botsOnActiveBox(list).sort((a, b) => a.name.localeCompare(b.name));
+  const mine = visibleBots(list).sort((a, b) => a.name.localeCompare(b.name));
   function toggle() {
     setCollapsed((current) => {
       try { localStorage.setItem('spacron_bots_collapsed', String(!current)); } catch { /* Live toggle still works. */ }
@@ -36,7 +41,7 @@ export default function BotsSidebar() {
           <BotIcon size={13} /><span>All bots</span>
         </button>
         {mine.map((bot) => {
-          const run = latestRun(runs, bot.id);
+          const run = latestRun(state, bot);
           const active = open && selected === bot.id;
           return (
             <button key={bot.id} type="button" className={`bots-sidebar-row${active ? ' active' : ''}`} aria-current={active ? 'true' : undefined} onClick={() => openBots(bot.id)} title={bot.name}>
