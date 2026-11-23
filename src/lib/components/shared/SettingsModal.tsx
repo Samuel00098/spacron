@@ -793,7 +793,12 @@ function ReadAloudSection() {
 
   return (
     <Section title="Read aloud">
-      <p className="shell-hint">Voice for chat replies and agent completion announcements.</p>
+      <SettingRow
+        title="Read agent completions aloud"
+        detail="Announce when an agent finishes, fails, or needs input."
+      >
+        <Toggle label="Read completions aloud" checked={speakCompletions} onChange={speakAgentCompletions.set} />
+      </SettingRow>
       <SettingRow title="Voice engine" detail={settings.engine === 'system' ? 'Uses the voices built into your computer. Free and offline.' : 'Uses AI-generated speech.'}>
         <SelectField
           value={settings.engine}
@@ -802,12 +807,6 @@ function ReadAloudSection() {
           ariaLabel="Read aloud voice engine"
           renderIcon={(id) => id === 'system' ? null : providerIcon(id)}
         />
-      </SettingRow>
-      <SettingRow
-        title="Read agent completions aloud"
-        detail="Announce when an agent finishes, fails, or needs input."
-      >
-        <Toggle label="Read completions aloud" checked={speakCompletions} onChange={speakAgentCompletions.set} />
       </SettingRow>
       {settings.engine === 'system' ? (
         <div className="settings-action-row">
@@ -973,46 +972,44 @@ function ReadAloudCloudSettings({ engine, settings }: { engine: CloudReadAloudEn
 
   return (
     <>
-      <p className="shell-hint">{status}</p>
       {engine === 'openrouter' && <p className="shell-hint">Models come from OpenRouter's public speech catalog; listing does not confirm your key has access.</p>}
       {engine === 'xai' && <p className="shell-hint">xAI uses its speech endpoint directly; this engine has no selectable speech model.</p>}
       {(modelCatalogCommand || modelOptions.length > 0) && (
-        <>
-          <SettingRow title="Speech model" detail={modelDetail}>
+        <SettingRow title="Speech model" detail={modelDetail}>
+          <div className="read-aloud-controls">
             <StyledSelect value={model} options={modelOptions} onChange={setModel} ariaLabel="Read aloud speech model" showSearch={modelCatalogCommand !== null} />
-          </SettingRow>
-          {canLoadModels && (
-            <div className="settings-action-row">
+            {canLoadModels && (
               <button className="settings-secondary" onClick={() => setModelsRefresh((revision) => revision + 1)} disabled={modelsLoading || savingKey}>
                 {modelsLoading ? 'Refreshing…' : 'Refresh models'}
               </button>
-            </div>
-          )}
-        </>
+            )}
+          </div>
+        </SettingRow>
       )}
       <SettingRow title="Voice" detail={voicesError || (engine === 'fish' && selectedFishModel ? `Voices for ${selectedFishModel.name}. Each model keeps its own voice.` : undefined)}>
-        <StyledSelect value={voice} options={voiceOptions} onChange={setVoice} ariaLabel="Read aloud voice" showSearch={voiceOptions.length > 10} />
+        <div className="read-aloud-controls">
+          <StyledSelect value={voice} options={voiceOptions} onChange={setVoice} ariaLabel="Read aloud voice" showSearch={voiceOptions.length > 10} />
+          <button className="settings-secondary" onClick={previewReadAloud} disabled={!keyExists || savingKey || !voice || selectionUnavailable}>Test voice</button>
+        </div>
       </SettingRow>
-      {keyUrl && (
-        <>
-          <SettingRow title={`${vendor} API key`}>
+      {keyUrl ? (
+        <SettingRow title={`${vendor} API key`} detail={status}>
+          <div className="read-aloud-key-controls">
             <input
               type="password"
               value={keyInput}
               onChange={(event) => setKeyInput(event.target.value)}
+              aria-label={`${vendor} API key`}
               placeholder={keyExists ? 'Key saved in OS keychain' : `Paste your ${vendor} key`}
             />
-          </SettingRow>
-          <div className="settings-action-row">
-            <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={savingKey || (keyExists === null && !keyError) || !keyInput.trim()}>Save key</button>
-            <button className="settings-secondary" onClick={() => void saveKey('')} disabled={savingKey || !keyExists}>Clear key</button>
-            <button className="settings-link-button" onClick={() => openExternalUrl(keyUrl)}>Get a key</button>
+            <div className="read-aloud-controls">
+              <button className="settings-primary" onClick={() => void saveKey(keyInput)} disabled={savingKey || (keyExists === null && !keyError) || !keyInput.trim()}>Save key</button>
+              <button className="settings-secondary" onClick={() => void saveKey('')} disabled={savingKey || !keyExists}>Clear key</button>
+              <button className="settings-link-button" onClick={() => openExternalUrl(keyUrl)}>Get a key</button>
+            </div>
           </div>
-        </>
-      )}
-      <div className="settings-action-row">
-        <button className="settings-secondary" onClick={previewReadAloud} disabled={!keyExists || savingKey || !voice || selectionUnavailable}>Test voice</button>
-      </div>
+        </SettingRow>
+      ) : <p className="shell-hint">{status}</p>}
       {keyError && <p className="shell-hint">{keyError}</p>}
     </>
   );

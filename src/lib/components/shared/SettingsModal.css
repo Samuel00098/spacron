@@ -752,6 +752,21 @@ html.has-bg-image.light-theme .settings-modal.settings-page::before {
 }
 
 /* ── Action buttons ── */
+.read-aloud-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.read-aloud-key-controls {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 360px);
+}
+
 .settings-action-row,
 .settings-footer-actions {
   display: flex;
@@ -1727,7 +1742,7 @@ details.settings-github-note pre {
   .settings-card   { margin-bottom: 14px; }
   .shortcut-row    { grid-template-columns: 1fr; }
   .theme-grid      { grid-template-columns: 1fr 1fr; }
-  .settings-control { justify-content: flex-start; }
+  .settings-control, .read-aloud-controls { justify-content: flex-start; }
   .mode-picker { width: 100%; gap: 8px; }
   .settings-modal .mode-swatch {
     flex: 1 1 0;
