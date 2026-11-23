@@ -105,7 +105,7 @@ pub(super) struct BoxRun {
     pub log: Option<String>,
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
@@ -119,11 +119,11 @@ fn file_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
+pub(crate) fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
     std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -217,7 +217,7 @@ fn is_running(workspace: &Path, automation_id: &str) -> bool {
 
 /// What one tick should do for one automation: the latest occurrence that has
 /// passed since the last one handled, and whether it is still within reach.
-pub(super) fn due(occurrences: &[u64], last_fired: u64, now: u64, catch_up_minutes: u64) -> Option<(u64, bool)> {
+pub(crate) fn due(occurrences: &[u64], last_fired: u64, now: u64, catch_up_minutes: u64) -> Option<(u64, bool)> {
     let latest = occurrences.iter().copied().filter(|&o| o > last_fired && o <= now).max()?;
     let window = catch_up_minutes.max(1) * 60_000;
     Some((latest, now - latest <= window))
@@ -272,7 +272,7 @@ fn tick(workspace: &Path) {
 // ── running ─────────────────────────────────────────────────────────────────
 
 /// The headless invocation for an agent, or why it cannot run unattended.
-pub(super) fn agent_command(agent: &str, prompt: &str, model: Option<&str>) -> Result<Vec<String>, String> {
+pub(crate) fn agent_command(agent: &str, prompt: &str, model: Option<&str>) -> Result<Vec<String>, String> {
     let mut parts = agent.split_whitespace().map(str::to_string);
     let exe = parts.next().ok_or("No agent chosen.")?;
     let extra: Vec<String> = parts.collect();
@@ -319,6 +319,30 @@ fn start_run(workspace: PathBuf, automation: BoxAutomation) -> String {
 
 async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result<i32, String> {
     let argv = agent_command(&a.agent, &a.prompt, a.model.as_deref())?;
+    spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, &[("SPACRON_AUTOMATION", &a.name)], RUN_TIMEOUT, None).await
+}
+
+/// What `spawn_headless` reports when a run was stopped through its cancel signal.
+pub(crate) const STOPPED_BY_USER: &str = "Stopped by you.";
+
+/// Run one headless agent invocation in `cwd`, writing everything it prints to
+/// `log_path`, and wait for it. It is stopped after `limit`, or as soon as
+/// `cancel` is notified. Shared by automations and bots so both start agents
+/// the same way.
+///
+/// The agent gets its own process group (Unix) so stopping it also stops what
+/// it started (MCP servers, node workers); on Windows the tree is killed.
+pub(crate) async fn spawn_headless(
+    argv: &[String],
+    cwd: &Path,
+    log_path: &Path,
+    env: &[(&str, &str)],
+    limit: Duration,
+    cancel: Option<std::sync::Arc<tokio::sync::Notify>>,
+) -> Result<i32, String> {
+    if argv.is_empty() {
+        return Err("No agent command.".into());
+    }
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -332,24 +356,54 @@ async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result
         // A login shell, so a server started at boot finds CLIs on the user's PATH.
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let mut c = tokio::process::Command::new(shell);
-        c.arg("-lc").arg("exec \"$0\" \"$@\"").args(&argv);
+        c.arg("-lc").arg("exec \"$0\" \"$@\"").args(argv);
         c
     };
+    #[cfg(unix)]
+    command.process_group(0);
     command
-        .current_dir(run_dir(workspace, a.cwd.as_deref()))
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
-        .env("SPACRON_AUTOMATION", &a.name)
+        .envs(env.iter().copied())
         .kill_on_drop(true);
     let mut child = command.spawn().map_err(|e| format!("Could not start {}: {e}", argv[0]))?;
-    match tokio::time::timeout(RUN_TIMEOUT, child.wait()).await {
-        Ok(status) => Ok(status.map_err(|e| e.to_string())?.code().unwrap_or(-1)),
-        Err(_) => {
-            let _ = child.kill().await;
-            Err("Stopped after an hour without finishing.".into())
+    let cancelled = async {
+        match &cancel {
+            Some(signal) => signal.notified().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        status = child.wait() => Ok(status.map_err(|e| e.to_string())?.code().unwrap_or(-1)),
+        _ = tokio::time::sleep(limit) => {
+            kill_tree(&mut child).await;
+            let minutes = (limit.as_secs() / 60).max(1);
+            Err(format!("Stopped after {minutes} minute{} without finishing.", if minutes == 1 { "" } else { "s" }))
+        }
+        _ = cancelled => {
+            kill_tree(&mut child).await;
+            Err(STOPPED_BY_USER.into())
         }
     }
+}
+
+/// Stop an agent and everything it started.
+async fn kill_tree(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        #[cfg(unix)]
+        let _ = tokio::process::Command::new("kill").args(["-TERM", "--"]).arg(format!("-{pid}")).status().await;
+        #[cfg(windows)]
+        let _ = tokio::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).status().await;
+        // A moment to exit cleanly before the hard kill below.
+        if tokio::time::timeout(Duration::from_secs(3), child.wait()).await.is_ok() {
+            return;
+        }
+        #[cfg(unix)]
+        let _ = tokio::process::Command::new("kill").args(["-KILL", "--"]).arg(format!("-{pid}")).status().await;
+    }
+    let _ = child.kill().await;
 }
 
 #[cfg(test)]

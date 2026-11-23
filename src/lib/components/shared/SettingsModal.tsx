@@ -178,6 +178,7 @@ import BrowserSettingsSection from './BrowserSettingsSection';
 import ProjectSettingsSection from './ProjectSettingsSection';
 import WorkspaceCleanupSection from './WorkspaceCleanupSection';
 import AutomationSettingsSection from './AutomationSettingsSection';
+import BotSettingsSection from './BotSettingsSection';
 import { ProjectIconBadge } from '$lib/components/shared/ProjectIcons';
 import { normalizeProjectPath } from '$lib/components/workspace/projectListPrefs';
 import { useGithubSignIn } from '$lib/react/useGithubSignIn';
@@ -237,6 +238,7 @@ const tabs: { id: Tab; label: string; kicker: string; description: string }[] = 
   { id: 'stats', label: 'Usage', kicker: 'Model usage and cost', description: 'Token and cost analytics across the agents.' },
   { id: 'shortcuts', label: 'Shortcuts', kicker: 'Keyboard map', description: 'Keyboard shortcuts across the app.' },
   { id: 'automations', label: 'Automations', kicker: 'Scheduled agent work', description: 'Every scheduled automation in one place, plus how and when they run.' },
+  { id: 'bots', label: 'Bots', kicker: 'Agents outside projects', description: 'How bots run on this PC and on your box: schedules, permissions, tools and results.' },
   { id: 'cleanup', label: 'Workspace Cleanup', kicker: 'Workspace Hygiene', description: 'Remove workspaces you’re done with and reclaim stale worktree resources.' },
   { id: 'about', label: 'About', kicker: 'Version and reset', description: 'Version details and resetting Spacron.' },
 ];
@@ -245,7 +247,7 @@ const settingsNavGroups: { label?: string; tabs: Tab[] }[] = [
   { tabs: ['general', 'appearance', 'browser', 'chat', 'voice', 'terminal', 'shortcuts', 'stats'] },
   // 'orchestrator' is left out while there is no Chat mode to configure; its
   // pane and search entries are kept so it can be listed here again.
-  { label: 'Agents', tabs: ['agents', 'mcp', 'automations'] },
+  { label: 'Agents', tabs: ['agents', 'mcp', 'automations', 'bots'] },
   { label: 'Connections', tabs: ['models', 'source-control'] },
   { label: 'Projects', tabs: ['project'] },
   { label: 'Workspace', tabs: ['cleanup'] },
@@ -268,6 +270,7 @@ const settingsTabIconPaths: Record<Tab, string> = {
   stats: 'M4 19V5M4 19h16M8 15l3-4 3 2 5-7',
   shortcuts: 'M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12H3V6ZM7 8h.01M11 8h.01M15 8h.01M7 12h.01M11 12h.01M15 12h.01M8 16h8',
   automations: 'M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18Z M12 7v5l3 2',
+  bots: 'M7 8h10a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3Z M12 4v4 M9 14h.01 M15 14h.01',
   cleanup: 'M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
   about: 'M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
 };
@@ -285,6 +288,11 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'automations-schedule', tab: 'automations', section: 'Scheduling', label: 'Run automations on schedule', keywords: 'automation schedule cron pause timer recurring' },
   { id: 'automations-notify', tab: 'automations', section: 'Results', label: 'Notify when a run finishes', keywords: 'automation result notification alert toast' },
   { id: 'automations-list', tab: 'automations', section: 'All automations', label: 'All automations', keywords: 'automation list pause delete run', target: 'section' },
+  { id: 'bots-schedule', tab: 'bots', section: 'Scheduling', label: 'Run bots on schedule', keywords: 'bot bots schedule pause background' },
+  { id: 'bots-limit', tab: 'bots', section: 'Scheduling', label: 'Stop a run after', keywords: 'bot timeout limit cost budget stop' },
+  { id: 'bots-access', tab: 'bots', section: 'Permissions and tools', label: 'New bots start with', keywords: 'bot permission access files sandbox' },
+  { id: 'bots-mcp', tab: 'bots', section: 'Permissions and tools', label: 'Spacron tools for bots on this PC', keywords: 'bot mcp spacron tools connectors' },
+  { id: 'bots-notify', tab: 'bots', section: 'Results', label: 'Notify when a run finishes', keywords: 'bot notification result alert' },
   { id: 'cleanup-rules', tab: 'cleanup', section: 'Workspace Cleanup', label: 'Automatic cleanup', keywords: 'worktree prune sweep delete merged' },
   { id: 'cleanup-manual', tab: 'cleanup', section: 'Workspace Cleanup', label: 'Manual cleanup', keywords: 'review delete workspaces' },
   { id: 'editor-font-size', tab: 'general', section: 'Editor', label: 'Font size', keywords: 'editor text code' },
@@ -2125,6 +2133,14 @@ function AntigravityRuntimeRow() {
       </div>
     </SettingRow>
   );
+}
+
+/** What computer use needs on this computer's OS, beyond the switch. */
+function computerUseSetupHint(): string {
+  const platform = typeof navigator === 'undefined' ? '' : `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
+  if (platform.includes('mac')) return ' On macOS, allow Spacron under Screen Recording and Accessibility in System Settings > Privacy & Security.';
+  if (platform.includes('linux')) return ' On Linux it needs xdotool, ImageMagick and x11-utils (sudo apt-get install -y xdotool imagemagick x11-utils); xprintidle is optional.';
+  return '';
 }
 
 export default function SettingsModal({ onclose }: SettingsModalProps) {
@@ -4409,8 +4425,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     title="Allow computer use"
                     detail={
                       computerUseAvailable === false
-                        ? 'Available on Windows only for now. macOS support is planned.'
-                        : 'While off, desktop automation tools are disabled.'
+                        ? 'Not available in this session. On Linux, Wayland does not let one app control another: sign in with an X11 (Xorg) session to use it.'
+                        : `While off, desktop automation tools are disabled.${computerUseSetupHint()}`
                     }
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -4866,6 +4882,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
             )}
 
             {activeTab === 'automations' && <AutomationSettingsSection />}
+            {activeTab === 'bots' && <BotSettingsSection onOpenBots={onclose} />}
             {activeTab === 'cleanup' && (
               <WorkspaceCleanupSection onCloseSettings={onclose} />
             )}

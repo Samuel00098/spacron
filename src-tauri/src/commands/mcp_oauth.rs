@@ -73,8 +73,22 @@ fn valid_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Where grants live. The desktop keeps them in its config folder; a box
+/// (`spacron-server`) points this at its own folder with [`use_store_dir`] and
+/// keeps the grants the desktop chose to share with it.
+fn store_override() -> &'static OnceLock<PathBuf> {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    &DIR
+}
+
+/// Keep grants in `dir` instead of the desktop config folder. Set once, by
+/// the box server at startup.
+pub fn use_store_dir(dir: PathBuf) {
+    let _ = store_override().set(dir);
+}
+
 fn store_dir() -> PathBuf {
-    crate::mcp::config_dir().join("mcp-oauth")
+    store_override().get().cloned().unwrap_or_else(|| crate::mcp::config_dir().join("mcp-oauth"))
 }
 
 fn grant_path(key: &str) -> PathBuf {
@@ -528,6 +542,31 @@ pub async fn fresh_grant(key: &str, force: bool) -> Result<Grant, String> {
         return refresh(key, &grant).await;
     }
     Ok(grant)
+}
+
+/// Replace the grants this store holds with `grants` (a box receiving what
+/// the desktop shares). Any grant not in the new set is removed, so turning
+/// sharing off on the desktop also removes the sign-in from the box.
+pub fn replace_grants(grants: &HashMap<String, Grant>) -> Result<usize, String> {
+    for key in grants.keys() {
+        valid_key(key)?;
+    }
+    let dir = store_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create the sign-in store: {e}"))?;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(key) = name.strip_suffix(".json") {
+                if !grants.contains_key(key) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    for (key, grant) in grants {
+        save_grant(key, grant)?;
+    }
+    Ok(grants.len())
 }
 
 // ---------------------------------------------------------------------------

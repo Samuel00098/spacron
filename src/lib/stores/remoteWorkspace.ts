@@ -379,6 +379,15 @@ export async function connectRemote(id: string): Promise<void> {
     void import('$lib/services/automations/automations')
       .then(({ syncBoxAutomations }) => syncBoxAutomations())
       .catch((err) => console.warn('[remoteWorkspace] Could not sync automations to the box:', err));
+    // Show agents the box started on its own as panes, now and while connected.
+    void import('$lib/services/box-agents').then(({ watchBoxAgents }) => watchBoxAgents()).catch(() => {});
+    // Learn where the box serves shared sign-ins before bots sync to it.
+    void import('$lib/services/box-signins')
+      .then(({ refreshBoxMcpInfo }) => refreshBoxMcpInfo())
+      .catch(() => {})
+      .then(() => import('$lib/services/bots/bots'))
+      .then(({ syncBots }) => syncBots())
+      .catch((err) => console.warn('[remoteWorkspace] Could not sync bots to the box:', err));
   } catch (err) {
     console.error('Failed to connect to remote workspace:', err);
     // Roll back cleanly to Local so we don't leave a half-connected state.

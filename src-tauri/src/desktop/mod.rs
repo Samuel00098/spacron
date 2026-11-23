@@ -25,6 +25,8 @@
 
 #[cfg(windows)]
 pub mod indicator;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod unix;
 #[cfg(windows)]
 mod win;
 
@@ -68,6 +70,7 @@ pub struct WindowInfo {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))] // the element tree (and its limits) is Windows-only for now
 pub struct TreeLimits {
     pub max_depth: usize,
     pub max_nodes: usize,
@@ -150,11 +153,53 @@ const ACTIVITY_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 pub const STOP_SHORTCUT: &str = "Ctrl+Alt+Esc";
 
 pub fn supported() -> bool {
-    cfg!(windows)
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        unix::supported()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        cfg!(windows)
+    }
 }
 
+#[cfg_attr(any(windows, target_os = "macos", target_os = "linux"), allow(dead_code))]
 fn unsupported() -> String {
-    "Computer use is only available on Windows in this version of Spacron.".to_string()
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        unix::unsupported_reason()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        "Computer use is not available on this operating system.".to_string()
+    }
+}
+
+/// Registers (`true`) or removes (`false`) the stop shortcut on macOS and
+/// Linux, where it goes through Tauri's global-shortcut plugin (Windows uses
+/// its own hook in `win.rs`). Set once by the app at startup; returns whether
+/// it worked.
+#[cfg_attr(windows, allow(dead_code))]
+pub type StopShortcutFn = Arc<dyn Fn(bool) -> bool + Send + Sync>;
+#[cfg_attr(windows, allow(dead_code))]
+static STOP_SHORTCUT_FN: std::sync::OnceLock<StopShortcutFn> = std::sync::OnceLock::new();
+#[cfg_attr(windows, allow(dead_code))]
+static STOP_TARGET: std::sync::Mutex<Option<Weak<DesktopState>>> = std::sync::Mutex::new(None);
+
+#[cfg_attr(windows, allow(dead_code))]
+pub fn set_stop_shortcut_registrar(f: StopShortcutFn) {
+    let _ = STOP_SHORTCUT_FN.set(f);
+}
+
+/// The stop shortcut was pressed (macOS and Linux).
+#[cfg_attr(windows, allow(dead_code))]
+pub fn stop_shortcut_pressed() {
+    let target = STOP_TARGET.lock().ok().and_then(|t| t.as_ref().and_then(Weak::upgrade));
+    if let Some(state) = target {
+        if state.enabled.load(Ordering::SeqCst) {
+            state.stop_by_shortcut();
+        }
+    }
 }
 
 /// Run blocking platform work off the async runtime.
@@ -378,6 +423,12 @@ impl DesktopState {
             self.withdraw_everything();
             #[cfg(windows)]
             win::stop_guard();
+            #[cfg(not(windows))]
+            if was {
+                if let Some(f) = STOP_SHORTCUT_FN.get() {
+                    f(false);
+                }
+            }
         }
     }
 
@@ -405,7 +456,18 @@ impl DesktopState {
     }
 
     #[cfg(not(windows))]
-    fn start_guard(&self) {}
+    fn start_guard(&self) {
+        if let Ok(mut t) = STOP_TARGET.lock() {
+            *t = Some(self.me.clone());
+        }
+        let registered = STOP_SHORTCUT_FN.get().is_some_and(|f| f(true));
+        if !registered {
+            (self.hooks.notice)(&format!(
+                "Computer use is on, but {STOP_SHORTCUT} could not be registered as the stop shortcut \
+                 (another app may own it). Turn computer use off in Settings to stop an agent."
+            ));
+        }
+    }
 
     /// The stop shortcut: everything withdrawn, the switch stays on so the user
     /// can grant again deliberately.
@@ -503,7 +565,9 @@ impl DesktopState {
             .collect();
         #[cfg(windows)]
         win::set_user_denylist(cleaned);
-        #[cfg(not(windows))]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        unix::set_user_denylist(cleaned);
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         let _ = cleaned;
     }
 
@@ -988,6 +1052,8 @@ pub fn parse_act(name: &str, args: Args) -> Result<Act, String> {
                 .ok_or_else(|| "desktop_key needs 'keys', e.g. \"enter\" or \"ctrl+s\".".to_string())?;
             #[cfg(windows)]
             win::parse_keys(keys)?;
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            unix::parse_keys(keys)?;
             Ok(Act::Key { keys: keys.to_string() })
         }
         "desktop_scroll" => {
@@ -1207,6 +1273,45 @@ async fn screenshot(id: String, to_file: bool) -> Result<serde_json::Value, Stri
     .await
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn ms_since_real_input() -> Option<u64> {
+    unix::ms_since_real_input()
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+async fn list_windows() -> Result<Vec<WindowInfo>, String> {
+    blocking(unix::list_windows).await
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+async fn window(id: String) -> Result<WindowInfo, String> {
+    blocking(move || unix::window(&id)).await
+}
+
+/// No UI element tree on macOS and Linux yet: say how to work instead.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+async fn walk(_caller: String, _id: String, _find: bool, _limits: TreeLimits) -> Result<(WindowInfo, Vec<Node>, bool), String> {
+    Err(unix::walk_unsupported())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+async fn perform(caller: String, info: WindowInfo, act: Act) -> Result<String, String> {
+    blocking(move || unix::act(&caller, &info, &act)).await
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+async fn screenshot(id: String, to_file: bool) -> Result<serde_json::Value, String> {
+    blocking(move || {
+        let (info, img) = unix::capture(&id)?;
+        if to_file {
+            screenshot_to_file(&info, img)
+        } else {
+            encode_screenshot(&info, img)
+        }
+    })
+    .await
+}
+
 /// Only built by the Windows backend (and tests); the formatters read it everywhere.
 #[cfg(not(windows))]
 #[allow(dead_code)]
@@ -1223,37 +1328,36 @@ pub struct Node {
     pub at: Option<(f64, f64)>,
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn ms_since_real_input() -> Option<u64> {
     None
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn list_windows() -> Result<Vec<WindowInfo>, String> {
     Err(unsupported())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn window(_id: String) -> Result<WindowInfo, String> {
     Err(unsupported())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn walk(_c: String, _id: String, _find: bool, _l: TreeLimits) -> Result<(WindowInfo, Vec<Node>, bool), String> {
     Err(unsupported())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn perform(_c: String, _info: WindowInfo, _act: Act) -> Result<String, String> {
     Err(unsupported())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn screenshot(_id: String, _to_file: bool) -> Result<serde_json::Value, String> {
     Err(unsupported())
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
 fn downscale(img: image::RgbaImage) -> image::RgbaImage {
     let (w, h) = (img.width(), img.height());
     let longest = w.max(h);
@@ -1266,7 +1370,6 @@ fn downscale(img: image::RgbaImage) -> image::RgbaImage {
     image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle)
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
 fn png_bytes(img: &image::RgbaImage) -> Result<Vec<u8>, String> {
     let mut png = Vec::new();
     image::DynamicImage::ImageRgba8(img.clone())

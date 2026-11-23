@@ -262,6 +262,19 @@ impl PtySession {
         Ok(replay)
     }
 
+    /// The end of what this session printed (up to `max` bytes), without
+    /// subscribing to it. For tools that read another agent's output.
+    pub fn output_tail(&self, max: usize) -> Vec<u8> {
+        let Ok(buffer) = self.output_buffer.lock() else { return Vec::new() };
+        let start = buffer.len().saturating_sub(max);
+        buffer[start..].to_vec()
+    }
+
+    /// Whether the session's process has exited.
+    pub fn has_exited(&self) -> bool {
+        self.exit_code.lock().map(|c| c.is_some()).unwrap_or(false)
+    }
+
     pub fn close(&self) -> Result<(), String> {
         {
             let mut killer = self.killer.lock().map_err(|e| e.to_string())?;

@@ -73,6 +73,19 @@ pub fn run() {
         }
     }));
 
+    // Computer use's stop shortcut on macOS and Linux (docs/computer-use.md).
+    // Registered only while computer use is on (see `desktop::start_guard`).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let builder = builder.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|_app, _shortcut, event| {
+                if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    desktop::stop_shortcut_pressed();
+                }
+            })
+            .build(),
+    );
+
     builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -179,6 +192,8 @@ pub fn run() {
             let pty_manager = app_state.pty_manager.clone();
             let app_handle = app.handle().clone();
             app.manage(app_state);
+            // Bots on this PC, for people without a box yet.
+            commands::local_bots::start(&config_dir);
             // Learn every configured provider's model capabilities in the
             // background (and again when a key is saved); see agent_turn/capabilities.rs.
             commands::secrets::agent_turn::start_capability_refresh(app.handle().clone());
@@ -243,6 +258,19 @@ pub fn run() {
             // agent's tool call until the frontend's dialog answers through
             // `mcp_desktop_grant_respond` (or it times out); the indicator is a
             // native overlay window; notices become toasts.
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                let shortcut_ah = app_handle.clone();
+                desktop::set_stop_shortcut_registrar(Arc::new(move |on| {
+                    let shortcut = "Ctrl+Alt+Escape";
+                    if on {
+                        shortcut_ah.global_shortcut().register(shortcut).is_ok()
+                    } else {
+                        shortcut_ah.global_shortcut().unregister(shortcut).is_ok()
+                    }
+                }));
+            }
             let desktop_hooks = {
                 let grant_ah = app_handle.clone();
                 let notice_ah = app_handle.clone();
@@ -386,6 +414,15 @@ pub fn run() {
             commands::workspace::workspace_open_project,
             commands::workspace::workspace_create_project,
             commands::chat_workspace::chat_workspace_open,
+            commands::local_bots::local_bots_sync,
+            commands::local_bots::local_bots_state,
+            commands::local_bots::local_bot_run_now,
+            commands::local_bots::local_bot_log,
+            commands::local_bots::local_bot_stop,
+            commands::local_bots::local_bot_proposals_ack,
+            commands::local_bots::local_bot_attach,
+            commands::local_bots::local_bot_file,
+            commands::remote_tunnel::remote_share_mcp_grants,
             commands::chat_workspace::chat_workspace_reveal,
             commands::chat_workspace::chat_workspace_export,
             commands::workspace::workspace_rename_project,

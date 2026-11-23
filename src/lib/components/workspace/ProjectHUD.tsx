@@ -67,6 +67,7 @@ import {
 import './ProjectHUD.css';
 import PinIcon from '$lib/components/shared/PinIcon';
 import StandaloneChatsSidebar from './StandaloneChatsSidebar';
+import BotsSidebar from '$lib/components/bots/BotsSidebar';
 import ProjectWorktreeList from './ProjectWorktreeList';
 import { mainWorktreeRow, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
 import { worktreeForPath } from '$lib/services/project-worktrees';
@@ -1957,6 +1958,7 @@ export default function ProjectHUD() {
           );
         })()}
 
+        <BotsSidebar />
         {currentInteractionMode === 'chat' && <StandaloneChatsSidebar />}
 
         {/* Global Empty Search State */}

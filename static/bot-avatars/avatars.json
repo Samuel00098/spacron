@@ -1,0 +1,98 @@
+[
+  {
+    "id": "robot",
+    "label": "Robot"
+  },
+  {
+    "id": "brain",
+    "label": "Thinker"
+  },
+  {
+    "id": "owl",
+    "label": "Night owl"
+  },
+  {
+    "id": "satellite",
+    "label": "Satellite"
+  },
+  {
+    "id": "rocket",
+    "label": "Rocket"
+  },
+  {
+    "id": "news",
+    "label": "Newsroom"
+  },
+  {
+    "id": "mail",
+    "label": "Inbox"
+  },
+  {
+    "id": "video",
+    "label": "Studio"
+  },
+  {
+    "id": "lock",
+    "label": "Guardian"
+  },
+  {
+    "id": "search",
+    "label": "Researcher"
+  },
+  {
+    "id": "idea",
+    "label": "Idea scout"
+  },
+  {
+    "id": "chart",
+    "label": "Analyst"
+  },
+  {
+    "id": "pen",
+    "label": "Writer"
+  },
+  {
+    "id": "calendar",
+    "label": "Planner"
+  },
+  {
+    "id": "code",
+    "label": "Coder"
+  },
+  {
+    "id": "globe",
+    "label": "Traveller"
+  },
+  {
+    "id": "bolt",
+    "label": "Automator"
+  },
+  {
+    "id": "builder",
+    "label": "Bot Builder"
+  },
+  {
+    "id": "music",
+    "label": "DJ"
+  },
+  {
+    "id": "money",
+    "label": "Money"
+  },
+  {
+    "id": "cat",
+    "label": "Cat"
+  },
+  {
+    "id": "alien",
+    "label": "Alien"
+  },
+  {
+    "id": "crystal",
+    "label": "Oracle"
+  },
+  {
+    "id": "chat",
+    "label": "Chatter"
+  }
+]
