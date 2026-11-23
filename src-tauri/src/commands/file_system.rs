@@ -786,7 +786,17 @@ pub fn save_pasted_image(name: String, data: Vec<u8>) -> Result<String, String> 
         .map(|n| n.trim_start_matches('.'))
         .filter(|n| !n.is_empty())
         .unwrap_or("image.png");
-    let dest = dir.join(safe_name);
+    // Every paste lands in one shared dir, and callers pass names that collide:
+    // clipboard images are all `image.png`, and the fallback name is only
+    // millisecond-unique. A bare `dir.join(safe_name)` let the second image
+    // overwrite the first, so two attachments pointed at the same (last) file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dest = dir.join(format!("{nanos}-{seq}-{safe_name}"));
     std::fs::write(&dest, &data).map_err(|e| sanitize_io_error(e, safe_name))?;
     Ok(dest.to_string_lossy().to_string())
 }
