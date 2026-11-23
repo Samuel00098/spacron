@@ -71,7 +71,7 @@ export default function BotSettingsSection({ onOpenBots }: { onOpenBots?: () => 
     <BoxSignInsSection />
 
     <Section title="Results">
-      <Row title="Notify when a run finishes" detail="Shows a notice when a scheduled run finishes, fails or is missed, while Spacron is open.">
+      <Row title="Notify when a run finishes" detail="Shows a notice while Spacron is open. Desktop and spoken alerts follow your notification and Read aloud settings.">
         <Toggle label="Notify when a bot run finishes" checked={settings.notify} onChange={(notify) => updateBotSettings({ notify })} />
       </Row>
       <Row title="Your bots" detail={`${list.length} bot${list.length === 1 ? '' : 's'} · ${local} on this PC · ${list.length - local} on boxes`}>

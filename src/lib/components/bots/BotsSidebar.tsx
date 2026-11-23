@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { loadBoolean } from '$lib/utils/storage';
 import { activeRemoteId, remoteTarget } from '$lib/stores/remoteWorkspace';
-import { showToast } from '$lib/stores/notification';
-import { botHostState, bots, botsOpen, latestRun, openBots, selectedBotId, startBotWatcher, visibleBots } from '$lib/services/bots/bots';
+import { botHostState, bots, botsOpen, latestRun, openBots, selectedBotId, visibleBots } from '$lib/services/bots/bots';
 import { BotAvatar, BotIcon, NEW_BOT } from './BotsPanel';
 import './Bots.css';
 
@@ -15,9 +14,6 @@ export default function BotsSidebar() {
   const open = useStore(botsOpen);
   const selected = useStore(selectedBotId);
   const state = useStore(botHostState);
-  // The sidebar is always mounted, so it owns the background watcher: run
-  // state stays fresh and finished scheduled runs are announced.
-  useEffect(() => startBotWatcher((message, tone) => showToast(message, tone, 8000)), []);
   const [collapsed, setCollapsed] = useState(() => loadBoolean('spacron_bots_collapsed'));
   const mine = visibleBots(list).sort((a, b) => a.name.localeCompare(b.name));
   function toggle() {

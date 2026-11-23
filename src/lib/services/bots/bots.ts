@@ -607,7 +607,8 @@ export function latestRun(state: Record<string, BotHostState>, bot: Pick<Bot, 'i
 
 // ── Bot Builder ─────────────────────────────────────────────────────────────
 
-type Notice = (message: string, tone: 'info' | 'success' | 'warning' | 'error') => void;
+type NoticeTone = 'info' | 'success' | 'warning' | 'error';
+type Notice = (message: string, tone: NoticeTone, spoken?: string) => void;
 let notice: Notice | null = null;
 const adopting = new Set<string>();
 
@@ -669,22 +670,21 @@ let watcher: ReturnType<typeof setInterval> | null = null;
 const seen = new Map<string, BotRun['status']>();
 
 /**
- * Notices for runs that changed since the last look. The first look only
- * records what is there. A finished run seen for the first time is announced
- * only if the schedule started it (manual and chat runs are watched in the panel).
+ * Announce status changes and runs that finish between polls. The first
+ * snapshot seeds older runs without replaying them.
  */
-export function noticesFor(state: Record<string, BotHostState>, seeded: boolean): { message: string; tone: 'info' | 'success' | 'warning' | 'error' }[] {
-  const out: { message: string; tone: 'info' | 'success' | 'warning' | 'error' }[] = [];
+export function noticesFor(state: Record<string, BotHostState>, watchingSince: number): { message: string; tone: NoticeTone; spoken: string }[] {
+  const out: { message: string; tone: NoticeTone; spoken: string }[] = [];
   for (const host of Object.values(state)) {
     for (const run of host.runs) {
       const before = seen.get(run.id);
       seen.set(run.id, run.status);
-      if (!seeded || before === run.status || run.status === 'running') continue;
-      if (before === undefined && run.trigger !== 'schedule') continue;
+      if (before === run.status || run.status === 'running') continue;
+      if (before === undefined && (run.finishedAt ?? run.startedAt) < watchingSince) continue;
       const name = `Bot "${run.name}"`;
-      if (run.status === 'completed') out.push({ message: `${name} finished. Open Bots to read the result.`, tone: 'success' });
-      else if (run.status === 'failed') out.push({ message: `${name} failed${run.detail ? `: ${run.detail}` : '.'}`, tone: 'error' });
-      else if (run.status === 'missed') out.push({ message: `${name} missed its scheduled run.`, tone: 'warning' });
+      if (run.status === 'completed') out.push({ message: `${name} finished. Open Bots to read the result.`, tone: 'success', spoken: `${name} finished.` });
+      else if (run.status === 'failed') out.push({ message: `${name} failed${run.detail ? `: ${run.detail}` : '.'}`, tone: 'error', spoken: `${name} could not finish.` });
+      else if (run.status === 'missed') out.push({ message: `${name} missed its scheduled run.`, tone: 'warning', spoken: `${name} missed its scheduled run.` });
     }
   }
   return out;
@@ -694,13 +694,12 @@ export function noticesFor(state: Record<string, BotHostState>, seeded: boolean)
 export function startBotWatcher(onNotice: Notice): () => void {
   notice = onNotice;
   if (watcher) return () => {};
-  let seeded = false;
+  const watchingSince = Date.now();
   const tick = async () => {
     try {
       const state = await refreshBotState();
-      const notices = noticesFor(state, seeded);
-      seeded = true;
-      if (get(botSettings).notify) notices.forEach((n) => onNotice(n.message, n.tone));
+      const notices = noticesFor(state, watchingSince);
+      if (get(botSettings).notify) notices.forEach((n) => onNotice(n.message, n.tone, n.spoken));
     } catch { /* A host is unreachable; try again next tick. */ }
   };
   // Refresh this PC's schedule window on launch, then start watching.

@@ -169,13 +169,33 @@ it('removing a bot drops it from the next sync', async () => {
   expect(lastSync(mock.local, 'local_bots_sync').args!.bots).toEqual([]);
 });
 
-it('announces finished scheduled runs once, and not on the first look', async () => {
+it('announces observed scheduled runs once when they finish', async () => {
   const { api } = await setup();
   const run = (status: string, trigger = 'schedule') => ({ local: { homeRoot: '', runs: [{ id: 'r1', botId: 'b', name: 'Digest', startedAt: 1, status, trigger }] } }) as never;
-  expect(api.noticesFor(run('running'), false)).toEqual([]);
-  expect(api.noticesFor(run('running'), true)).toEqual([]);
-  expect(api.noticesFor(run('completed'), true)).toEqual([expect.objectContaining({ tone: 'success' })]);
-  expect(api.noticesFor(run('completed'), true)).toEqual([]);
+  expect(api.noticesFor(run('running'), 10)).toEqual([]);
+  expect(api.noticesFor(run('running'), 10)).toEqual([]);
+  expect(api.noticesFor(run('completed'), 10)).toEqual([expect.objectContaining({ tone: 'success' })]);
+  expect(api.noticesFor(run('completed'), 10)).toEqual([]);
+});
+
+it('announces manual and chat runs that finish between polls without replaying old runs', async () => {
+  const { api } = await setup();
+  const state = {
+    local: {
+      homeRoot: '',
+      runs: [
+        { id: 'old', botId: 'b', name: 'Digest', startedAt: 1, finishedAt: 9, status: 'completed', trigger: 'chat' },
+        { id: 'chat', botId: 'b', name: 'Digest', startedAt: 11, finishedAt: 12, status: 'completed', trigger: 'chat' },
+        { id: 'manual', botId: 'b', name: 'Digest', startedAt: 13, finishedAt: 14, status: 'failed', trigger: 'manual', detail: 'Raw diagnostic' },
+      ],
+    },
+  } as const;
+  const snapshot = { local: { ...state.local, runs: [...state.local.runs] } };
+  expect(api.noticesFor(snapshot, 10)).toEqual([
+    expect.objectContaining({ tone: 'success', spoken: 'Bot "Digest" finished.' }),
+    expect.objectContaining({ tone: 'error', spoken: 'Bot "Digest" could not finish.' }),
+  ]);
+  expect(api.noticesFor(snapshot, 10)).toEqual([]);
 });
 
 it('ignores corrupt saved data and upgrades old bots', async () => {

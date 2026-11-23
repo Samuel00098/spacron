@@ -48,7 +48,8 @@ import ToolboxPanel from '$lib/components/toolbox/ToolboxPanelLazy.tsx';
 import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import ChatModePanel from '$lib/components/workspace/ChatModePanel.tsx';
 import BotsPanel from '$lib/components/bots/BotsPanel';
-import { botsOpen, closeBots } from '$lib/services/bots/bots';
+import { botsOpen, closeBots, startBotWatcher } from '$lib/services/bots/bots';
+import { speakText } from '$lib/services/read-aloud';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import MobilePanel, { MobilePanelFloatingHostLazy } from '$lib/components/mobile/MobilePanelLazy.tsx';
 import { useShallow } from 'zustand/react/shallow';
@@ -98,7 +99,7 @@ import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
 import { startProxy, stopProxy, previewTabs, activePreviewTabId, createBlankPreviewBrowserTab, selectPreviewBrowserTab, closePreviewBrowserTab } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
-import { appearance, matchShortcut } from '$lib/stores/settings';
+import { appearance, matchShortcut, speakAgentCompletions } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
 import { closeUsagePanel } from '$lib/stores/usage';
 import { interactionMode } from '$lib/stores/interactionMode';
@@ -720,6 +721,10 @@ export default function AppShell() {
   }, [currentDevActiveSessionId]);
   // Agent CLI update checks: app-wide, a few registry requests every 6 hours.
   useEffect(() => startAgentUpdateChecks(), []);
+  useEffect(() => startBotWatcher((message, tone, spoken) => {
+    showToast(message, tone, 8000, Boolean(spoken));
+    if (spoken && get(speakAgentCompletions)) speakText(spoken);
+  }), []);
 
   const zoom = useSettingsStore((s) => s.uiZoom);
   const showSnapshotsTab = useSettingsStore((s) => s.showSnapshotsTab);
