@@ -12,7 +12,6 @@ import { showToast } from '$lib/stores/notification';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import Dropdown from '$lib/components/shared/Dropdown';
 import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
-import { catalogIconFor } from '$lib/services/mcp-catalog';
 import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
   BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, canRunHeadless, closeBots,
@@ -281,10 +280,9 @@ function ConnectorPicker({ host, value, onChange }: { host: string; value: strin
     <div className="bots-connectors">
       {choices.map((c) => {
         const on = value.includes(c.key);
-        const icon = catalogIconFor(c.catalogId ?? c.name);
         return <label key={c.key} className={`bots-connector${on ? ' on' : ''}${c.usable ? '' : ' disabled'}`} title={c.reason}>
           <input type="checkbox" checked={on && c.usable} disabled={!c.usable} onChange={(e) => onChange(e.target.checked ? [...value, c.key] : value.filter((k) => k !== c.key))} />
-          {icon ? <img src={icon} alt="" width={16} height={16} /> : <span className="bots-connector-letter">{c.name.slice(0, 1).toUpperCase()}</span>}
+          {c.icon ? <img src={c.icon} alt="" width={16} height={16} /> : <span className="bots-connector-letter" aria-hidden="true">{c.name.slice(0, 1).toUpperCase()}</span>}
           <span>{c.name}</span>
         </label>;
       })}

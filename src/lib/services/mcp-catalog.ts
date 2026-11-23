@@ -434,6 +434,10 @@ export function installedFrom(entry: McpCatalogEntry, servers: McpServer[]): Mcp
 export function catalogIconFor(name: string | null | undefined, url?: string | null): string | undefined {
   const key = name ? serverKey({ name }) : null;
   const id = url ? serverIdentity(url) : null;
+  const host = id?.split('/')[0];
+  if (key === 'spacron-higgsfield' || host === 'higgsfield.ai' || host?.endsWith('.higgsfield.ai')) {
+    return '/mcp-icons/higgsfield.png';
+  }
   const entry = MCP_CATALOG.find(
     (e) =>
       (key && (serverKey({ name: e.id }) === key || serverKey({ name: e.name }) === key)) ||

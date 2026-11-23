@@ -100,6 +100,8 @@ describe('one icon per service everywhere', () => {
     expect(catalogIconFor('linear')).toBe('/mcp-icons/linear.png');
     expect(catalogIconFor('Hugging Face')).toBe('/mcp-icons/huggingface.ico');
     expect(catalogIconFor('anything', 'https://mcp.context7.com/mcp?client=claude-code-plugin')).toBe('/mcp-icons/context7.png');
+    expect(catalogIconFor('Higgsfield')).toBe('/mcp-icons/higgsfield.png');
+    expect(catalogIconFor('My video tools', 'https://mcp.higgsfield.ai/mcp')).toBe('/mcp-icons/higgsfield.png');
     expect(catalogIconFor('not-a-catalog-service')).toBeUndefined();
   });
 });

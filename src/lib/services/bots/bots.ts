@@ -23,6 +23,7 @@ import { backendInvoke } from '$lib/services/backend';
 import { enabledServers, standardEntry, withSignInProxy, SPACRON_OWN_KEY, SPACRON_BROWSER_KEY, type McpServer } from '$lib/services/mcp-servers';
 import { nextOccurrence, type Schedule } from '$lib/services/automations/schedule';
 import { sharedWith } from '$lib/services/box-signins';
+import { catalogIconFor } from '$lib/services/mcp-catalog';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { BOT_AVATARS, DEFAULT_AVATAR, isBuiltInAvatar } from './avatars';
 
@@ -268,6 +269,7 @@ export interface ConnectorChoice {
   name: string;
   /** The catalog id it was installed from, for its icon. */
   catalogId?: string;
+  icon?: string;
   /** Whether a bot on this host can use it right now. */
   usable: boolean;
   /** Why not, when it can't. */
@@ -283,13 +285,17 @@ export function connectorChoices(host: string): ConnectorChoice[] {
     const usable = host === LOCAL_HOST || !signIn || shared.has(key);
     return {
       key, name: server.name, catalogId: server.catalogId, usable,
+      icon: catalogIconFor(server.catalogId ?? server.name, server.url),
       ...(usable ? {} : { reason: 'Signed in on this computer only. Share it with the box in Settings > Bots.' }),
     };
   });
   if (get(botSettings).spacronTools) {
-    out.unshift(host === LOCAL_HOST
-      ? { key: SPACRON_OWN_KEY, name: 'Spacron tools', usable: true }
-      : { key: BOX_TOOLS_KEY, name: 'Spacron tools', usable: true });
+    out.unshift({
+      key: host === LOCAL_HOST ? SPACRON_OWN_KEY : BOX_TOOLS_KEY,
+      name: 'Spacron tools',
+      icon: '/favicon.png',
+      usable: true,
+    });
   }
   return out;
 }
