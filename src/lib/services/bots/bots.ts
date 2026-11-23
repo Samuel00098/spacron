@@ -170,6 +170,13 @@ export function validAvatar(avatar: unknown): avatar is string {
   return typeof avatar === 'string' && (isBuiltInAvatar(avatar) || (/^data:image\/(png|jpeg|webp|gif);base64,/.test(avatar) && avatar.length <= MAX_AVATAR_CHARS));
 }
 
+/** Pick an unused mascot for a new bot when the built-in set has room. */
+export function suggestBotAvatar(preferred = DEFAULT_AVATAR): string {
+  const used = new Set(get(bots).map((bot) => bot.avatar));
+  if (!used.has(preferred)) return preferred;
+  return BOT_AVATARS.find(({ id }) => !used.has(id))?.id ?? preferred;
+}
+
 const initial = load();
 export const bots = writable<Bot[]>(initial.bots);
 export const botSettings = writable<BotSettings>(initial.settings);
@@ -628,7 +635,7 @@ export function botFromProposal(host: string, p: BotProposal): BotInput | string
   const names = Array.isArray(spec.connectors) ? spec.connectors.map((n) => str(n).toLowerCase()).filter(Boolean) : [];
   const choices = connectorChoices(host).filter((c) => c.usable);
   const mcpKeys = choices.filter((c) => names.some((n) => c.name.toLowerCase() === n || c.key === n || c.catalogId === n)).map((c) => c.key);
-  const avatar = isBuiltInAvatar(str(spec.avatar)) ? str(spec.avatar) : DEFAULT_AVATAR;
+  const avatar = suggestBotAvatar(isBuiltInAvatar(str(spec.avatar)) ? str(spec.avatar) : DEFAULT_AVATAR);
   return {
     boxId: host, name, instructions, agent, model: null, schedule, time, day, enabled: false, access,
     connectors: mcpKeys.length > 0, mcpKeys, browser: spec.browser === true, canCreateBots: false, avatar,

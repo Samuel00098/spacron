@@ -17,7 +17,7 @@ import {
   BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, canRunHeadless, closeBots,
   connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
   attachToBot, attachmentPreview, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
-  saveBot, selectedBotId, sendBotMessage, stopBotRun, toggleBot, visibleBots,
+  saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
@@ -46,7 +46,7 @@ export function BotIcon({ size = 18 }: { size?: number }) {
 
 /** A bot's picture: a built-in avatar or the one the user uploaded. */
 export function BotAvatar({ avatar, size = 32, className = '' }: { avatar?: string | null; size?: number; className?: string }) {
-  return <img className={`bot-avatar ${className}`} src={avatarUrl(avatar)} alt="" width={size} height={size} draggable={false}
+  return <img className={`bot-avatar${avatar?.startsWith('data:image/') ? ' bot-avatar-uploaded' : ''} ${className}`} src={avatarUrl(avatar)} alt="" width={size} height={size} draggable={false}
     onError={(e) => { const img = e.currentTarget; if (!img.src.endsWith(`/${DEFAULT_AVATAR}.webp`)) img.src = avatarUrl(DEFAULT_AVATAR); }} />;
 }
 
@@ -309,7 +309,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [host, setHost] = useState(bot?.boxId ?? hosts[0]?.value ?? LOCAL_HOST);
   const [name, setName] = useState(start?.name ?? '');
   const [instructions, setInstructions] = useState(start?.instructions ?? '');
-  const [avatar, setAvatar] = useState(start?.avatar ?? DEFAULT_AVATAR);
+  const [avatar, setAvatar] = useState(() => bot?.avatar ?? suggestBotAvatar(template?.avatar));
   const [agent, setAgent] = useState(bot?.agent ?? agents[0]?.command ?? '');
   const [model, setModel] = useState(bot?.model ?? '');
   const [schedule, setSchedule] = useState<BotSchedule>(start?.schedule ?? 'manual');
@@ -347,7 +347,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const missing = template?.connectors?.filter((id) => !connectorChoices(host).some((c) => c.usable && c.catalogId === id)) ?? [];
   function applyTemplate(t: BotTemplate) {
     setTemplate(t); setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day);
-    setAccess(t.access); setAvatar(t.avatar); setBrowser(t.browser ?? false); setBuilder(t.canCreateBots ?? false); setComputer(t.computerUse ?? false); setKeys(templateKeys(t, host));
+    setAccess(t.access); setAvatar(suggestBotAvatar(t.avatar)); setBrowser(t.browser ?? false); setBuilder(t.canCreateBots ?? false); setComputer(t.computerUse ?? false); setKeys(templateKeys(t, host));
   }
   function submit() {
     setError('');

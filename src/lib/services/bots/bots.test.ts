@@ -258,7 +258,7 @@ it('bots a builder proposes are capped, paused and never builders themselves', a
   expect((made as { mcpKeys: string[] }).mcpKeys).toEqual(['spacron-gmail']);
   expect(api.botFromProposal('local', { id: 'p2', createdBy: 'x', createdByName: '', creatorAccess: 'research', createdAt: 1, spec: { name: '' } })).toBe('it had no name or job');
   const odd = api.botFromProposal('local', { id: 'p3', createdBy: 'gone', createdByName: 'Old', creatorAccess: 'research', createdAt: 1, spec: { name: 'X', instructions: 'Y', schedule: 'every minute', avatar: 'nope', access: 'folder' } });
-  expect(odd).toMatchObject({ schedule: 'manual', avatar: 'robot', access: 'research' });
+  expect(odd).toMatchObject({ schedule: 'manual', avatar: 'brain', access: 'research' });
 });
 
 it('adopts proposals from the host, then acks them', async () => {

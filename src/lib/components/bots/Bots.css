@@ -228,11 +228,11 @@
 .bots-editor-side label.bots-check + .bots-helper { margin-top: 6px; }
 
 /* ── Avatars ─────────────────────────────────────────────────────────────── */
-.bot-avatar { display: block; flex-shrink: 0; border-radius: 24%; object-fit: cover; background: var(--bg-tertiary); }
-.bots-empty-avatar { box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.bot-avatar { display: block; flex-shrink: 0; object-fit: contain; }
+.bot-avatar-uploaded { border-radius: 24%; object-fit: cover; background: var(--bg-tertiary); }
+.bots-empty-avatar { filter: drop-shadow(0 5px 10px rgba(0,0,0,.2)); }
 .bots-sidebar-avatar { position: relative; display: inline-flex; flex-shrink: 0; }
 .bots-sidebar-avatar .bots-dot { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; box-shadow: 0 0 0 2px var(--bg-secondary, #111); }
-.bots-card-top .bot-avatar { border-radius: 26%; }
 .bots-card-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .bots-card-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .bots-card-title small { color: var(--text-muted); font-size: 11px; }
