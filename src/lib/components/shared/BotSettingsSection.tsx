@@ -7,7 +7,15 @@ import { showToast } from '$lib/stores/notification';
 import { enabledServers, type McpServer } from '$lib/services/mcp-servers';
 import { boxMcpInfo, refreshBoxMcpInfo, setSharedSignIns, sharedSignIns } from '$lib/services/box-signins';
 import { botSettings, bots, closeBots, openBots, syncBots, updateBotSettings, LOCAL_HOST, type BotAccess } from '$lib/services/bots/bots';
+import {
+  botChatAppearance,
+  botChatSuggestedPrompts,
+  botChatTimestamps,
+  botChatVisuals,
+} from '$lib/stores/botChatSettings';
+import { ChatAppearanceRows } from './ChatSettingsPane';
 import Dropdown from './Dropdown';
+import './ChatSettingsPane.css';
 import './AutomationSettingsSection.css';
 
 function key(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''); }
@@ -37,6 +45,10 @@ export default function BotSettingsSection({ onOpenBots }: { onOpenBots?: () => 
   const list = useStore(bots);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const local = list.filter((b) => b.boxId === LOCAL_HOST).length;
+  const appearance = useStore(botChatAppearance);
+  const visuals = useStore(botChatVisuals);
+  const timestamps = useStore(botChatTimestamps);
+  const starters = useStore(botChatSuggestedPrompts);
   return <div className="automation-settings">
     <Section title="Scheduling">
       <Row title="Run bots on schedule" detail="When off, no bot starts on its own, on this PC or on a box. Run now still works.">
@@ -65,6 +77,19 @@ export default function BotSettingsSection({ onOpenBots }: { onOpenBots?: () => 
       </Row>
       <Row title="Connectors" detail="Bots use the MCP servers from Settings > MCP & plugins. On a box, connectors you signed in to through Spacron are left out, because their sign-in lives in this app.">
         <span className="automation-settings-value">Per bot</span>
+      </Row>
+    </Section>
+
+    <Section title="Chat">
+      <ChatAppearanceRows appearance={appearance} onChange={botChatAppearance.set} showMatchTerminal={false} />
+      <Row title="Interactive visuals" detail="Let bots answer with charts, tables and small tools shown inline, which you can use and send back to the bot. Only bots that can work in their folder (or have full access) can make them.">
+        <Toggle label="Interactive visuals in bot chats" checked={visuals} onChange={(on) => { botChatVisuals.set(on); void syncBots().catch(() => {}); }} />
+      </Row>
+      <Row title="Message times" detail="Show when each reply was sent.">
+        <Toggle label="Show times in bot chats" checked={timestamps} onChange={botChatTimestamps.set} />
+      </Row>
+      <Row title="Starter prompts" detail="Suggest things to ask in an empty bot chat.">
+        <Toggle label="Starter prompts in bot chats" checked={starters} onChange={botChatSuggestedPrompts.set} />
       </Row>
     </Section>
 

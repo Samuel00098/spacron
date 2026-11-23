@@ -198,81 +198,30 @@ const CHAT_AGENT_NAMES: Record<string, string> = {
 
 const MODE_LABEL = { yolo: 'Full access', manual: 'Asks for approval', custom: 'Custom' } as const;
 
-export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () => void }) {
-  const launchView = useStore(agentLaunchView);
-  const launchByAgent = useStore(agentLaunchViewByAgent);
-  const appearance = useStore(chatAppearance);
-  const scrollOnSend = useStore(chatScrollToLatestOnSend);
-  const spellcheck = useStore(chatComposerSpellcheck);
-  const inlineVisuals = useStore(chatInlineVisuals);
-  const queueFollowUps = useStore(chatQueueFollowUps);
-  const markNew = useStore(chatMarkNewMessages);
-  const autoNames = useStore(chatAutoNames);
-  const modelNames = useStore(chatModelNames);
-  const timestamps = useStore(chatShowTimestamps);
-  const suggested = useStore(chatSuggestedPrompts);
-  const turnDiffs = useStore(chatTurnDiffs);
-  const pullRequests = useStore(chatPullRequests);
-  const ciLines = useStore(chatCiLines);
-  const linkPreviews = useStore(chatLinkPreviews);
-  const usageContinue = useStore(chatUsageAutoContinue);
-  const permissionMode = useStore(agentPermissionMode);
-  const defaultAccess = useStore(chatDefaultAccessMode);
-  const autoAnswerInline = useStore(chatAutoAnswerInline);
-  const cmdOverrides = useStore(agentCmdOverrides);
-  const defaultArgs = useStore(agentDefaultArgs);
-  const defaultEnv = useStore(agentDefaultEnv);
-
-  const patch = (next: Partial<ChatAppearance>) => chatAppearance.set({ ...appearance, ...next });
+/**
+ * The appearance controls, shared by Settings > Chat (agent chats) and
+ * Settings > Bots (bot chats): each passes its own value and where to save it.
+ */
+export function ChatAppearanceRows({ appearance, onChange, showMatchTerminal = true }: {
+  appearance: ChatAppearance;
+  onChange: (next: ChatAppearance) => void;
+  /** Bot chats have no terminal to match. */
+  showMatchTerminal?: boolean;
+}) {
+  const patch = (next: Partial<ChatAppearance>) => onChange({ ...appearance, ...next });
   const appSize = appFontSize();
   const fonts = useInstalledFonts();
   const isDefault = JSON.stringify(appearance) === JSON.stringify(DEFAULT_CHAT_APPEARANCE);
-  const agentName = (preset: string) => CHAT_AGENT_NAMES[preset] ?? getAgentDisplayName(preset) ?? preset;
-  const setAgentView = (preset: string, view: AgentLaunchView) => agentLaunchViewByAgent.set({ ...launchByAgent, [preset]: view });
-
   return (
     <>
-      <Card title="Opening">
-        <Row
-          title="Open new agents in"
-          detail="Choose default view for new agent sessions (Ctrl+Shift+J to toggle)."
-        >
-          <Segmented<AgentLaunchView>
-            label="Open new agents in"
-            value={launchView}
-            options={[{ value: 'chat', label: 'Chat' }, { value: 'terminal', label: 'CLI' }]}
-            onChange={(view) => agentLaunchView.set(view)}
-          />
-        </Row>
-      </Card>
-
-      <Card title="Default launch mode per agent" subtitle="Default view for supported agents.">
-        {CHAT_CAPABLE_AGENTS.map((preset) => (
-          <div key={preset} className="settings-control-row chat-settings-agent" data-settings-key={searchKey(agentName(preset))}>
-            <div className="settings-control-copy chat-settings-agent-name">
-              <span className="chat-settings-agent-mark"><AgentBrandMark command={preset} name={agentName(preset)} /></span>
-              <span>{agentName(preset)}</span>
-            </div>
-            <div className="settings-control">
-              <Segmented<AgentLaunchView>
-                size="sm"
-                label={`${agentName(preset)} opens in`}
-                value={launchByAgent[preset] ?? launchView}
-                options={[{ value: 'chat', label: 'Chat' }, { value: 'terminal', label: 'CLI' }]}
-                onChange={(view) => setAgentView(preset, view)}
-              />
-            </div>
-          </div>
-        ))}
-      </Card>
-
-      <Card title="Appearance">
-        <Row
-          title="Match terminal interface"
-          detail="Use terminal font and colors across chat."
-        >
-          <Toggle label="Toggle match terminal interface" checked={appearance.matchTerminal} onChange={(on) => patch({ matchTerminal: on })} />
-        </Row>
+        {showMatchTerminal && (
+          <Row
+            title="Match terminal interface"
+            detail="Use terminal font and colors across chat."
+          >
+            <Toggle label="Toggle match terminal interface" checked={appearance.matchTerminal} onChange={(on) => patch({ matchTerminal: on })} />
+          </Row>
+        )}
         <Row title="Contrast" detail="Adjust text contrast against the background.">
           <div className="chat-settings-contrast">
             <span>Softer</span>
@@ -354,10 +303,80 @@ export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () =>
           />
         </Row>
         <Row title="Reset chat appearance" detail="Restore default appearance settings.">
-          <button type="button" className="settings-secondary" disabled={isDefault} onClick={() => chatAppearance.set({ ...DEFAULT_CHAT_APPEARANCE })}>
+          <button type="button" className="settings-secondary" disabled={isDefault} onClick={() => onChange({ ...DEFAULT_CHAT_APPEARANCE })}>
             Reset
           </button>
         </Row>
+    </>
+  );
+}
+
+export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () => void }) {
+  const launchView = useStore(agentLaunchView);
+  const launchByAgent = useStore(agentLaunchViewByAgent);
+  const appearance = useStore(chatAppearance);
+  const scrollOnSend = useStore(chatScrollToLatestOnSend);
+  const spellcheck = useStore(chatComposerSpellcheck);
+  const inlineVisuals = useStore(chatInlineVisuals);
+  const queueFollowUps = useStore(chatQueueFollowUps);
+  const markNew = useStore(chatMarkNewMessages);
+  const autoNames = useStore(chatAutoNames);
+  const modelNames = useStore(chatModelNames);
+  const timestamps = useStore(chatShowTimestamps);
+  const suggested = useStore(chatSuggestedPrompts);
+  const turnDiffs = useStore(chatTurnDiffs);
+  const pullRequests = useStore(chatPullRequests);
+  const ciLines = useStore(chatCiLines);
+  const linkPreviews = useStore(chatLinkPreviews);
+  const usageContinue = useStore(chatUsageAutoContinue);
+  const permissionMode = useStore(agentPermissionMode);
+  const defaultAccess = useStore(chatDefaultAccessMode);
+  const autoAnswerInline = useStore(chatAutoAnswerInline);
+  const cmdOverrides = useStore(agentCmdOverrides);
+  const defaultArgs = useStore(agentDefaultArgs);
+  const defaultEnv = useStore(agentDefaultEnv);
+
+  const agentName = (preset: string) => CHAT_AGENT_NAMES[preset] ?? getAgentDisplayName(preset) ?? preset;
+  const setAgentView = (preset: string, view: AgentLaunchView) => agentLaunchViewByAgent.set({ ...launchByAgent, [preset]: view });
+
+  return (
+    <>
+      <Card title="Opening">
+        <Row
+          title="Open new agents in"
+          detail="Choose default view for new agent sessions (Ctrl+Shift+J to toggle)."
+        >
+          <Segmented<AgentLaunchView>
+            label="Open new agents in"
+            value={launchView}
+            options={[{ value: 'chat', label: 'Chat' }, { value: 'terminal', label: 'CLI' }]}
+            onChange={(view) => agentLaunchView.set(view)}
+          />
+        </Row>
+      </Card>
+
+      <Card title="Default launch mode per agent" subtitle="Default view for supported agents.">
+        {CHAT_CAPABLE_AGENTS.map((preset) => (
+          <div key={preset} className="settings-control-row chat-settings-agent" data-settings-key={searchKey(agentName(preset))}>
+            <div className="settings-control-copy chat-settings-agent-name">
+              <span className="chat-settings-agent-mark"><AgentBrandMark command={preset} name={agentName(preset)} /></span>
+              <span>{agentName(preset)}</span>
+            </div>
+            <div className="settings-control">
+              <Segmented<AgentLaunchView>
+                size="sm"
+                label={`${agentName(preset)} opens in`}
+                value={launchByAgent[preset] ?? launchView}
+                options={[{ value: 'chat', label: 'Chat' }, { value: 'terminal', label: 'CLI' }]}
+                onChange={(view) => setAgentView(preset, view)}
+              />
+            </div>
+          </div>
+        ))}
+      </Card>
+
+      <Card title="Appearance">
+        <ChatAppearanceRows appearance={appearance} onChange={(next) => chatAppearance.set(next)} />
       </Card>
 
       <Card title="Turn activity">

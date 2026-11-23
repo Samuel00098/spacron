@@ -73,7 +73,7 @@ export function normalizeChatAppearance(value: unknown): ChatAppearance {
   };
 }
 
-function persisted<T>(key: string, fallback: T, normalize: (raw: unknown) => T): Writable<T> {
+export function persisted<T>(key: string, fallback: T, normalize: (raw: unknown) => T): Writable<T> {
   let initial = fallback;
   try {
     const raw = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
@@ -92,7 +92,7 @@ function persisted<T>(key: string, fallback: T, normalize: (raw: unknown) => T):
   return store;
 }
 
-const bool = (fallback: boolean) => (raw: unknown) => (typeof raw === 'boolean' ? raw : fallback);
+export const bool = (fallback: boolean) => (raw: unknown) => (typeof raw === 'boolean' ? raw : fallback);
 
 export const chatAppearance = persisted('spacron_chat_appearance', DEFAULT_CHAT_APPEARANCE, normalizeChatAppearance);
 

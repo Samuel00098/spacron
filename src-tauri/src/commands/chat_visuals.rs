@@ -154,6 +154,22 @@ pub async fn chat_visuals_prepare(key: String) -> Result<ChatVisualsSpot, String
     })
 }
 
+/// Put one page into a chat's folder, for chats whose agent runs somewhere the
+/// page cannot be written directly (a bot's reply is fetched from its home, which
+/// may be on a box). Same name rules and size cap as a page the agent writes.
+#[tauri::command]
+pub async fn chat_visuals_write(key: String, file: String, content: String) -> Result<(), String> {
+    if !is_safe_key(&key) || !is_safe_visual_file(&file) {
+        return Err("Invalid visual".into());
+    }
+    if content.len() as u64 > MAX_VISUAL_BYTES {
+        return Err("Visual too large".into());
+    }
+    let dir = visuals_root().join(&key);
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    tokio::fs::write(dir.join(&file), content).await.map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

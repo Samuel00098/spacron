@@ -594,6 +594,7 @@ pub fn run() {
             commands::chat_extras::chat_link_preview,
             commands::chat_extras::chat_pr_status,
             commands::chat_visuals::chat_visuals_prepare,
+            commands::chat_visuals::chat_visuals_write,
             commands::workspace::workspace_git_stage_paths,
             commands::workspace::workspace_git_unstage_paths,
             commands::workspace::workspace_git_apply_patch,

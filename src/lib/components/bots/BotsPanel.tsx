@@ -16,13 +16,21 @@ import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
   BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, canRunHeadless, closeBots,
   connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
-  attachToBot, attachmentPreview, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
+  attachToBot, attachmentPreview, botVisualSpot, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
   saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
 import { Dots, Markdown, UserTurn, contrastVars } from '$lib/components/terminal/TerminalChatView';
-import { CHAT_WIDTH_COLUMN, chatAppearance } from '$lib/stores/chatViewSettings';
+import { CHAT_WIDTH_COLUMN } from '$lib/stores/chatViewSettings';
+import {
+  botChatAppearance,
+  botChatSuggestedPrompts,
+  botChatTimestamps,
+  botChatVisuals,
+} from '$lib/stores/botChatSettings';
+import { ChatVisual, splitReply } from '$lib/components/terminal/ChatVisual';
+import type { ChatVisualsSpot } from '$lib/stores/terminal';
 import '$lib/components/terminal/TerminalChatRich.css';
 import '$lib/components/terminal/TerminalChatView.css';
 import './Bots.css';
@@ -521,7 +529,10 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
  * appearance settings. No avatars beside the messages.
  */
 function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: BotRun }) {
-  const appearance = useStore(chatAppearance);
+  const appearance = useStore(botChatAppearance);
+  const visualsOn = useStore(botChatVisuals);
+  const showTimes = useStore(botChatTimestamps);
+  const showStarters = useStore(botChatSuggestedPrompts);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState<'send' | 'stop' | null>(null);
   const [error, setError] = useState('');
@@ -594,6 +605,11 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
       await refreshBotState();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
+  // A visual's "send to the bot" button fills the message box for review.
+  function composeFromVisual(text: string) {
+    setDraft((cur) => (cur.trim() ? `${cur.trim()}\n${text}` : text));
+    textarea.current?.focus();
+  }
   async function stop() {
     if (!active) return;
     setBusy('stop'); setError('');
@@ -637,14 +653,14 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
               <p>{bot.canCreateBots
                 ? 'Describe a recurring task, a schedule, or a workflow you want a bot to handle.'
                 : 'Ask this bot what it can do, or give it a task to start.'}</p>
-              <div className="bots-chat-suggestions" role="group" aria-label="Starter prompts">
+              {showStarters && <div className="bots-chat-suggestions" role="group" aria-label="Starter prompts">
                 {suggestions.map(({ label, prompt }) => (
                   <button key={label} type="button" disabled={Boolean(active) || busy !== null} onClick={() => { setDraft(prompt); textarea.current?.focus(); }}>
                     <span>{label}</span>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
                   </button>
                 ))}
-              </div>
+              </div>}
             </div>}
             {shown.map((run) => {
               const reply = replies[run.id]?.trim();
@@ -652,7 +668,14 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
                 {run.message
                   ? <SentTurn bot={bot} run={run} />
                   : <div className="terminal-chat-notice">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
-                {reply && <div className="tcr-msg"><div className="terminal-chat-agent"><Markdown text={reply} onOpenImage={noImages} /></div></div>}
+                {reply && <div className="tcr-msg">
+                  <div className="terminal-chat-agent">
+                    {splitReply(reply).map((segment, i) => segment.type === 'text'
+                      ? <Markdown key={`t${i}`} text={segment.text} onOpenImage={noImages} />
+                      : visualsOn && <BotVisual key={`v${i}-${segment.visual.file}`} bot={bot} visual={segment.visual} status={run.status} onCompose={composeFromVisual} />)}
+                  </div>
+                  {showTimes && <div className="bots-reply-time">{clock(run.finishedAt ?? run.startedAt)}</div>}
+                </div>}
                 {run.status === 'running' && <div className="terminal-chat-working"><Dots /><span>{bot.name} is working · {Math.max(0, Math.round((now - run.startedAt) / 1000))}s</span></div>}
                 {run.status === 'missed' && <div className="terminal-chat-notice">Missed its scheduled time.</div>}
                 {run.status === 'completed' && !reply && replies[run.id] !== undefined && <div className="terminal-chat-notice">No reply.</div>}
@@ -729,6 +752,33 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
 }
 
 /** A message you sent, with its attachments: images as thumbnails, other files as chips. */
+/**
+ * One interactive visual from a bot's reply. The page lives in the bot's home
+ * (here or on a box), so it is fetched first; until then, or if it never
+ * arrives, the card says so rather than showing a broken frame. A page that was
+ * not there yet is tried again when the run's status changes.
+ */
+function BotVisual({ bot, visual, status, onCompose }: {
+  bot: Bot;
+  visual: { file: string; title: string | null };
+  status: BotRun['status'];
+  onCompose: (text: string) => void;
+}) {
+  const [state, setState] = useState<{ spot: ChatVisualsSpot } | { error: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void botVisualSpot(bot, visual.file)
+      .then((spot) => { if (alive) setState({ spot }); })
+      .catch((e) => { if (alive) setState({ error: e instanceof Error ? e.message : String(e) }); });
+    return () => { alive = false; };
+  }, [bot.id, bot.boxId, visual.file, status]);
+  if (state && 'spot' in state) return <ChatVisual visual={visual} spot={state.spot} onCompose={onCompose} />;
+  return <div className="chat-visual missing">
+    <span>{visual.title ?? visual.file}</span>
+    <em>{state ? (status === 'running' ? 'Waiting for the bot to finish this visual…' : `This visual can't be shown: ${state.error}`) : 'Loading visual…'}</em>
+  </div>;
+}
+
 function SentTurn({ bot, run }: { bot: Bot; run: BotRun }) {
   const files = run.attachments ?? [];
   const [images, setImages] = useState<string[]>([]);

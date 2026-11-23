@@ -121,6 +121,11 @@ pub(crate) struct BoxBot {
     /// or this PC's screen through Spacron's own tools.
     #[serde(default)]
     pub computer_use: bool,
+    /// May answer with interactive visuals (`::spacron-visual{…}`): HTML pages
+    /// written to `visuals/` in its home. Needs file access, so a bot that
+    /// cannot write files never gets the instructions.
+    #[serde(default)]
+    pub chat_visuals: bool,
     /// Extra context the desktop adds to the prompt (the Bot Builder gets the
     /// connectors, agents and avatars it may choose from).
     #[serde(default)]
@@ -236,11 +241,29 @@ so put the full result in your final answer.",
         "You are \"{name}\", a Spacron bot running unattended. \
 Your current folder is your own home folder and it persists between runs: anything kept there (for example a \
 NOTES.md file) is still there next time. {access} Nobody is watching this run, so do not wait for input or ask \
-questions; do the work and finish with a short summary of what you did.\n\nYour job:\n{instructions}",
+questions; do the work and finish with a short summary of what you did.{visuals}\n\nYour job:\n{instructions}",
         name = bot.name.trim(),
         instructions = bot.instructions.trim(),
+        visuals = if wants_visuals(bot) { VISUALS_PROMPT } else { "" },
     )
 }
+
+/// Whether this bot's run is told it can answer with interactive visuals.
+fn wants_visuals(bot: &BoxBot) -> bool {
+    bot.chat_visuals && bot.access != Access::Research
+}
+
+const VISUALS_PROMPT: &str = "\n\nYour answer is shown in a chat that can display interactive visuals (charts, tables, \
+dashboards, small tools) inline. When one would explain the result better than text, write ONE complete, self-contained \
+HTML file in the visuals folder of your home folder, under 512 KB, with a new file name each time (letters, digits, \
+. _ - only, ending in .html, for example latency-by-region-7c1e.html), then put this on its own line in your answer, \
+outside any code block: ::spacron-visual{file=\"latency-by-region-7c1e.html\" title=\"Latency by region\"} (file is the bare \
+name, never a path; at most 8 per answer). Put your data, styles and scripts inline; libraries may load only from \
+cdn.jsdelivr.net, unpkg.com, cdnjs.cloudflare.com or esm.sh, and the page cannot make network requests. Make it \
+interactive where it helps (controls, sliders, toggles) and style it with the CSS variables --background, --foreground, \
+--card, --muted, --muted-foreground, --accent, --border, --radius and --font-sans, each with a fallback value. To let the \
+user send something back to you, add a button that calls window.spacron.compose(\"a plain-language request\"): it puts that \
+text in their message box for them to review and send. Always also write the key result in plain text.";
 
 /// The end of a run's output, for the conversation the next run sees.
 fn reply_tail(root: &Path, run: &BotRun) -> String {
@@ -636,6 +659,32 @@ fn checked_attachments(root: &Path, bot_id: &str, args: &Value) -> Result<Vec<St
     }).collect()
 }
 
+/// One bare `.html` name, as the chat's visuals folder allows (letters, digits,
+/// `.`, `_`, `-`; no directories or traversal).
+fn visual_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 128 && name.ends_with(".html") && !name.contains("..")
+        && name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// An interactive visual the bot wrote to its `visuals/` folder, as text for
+/// the desktop to serve in the chat. Only bare `.html` names, only small ones.
+fn visual_page(root: &Path, bot_id: &str, name: &str) -> Result<Value, String> {
+    if !visual_name_ok(name) {
+        return Err("Not a visual of this bot.".into());
+    }
+    let full = home(root, bot_id).join("visuals").join(name);
+    let meta = std::fs::metadata(&full).map_err(|_| "That visual is not there (yet).".to_string())?;
+    if !meta.is_file() || meta.len() > MAX_VISUAL_BYTES {
+        return Err("That visual is missing or too large.".into());
+    }
+    let text = std::fs::read_to_string(&full).map_err(|_| "That visual is not readable text.".to_string())?;
+    Ok(json!({ "mime": "text/html", "text": text }))
+}
+
+/// Largest visual page, as the desktop serves it (`chat_visuals.rs`).
+const MAX_VISUAL_BYTES: u64 = 512 * 1024;
+
 /// An attached image's bytes, for the chat's thumbnails. Only files in the
 /// bot's `attachments/`, only images, only small ones.
 pub(crate) fn file(args: Value, root: &Path) -> Result<Value, String> {
@@ -645,6 +694,9 @@ pub(crate) fn file(args: Value, root: &Path) -> Result<Value, String> {
         return Err("This bot's id is not valid.".into());
     }
     let rel = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path.")?;
+    if let Some(name) = rel.strip_prefix("visuals/") {
+        return visual_page(root, bot_id, name);
+    }
     let [path] = checked_attachments(root, bot_id, &json!({ "attachments": [rel] }))?.try_into().map_err(|_| "Bad path.".to_string())?;
     let lower = path.to_ascii_lowercase();
     let mime = [("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("gif", "image/gif"), ("webp", "image/webp")]
@@ -760,6 +812,9 @@ async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path
     std::fs::create_dir_all(&cwd).map_err(|e| format!("Could not create the bot's folder: {e}"))?;
     if bot.can_create_bots {
         let _ = std::fs::create_dir_all(cwd.join("new-bots"));
+    }
+    if wants_visuals(bot) {
+        let _ = std::fs::create_dir_all(cwd.join("visuals"));
     }
     let run_config = run_mcp_config(root, bot, run_id);
     let mcp = run_config.as_ref().map(|(path, keys)| (path.as_path(), keys.as_slice()));
@@ -1295,5 +1350,30 @@ echo 'not json' > new-bots/broken.json; echo '[1,2]' > new-bots/array.json; echo
     fn run_now_needs_a_synced_bot() {
         let dir = tempfile::tempdir().unwrap();
         assert!(run_now(json!({ "id": "nope" }), dir.path()).is_err());
+    }
+
+    #[test]
+    fn visuals_are_only_promised_to_bots_that_can_write_files() {
+        let mut b = parsed(bot("a", vec![]));
+        b.chat_visuals = true;
+        assert!(!bot_prompt(&b).contains("::spacron-visual"), "research access cannot write the page");
+        b.access = Access::Folder;
+        assert!(bot_prompt(&b).contains("::spacron-visual{file="));
+        b.chat_visuals = false;
+        assert!(!bot_prompt(&b).contains("::spacron-visual"));
+    }
+
+    #[test]
+    fn a_visual_is_read_back_by_bare_name_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = home(dir.path(), "b1").join("visuals");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("chart-1.html"), "<p>hi</p>").unwrap();
+        std::fs::write(home(dir.path(), "b1").join("secret.html"), "no").unwrap();
+        let ask = |p: &str| file(json!({ "botId": "b1", "path": p }), dir.path());
+        assert_eq!(ask("visuals/chart-1.html").unwrap()["text"], "<p>hi</p>");
+        for bad in ["visuals/../secret.html", "visuals/a/b.html", "visuals/.x.html", "visuals/chart-1.js", "visuals/gone.html", "visuals/"] {
+            assert!(ask(bad).is_err(), "{bad}");
+        }
     }
 }

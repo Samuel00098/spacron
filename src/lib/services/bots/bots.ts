@@ -20,6 +20,8 @@ import { activeRemoteId, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { getAgentRoster } from '$lib/stores/runs';
 import { mcpServers } from '$lib/stores/settings';
 import { backendInvoke } from '$lib/services/backend';
+import { botChatVisuals } from '$lib/stores/botChatSettings';
+import type { ChatVisualsSpot } from '$lib/stores/terminal';
 import { enabledServers, standardEntry, withSignInProxy, SPACRON_OWN_KEY, SPACRON_BROWSER_KEY, type McpServer } from '$lib/services/mcp-servers';
 import { nextOccurrence, type Schedule } from '$lib/services/automations/schedule';
 import { sharedWith } from '$lib/services/box-signins';
@@ -503,6 +505,7 @@ async function sendHost(host: string): Promise<void> {
     enabled: b.enabled, occurrences: upcomingBotRuns(b, now), access: b.access,
     connectors: b.connectors || b.browser || b.computerUse, mcpKeys: keysFor(b), canCreateBots: b.canCreateBots,
     computerUse: b.computerUse,
+    chatVisuals: get(botChatVisuals),
     extraContext: b.canCreateBots ? builderContext(host) : null,
   }));
   const wantsMcp = payload.some((b) => b.connectors);
@@ -555,6 +558,31 @@ export async function attachToBot(bot: Pick<Bot, 'id' | 'boxId'>, file: File): P
   if (!isReachable(bot.boxId)) throw new Error('Connect to this bot’s box first.');
   const { path } = await call<{ path: string }>(bot.boxId, 'attach', { botId: bot.id, name: file.name || 'file', data: await base64Of(file) });
   return path;
+}
+
+/**
+ * An interactive visual the bot wrote (`::spacron-visual{file="x.html"}` in its
+ * reply), served in the chat. The page is read from the bot's home, on this PC
+ * or a box, and put in the chat's own folder under the visuals server.
+ * Cached per page; a failure is not, because the page may only be late.
+ */
+const visualSpots = new Map<string, Promise<ChatVisualsSpot>>();
+
+export function botVisualSpot(bot: Pick<Bot, 'id' | 'boxId'>, file: string): Promise<ChatVisualsSpot> {
+  const cacheKey = `${bot.boxId}:${bot.id}:${file}`;
+  const cached = visualSpots.get(cacheKey);
+  if (cached) return cached;
+  // One folder per bot; the visuals server takes `[A-Za-z0-9-]{1,64}`.
+  const key = `bot-${bot.id.replace(/[^A-Za-z0-9]/g, '-')}`.slice(0, 64);
+  const pending = (async () => {
+    const page = await call<{ text: string }>(bot.boxId, 'file', { botId: bot.id, path: `visuals/${file}` });
+    const spot = await invoke<ChatVisualsSpot>('chat_visuals_prepare', { key });
+    await invoke('chat_visuals_write', { key, file, content: page.text });
+    return spot;
+  })();
+  visualSpots.set(cacheKey, pending);
+  pending.catch(() => visualSpots.delete(cacheKey));
+  return pending;
 }
 
 const previews = new Map<string, Promise<string | null>>();

@@ -382,3 +382,10 @@
 }
 .bots-structured-chat .bots-composer-send:hover:not(:disabled) { transform: none; }
 .bots-structured-chat .bots-composer-send svg { flex: none; }
+
+/* The time under a bot's reply (Settings > Bots > Chat > Message times). */
+.bots-reply-time {
+  margin: 2px 0 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
