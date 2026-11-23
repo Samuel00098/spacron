@@ -4,6 +4,19 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+## [v5.1.9] - 2026-11-23
+
+A follow-up to 5.1.8 that lets bot visuals take you to the bot they are about, and fixes "storage quota exceeded" errors when saving bots.
+
+### Added
+
+- **Bot visuals open and message bots** — in a bot chat, an interactive visual can open a bot (or the bot list, or a new bot) in one click, and a button can put a message in the box of the bot it created, ready to review and send. Agent chats keep their visuals as before.
+- **Bot visuals use the bot's real picture** — visuals in bot chats show the same picture the app shows for each bot, drawn from the 24 built-in avatars, instead of an emoji or a made-up icon.
+
+### Fixed
+
+- **"Exceeded the quota" when saving a bot** — chat history is now kept in IndexedDB instead of the 5 MB browser store, so it no longer crowds out your bots. Existing history moves over on first launch. Uploaded bot pictures are also stored separately and saved smaller, and a full store now gives a clear message naming what is using the space.
+
 ## [v5.1.8] - 2026-11-23
 
 Bots arrive: agents that work on a schedule on this PC or your box, with your connectors, chat, avatars, a builder and computer use. Also fixes pasted images being sent twice.
