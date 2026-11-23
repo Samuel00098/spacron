@@ -91,6 +91,9 @@ pub struct RemoteDeployResult {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeployPlatform {
     Linux,
+    /// Linux on 64-bit ARM (Ampere, Graviton, Raspberry Pi 4/5…). Same install
+    /// flow as `Linux`; only the server build differs.
+    LinuxArm64,
     Macos,
     Windows,
 }
@@ -99,6 +102,7 @@ impl DeployPlatform {
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "linux" => Ok(Self::Linux),
+            "linux-arm64" | "linux-aarch64" | "linux-arm" => Ok(Self::LinuxArm64),
             "macos" | "mac" | "darwin" => Ok(Self::Macos),
             "windows" | "win" => Ok(Self::Windows),
             other => Err(format!(
@@ -117,7 +121,11 @@ impl DeployPlatform {
         {
             Self::Macos
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(all(not(any(target_os = "windows", target_os = "macos")), target_arch = "aarch64"))]
+        {
+            Self::LinuxArm64
+        }
+        #[cfg(all(not(any(target_os = "windows", target_os = "macos")), not(target_arch = "aarch64")))]
         {
             Self::Linux
         }
@@ -126,6 +134,7 @@ impl DeployPlatform {
     pub fn label(self) -> &'static str {
         match self {
             Self::Linux => "Linux",
+            Self::LinuxArm64 => "Linux (ARM)",
             Self::Macos => "macOS",
             Self::Windows => "Windows",
         }
@@ -136,6 +145,7 @@ impl DeployPlatform {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Linux => "linux",
+            Self::LinuxArm64 => "linux-arm64",
             Self::Macos => "macos",
             Self::Windows => "windows",
         }
@@ -148,12 +158,10 @@ impl DeployPlatform {
     /// library installs) and macOS prefers arm64 (Apple Silicon dominates).
     pub fn triples(self) -> &'static [&'static str] {
         match self {
-            Self::Linux => &[
-                "x86_64-unknown-linux-musl",
-                "aarch64-unknown-linux-musl",
-                "x86_64-unknown-linux-gnu",
-                "aarch64-unknown-linux-gnu",
-            ],
+            // Split by CPU: an x86 build cannot run on an ARM box and vice
+            // versa, so each platform only ever resolves its own.
+            Self::Linux => &["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"],
+            Self::LinuxArm64 => &["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"],
             Self::Macos => &["aarch64-apple-darwin", "x86_64-apple-darwin"],
             Self::Windows => &["x86_64-pc-windows-msvc"],
         }
@@ -169,7 +177,12 @@ pub fn parse_probe_output(raw: &str) -> Option<DeployPlatform> {
     if out.contains("Darwin") {
         Some(DeployPlatform::Macos)
     } else if out.contains("Linux") {
-        Some(DeployPlatform::Linux)
+        // `uname -sm` adds the CPU: "Linux aarch64" (or "arm64" on some distros).
+        if out.contains("aarch64") || out.contains("arm64") || out.contains("armv8") {
+            Some(DeployPlatform::LinuxArm64)
+        } else {
+            Some(DeployPlatform::Linux)
+        }
     } else if ["MINGW", "MSYS", "CYGWIN", "Windows_NT"]
         .iter()
         .any(|m| out.contains(m))
@@ -566,6 +579,7 @@ const RELEASES_BASE: &str = "https://github.com/Samuel00098/spacron-releases/rel
 fn published_triple(platform: DeployPlatform) -> &'static str {
     match platform {
         DeployPlatform::Linux => "x86_64-unknown-linux-gnu",
+        DeployPlatform::LinuxArm64 => "aarch64-unknown-linux-gnu",
         DeployPlatform::Macos => "aarch64-apple-darwin",
         DeployPlatform::Windows => "x86_64-pc-windows-msvc",
     }
@@ -893,7 +907,7 @@ pub async fn remote_deploy_vps(args: RemoteDeployArgs) -> Result<RemoteDeployRes
             )
             .await?;
         }
-        DeployPlatform::Linux => {
+        DeployPlatform::Linux | DeployPlatform::LinuxArm64 => {
             run_ssh("mkdir -p ~/.spacron-server", &args).await?;
             run_scp(&binary, "~/.spacron-server/spacron-server", &args).await?;
             run_install_script(
@@ -983,7 +997,7 @@ pub async fn remote_detect_platform(
         platform: "linux".to_string(),
     };
 
-    match probe_once("uname -s", &probe_args).await {
+    match probe_once("uname -sm", &probe_args).await {
         Ok(out) => {
             if let Some(p) = parse_probe_output(&out) {
                 return Ok(DetectPlatformResult {
@@ -1149,6 +1163,25 @@ mod tests {
         assert_eq!(DeployPlatform::parse("macOS").unwrap(), DeployPlatform::Macos);
         assert_eq!(DeployPlatform::parse("Windows").unwrap(), DeployPlatform::Windows);
         assert!(DeployPlatform::parse("plan9").is_err());
+    }
+
+    #[test]
+    fn arm_linux_boxes_are_detected_and_get_the_arm_build() {
+        // `uname -sm` answers.
+        assert_eq!(parse_probe_output("Linux aarch64"), Some(DeployPlatform::LinuxArm64));
+        assert_eq!(parse_probe_output("Linux arm64"), Some(DeployPlatform::LinuxArm64));
+        assert_eq!(parse_probe_output("Linux x86_64"), Some(DeployPlatform::Linux));
+        assert_eq!(parse_probe_output("Darwin arm64"), Some(DeployPlatform::Macos));
+        assert_eq!(parse_probe_output("MINGW64_NT-10.0 x86_64"), Some(DeployPlatform::Windows));
+        // Wire form round-trips, and the two Linux builds never cross over.
+        assert_eq!(DeployPlatform::parse("linux-arm64"), Ok(DeployPlatform::LinuxArm64));
+        assert_eq!(DeployPlatform::LinuxArm64.as_str(), "linux-arm64");
+        assert!(DeployPlatform::LinuxArm64.triples().iter().all(|t| t.starts_with("aarch64")));
+        assert!(DeployPlatform::Linux.triples().iter().all(|t| t.starts_with("x86_64")));
+        assert_eq!(
+            published_asset_name(DeployPlatform::LinuxArm64),
+            "spacron-server-aarch64-unknown-linux-gnu"
+        );
     }
 
     #[test]

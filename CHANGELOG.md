@@ -6,6 +6,10 @@ All notable changes to Spacron will be documented here.
 
 A small follow-up to 5.1.6 that makes setting up a remote box pick up the new server, lets a Windows box start npm-installed agents, and tidies the Focus panel control.
 
+### Added
+
+- **Linux on ARM** — Spacron now ships a 64-bit ARM Linux build (AppImage, .deb and .rpm), and remote workspaces support ARM boxes (Ampere, Graviton, Raspberry Pi 4/5). "Set up a new VPS…" detects an ARM box and deploys the matching "Linux (ARM)" server.
+
 ### Fixed
 
 - **Agents start on a Windows box** — automations and the chat view on a Windows remote now find npm-installed agent CLIs (Claude Code, Codex, Gemini). They were started by bare name, which on Windows only finds `.exe` files, so they failed with "could not start".

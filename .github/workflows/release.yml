@@ -86,6 +86,14 @@ jobs:
             args: ''
             rust-targets: ''
 
+          # Linux on 64-bit ARM, built natively on GitHub's ARM runner (free for
+          # public repos). Also publishes the aarch64 server that the VPS
+          # wizard's "Linux (ARM)" platform downloads.
+          - platform: ubuntu-22.04-arm
+            os: linux-arm64
+            args: ''
+            rust-targets: ''
+
     runs-on: ${{ matrix.platform }}
 
     steps:
@@ -99,7 +107,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Install Linux dependencies
-        if: matrix.os == 'linux'
+        if: startsWith(matrix.os, 'linux')
         run: |
           sudo apt-get update
           sudo apt-get install -y \

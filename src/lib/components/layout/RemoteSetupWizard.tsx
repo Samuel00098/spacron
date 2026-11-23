@@ -31,6 +31,7 @@ import './RemoteSetupWizard.css';
 
 const PLATFORM_HINTS: Record<DeployPlatform, string> = {
   linux: 'Ubuntu and Debian install the runtime libraries automatically when passwordless sudo is available.',
+  'linux-arm64': 'For 64-bit ARM boxes (Ampere, Graviton, Raspberry Pi 4/5). Ubuntu and Debian install the runtime libraries automatically when passwordless sudo is available.',
   macos: 'Enable Remote Login on the Mac (System Settings → General → Sharing). Runs as a launchd agent.',
   windows: 'Enable OpenSSH Server on the box; admin SSH access is needed for the boot task and firewall rule.',
 };

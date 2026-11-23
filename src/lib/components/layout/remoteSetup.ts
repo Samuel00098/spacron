@@ -5,14 +5,14 @@
  */
 
 /** OS the target server runs — the deploy supervisor differs per platform. */
-export type DeployPlatform = 'linux' | 'macos' | 'windows';
+export type DeployPlatform = 'linux' | 'linux-arm64' | 'macos' | 'windows';
 
-export const DEPLOY_PLATFORMS: DeployPlatform[] = ['linux', 'macos', 'windows'];
+export const DEPLOY_PLATFORMS: DeployPlatform[] = ['linux', 'linux-arm64', 'macos', 'windows'];
 
 /** Display name for a deploy platform — proper nouns ("Windows", "macOS"),
  *  never the raw enum value, everywhere the wizard shows one. */
 export function platformLabel(p: DeployPlatform): string {
-  return p === 'macos' ? 'macOS' : p === 'windows' ? 'Windows' : 'Linux';
+  return p === 'macos' ? 'macOS' : p === 'windows' ? 'Windows' : p === 'linux-arm64' ? 'Linux (ARM)' : 'Linux';
 }
 
 export interface DeployInput {
