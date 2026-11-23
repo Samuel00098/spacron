@@ -389,8 +389,19 @@
 .bots-structured-chat .bots-composer-send:hover:not(:disabled) { transform: none; }
 .bots-structured-chat .bots-composer-send svg { flex: none; }
 
-/* The time under a bot's reply (Settings > Bots > Chat > Message times). */
 .bots-structured-chat .bots-exchange .tcr-actions { opacity: 1; }
+.bots-structured-chat .bots-exchange .tcr-actions button {
+  color: var(--text-primary);
+  background: var(--tc-surface);
+}
+.bots-structured-chat .bots-exchange .tcr-actions button:hover {
+  background: var(--tc-surface-strong);
+}
+.bots-structured-chat .bots-exchange .tcr-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Timestamps follow Settings > Bots > Chat > Message times. */
 .bots-structured-chat .bots-exchange .tcr-msg:not(:hover) .tcr-actions .tcr-time { visibility: visible; }
 .bots-reply-time {
   margin: 2px 0 0 2px;
