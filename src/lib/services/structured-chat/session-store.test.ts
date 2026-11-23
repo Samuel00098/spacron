@@ -192,13 +192,22 @@ describe('structured session store', () => {
     fake.states.clear();
     for (const [key, value] of saved) env.data.set(key, value);
     const { structuredSessions: fresh } = await import('./session-store');
-    fresh.set(JSON.parse(env.data.get('spacron_structured_sessions')!));
+    const records = JSON.parse(env.data.get('spacron_structured_sessions')!);
+    const olderId = 'older-chat';
+    records[olderId] = {
+      ...records[id],
+      id: olderId,
+      nativeSessionId: 'older-thread',
+      updatedAt: records[id].updatedAt - 1,
+    };
+    fresh.set(records);
 
     expect(await restoreStructuredSessions('proj')).toBe(1);
     const pane = Number(Object.keys(get(panes.structuredChatPanes))[0]);
     expect(recordForPane(pane)?.id).toBe(id);
     expect(fake.provider.start).toHaveBeenLastCalledWith(pane, '/repo', { resumeId: 'thread-3', access: 'ask', accountId: 'work' });
     expect((get(panes.structuredChatHistory)[pane] as { text: string }[]).map((i) => i.text)).toEqual(['remember me']);
+    expect(get(fresh)[olderId].lifecycle).toBe('closed');
     // Not restored twice.
     expect(await restoreStructuredSessions('proj')).toBe(0);
   });

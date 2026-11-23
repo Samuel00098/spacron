@@ -1,6 +1,7 @@
 import { writable, derived, get } from '$lib/stores/storeCompat';
 import type { Project, Workspace } from '$lib/types/workspace';
 import { openFiles, activeFile, fileCache, activeLine, activeColumn, restoreEditorFiles, resetEditorSession } from './editor';
+import { isNewStructuredChatPane, structuredChatPanes } from '$lib/services/structured-chat/panes';
 import { sessions, activeSessionId, gridLayout, paneAssignments, activePaneIndex, createTerminalSession, attachTerminalSession, setSessionOwnerTask, killSession, getTerminalProjectState, restoreTerminalProjectState, setActiveTerminalProject, setTerminalProjectRoot, setSessionCwd, applyRestoredSessionMetadata, relaunchRestoredAgentSession } from './terminal';
 import { browserDefaultPort, browserPreferredHost } from './settings';
 import { targetPort, proxyPort, proxyStarted, currentUrl, preferredLocalHost, parseLocalPreviewUrl, previewTabs, activePreviewTabId, restorePreviewTabsState, resetPreviewTabsState, setPreferredLocalHost, setTargetPort, type PreviewTab } from './preview';
@@ -547,8 +548,10 @@ function isRemoteProjectId(projectId: string): boolean {
 function saveProjectStateToStorage(projectId: string) {
   if (typeof window === 'undefined') return;
   const terminalState = getTerminalProjectState(projectId);
+  const chatPanes = get(structuredChatPanes);
   const terminalPanes: PersistedTerminalPane[] = terminalState.sessions
-    .filter((session) => session.isRunning && session.agentPreset)
+    .filter((session) => session.isRunning && session.agentPreset &&
+      !(chatPanes[session.id] && isNewStructuredChatPane(session.id)))
     .map((session) => {
       return {
         backendSessionId: session.id,
@@ -1317,9 +1320,19 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
             return null;
           };
 
-          const restored = await Promise.all(
-            persisted.terminalPanes.map((pane, i) => restorePane(pane, i)),
-          );
+          const structured = await import('$lib/services/structured-chat/session-store');
+          const chatKeys = new Set(structured.openChatRecords(projectId).map((record) =>
+            JSON.stringify([record.preset ?? record.provider, structured.restoreAgentFolder(record.cwd)])));
+          const seen = new Set<string>();
+          const panesToRestore = persisted.terminalPanes.map((pane, index) => ({ pane, index }));
+          const selectedPanes = panesToRestore.reverse().filter(({ pane }) => {
+            if (!pane.hasSession || !pane.agentPreset || pane.ownerTaskId) return true;
+            const key = JSON.stringify([pane.agentPreset, structured.restoreAgentFolder(pane.cwd || rootPath)]);
+            if (seen.has(key) || chatKeys.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).reverse();
+          const restored = await Promise.all(selectedPanes.map(({ pane, index }) => restorePane(pane, index)));
           for (const id of restored) {
             if (id !== null) spawnedIds.push(id);
           }

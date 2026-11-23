@@ -546,26 +546,42 @@ async function restoreRecordSubagents(paneId: number, record: StructuredSessionR
   }
 }
 
-/**
- * Reopen this project's open chat sessions from the previous run. Each comes
- * back in a fresh pane, resumed by its native id, with its journaled
- * conversation shown as history.
- */
-export async function restoreStructuredSessions(projectId: string): Promise<number> {
-  startSessionStore();
-  const linked = new Set(paneRecords.values());
-  const candidates = Object.values(get(structuredSessions)).filter((record) =>
+export function restoreAgentFolder(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-z]:/i.test(normalized) || normalized.startsWith('//') ? normalized.toLowerCase() : normalized;
+}
+
+export function openChatRecords(projectId: string): StructuredSessionRecord[] {
+  return Object.values(get(structuredSessions)).filter((record) =>
     record.projectId === projectId &&
     record.origin === 'chat' &&
     !record.archived &&
     record.view === 'chat' &&
     record.lifecycle !== 'closed' &&
-    !linked.has(record.id) &&
-    !restoring.has(record.id) &&
-    structuredChatProvider(record.provider));
+    structuredChatProvider(record.provider))
+    .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
+}
+
+export async function restoreStructuredSessions(projectId: string): Promise<number> {
+  startSessionStore();
+  const linked = new Set(paneRecords.values());
+  const latest = new Map<string, StructuredSessionRecord>();
+  const superseded = new Map<string, string[]>();
+  for (const record of openChatRecords(projectId)) {
+    const key = JSON.stringify([record.provider, record.accountId ?? 'default', restoreAgentFolder(record.cwd)]);
+    const newest = latest.get(key);
+    if (!newest) {
+      latest.set(key, record);
+    } else if (!linked.has(record.id) && !restoring.has(record.id)) {
+      const older = superseded.get(newest.id) ?? [];
+      older.push(record.id);
+      superseded.set(newest.id, older);
+    }
+  }
+  const candidates = [...latest.values()].filter((record) => !linked.has(record.id) && !restoring.has(record.id));
+  for (const record of candidates) restoring.add(record.id);
   let restored = 0;
   for (const record of candidates) {
-    restoring.add(record.id);
     try {
       const paneId = await createTerminalSession(record.cwd, undefined, projectId, {
         assignPane: false,
@@ -573,10 +589,11 @@ export async function restoreStructuredSessions(projectId: string): Promise<numb
       });
       if (paneId === null) continue;
       pendingLinks.set(paneId, record.id);
-      markStructuredChatPane(paneId, record.provider, record.preset ?? undefined);
+      markStructuredChatPane(paneId, record.provider, record.preset ?? undefined, 'chat');
       updateSessionTitle(paneId, record.title ?? `${structuredChatProvider(record.provider)?.label ?? 'Agent'} Chat`);
       await openRecordInPane(paneId, record);
       await restoreRecordSubagents(paneId, record);
+      for (const id of superseded.get(record.id) ?? []) patchRecord(id, { lifecycle: 'closed' });
       restored += 1;
     } catch (error) {
       console.warn('Could not restore structured chat', record.id, error);
