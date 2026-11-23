@@ -99,8 +99,14 @@ pub(super) fn handle(
 }
 
 fn start(args: &Value, workspace: &Path) -> Result<Value, String> {
-    let start: AcpStartArgs = serde_json::from_value(args.get("args").cloned().unwrap_or(Value::Null))
+    let mut start: AcpStartArgs = serde_json::from_value(args.get("args").cloned().unwrap_or(Value::Null))
         .map_err(|e| format!("Invalid acp_start arguments: {e}"))?;
+    // The desktop sends agents by bare name (it can't know the box's OS); on
+    // a Windows box that name is usually an npm `.cmd` shim only a PATHEXT
+    // lookup finds. A pre-quoted cmd.exe line (`raw_args`) is left as sent.
+    if start.raw_args.is_none() {
+        start.command = super::automations::resolve_agent_program(&start.command);
+    }
     // The agent works on this box's workspace and nothing outside it.
     let cwd = PathBuf::from(&start.cwd);
     crate::commands::file_system::require_in_roots(&cwd, &[workspace.to_path_buf()])?;

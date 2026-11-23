@@ -31,6 +31,24 @@ use serde_json::{json, Value};
 /// A run that has not finished after this long is stopped.
 const RUN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const TICK: Duration = Duration::from_secs(30);
+
+/// The program to spawn for an agent CLI given by bare name on this box.
+///
+/// On a Windows box most agent CLIs are npm `.cmd` shims, and
+/// `Command::new("claude")` only looks for `claude.exe`, so the run failed with
+/// "program not found". Resolving through PATH/PATHEXT gives the shim's full
+/// path, which Rust's std then starts through cmd.exe with its own safe
+/// argument escaping (it refuses arguments it cannot escape rather than
+/// passing them through). Paths and non-Windows boxes are left alone: there a
+/// login shell or the OS does the lookup.
+pub(crate) fn resolve_agent_program(program: &str) -> String {
+    if cfg!(windows) && !program.contains(['/', '\\']) {
+        if let Some(path) = crate::commands::agent_probe::which(program) {
+            return path.to_string_lossy().to_string();
+        }
+    }
+    program.to_string()
+}
 const MAX_RUNS: usize = 200;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -307,7 +325,7 @@ async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result
     let log = std::fs::File::create(log_path).map_err(|e| format!("Could not create the run log: {e}"))?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
     let mut command = if cfg!(windows) {
-        let mut c = tokio::process::Command::new(&argv[0]);
+        let mut c = tokio::process::Command::new(resolve_agent_program(&argv[0]));
         c.args(&argv[1..]);
         c
     } else {
@@ -337,6 +355,40 @@ async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_and_unknown_programs_pass_through() {
+        assert_eq!(resolve_agent_program("/usr/local/bin/claude"), "/usr/local/bin/claude");
+        assert_eq!(resolve_agent_program(r"C:\tools\claude.cmd"), r"C:\tools\claude.cmd");
+        assert_eq!(resolve_agent_program("spacron-no-such-agent-xyz"), "spacron-no-such-agent-xyz");
+    }
+
+    /// The Windows-box case: an npm-style `.cmd` shim found by bare name, run
+    /// with a prompt full of cmd metacharacters that must arrive as one intact
+    /// argument rather than being split or executed.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_shim_is_found_by_bare_name_and_gets_its_arguments_intact() {
+        let dir = std::env::temp_dir().join(format!("spacron-shim-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("spacron-fake-agent.cmd"), "@echo ARG=%1\r\n").unwrap();
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![dir.clone()];
+        paths.extend(std::env::split_paths(&old));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+
+        let program = resolve_agent_program("spacron-fake-agent");
+        assert!(program.to_ascii_lowercase().ends_with("spacron-fake-agent.cmd"), "{program}");
+        let out = std::process::Command::new(&program)
+            .arg("fix this & that | now")
+            .output()
+            .expect("the shim starts");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("ARG=\"fix this & that | now\""), "{text}");
+
+        std::env::set_var("PATH", old);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn due_picks_the_latest_passed_occurrence_and_checks_reach() {
