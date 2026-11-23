@@ -86,6 +86,8 @@ describe('terminal chat view', () => {
     expect(permissionModesFor('claude')).toEqual(['ask', 'accept-edits', 'auto', 'full-access']);
     expect(permissionModesFor('codex')).toEqual(['ask', 'auto', 'full-access']);
     expect(permissionModesFor('opencode')).toEqual(['ask', 'full-access']);
+    expect(permissionModesFor('antigravity', true)).toEqual(['ask', 'auto', 'full-access']);
+    expect(permissionModesFor('antigravity')).toEqual([]);
     expect(permissionArgs('claude', 'accept-edits')).toBe('--permission-mode acceptEdits');
     expect(permissionArgs('codex', 'auto')).toBe('--approve-for-me');
     expect(permissionArgs('codex', 'ask')).toBe('-a on-request -s read-only -c approvals_reviewer="user"');

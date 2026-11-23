@@ -13,6 +13,8 @@ import {
   type AcpServerRequest,
   type AcpSession,
 } from '$lib/services/acp-transport';
+import { acpApprovalDecision } from '$lib/services/acp-approval-policy';
+import { chooseAntigravityAcpMode } from '$lib/services/acp-permission-modes';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { get } from '$lib/stores/storeCompat';
 import { chatAutoAnswerInline } from '$lib/stores/settings';
@@ -201,11 +203,13 @@ export function advertisedModes(record: Json): string[] {
 
 /**
  * The agent's own permission mode for `access`, or null when it has none.
- * Verified 2026-11-20: Antigravity offers default/accept-edits/auto/plan;
  * OpenCode (build/plan), Cursor (agent/plan/ask) and Grok (none) have no
  * permission modes, so nothing is sent to them.
  */
-export function permissionModeFor(modes: readonly string[], access: StructuredAccess): string | null {
+export function permissionModeFor(modes: readonly string[], access: StructuredAccess, agent?: string): string | null {
+  if (agent === 'antigravity') {
+    return chooseAntigravityAcpMode({ availableModes: modes.map((id) => ({ id })), currentModeId: null }, access === 'ask' ? 'supervised' : access);
+  }
   const lower = new Map(modes.map((mode) => [mode.toLowerCase(), mode]));
   const pick = (...ids: string[]) => ids.map((id) => lower.get(id)).find((mode): mode is string => !!mode) ?? null;
   if (access === 'full-access') return pick('bypasspermissions', 'bypass-permissions', 'yolo', 'full-access', 'auto');
@@ -244,7 +248,7 @@ function capabilitiesForAgent(agent: string): import('./provider').StructuredPro
         // registry checks before it claims a child is provider-native.
         subagents: { supported: false, spawn: false, inspectTranscript: false },
         nativeCommands: false,
-        supportedAccessModes: ['ask', 'auto'],
+        supportedAccessModes: ['ask', 'auto', 'full-access'],
       };
     case 'opencode':
       return {
@@ -487,7 +491,7 @@ function makeProvider(agent: string): StructuredChatProvider {
   async function applyAccessMode(sessionId: number, access: StructuredAccess): Promise<void> {
     const runtime = sessions.get(sessionId);
     if (!runtime) return;
-    const modeId = permissionModeFor(runtime.modes ?? [], access);
+    const modeId = permissionModeFor(runtime.modes ?? [], access, agent);
     if (!modeId) return;
     try {
       const result = await setAcpSessionMode(runtime.session, runtime.sessionId, modeId);
@@ -538,12 +542,21 @@ function makeProvider(agent: string): StructuredChatProvider {
       const options = (Array.isArray(params.options) ? params.options : []).map(rec).filter((option): option is Json => option !== null);
       const access = stores.get(sessionId)?.access ?? 'ask';
       const autoAnswer = get(chatAutoAnswerInline);
-      if (autoApproves(access, str(toolCall?.kind), autoAnswer)) {
-        void sessions.get(sessionId)?.session.respond(request.requestId, permissionOutcome(options, 'accept')).catch(() => undefined);
+      const offered = approvalOptions(options);
+      const toolKind = str(toolCall?.kind);
+      const outcome = agent === 'antigravity'
+        ? acpApprovalDecision(
+            access === 'ask' ? 'supervised' : access,
+            toolKind ?? undefined,
+            offered.map(({ id, label, kind }) => ({ id, label, kind: kind ?? undefined })),
+            { toolCallId: str(toolCall?.toolCallId) ?? undefined },
+          )
+        : null;
+      if (outcome || (agent !== 'antigravity' && autoApproves(access, toolKind, autoAnswer))) {
+        void sessions.get(sessionId)?.session.respond(request.requestId, permissionOutcome(options, 'accept', outcome?.option.id)).catch(() => undefined);
         return;
       }
       permissionOptions.set(String(request.requestId), options);
-      const offered = approvalOptions(options);
       stores.update(sessionId, (state) => ({ approvals: [...state.approvals, { requestId: request.requestId, kind: 'other', title: str(toolCall?.title) ?? 'Allow this agent action?', detail: str(params.title) ?? str(params.description) ?? str(params.command) ?? str(toolCall?.kind), ...(offered.length ? { options: offered } : {}) }] }));
     } else {
       const kind = askKindFor(request.method);

@@ -93,6 +93,9 @@ describe('ACP access modes (as each agent advertised them, 2026-11-20)', () => {
     expect(permissionModeFor([], 'full-access')).toBeNull(); // Grok
     expect(permissionModeFor(['agent', 'plan', 'ask'], 'ask')).toBeNull(); // Cursor's `ask` is Q&A, not approvals
     expect(permissionModeFor(['default', 'accept-edits', 'auto', 'plan'], 'ask')).toBe('default');
+    expect(permissionModeFor(['default', 'accept-edits', 'auto', 'plan'], 'auto', 'antigravity')).toBe('auto');
+    expect(permissionModeFor(['default', 'accept-edits'], 'auto', 'antigravity')).toBe('default');
+    expect(permissionModeFor(['default', 'auto'], 'full-access', 'antigravity')).toBe('default');
   });
 
   it('answers permission requests itself under Full access and, for file work, under Auto', () => {

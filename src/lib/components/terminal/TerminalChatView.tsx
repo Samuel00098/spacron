@@ -1407,6 +1407,7 @@ export default function TerminalChatView({
     ? modelCatalogNote(agentLabel, catalogStatus, selectedModelIssue(catalogStatus, currentModelId ?? null, currentEffort ?? null))
     : null;
   const permissionMode: ChatPermissionMode = picks.permission ?? reported.permission ?? sessionPermissionMode(sessionId);
+  const permissionModes = agent ? permissionModesFor(agent, structuredMode) : [];
   const context = structuredMode
     ? structuredState?.contextUsed != null
       ? { used: structuredState.contextUsed, window: structuredState.contextWindow, estimated: false, breakdown: structuredState.contextBreakdown ?? null }
@@ -2018,9 +2019,10 @@ export default function TerminalChatView({
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             </button>
-            {agent && permissionModesFor(agent).length > 0 && (
+            {agent && permissionModes.length > 0 && (
               <AccessMenu
                 agent={agent}
+                modes={permissionModes}
                 mode={permissionMode}
                 disabled={optionsLocked}
                 title={optionsLocked ? 'Change permissions between turns' : 'Permissions'}
@@ -2333,12 +2335,14 @@ function PermissionIcon({ mode }: { mode: ChatPermissionMode }) {
  */
 function AccessMenu({
   agent,
+  modes,
   mode,
   disabled,
   title,
   onPick,
 }: {
   agent: NonNullable<ReturnType<typeof transcriptAgentFor>>;
+  modes: ChatPermissionMode[];
   mode: ChatPermissionMode;
   disabled: boolean;
   title: string;
@@ -2376,7 +2380,6 @@ function AccessMenu({
     };
   }, [open]);
 
-  const modes = permissionModesFor(agent);
   return (
     <div className="terminal-chat-option" ref={rootRef}>
       <button

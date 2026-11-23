@@ -374,8 +374,9 @@ export function permissionDescription(agent: TranscriptAgent, mode: ChatPermissi
   return PERMISSION_MODE_COPY[mode].description;
 }
 
-export function permissionModesFor(agent: TranscriptAgent): ChatPermissionMode[] {
+export function permissionModesFor(agent: TranscriptAgent, structured = false): ChatPermissionMode[] {
   switch (agent) {
+    case 'antigravity': return structured ? ['ask', 'auto', 'full-access'] : [];
     case 'claude':
     case 'openclaude': return ['ask', 'accept-edits', 'auto', 'full-access'];
     case 'codex':

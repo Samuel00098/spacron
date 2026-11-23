@@ -66,7 +66,7 @@ describe('structured provider capabilities and operations', () => {
       contextUsage: true,
       mcp: true,
       subagents: { supported: false, spawn: false, inspectTranscript: false },
-      supportedAccessModes: ['ask', 'auto'],
+      supportedAccessModes: ['ask', 'auto', 'full-access'],
     });
 
     const opencode = providerCapabilities('opencode');

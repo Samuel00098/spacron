@@ -18,13 +18,17 @@ vi.mock('./visuals', () => ({ prepareStructuredVisuals: async () => ({}) }));
 vi.mock('$lib/stores/settings', () => ({ chatAutoAnswerInline: { subscribe: (fn: (v: boolean) => void) => { fn(false); return () => {}; } } }));
 
 import { createAcpProvider } from './acp-session';
+import type { AcpServerRequest } from '$lib/services/acp-transport';
 import { piProvider } from './pi-session';
 
 function session() {
   let raw: (line: string) => void = () => {};
   return {
     request: vi.fn(async (_method: string, _params: unknown) => ({ sessionId: 'saved-session' })),
-    onNotification: vi.fn(async (_listener: (notification: Record<string, unknown>) => void) => {}), onRequest: vi.fn(async () => {}), onExit: vi.fn(async () => {}),
+    onNotification: vi.fn(async (_listener: (notification: Record<string, unknown>) => void) => {}),
+    onRequest: vi.fn(async (_listener: (request: AcpServerRequest) => void) => {}),
+    onExit: vi.fn(async () => {}),
+    respond: vi.fn(async () => {}),
     onRawLine: vi.fn(async (listener: (line: string) => void) => { raw = listener; }),
     writeRaw: vi.fn(async (line: string) => {
       const frame = JSON.parse(line);
@@ -101,6 +105,28 @@ describe('history resumes the native conversation under its owner', () => {
       ['user', 'First question'], ['assistant', 'First answer'], ['user', 'Second question'], ['assistant', 'Second answer'],
     ]);
     await provider.close(10);
+  });
+
+  it('asks in Antigravity Auto and keeps fixed choices explicit in Full access', async () => {
+    const rpc = session();
+    transport.open.mockResolvedValue(rpc);
+    const provider = createAcpProvider('antigravity');
+    await provider.start(11, '/repo', { access: 'auto' });
+    const request = rpc.onRequest.mock.calls[0][0];
+    const options = [{ optionId: 'once', name: 'Allow once', kind: 'allow_once' }];
+    request({ requestId: 1, method: 'session/request_permission', params: { toolCall: { kind: 'edit' }, options } });
+    expect(rpc.respond).not.toHaveBeenCalled();
+    expect(provider.get(11)?.approvals[0]?.requestId).toBe(1);
+    await provider.answerApproval(11, 1, 'accept', 'once');
+    expect(rpc.respond).toHaveBeenCalledWith(1, { outcome: { outcome: 'selected', optionId: 'once' } });
+
+    provider.setAccess(11, 'full-access');
+    request({ requestId: 2, method: 'session/request_permission', params: { toolCall: { kind: 'execute' }, options } });
+    expect(rpc.respond).toHaveBeenCalledWith(2, { outcome: { outcome: 'selected', optionId: 'once' } });
+    request({ requestId: 3, method: 'session/request_permission', params: { toolCall: { toolCallId: 'interaction_3' }, options } });
+    expect(rpc.respond).toHaveBeenCalledTimes(2);
+    expect(provider.get(11)?.approvals[0]?.requestId).toBe(3);
+    await provider.close(11);
   });
 
   it('Pi opens the requested session at launch and keeps its native identity', async () => {
