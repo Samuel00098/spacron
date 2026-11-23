@@ -4039,22 +4039,24 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
               <>
                 {/* Voice settings and voice history are two views of the SAME
                     tab — history is not a top-level tab of its own. */}
-                <div className="settings-subnav" role="tablist" aria-label="Voice section">
-                  {([
-                    { id: 'settings' as const, label: 'Settings' },
-                    { id: 'history' as const, label: 'History' },
-                  ]).map((view) => (
-                    <button
-                      key={view.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={voiceView === view.id}
-                      className={classNames('settings-subnav-btn', voiceView === view.id && 'active')}
-                      onClick={() => setVoiceView(view.id)}
-                    >
-                      {view.label}
-                    </button>
-                  ))}
+                <div>
+                  <div className="settings-subnav" role="tablist" aria-label="Voice section">
+                    {([
+                      { id: 'settings' as const, label: 'Settings' },
+                      { id: 'history' as const, label: 'History' },
+                    ]).map((view) => (
+                      <button
+                        key={view.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={voiceView === view.id}
+                        className={classNames('settings-subnav-btn', voiceView === view.id && 'active')}
+                        onClick={() => setVoiceView(view.id)}
+                      >
+                        {view.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {voiceView === 'history' && <VoiceHistoryPanel />}
