@@ -1,5 +1,10 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { get } from '$lib/stores/storeCompat';
+import { speakAgentCompletions } from '$lib/stores/settings';
+import { speakText } from '$lib/services/read-aloud';
+import { noteAgentPrompted, noteAgentTurnEnded } from './agentTurnState';
+
+vi.mock('$lib/services/read-aloud', () => ({ speakText: vi.fn() }));
 import { platformLaunchFlags, pasteLineBreak } from '$lib/services/agent-permissions';
 
 const ptyDataHandlers = vi.hoisted(() => new Map<number, (bytes: Uint8Array) => void>());
@@ -1352,6 +1357,28 @@ describe('close notifications', () => {
     expect(toastMessages()).toContain('Terminal 1 closed');
     const severities = vi.mocked(showToast).mock.calls.map((call: unknown[]) => String(call[1]));
     expect(severities).not.toContain('error');
+  });
+
+  it('speaks a busy agent exit but does not repeat an announced turn', async () => {
+    const previousSpeech = get(speakAgentCompletions);
+    speakAgentCompletions.set(true);
+    vi.mocked(speakText).mockClear();
+    try {
+      const busyAgent = await spawnAgentPreset('claude', undefined, { skipAutoBrief: true });
+      expect(busyAgent).not.toBeNull();
+      noteAgentPrompted(busyAgent!, 'Check the build');
+      firePtyExit(busyAgent!, 0);
+      expect(speakText).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('has exited'));
+
+      const finishedAgent = await spawnAgentPreset('claude', undefined, { skipAutoBrief: true });
+      expect(finishedAgent).not.toBeNull();
+      noteAgentPrompted(finishedAgent!, 'Check the build');
+      noteAgentTurnEnded(finishedAgent!, 'finished', 'declared');
+      firePtyExit(finishedAgent!, 0);
+      expect(speakText).toHaveBeenCalledTimes(1);
+    } finally {
+      speakAgentCompletions.set(previousSpeech);
+    }
   });
 
   it('still reports a process that quit by itself as an error', async () => {

@@ -949,13 +949,12 @@ function announceCompletionAloud(
   status: CompletionSummary['status'],
   title: string
 ): void {
-  if (!get(announceAgentCompletions)) return;
   const line =
     status === 'blocked' ? `${name} needs your input: ${title}.` :
     status === 'failed' ? `${name} failed: ${title}.` :
     `${name} finished: ${title}.`;
   if (get(speakAgentCompletions)) speakText(line);
-  playNudge(status);
+  if (get(announceAgentCompletions)) playNudge(status);
 }
 
 /** True while `sessionId` is the live, running terminal still leased to `taskId`. */
@@ -1288,8 +1287,7 @@ async function notifyChatCompletion(
     6000,
     true, // notifySystem — ping the OS even when the app is focused or hidden
   );
-  if (!get(announceAgentCompletions)) return;
-  playNudge(status);
+  if (get(announceAgentCompletions)) playNudge(status);
   if (get(speakAgentCompletions)) {
     speakText(
       status === 'done'
@@ -3715,12 +3713,7 @@ function notifyAdoptedTurnEnd(
 
   // The completion card below is the one visual notification for this turn end —
   // a toast would duplicate it. The chime stays as the "right now" audio cue.
-  if (!silent && get(announceAgentCompletions)) {
-    // Read the turn end back via TTS, then chime. A chime on top of TTS is fine
-    // — they're complementary (voice says what happened, chime grabs attention).
-    if (get(speakAgentCompletions)) speakText(spokenTurnEnd(name, told));
-    playNudge(told.status === 'done' ? 'done' : 'blocked');
-  }
+  if (!silent) announceReportedTurn(name, told);
 
   // A hand-launched agent can still be one a conversation has been driving —
   // the orchestrator adopts a live session the moment it is asked to message
@@ -3740,6 +3733,11 @@ function notifyAdoptedTurnEnd(
   // task it was sent.
   const summary = getSessionHeaderSummary(sessionId) ?? turn?.task;
   appendAgentTurnCard(task, name, told.status, told.reason, told.endedBy, silent, asked ? undefined : threadId, summary);
+}
+
+function announceReportedTurn(name: string, told: TurnEndPresentation): void {
+  if (get(speakAgentCompletions)) speakText(spokenTurnEnd(name, told));
+  if (get(announceAgentCompletions)) playNudge(told.status === 'done' ? 'done' : 'blocked');
 }
 
 /**
@@ -3876,7 +3874,10 @@ export function recordUnwatchedAgentReport(
   const session =
     sessionId == null ? undefined : get(allProjectSessions).find((s) => s.id === sessionId);
   const projectId = task?.projectId ?? session?.projectId ?? getActiveTerminalProjectId();
-  if (!projectId) return null;
+  if (!projectId) {
+    announceReportedTurn(fallbackName, told);
+    return null;
+  }
 
   const name =
     task?.name?.trim()
@@ -3951,10 +3952,7 @@ export function recordUnwatchedAgentReport(
 
   // The same audio cue every other declared turn end gets. The card above is
   // the only visual one — see the dedupe note on `notifyAdoptedTurnEnd`.
-  if (get(announceAgentCompletions)) {
-    if (get(speakAgentCompletions)) speakText(spokenTurnEnd(name, told));
-    playNudge(told.status === 'done' ? 'done' : 'blocked');
-  }
+  announceReportedTurn(name, told);
 
   return { kind: 'filed', projectId };
 }

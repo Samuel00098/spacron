@@ -10,6 +10,7 @@ import {
 import {
   terminalShell,
   announceAgentCompletions,
+  speakAgentCompletions,
   agentPermissionMode,
   agentCmdOverrides,
   agentDefaultArgs,
@@ -27,6 +28,7 @@ import {
   resolveAgentLaunchEnv,
 } from '$lib/services/agent-permissions';
 import { playNudge } from '$lib/services/nudge';
+import { speakText } from '$lib/services/read-aloud';
 import { showToast } from '$lib/stores/notification';
 import { buildAgentCharter } from '$lib/services/orchestrator/agent-charter';
 import {
@@ -44,7 +46,7 @@ import { ensureOrchestratorBrief } from '$lib/services/orchestrator/orchestrator
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { recordAgentSpawn, forgetAgentSpawn } from '$lib/stores/activityStats';
 import { agentSessionClosed } from '$lib/services/keep-awake';
-import { forgetAgentTurnState, noteAgentLaunched, noteAgentLineSubmitted, noteAgentPrompted } from './agentTurnState';
+import { agentTurnStates, forgetAgentTurnState, noteAgentLaunched, noteAgentLineSubmitted, noteAgentPrompted } from './agentTurnState';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { agentPanelImages } from '$lib/stores/agentPanelImages';
 import { reclaimWorktree, type WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
@@ -1052,6 +1054,7 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
   const state = getProjectState(sessionProjectId, isDev);
   const session = state.sessions.find((x) => x.id === id);
   const closing = closingSessions.get(id);
+  const turnPhase = get(agentTurnStates)[id]?.phase;
   exitCallbacks.get(id)?.(code);
   updateProjectState(sessionProjectId, (current) => ({
     ...current,
@@ -1095,6 +1098,11 @@ function handlePtyExit(id: number, owningProjectId: string, code: number) {
     // work that was cancelled out from under it.
     if (!wasKilled && get(announceAgentCompletions)) {
       playNudge(clean ? 'done' : 'failed');
+    }
+    // A confirmed turn already had a chance to speak. Only announce an exit
+    // here when it ended work that was still in progress.
+    if (!wasKilled && (turnPhase === 'working' || turnPhase === 'quiet') && get(speakAgentCompletions)) {
+      speakText(clean ? `${label} has exited.` : `${label} exited with errors.`);
     }
     // Orchestrator-tracked sessions (leased/adopted) already get a completion
     // card in the inbox on exit — the card is the notification. Only untracked

@@ -1,6 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { get } from '$lib/stores/storeCompat';
-import { mcpServers } from '$lib/stores/settings';
+import { announceAgentCompletions, mcpServers, speakAgentCompletions } from '$lib/stores/settings';
+import { speakText } from '$lib/services/read-aloud';
+import { playNudge } from '$lib/services/nudge';
+
+vi.mock('$lib/services/read-aloud', () => ({ speakText: vi.fn() }));
+vi.mock('$lib/services/nudge', () => ({ playNudge: vi.fn() }));
 import { useCommandPaletteStore } from '$lib/stores/zustand/commandpalette';
 import { layoutControlCommand } from '$lib/stores/layoutControl';
 import { chatDirectAgentMode } from '$lib/stores/chatDirectMode';
@@ -3756,6 +3761,26 @@ describe('recordUnwatchedAgentReport', () => {
   afterEach(() => {
     orchestratorTasks.set([]);
     chatMessages.set({});
+  });
+
+  it('reads a terminal completion once when voice is on and the chime is off', () => {
+    const previousChime = get(announceAgentCompletions);
+    const previousSpeech = get(speakAgentCompletions);
+    announceAgentCompletions.set(false);
+    speakAgentCompletions.set(true);
+    vi.mocked(speakText).mockClear();
+    vi.mocked(playNudge).mockClear();
+    try {
+      agentTurns.noteAgentPrompted(70, 'Check the build');
+      const signal = { kind: 'finished', detail: 'Build passed.' } as const;
+      recordUnwatchedAgentReport(70, signal, 'Agent');
+      expect(recordUnwatchedAgentReport(70, signal, 'Agent')).toEqual({ kind: 'duplicate' });
+      expect(speakText).toHaveBeenCalledExactlyOnceWith('Agent finished its turn.');
+      expect(playNudge).not.toHaveBeenCalled();
+    } finally {
+      announceAgentCompletions.set(previousChime);
+      speakAgentCompletions.set(previousSpeech);
+    }
   });
 
   it('files the report as a completion card under the task that owns the session', async () => {
