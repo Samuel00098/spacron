@@ -922,7 +922,14 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 .terminal-chat-send:hover:not(:disabled) { transform: scale(1.05); }
 .terminal-chat-send:active:not(:disabled) { transform: scale(0.94); }
 .terminal-chat-send:disabled { opacity: 0.25; cursor: default; }
-.terminal-chat-send.stop { background: var(--text-primary); }
+.terminal-chat-send.stop {
+  background: #d52d49;
+  color: #fff;
+  box-shadow: 0 0 0 1px #ffffff26, 0 2px 8px #d52d4959 !important;
+}
+.terminal-chat-send.stop:hover {
+  background: #df3650;
+}
 
 .terminal-chat-keys {
   display: flex;
