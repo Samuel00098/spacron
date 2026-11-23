@@ -861,14 +861,14 @@
   border-radius: 6px;
   border: none;
   cursor: pointer;
-  background: var(--success, #16a34a);
-  color: #fff;
-  transition: filter 0.15s ease;
+  background: color-mix(in srgb, var(--success, #16a34a) 16%, transparent);
+  color: var(--foreground);
+  transition: background-color 0.15s ease;
   white-space: nowrap;
 }
 
 .pr-merge-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
+  background: color-mix(in srgb, var(--success, #16a34a) 24%, transparent);
 }
 
 .pr-merge-btn:disabled {
