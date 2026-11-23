@@ -638,7 +638,7 @@ export async function stopBotRun(bot: Pick<Bot, 'boxId'>, runId: string): Promis
   await call(bot.boxId, 'stop', { runId });
 }
 
-export async function fetchBotLog(bot: Pick<Bot, 'boxId'>, runId: string): Promise<{ text: string; truncated: boolean }> {
+export async function fetchBotLog(bot: Pick<Bot, 'boxId'>, runId: string): Promise<{ text: string; truncated: boolean; reply?: string }> {
   return call(bot.boxId, 'log', { runId });
 }
 

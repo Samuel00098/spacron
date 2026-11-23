@@ -6,6 +6,7 @@ import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { usageState } from '$lib/stores/usage';
 import { getAgentRoster } from '$lib/stores/runs';
 import { freshLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import { stripTerminalOutput } from '$lib/services/orchestrator/activity-log';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import { computerUse as computerUseSetting, mcpServers } from '$lib/stores/settings';
 import { computerUseSupported } from '$lib/stores/computerUse';
@@ -548,6 +549,13 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
  * and reads exactly like a chat with an agent, and follows the same chat
  * appearance settings. No avatars beside the messages.
  */
+function botChatReply(log: Awaited<ReturnType<typeof fetchBotLog>>): string {
+  if (log.reply !== undefined) return log.reply;
+  return log.text.includes('\x1b')
+    ? stripTerminalOutput(log.text.replace(/\r\n/g, '\n'))
+    : log.text;
+}
+
 function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: BotRun }) {
   const appearance = useStore(botChatAppearance);
   const visualsOn = useStore(botChatVisuals);
@@ -589,7 +597,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
     for (const run of shown) {
       if (!run.log || fetchedAt.current[run.id] === run.status) continue;
       fetchedAt.current[run.id] = run.status;
-      void fetchBotLog(bot, run.id).then((log) => setReplies((r) => ({ ...r, [run.id]: log.text })))
+      void fetchBotLog(bot, run.id).then((log) => setReplies((r) => ({ ...r, [run.id]: botChatReply(log) })))
         .catch(() => { delete fetchedAt.current[run.id]; });
     }
   }, [finishedKey]);
@@ -597,7 +605,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
     if (!active) return;
     const timer = window.setInterval(() => {
       setNow(Date.now());
-      void fetchBotLog(bot, active.id).then((log) => setReplies((r) => ({ ...r, [active.id]: log.text }))).catch(() => {});
+      void fetchBotLog(bot, active.id).then((log) => setReplies((r) => ({ ...r, [active.id]: botChatReply(log) }))).catch(() => {});
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [active?.id]);

@@ -268,10 +268,34 @@ read the computed CSS variables at startup and redraw on the window's spacron:th
 user send something back to you, add a button that calls window.spacron.compose(\"a plain-language request\"): it puts that \
 text in their message box for them to review and send. Always also write the key result in plain text.";
 
+/// Extract assistant text from OpenCode's newline-delimited run events.
+fn opencode_reply(log: &str) -> Option<String> {
+    let mut structured = false;
+    let mut parts = Vec::new();
+    for line in log.lines().filter(|line| line.trim_start().starts_with('{')) {
+        let Ok(event) = serde_json::from_str::<Value>(line) else { continue };
+        if !event["sessionID"].is_string() || !event["timestamp"].is_number() {
+            continue;
+        }
+        match event["type"].as_str() {
+            Some("text") if event["part"]["type"] == "text" => {
+                structured = true;
+                if let Some(text) = event["part"]["text"].as_str() {
+                    parts.push(text.to_owned());
+                }
+            }
+            Some("step_start" | "step_finish" | "tool_use" | "reasoning" | "error") => structured = true,
+            _ => {}
+        }
+    }
+    structured.then(|| parts.join("\n\n"))
+}
+
 /// The end of a run's output, for the conversation the next run sees.
 fn reply_tail(root: &Path, run: &BotRun) -> String {
     let text = run.log.as_deref().and_then(|l| std::fs::read(root.join(l)).ok())
         .map(|b| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default();
+    let text = opencode_reply(&text).unwrap_or(text);
     if text.chars().count() <= CONTEXT_REPLY_CHARS {
         return text;
     }
@@ -432,9 +456,11 @@ fn codex_mcp_flags(path: &Path) -> Vec<String> {
 pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[String])>) -> Result<Vec<String>, String> {
     let mut argv = bot_agent_command(&bot.agent, prompt, bot.model.as_deref())?;
     let exe = argv[0].clone();
-    let name = Path::new(&exe).file_stem().and_then(|s| s.to_str()).unwrap_or(&exe).to_ascii_lowercase();
+    let basename = exe.rsplit(['/', '\\']).next().unwrap_or(&exe);
+    let name = Path::new(basename).file_stem().and_then(|s| s.to_str()).unwrap_or(basename).to_ascii_lowercase();
     let mut flags: Vec<String> = Vec::new();
     match name.as_str() {
+        "opencode" => flags.extend(["--format".into(), "json".into()]),
         "claude" => {
             // `--mcp-config`, `--allowedTools` and `--disallowedTools` each take
             // a list, so each is followed by another option, never the prompt.
@@ -603,7 +629,12 @@ pub(crate) fn log(args: Value, root: &Path) -> Result<Value, String> {
     let bytes = std::fs::read(root.join(rel)).unwrap_or_default();
     let truncated = bytes.len() > MAX_LOG_BYTES;
     let tail = if truncated { &bytes[bytes.len() - MAX_LOG_BYTES..] } else { &bytes[..] };
-    Ok(json!({ "text": String::from_utf8_lossy(tail), "truncated": truncated }))
+    let text = String::from_utf8_lossy(tail);
+    let mut output = json!({ "text": text, "truncated": truncated });
+    if let Some(reply) = opencode_reply(&String::from_utf8_lossy(&bytes)) {
+        output["reply"] = json!(reply);
+    }
+    Ok(output)
 }
 
 // ── attachments ─────────────────────────────────────────────────────────────
@@ -1136,6 +1167,24 @@ mod tests {
         tick(dir.path());
         let runs: Vec<BotRun> = read_json(&super::dir(dir.path()).join("runs.json"));
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn opencode_chat_extracts_assistant_text_from_run_events() {
+        let events = concat!(
+            "startup diagnostic\n",
+            r#"{"type":"step_start","sessionID":"ses_1","timestamp":1}"#, "\n",
+            r##"{"type":"text","sessionID":"ses_1","timestamp":2,"part":{"type":"text","text":"# First\n\nParagraph"}}"##, "\n",
+            r#"{"type":"tool_use","sessionID":"ses_1","timestamp":3,"part":{"type":"tool","text":"Read ."}}"#, "\n",
+            r#"{"type":"text","sessionID":"ses_1","timestamp":4,"part":{"type":"text","text":"Final"}}"#, "\n",
+            r#"{"type":"step_finish","sessionID":"ses_1","timestamp":"#,
+        );
+        assert_eq!(opencode_reply(events).as_deref(), Some("# First\n\nParagraph\n\nFinal"));
+        assert_eq!(opencode_reply("Legacy reply"), None);
+        assert_eq!(opencode_reply(r#"{"type":"step_start","sessionID":"ses_1","timestamp":1}"#).as_deref(), Some(""));
+        let mut bot = parsed(bot("a", vec![]));
+        bot.agent = "opencode".into();
+        assert_eq!(bot_command(&bot, "hello", None).unwrap(), ["opencode", "run", "--format", "json", "hello"]);
     }
 
     #[test]
