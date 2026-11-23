@@ -2438,11 +2438,6 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
             />
           )}
           <form ref={composerRef} className={`chat-mode-composer${isComposerDragOver ? ' drag-over' : ''}`} onSubmit={(event) => { event.preventDefault(); void submit(); }} onDragOver={handleComposerDragOver} onDragLeave={handleComposerDragLeave} onDrop={(event) => void handleComposerDrop(event)}>
-          {isComposerDragOver && (
-            <div className="chat-mode-drop-overlay" aria-hidden="true">
-              Drop files to attach
-            </div>
-          )}
           {attachments.length > 0 && (
             <div className="chat-mode-attachment-list" aria-label="Attached files">
               {attachments.map((attachment) => (

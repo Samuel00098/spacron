@@ -1584,22 +1584,6 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent), 0 18px 50px rgba(0, 0, 0, 0.32);
 }
 
-.app-shell .chat-mode-drop-overlay {
-  position: absolute;
-  inset: 0;
-  border-radius: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
-  pointer-events: none;
-  z-index: 5;
-}
-
 .app-shell .chat-mode-attachment-chip.image {
   gap: 6px;
 }

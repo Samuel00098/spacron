@@ -26,6 +26,7 @@ const DRAG_THRESHOLD = 6;
 
 interface PendingDrag {
   path: string;
+  pointerId: number;
   startX: number;
   startY: number;
   active: boolean;
@@ -110,66 +111,44 @@ function FileNodeUnmemoized({ node }: { node: FileNodeType }) {
     showContextMenu(e.nativeEvent, node.entry.path, node.entry.is_dir);
   }
 
-  function cleanupPointerDrag() {
-    window.removeEventListener('mousemove', handleWindowMouseMove);
-    window.removeEventListener('mouseup', handleWindowMouseUp);
-    pendingDrag.current = null;
-  }
-
-  function handleWindowMouseMove(event: MouseEvent) {
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
     const drag = pendingDrag.current;
-    if (!drag) return;
-    const deltaX = event.clientX - drag.startX;
-    const deltaY = event.clientY - drag.startY;
-    const movedEnough = Math.hypot(deltaX, deltaY) >= DRAG_THRESHOLD;
-
-    if (!drag.active && !movedEnough) {
-      return;
-    }
-
+    if (!drag || drag.pointerId !== event.pointerId) return;
     if (!drag.active) {
+      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_THRESHOLD) return;
       drag.active = true;
       suppressClick.current = true;
-      window.dispatchEvent(
-        new CustomEvent('spacron-explorer-drag-start', { detail: { path: drag.path } }),
-      );
+      window.dispatchEvent(new CustomEvent('spacron-explorer-drag-start', { detail: { path: drag.path } }));
     }
-
-    window.dispatchEvent(
-      new CustomEvent('spacron-explorer-drag-move', {
-        detail: { path: drag.path, clientX: event.clientX, clientY: event.clientY },
-      }),
-    );
+    window.dispatchEvent(new CustomEvent('spacron-explorer-drag-move', {
+      detail: { path: drag.path, clientX: event.clientX, clientY: event.clientY },
+    }));
   }
 
-  function handleWindowMouseUp(event: MouseEvent) {
+  function finishPointerDrag(event: React.PointerEvent<HTMLDivElement>, dropped: boolean) {
     const drag = pendingDrag.current;
-    if (!drag) return;
-    cleanupPointerDrag();
-
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    pendingDrag.current = null;
     if (!drag.active) return;
 
-    event.preventDefault();
-    window.dispatchEvent(
-      new CustomEvent('spacron-explorer-drag-end', {
-        detail: { path: drag.path, clientX: event.clientX, clientY: event.clientY },
-      }),
-    );
-    requestAnimationFrame(() => {
-      suppressClick.current = false;
-    });
+    window.dispatchEvent(new CustomEvent('spacron-explorer-drag-end', {
+      detail: dropped
+        ? { path: drag.path, clientX: event.clientX, clientY: event.clientY }
+        : {},
+    }));
+    requestAnimationFrame(() => { suppressClick.current = false; });
   }
 
-  function handleMouseDown(event: React.MouseEvent) {
-    if (event.button !== 0) return;
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !event.isPrimary || renaming === node.entry.path) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
     pendingDrag.current = {
       path: node.entry.path,
+      pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       active: false,
     };
-    window.addEventListener('mousemove', handleWindowMouseMove);
-    window.addEventListener('mouseup', handleWindowMouseUp);
   }
 
   const renameInput = (
@@ -261,7 +240,12 @@ function FileNodeUnmemoized({ node }: { node: FileNodeType }) {
       className={`file-node file${selected.has(node.entry.path) ? ' selected' : ''}`}
       style={{ paddingLeft: node.depth * 16 + 8 }}
       onClick={handleClick}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={(event) => finishPointerDrag(event, true)}
+      onPointerCancel={(event) => finishPointerDrag(event, false)}
+      onLostPointerCapture={(event) => finishPointerDrag(event, false)}
+      onDragStart={(event) => event.preventDefault()}
       onKeyDown={handleKeydown}
       onContextMenu={handleContextMenu}
       role="treeitem"

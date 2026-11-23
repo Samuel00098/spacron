@@ -2000,9 +2000,6 @@ export default function TerminalChatView({
           onDragLeave={onComposerDragLeave}
           onDrop={(event) => void onComposerDrop(event)}
         >
-          {dropOver && (
-            <div className="terminal-chat-drop-overlay" aria-hidden="true">Drop files to attach</div>
-          )}
           {suggestions.length > 0 && (
             <ComposerMenu
               items={suggestions}
