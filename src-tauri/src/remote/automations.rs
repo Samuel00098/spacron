@@ -49,6 +49,26 @@ pub(crate) fn resolve_agent_program(program: &str) -> String {
     }
     program.to_string()
 }
+
+#[cfg(windows)]
+fn headless_windows_program(resolved: &Path) -> PathBuf {
+    // npm's OpenCode shim forwards its arguments to this native executable.
+    // Rust refuses multiline arguments to batch files because cmd.exe cannot
+    // safely preserve them. Launch the installed binary without a shell.
+    if resolved.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.eq_ignore_ascii_case("opencode.cmd")) {
+        if let Some(prefix) = resolved.parent() {
+            let modules = prefix.join("node_modules");
+            for package in ["@opencode/cli", "opencode-ai"] {
+                let binary = modules.join(package).join("bin").join("opencode.exe");
+                if binary.is_file() {
+                    return binary;
+                }
+            }
+        }
+    }
+    resolved.to_path_buf()
+}
+
 const MAX_RUNS: usize = 200;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -348,11 +368,15 @@ pub(crate) async fn spawn_headless(
     }
     let log = std::fs::File::create(log_path).map_err(|e| format!("Could not create the run log: {e}"))?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
-    let mut command = if cfg!(windows) {
-        let mut c = tokio::process::Command::new(resolve_agent_program(&argv[0]));
+    #[cfg(windows)]
+    let mut command = {
+        let resolved = resolve_agent_program(&argv[0]);
+        let mut c = tokio::process::Command::new(headless_windows_program(Path::new(&resolved)));
         c.args(&argv[1..]);
         c
-    } else {
+    };
+    #[cfg(not(windows))]
+    let mut command = {
         // A login shell, so a server started at boot finds CLIs on the user's PATH.
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let mut c = tokio::process::Command::new(shell);
@@ -415,6 +439,23 @@ mod tests {
         assert_eq!(resolve_agent_program("/usr/local/bin/claude"), "/usr/local/bin/claude");
         assert_eq!(resolve_agent_program(r"C:\tools\claude.cmd"), r"C:\tools\claude.cmd");
         assert_eq!(resolve_agent_program("spacron-no-such-agent-xyz"), "spacron-no-such-agent-xyz");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn headless_opencode_prefers_its_native_npm_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("opencode.cmd");
+        assert_eq!(headless_windows_program(&shim), shim);
+        for package in ["opencode-ai", "@opencode/cli"] {
+            let binary = dir.path().join("node_modules").join(package).join("bin").join("opencode.exe");
+            std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            std::fs::write(&binary, []).unwrap();
+            assert_eq!(headless_windows_program(&shim), binary);
+            assert_eq!(headless_windows_program(&binary), binary);
+        }
+        let other = dir.path().join("other.cmd");
+        assert_eq!(headless_windows_program(&other), other);
     }
 
     /// The Windows-box case: an npm-style `.cmd` shim found by bare name, run

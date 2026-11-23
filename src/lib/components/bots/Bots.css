@@ -390,6 +390,8 @@
 .bots-structured-chat .bots-composer-send svg { flex: none; }
 
 /* The time under a bot's reply (Settings > Bots > Chat > Message times). */
+.bots-structured-chat .bots-exchange .tcr-actions { opacity: 1; }
+.bots-structured-chat .bots-exchange .tcr-msg:not(:hover) .tcr-actions .tcr-time { visibility: visible; }
 .bots-reply-time {
   margin: 2px 0 0 2px;
   font-size: 11px;

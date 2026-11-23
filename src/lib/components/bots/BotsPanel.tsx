@@ -22,6 +22,7 @@ import {
 } from '$lib/services/bots/bots';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
 import { Dots, Markdown, UserTurn, contrastVars } from '$lib/components/terminal/TerminalChatView';
+import { MessageActions } from '$lib/components/terminal/TerminalChatRich';
 import { CHAT_WIDTH_COLUMN } from '$lib/stores/chatViewSettings';
 import {
   botChatAppearance,
@@ -672,17 +673,22 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
             </div>}
             {shown.map((run) => {
               const reply = replies[run.id]?.trim();
+              const segments = reply ? splitReply(reply) : [];
+              const replyText = segments.flatMap((segment) => segment.type === 'text' ? [segment.text] : []).join('\n\n').trim();
+              const replyTime = showTimes ? run.finishedAt ?? run.startedAt : null;
               return <div key={run.id} className="bots-exchange">
                 {run.message
                   ? <SentTurn bot={bot} run={run} />
                   : <div className="terminal-chat-notice">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
                 {reply && <div className="tcr-msg">
                   <div className="terminal-chat-agent">
-                    {splitReply(reply).map((segment, i) => segment.type === 'text'
+                    {segments.map((segment, i) => segment.type === 'text'
                       ? <Markdown key={`t${i}`} text={segment.text} onOpenImage={noImages} />
                       : visualsOn && <BotVisual key={`v${i}-${segment.visual.file}`} bot={bot} visual={segment.visual} status={run.status} onCompose={composeFromVisual} />)}
                   </div>
-                  {showTimes && <div className="bots-reply-time">{clock(run.finishedAt ?? run.startedAt)}</div>}
+                  {replyText
+                    ? <MessageActions text={replyText} time={replyTime} />
+                    : replyTime !== null && <div className="bots-reply-time">{clock(replyTime)}</div>}
                 </div>}
                 {run.status === 'running' && <div className="terminal-chat-working"><Dots /><span>{bot.name} is working · {Math.max(0, Math.round((now - run.startedAt) / 1000))}s</span></div>}
                 {run.status === 'missed' && <div className="terminal-chat-notice">Missed its scheduled time.</div>}
