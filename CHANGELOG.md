@@ -4,10 +4,11 @@ All notable changes to Spacron will be documented here.
 
 ## [v5.1.7] - 2026-11-23
 
-A small follow-up to 5.1.6 that makes setting up a remote box pick up the new server, and tidies the Focus panel control.
+A small follow-up to 5.1.6 that makes setting up a remote box pick up the new server, lets a Windows box start npm-installed agents, and tidies the Focus panel control.
 
 ### Fixed
 
+- **Agents start on a Windows box** — automations and the chat view on a Windows remote now find npm-installed agent CLIs (Claude Code, Codex, Gemini). They were started by bare name, which on Windows only finds `.exe` files, so they failed with "could not start".
 - **Updating the app now refreshes the remote server build** — a server downloaded by "Set up a new VPS…" is remembered with the app version that fetched it and only reused by that version. Before, an older cached build kept showing as ready after an update, so redeploying put the old server back on the box.
 - **Compact Focus panel picker** — the "1/2 · Tasks" control at the bottom of the workspace sizes to the panel name instead of a fixed width, so the count, name and arrow sit together without empty space.
 
