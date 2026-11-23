@@ -130,22 +130,39 @@
   .bots-template-picker .bots-template-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
 }
 
-.bots-detail { max-width: 860px; }
+.bots-detail { max-width: 1120px; margin-inline: auto; container-type: inline-size; }
 .bots-panel .bots-back { margin-bottom: 16px; padding: 6px 10px; background: transparent; color: var(--text-muted); }
 .bots-detail-head { display: flex; align-items: center; gap: 14px; }
 .bots-detail-head h3 { display: flex; align-items: center; gap: 10px; }
 .bots-detail-head p { margin-top: 4px; color: var(--text-muted); }
-.bots-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 18px 0 8px; }
+.bots-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
+.bots-detail > .bots-note { margin-bottom: 16px; }
 .bots-confirm { color: var(--text-muted); }
-.bots-section { margin-top: 24px; }
-.bots-section h4 { margin-bottom: 10px; font-size: 12px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase; color: var(--text-muted); }
-.bots-job { white-space: pre-wrap; line-height: 1.6; padding: 12px 14px; border-radius: 10px; background: var(--bg-tertiary); }
-.bots-run { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.bots-about-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.bots-section {
+  min-width: 0;
+  padding: clamp(16px, 2.2cqi, 24px);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 3%, var(--app-surface));
+  box-shadow: var(--surface-outline);
+}
+#app .bots-section h4 { margin-bottom: 14px; font-size: 1.15em !important; }
+.bots-job { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.bots-home-folder { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
+.bots-home-folder dt { margin-bottom: 6px; color: var(--text-muted); }
+.bots-home-folder dd { margin: 0; overflow-wrap: anywhere; }
+.bots-run-history { margin-top: 16px; }
+.bots-panel .bots-no-runs { padding: 18px 14px; border-radius: 8px; background: var(--app-surface); color: var(--text-muted); }
+.bots-run { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 12px 0; }
+.bots-run + .bots-run { border-top: 1px solid var(--border); }
 .bots-run .bots-dot { margin-top: 5px; }
-.bots-run > div { flex: 1; min-width: 0; }
+.bots-run-info { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .bots-run p { margin-top: 2px; color: var(--text-muted); font-size: 12px; }
 .bots-run small { display: block; margin-top: 4px; color: var(--text-muted); }
 .bots-log { max-height: 360px; margin: 10px 0 0; padding: 12px; overflow: auto; border-radius: 8px; background: var(--bg-primary, #000); font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+@container (max-width: 680px) {
+  .bots-about-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 @media (max-width: 720px) {
   .bots-header, .bots-body, .bots-editor-footer { padding-left: 16px; padding-right: 16px; }
@@ -179,8 +196,13 @@
 .bots-editor-main label.bots-check { margin-top: 16px; }
 .bots-editor-main label.bots-check + .bots-helper { margin: 4px 0 0 24px; }
 .bots-panel .bots-check input { width: 16px; height: 16px; margin: 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
-.bots-facts { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; color: var(--text-muted); font-size: 12px; }
-.bots-facts strong { color: var(--text-primary); font-weight: 500; margin-right: 4px; }
+.bots-facts { margin: 0; }
+.bots-facts > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: baseline; gap: 12px; padding: 9px 0; }
+.bots-facts > div + div { border-top: 1px solid var(--border); }
+.bots-facts dt { color: var(--text-muted); }
+.bots-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.bots-about-agent { display: flex; align-items: flex-start; gap: 6px; }
+.bots-about-agent > span:last-child { min-width: 0; }
 /* Breathing room between a field's helper text and the next field. */
 .bots-editor-side .bots-helper { margin-bottom: 18px; }
 .bots-editor-side label.bots-check + .bots-helper { margin-top: 6px; }

@@ -747,6 +747,7 @@ function BotAbout({ bot, runs, homeRoot, active, onEdit }: { bot: Bot; runs: Bot
   const [openLog, setOpenLog] = useState<{ id: string; text: string } | null>(null);
   const access = ACCESS_OPTIONS.find((o) => o.value === bot.access);
   const connectors = botConnectorNames(bot);
+  const agentName = getAgentRoster().find((agent) => agent.command === bot.agent)?.name ?? agentProgram(bot.agent);
   async function runNow() {
     setBusy(true); setError('');
     try { await runBotNow(bot.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
@@ -772,37 +773,43 @@ function BotAbout({ bot, runs, homeRoot, active, onEdit }: { bot: Bot; runs: Bot
           </> : <button type="button" className="bots-subtle" disabled={Boolean(active)} title={active ? 'Stop the run first' : undefined} onClick={() => setConfirmDelete(true)}>Delete</button>}
         </div>
         {bot.createdBy && bot.schedule !== 'manual' && !bot.enabled && <p className="bots-note">{bot.createdBy} created this bot. Its schedule is off until you turn it on.</p>}
-        <div className="bots-section">
-          <h4>Job</h4>
-          <p className="bots-job">{bot.instructions}</p>
-          <div className="bots-facts">
-            <span><strong>Agent</strong> {bot.agent}{bot.model ? ` (${bot.model})` : ''}</span>
-            <span><strong>May</strong> {access?.label.toLowerCase()}</span>
-            <span><strong>Connectors</strong> {connectors.length ? connectors.join(', ') : 'none'}</span>
-            <span><strong>Browser</strong> {bot.browser ? 'yes' : 'no'}</span>
-            <span><strong>Computer use</strong> {bot.computerUse ? (bot.boxId === LOCAL_HOST ? 'this PC\'s screen' : 'the box\'s desktop') : 'no'}</span>
-            {bot.canCreateBots && <span><strong>Creates bots</strong> yes</span>}
-          </div>
-          {homeRoot && <p className="bots-helper">Home folder: <code>{`${homeRoot}/${bot.id}`}</code></p>}
+        <div className="bots-about-grid">
+          <section className="bots-section">
+            <h4>Job</h4>
+            <p className="bots-job">{bot.instructions}</p>
+            {homeRoot && <dl className="bots-home-folder">
+              <dt>Home folder</dt>
+              <dd><code>{`${homeRoot}/${bot.id}`}</code></dd>
+            </dl>}
+          </section>
+          <section className="bots-section">
+            <h4>Agent and tools</h4>
+            <dl className="bots-facts">
+              <div><dt>Agent</dt><dd className="bots-about-agent"><AgentBrandMark command={bot.agent} name={agentName} className="bots-agent-mark" /><span>{agentName}{bot.model ? ` · ${bot.model}` : ''}</span></dd></div>
+              <div><dt>Permissions</dt><dd>{access?.label}</dd></div>
+              <div><dt>Connectors</dt><dd>{connectors.length ? connectors.join(', ') : 'None'}</dd></div>
+              <div><dt>Browser</dt><dd>{bot.browser ? 'Enabled' : 'Off'}</dd></div>
+              <div><dt>Computer use</dt><dd>{bot.computerUse ? (bot.boxId === LOCAL_HOST ? 'This PC’s screen' : 'Box desktop') : 'Off'}</dd></div>
+              {bot.canCreateBots && <div><dt>Can create bots</dt><dd>Enabled</dd></div>}
+            </dl>
+          </section>
         </div>
-        <div className="bots-section">
-          <h4>All runs</h4>
-          {!runs.length ? <p className="bots-helper">No runs yet.</p> : runs.map((run) => (
+        <section className="bots-section bots-run-history">
+          <h4>Run history</h4>
+          {!runs.length ? <p className="bots-no-runs">No runs yet. Runs will appear here once the bot starts.</p> : runs.map((run) => (
             <article key={run.id} className="bots-run">
               <span className={`bots-dot ${run.status}`} aria-hidden="true" />
-              <div>
+              <div className="bots-run-info">
                 <strong>{STATUS_LABEL[run.status]}</strong>
                 <p>{when(run.startedAt)} · {run.trigger === 'schedule' ? 'scheduled' : run.trigger === 'chat' ? 'chat' : 'manual'}{duration(run) ? ` · ${duration(run)}` : ''}</p>
                 {run.message && <small>“{run.message.length > 120 ? `${run.message.slice(0, 120)}…` : run.message}”</small>}
                 {run.detail && <small>{run.detail}</small>}
                 {openLog?.id === run.id && <pre className="bots-log">{openLog.text}</pre>}
               </div>
-              <div className="bots-run-actions">
-                {run.log && <button type="button" onClick={() => void toggleLog(run)}>{openLog?.id === run.id ? 'Hide output' : 'Raw output'}</button>}
-              </div>
+              {run.log && <div className="bots-run-actions"><button type="button" aria-expanded={openLog?.id === run.id} onClick={() => void toggleLog(run)}>{openLog?.id === run.id ? 'Hide output' : 'View output'}</button></div>}
             </article>
           ))}
-        </div>
+        </section>
       </div>
     </div>
   );
