@@ -912,26 +912,27 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   justify-content: center;
   border: 0;
   border-radius: 50%;
-  background: #3e5de0;
-  color: #fff;
-  box-shadow: 0 0 0 1px #ffffff33, 0 2px 8px #3e5de066 !important;
+  background: var(--button-bg, var(--accent));
+  color: var(--button-text, var(--bg-primary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 20%, transparent),
+    0 2px 8px color-mix(in srgb, var(--accent) 36%, transparent) !important;
   cursor: pointer;
   transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .terminal-chat-send:hover:not(:disabled) {
-  background: #4766e6;
+  background: var(--button-hover-bg, var(--accent-hover, var(--accent)));
   transform: scale(1.05);
 }
 .terminal-chat-send:focus-visible {
-  outline: 2px solid #91a7ff;
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 .terminal-chat-send:active:not(:disabled) { transform: scale(0.94); }
 .terminal-chat-send:disabled {
-  background: #293557;
-  color: #a4b3dc;
-  box-shadow: 0 0 0 1px #a4b3dc40 !important;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-primary));
+  color: var(--text-secondary, var(--text-primary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent) !important;
   cursor: default;
 }
 .terminal-chat-send.stop {
