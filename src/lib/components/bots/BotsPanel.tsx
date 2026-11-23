@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 import { useStore } from '$lib/react/useStore';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
@@ -19,6 +17,10 @@ import {
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
+import { Dots, Markdown, UserTurn, contrastVars } from '$lib/components/terminal/TerminalChatView';
+import { CHAT_WIDTH_COLUMN, chatAppearance } from '$lib/stores/chatViewSettings';
+import '$lib/components/terminal/TerminalChatRich.css';
+import '$lib/components/terminal/TerminalChatView.css';
 import './Bots.css';
 
 /** `selectedBotId` value that opens the editor for a new bot. */
@@ -402,14 +404,6 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
 
 // ── a bot: chat and details ─────────────────────────────────────────────────
 
-/** Bot replies are Markdown; they can quote web pages, so they are sanitized. */
-function Reply({ text }: { text: string }) {
-  const html = useMemo(() => {
-    try { return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }) as string); } catch { return DOMPurify.sanitize(text); }
-  }, [text]);
-  return <div className="bots-reply-md" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
 function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: string }) {
   const hostName = useHostName();
   const [tab, setTab] = useState<'chat' | 'about'>('chat');
@@ -439,20 +433,33 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
   );
 }
 
+/**
+ * A bot's chat, drawn with the structured chat's own pieces (UserTurn,
+ * Markdown, Dots, the composer markup and TerminalChatView.css) so it looks
+ * and reads exactly like a chat with an agent, and follows the same chat
+ * appearance settings. No avatars beside the messages.
+ */
 function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: BotRun }) {
+  const appearance = useStore(chatAppearance);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState<'send' | 'stop' | null>(null);
   const [error, setError] = useState('');
   const [replies, setReplies] = useState<Record<string, string>>({});
+  const [now, setNow] = useState(Date.now());
   const scroller = useRef<HTMLDivElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const shown = useMemo(() => runs.slice(0, 30).reverse(), [runs]);
   const finishedKey = shown.map((r) => `${r.id}:${r.status}`).join('|');
+  const noImages = () => {};
 
-  // Load replies for finished runs once, and keep the running one fresh.
+  // Fetch each run's reply, and again whenever its status changes: a reply
+  // read while the run was still going may be empty or partial.
+  const fetchedAt = useRef<Record<string, BotRun['status']>>({});
   useEffect(() => {
     let alive = true;
     for (const run of shown) {
-      if (!run.log || (replies[run.id] !== undefined && run.status !== 'running')) continue;
+      if (!run.log || fetchedAt.current[run.id] === run.status) continue;
+      fetchedAt.current[run.id] = run.status;
       void fetchBotLog(bot, run.id).then((log) => { if (alive) setReplies((r) => ({ ...r, [run.id]: log.text })); }).catch(() => {});
     }
     return () => { alive = false; };
@@ -460,15 +467,23 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => {
+      setNow(Date.now());
       void fetchBotLog(bot, active.id).then((log) => setReplies((r) => ({ ...r, [active.id]: log.text }))).catch(() => {});
-    }, 1_500);
+    }, 1_000);
     return () => window.clearInterval(timer);
   }, [active?.id]);
   useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [shown.length, active ? replies[active.id]?.length : 0]);
+  // Grow the composer with its text, like the structured chat.
+  useEffect(() => {
+    const el = textarea.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+  }, [draft]);
 
   async function send() {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || active) return;
     setBusy('send'); setError('');
     try {
       await sendBotMessage(bot.id, text);
@@ -481,48 +496,89 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
     setBusy('stop'); setError('');
     try { await stopBotRun(bot, active.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
+  const suggestions = bot.canCreateBots
+    ? ['Make me a bot that sends me a daily AI news digest', 'I want a bot that checks my inbox every morning', 'Build a bot that finds YouTube video ideas weekly']
+    : ['Do your job now', 'What can you do for me?', 'What did you do last time?'];
   return (
-    <div className="bots-chat">
-      <div className="bots-chat-log" ref={scroller}>
-        {!shown.length && <div className="bots-chat-empty">
-          <BotAvatar avatar={bot.avatar} size={72} />
-          <h3>{bot.name}</h3>
-          <p>{bot.instructions.length > 220 ? `${bot.instructions.slice(0, 220)}…` : bot.instructions}</p>
-          <div className="bots-chat-suggestions">
-            {(bot.canCreateBots
-              ? ['Make me a bot that sends me a daily AI news digest', 'I want a bot that checks my inbox every morning', 'Build a bot that finds YouTube video ideas weekly']
-              : ['Do your job now', 'What can you do for me?', 'What did you do last time?']
-            ).map((s) => <button key={s} type="button" onClick={() => setDraft(s)}>{s}</button>)}
-          </div>
-        </div>}
-        {shown.map((run) => {
-          const reply = replies[run.id];
-          return <div key={run.id} className="bots-exchange">
-            {run.message
-              ? <div className="bots-msg user"><div className="bots-bubble">{run.message}</div><time>{clock(run.startedAt)}</time></div>
-              : <div className="bots-event">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
-            <div className="bots-msg bot">
-              <BotAvatar avatar={bot.avatar} size={28} />
-              <div className="bots-bubble">
-                {run.status === 'running' && !reply?.trim() && <span className="bots-typing" aria-label="Working"><i /><i /><i /></span>}
-                {reply?.trim() ? <Reply text={reply} /> : run.status !== 'running' && <em className="bots-muted">{run.status === 'missed' ? 'Missed its scheduled time.' : '(No reply.)'}</em>}
-                {run.status !== 'running' && run.status !== 'completed' && <div className={`bots-run-note ${run.status}`}>{STATUS_LABEL[run.status]}{run.detail ? `: ${run.detail}` : ''}</div>}
+    <div
+      className="terminal-chat-view structured-chat-view bots-structured-chat"
+      data-chat-font={appearance.font === 'app' ? undefined : appearance.font === 'system' || appearance.font === 'terminal' ? appearance.font : 'custom'}
+      data-chat-font-size={appearance.fontSize == null ? undefined : 'set'}
+      data-contrast={appearance.contrast !== 100 ? '' : undefined}
+      style={{
+        '--tc-col': CHAT_WIDTH_COLUMN[appearance.width],
+        '--tc-code-size': `${appearance.codeFontSize}px`,
+        '--tc-font-family': `"${appearance.font}", system-ui, sans-serif`,
+        ...contrastVars(appearance.contrast, false),
+        ...(appearance.fontSize == null ? {} : { '--tc-font-size': `${appearance.fontSize}px` }),
+      } as React.CSSProperties}
+    >
+      <div className="terminal-chat-transcript">
+        <div className="terminal-chat-scroll" ref={scroller}>
+          <div className="terminal-chat-thread">
+            {!shown.length && <div className="bots-chat-empty">
+              <BotAvatar avatar={bot.avatar} size={64} />
+              <h3>{bot.name}</h3>
+              <p>{bot.instructions.length > 220 ? `${bot.instructions.slice(0, 220)}…` : bot.instructions}</p>
+              <div className="bots-chat-suggestions">
+                {suggestions.map((text) => <button key={text} type="button" className="terminal-chat-pill" onClick={() => { setDraft(text); textarea.current?.focus(); }}>{text}</button>)}
               </div>
-            </div>
-          </div>;
-        })}
+            </div>}
+            {shown.map((run) => {
+              const reply = replies[run.id]?.trim();
+              return <div key={run.id} className="bots-exchange">
+                {run.message
+                  ? <UserTurn text={run.message} images={[]} onOpenImage={noImages} />
+                  : <div className="terminal-chat-notice">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
+                {reply && <div className="tcr-msg"><div className="terminal-chat-agent"><Markdown text={reply} onOpenImage={noImages} /></div></div>}
+                {run.status === 'running' && <div className="terminal-chat-working"><Dots /><span>{bot.name} is working · {Math.max(0, Math.round((now - run.startedAt) / 1000))}s</span></div>}
+                {run.status === 'missed' && <div className="terminal-chat-notice">Missed its scheduled time.</div>}
+                {run.status === 'completed' && !reply && replies[run.id] !== undefined && <div className="terminal-chat-notice">No reply.</div>}
+                {(run.status === 'failed' || run.status === 'stopped' || run.status === 'interrupted') && (
+                  <div className={run.status === 'failed' ? 'terminal-chat-error' : 'terminal-chat-notice'} role={run.status === 'failed' ? 'alert' : undefined}>
+                    <span>{STATUS_LABEL[run.status]}{run.detail ? `: ${run.detail}` : ''}</span>
+                  </div>
+                )}
+              </div>;
+            })}
+          </div>
+        </div>
       </div>
-      {error && <p role="alert" className="bots-error">{error}</p>}
-      <form className="bots-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-        <textarea rows={1} placeholder={active ? `${bot.name} is working…` : `Message ${bot.name}`} value={draft} disabled={Boolean(active)}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
-        {active
-          ? <button type="button" className="bots-stop" disabled={busy !== null} onClick={() => void stop()} aria-label="Stop">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>{busy === 'stop' ? 'Stopping…' : 'Stop'}
-            </button>
-          : <button type="submit" className="bots-primary" disabled={busy !== null || !draft.trim()}>{busy === 'send' ? 'Sending…' : 'Send'}</button>}
-      </form>
+      <div className="terminal-chat-dock">
+        {error && <div className="terminal-chat-error" role="alert"><span>{error}</span></div>}
+        <div className="terminal-chat-composer">
+          <textarea
+            ref={textarea}
+            rows={1}
+            value={draft}
+            placeholder={active ? `${bot.name} is working… (Stop to send something new)` : `Message ${bot.name}`}
+            disabled={Boolean(active)}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+              if (e.key === 'Escape' && active) { e.preventDefault(); void stop(); }
+            }}
+          />
+          <div className="terminal-chat-composer-bar">
+            <span className="terminal-chat-pill" title="The agent CLI this bot runs on">
+              <span className="terminal-chat-pill-label">{agentProgram(bot.agent)}{bot.model ? ` · ${bot.model}` : ''}</span>
+            </span>
+            {(bot.browser || botConnectorNames(bot).length > 0) && <span className="terminal-chat-pill" title={[bot.browser && 'Browser', ...botConnectorNames(bot)].filter(Boolean).join(', ')}>
+              <span className="terminal-chat-pill-label">{[bot.browser && 'Browser', ...botConnectorNames(bot)].filter(Boolean).length} tools</span>
+            </span>}
+            <span className="terminal-chat-bar-spacer" />
+            {active ? (
+              <button type="button" className="terminal-chat-send stop" title="Stop (Esc)" aria-label="Stop" disabled={busy !== null} onClick={() => void stop()}>
+                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2.2" fill="currentColor" /></svg>
+              </button>
+            ) : (
+              <button type="button" className="terminal-chat-send" title="Send (Enter)" aria-label="Send" disabled={busy !== null || !draft.trim()} onClick={() => void send()}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -23,9 +23,9 @@
 
 .bots-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; color: var(--text-primary); font-size: 13px; }
 .bots-panel h2, .bots-panel h3, .bots-panel h4, .bots-panel p { margin: 0; }
-.bots-panel button { cursor: pointer; border: 0; border-radius: 7px; padding: 8px 12px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; transition: background .15s, opacity .15s; }
-.bots-panel button:hover { background: var(--bg-hover); }
-.bots-panel button:disabled { opacity: .45; cursor: default; }
+:where(.bots-panel) button { cursor: pointer; border: 0; border-radius: 7px; padding: 8px 12px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; transition: background .15s, opacity .15s; }
+:where(.bots-panel) button:hover { background: var(--bg-hover); }
+:where(.bots-panel) button:disabled { opacity: .45; cursor: default; }
 .bots-panel .bots-primary { background: var(--accent) !important; color: var(--on-accent, var(--button-text, #000)) !important; font-weight: 600; }
 .bots-panel .bots-primary:hover { opacity: .85; }
 .bots-panel .bots-danger { background: color-mix(in srgb, var(--error, #f85149) 18%, transparent); color: var(--error, #f85149); }
@@ -83,9 +83,9 @@
 .bots-editor-side > .dropdown { margin-bottom: 16px; }
 .bots-panel label, .bots-field-label { display: block; margin: 0 0 8px; }
 .bots-panel label small { color: var(--text-muted); }
-.bots-panel input, .bots-panel textarea { width: 100%; box-sizing: border-box; margin-bottom: 16px; border: 0; border-radius: 8px; padding: 10px 12px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; box-shadow: var(--surface-outline); }
-.bots-panel input { height: 40px; }
-.bots-panel textarea { min-height: 180px; resize: vertical; line-height: 1.6; }
+:where(.bots-panel) input, :where(.bots-panel) textarea { width: 100%; box-sizing: border-box; margin-bottom: 16px; border: 0; border-radius: 8px; padding: 10px 12px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; box-shadow: var(--surface-outline); }
+:where(.bots-panel) input { height: 40px; }
+:where(.bots-panel) textarea { min-height: 180px; resize: vertical; line-height: 1.6; }
 .bots-time-row { display: flex; gap: 12px; }
 .bots-time-row > div { flex: 1; min-width: 0; }
 .bots-editor-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
@@ -217,3 +217,14 @@
 .bots-panel .bots-composer button { flex-shrink: 0; height: 38px; }
 .bots-chat > .bots-error { margin: 0 20px 8px; }
 .bots-identity > .bots-avatar-picker { flex: none; }
+
+/* The bot chat uses the structured chat's own styles (TerminalChatView.css);
+   these only fit it into the bot view. */
+.bots-view { position: relative; }
+/* The structured chat is built to fill a whole pane (position: absolute; inset: 0).
+   Here it sits under the bot header instead. */
+.bots-view > .terminal-chat-view.bots-structured-chat { position: relative; inset: auto; flex: 1; min-height: 0; height: auto; }
+.bots-structured-chat .bots-exchange { display: contents; }
+.bots-structured-chat .bots-chat-empty { margin: 10vh auto 24px; }
+.bots-structured-chat .bots-chat-empty h3 { margin: 4px 0 0; }
+.bots-structured-chat .bots-chat-suggestions .terminal-chat-pill { cursor: pointer; }

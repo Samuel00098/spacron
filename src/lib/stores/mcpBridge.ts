@@ -10,7 +10,7 @@
  *   4. Provide the MCP server port for writing agent config files.
  */
 import { invoke } from '@tauri-apps/api/core';
-import { boxProxyUrl } from '$lib/services/box-signins';
+import { boxMcpInfo, boxProxyUrl } from '$lib/services/box-signins';
 import { backendInvoke } from '$lib/services/backend';
 import { listen } from '@tauri-apps/api/event';
 import { get } from './storeCompat';
@@ -57,6 +57,8 @@ import {
   mergeMap,
   opencodeEntry,
   qwenEntry,
+  serverKey,
+  SPACRON_OWN_KEY,
   standardEntry,
   untypedEntry,
   withSignInProxy,
@@ -554,6 +556,13 @@ export function initMcpBridge(): void {
     if (seenServers) scheduleMcpConfigResync();
     seenServers = true;
   });
+  // Sharing a sign-in with the box (or connecting to one) changes which URL
+  // the box's agent configs should carry for it.
+  let seenBoxInfo = false;
+  boxMcpInfo.subscribe(() => {
+    if (seenBoxInfo) scheduleMcpConfigResync();
+    seenBoxInfo = true;
+  });
   let seenBrowser = false;
   agentBrowserTools.subscribe(() => {
     if (seenBrowser) scheduleMcpConfigResync();
@@ -938,6 +947,59 @@ export async function botBrowserEntry(onThisPc: boolean): Promise<{ command: str
   return { command: PLAYWRIGHT_COMMAND, args: ['-y', `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`, '--isolated', '--headless', '--browser', 'chromium'] };
 }
 
+/**
+ * The user's servers for a config that lives where the agent runs: on a box,
+ * a sign-in shared with that box goes through the box's own proxy, so it
+ * keeps working after this laptop disconnects (see box-signins.ts). Every
+ * other server is as `userServers()` gives it. Global configs on this
+ * computer (Codex, Droid, Antigravity) keep using `userServers()`.
+ */
+function projectServers(): McpServer[] {
+  const proxied = userServers();
+  if (!isRemote()) return proxied;
+  const byId = new Map(proxied.map((s) => [s.id, s]));
+  return rawUserServers().map((s) => {
+    const boxUrl = s.oauth ? boxProxyUrl(serverKey(s)) : null;
+    return boxUrl ? { ...s, transport: 'http' as const, url: boxUrl, oauth: false, headers: undefined } : byId.get(s.id) ?? s;
+  });
+}
+
+function isRemote(): boolean {
+  try { return Boolean(get(remoteTarget)); } catch { return false; }
+}
+
+/**
+ * Codex reads MCP servers only from its global config, which Spacron writes
+ * on this computer, never on a box. When Codex is launched on a box, the
+ * same servers go on its command line instead, as `-c` overrides (TOML
+ * values), so it gets your connectors there without touching the box's home
+ * folder. Servers that need request headers are left out: Codex has no
+ * config key for them (see `headersLostOnCodex`).
+ */
+export function codexServerFlags(servers: Array<{ key: string; server: McpServer }>, spacronHttpUrl: string | null): string {
+  const flags: string[] = [];
+  const toml = (v: string) => JSON.stringify(v);
+  const add = (key: string, field: string, value: string) => {
+    const arg = `mcp_servers.${key}.${field}=${value}`;
+    // Single-quoted for the shell; a value holding a quote is skipped rather than escaped.
+    if (!arg.includes("'")) flags.push(`-c '${arg}'`);
+  };
+  if (spacronHttpUrl) add(SPACRON_OWN_KEY, 'url', toml(spacronHttpUrl));
+  for (const { key, server } of servers) {
+    if (server.transport === 'stdio') {
+      if (!server.command?.trim()) continue;
+      add(key, 'command', toml(server.command.trim()));
+      const args = (server.args ?? []).map((a) => a.trim()).filter(Boolean);
+      if (args.length) add(key, 'args', `[${args.map(toml).join(', ')}]`);
+      const env = Object.entries(server.env ?? {}).filter(([k]) => k.trim());
+      if (env.length) add(key, 'env', `{ ${env.map(([k, v]) => `${toml(k.trim())} = ${toml(v)}`).join(', ')} }`);
+    } else if (server.url?.trim() && !headersLostOnCodex(server)) {
+      add(key, 'url', toml(server.url.trim()));
+    }
+  }
+  return flags.length ? ` ${flags.join(' ')}` : '';
+}
+
 function userServers(): McpServer[] {
   try {
     const value = get(mcpServers);
@@ -1115,6 +1177,14 @@ export async function mcpLaunchFlags(
   projectRoot?: string,
   sessionId?: number,
 ): Promise<string> {
+  if (agentExecutable(preset) === 'codex') {
+    if (!isRemote()) return ''; // On this computer Codex reads ~/.codex/config.toml.
+    try {
+      return codexServerFlags(enabledServers(projectServers()), await getMcpHttpUrl().catch(() => null));
+    } catch {
+      return '';
+    }
+  }
   if (!CLAUDE_EXECUTABLES.has(agentExecutable(preset))) return '';
   if (!projectRoot) return '';
 
@@ -1153,16 +1223,8 @@ export async function mcpLaunchFlags(
     // This file is rewritten on every launch, so an omitted entry is already a
     // removed one — no delete branch needed here, unlike the merging writers.
     if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(projectRoot);
-    for (const { key, server } of enabledServers(userServers())) {
+    for (const { key, server } of enabledServers(projectServers())) {
       servers[key] = standardEntry(server);
-    }
-    // On a box, a sign-in shared with it goes through the box's own proxy, so
-    // it keeps working after this laptop disconnects (see box-signins.ts).
-    if (get(remoteTarget)) {
-      for (const { key, server } of enabledServers(rawUserServers())) {
-        const boxUrl = server.oauth ? boxProxyUrl(key) : null;
-        if (boxUrl) servers[key] = { type: 'http', url: boxUrl };
-      }
     }
     const content = JSON.stringify({ mcpServers: servers }, null, 2);
     // On a remote the agent runs on the box, so its config has to be there too.
@@ -1396,7 +1458,7 @@ async function injectProjectMcpJson(
     servers['spacron-mcp'] = { type: 'sse', url: mcpUrl };
     if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(projectRoot);
     else delete servers[BROWSER_SERVER_KEY];
-    for (const [key, entry] of Object.entries(mergeMap(userServers(), Object.keys(servers), standardEntry))) {
+    for (const [key, entry] of Object.entries(mergeMap(projectServers(), Object.keys(servers), standardEntry))) {
       if (entry === null) delete servers[key];
       else servers[key] = entry;
     }
@@ -1478,7 +1540,7 @@ async function injectCursorConfig(
     (keys) => ({
       'spacron-mcp': { type: 'http', url: httpUrl },
       [BROWSER_SERVER_KEY]: browser,
-      ...mergeMap(userServers(), keys, standardEntry),
+      ...mergeMap(projectServers(), keys, standardEntry),
     }),
     'Cursor',
   );
@@ -1503,7 +1565,7 @@ async function injectGeminiConfig(
     (keys) => ({
       'spacron-mcp': { type: 'http', url: httpUrl },
       [BROWSER_SERVER_KEY]: browser,
-      ...mergeMap(userServers(), keys, standardEntry),
+      ...mergeMap(projectServers(), keys, standardEntry),
     }),
     'Gemini CLI',
   );
@@ -1527,7 +1589,7 @@ async function injectOpencodeConfig(
     (keys) => ({
       'spacron-mcp': { type: 'remote', url: httpUrl, enabled: true },
       [BROWSER_SERVER_KEY]: browser,
-      ...mergeMap(userServers(), keys, opencodeEntry),
+      ...mergeMap(projectServers(), keys, opencodeEntry),
     }),
     'opencode',
   );
@@ -1543,7 +1605,7 @@ async function injectQwenConfig(projectRoot: string | undefined, httpUrl: string
     (keys) => ({
       'spacron-mcp': { httpUrl },
       [BROWSER_SERVER_KEY]: browser,
-      ...mergeMap(userServers(), keys, qwenEntry),
+      ...mergeMap(projectServers(), keys, qwenEntry),
     }),
     'Qwen Code',
   );
@@ -1559,7 +1621,7 @@ async function injectKiroConfig(projectRoot: string | undefined, httpUrl: string
     (keys) => ({
       'spacron-mcp': { url: httpUrl },
       [BROWSER_SERVER_KEY]: browser,
-      ...mergeMap(userServers(), keys, untypedEntry),
+      ...mergeMap(projectServers(), keys, untypedEntry),
     }),
     'Kiro CLI',
   );
@@ -1579,7 +1641,7 @@ async function injectAmpConfig(projectRoot: string | undefined, httpUrl: string)
     (keys) => ({
       'spacron-mcp': { url: httpUrl },
       [BROWSER_SERVER_KEY]: browser,
-      ...mergeMap(userServers(), keys, untypedEntry),
+      ...mergeMap(projectServers(), keys, untypedEntry),
     }),
     'Amp',
   );
@@ -1599,7 +1661,7 @@ async function injectDevinConfig(projectRoot: string | undefined, httpUrl: strin
     (keys) => ({
       'spacron-mcp': { url: httpUrl, transport: 'http' },
       [BROWSER_SERVER_KEY]: browser ? { ...browser, transport: 'stdio' } : null,
-      ...mergeMap(userServers(), keys, devinEntry),
+      ...mergeMap(projectServers(), keys, devinEntry),
     }),
     'Devin CLI',
   );
