@@ -387,6 +387,7 @@ function isImageUrl(val: string | null | undefined): boolean {
 }
 
 const voiceInputProviders: { id: VoiceInputProviderId; label: string }[] = [
+  { id: 'fish', label: 'Fish Audio' },
   { id: 'webspeech', label: 'System speech' },
   { id: 'google', label: 'Google Gemini' },
   { id: 'openai', label: 'OpenAI' },
@@ -2822,7 +2823,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   }, []);
 
   const loadSttModels = useCallback(async (prov: VoiceInputProviderId, force = false) => {
-    if (!isTauriRuntime() || prov === 'webspeech') return;
+    if (!isTauriRuntime() || prov === 'webspeech' || prov === 'fish') return;
     const pid = prov as AiProviderId;
     const isLocal = isLocalProvider(pid);
     const hasKey = isLocal ? true : await providerApiKeyExists(pid).catch(() => false);
@@ -4071,6 +4072,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                   {voiceInputUsesModelTranscription(voiceInput) && (
                     <>
+                      {voiceInput === 'fish' && <p className="shell-hint">Dictation uses the Fish Audio API key saved under Read aloud.</p>}
                       <SettingRow title="Transcription model">
                         <ModelSelect
                           value={voiceInputModel}
@@ -4079,11 +4081,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                           label="Voice input model"
                         />
                       </SettingRow>
-                      <div className="settings-action-row">
+                      {voiceInput !== 'fish' && <div className="settings-action-row">
                         <button className="settings-secondary" onClick={() => void loadSttModels(voiceInput, true)} disabled={sttModelLoading}>
                           {sttModelLoading ? 'Refreshing...' : 'Refresh models'}
                         </button>
-                      </div>
+                      </div>}
                     </>
                   )}
                   <SettingRow

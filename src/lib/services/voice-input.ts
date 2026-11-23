@@ -776,8 +776,8 @@ export function createVoiceInputSession(
       } else {
         const providerId = (provider === 'webspeech' ? 'google' : provider) as AiProviderId;
         const providerDef = getProviderDef(providerId);
-        const local = isLocalProvider(providerId);
-        const hasApiKey = local || isProviderApiKeyConfiguredLocal(providerDef.id);
+        const local = provider !== 'fish' && isLocalProvider(providerId);
+        const hasApiKey = provider === 'fish' || local || isProviderApiKeyConfiguredLocal(providerDef.id);
         const baseUrl = local ? getProviderBaseUrl(providerId) : '';
         if (!hasApiKey) {
           throw new Error(`${providerDef.label} API key is missing. Add it in Settings to use voice mode.`);

@@ -4,21 +4,14 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-// Tauri's `onDragDropEvent` reports the cursor in PHYSICAL pixels relative to
-// the window's top-left (title bar included), while DOM hit-testing and
-// `getBoundingClientRect()` work in CSS pixels relative to the viewport. On a
-// scaled display or a decorated window the two differ, so comparing them raw
-// misattributes drops to the wrong pane — or none. Convert once, here, and
-// compare in CSS viewport space everywhere.
+// Wry reports drop coordinates relative to the webview. WebView2 uses
+// physical pixels, while WKWebView and WebKitGTK report logical coordinates.
 export async function dropPositionToCss(pos: { x: number; y: number }): Promise<{ x: number; y: number } | null> {
   if (!isTauriRuntime()) return null;
+  if (!/Windows/i.test(navigator.userAgent)) return pos;
   try {
-    const win = getCurrentWindow();
-    const [innerPos, scale] = await Promise.all([win.innerPosition(), win.scaleFactor()]);
-    return {
-      x: (pos.x - innerPos.x) / scale,
-      y: (pos.y - innerPos.y) / scale,
-    };
+    const scale = await getCurrentWindow().scaleFactor();
+    return { x: pos.x / scale, y: pos.y / scale };
   } catch {
     return null;
   }

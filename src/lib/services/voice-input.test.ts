@@ -365,10 +365,13 @@ describe('createVoiceInputSession', () => {
     vi.useRealTimers();
   });
 
-  it('routes model transcription through OpenRouter when selected', async () => {
+  it.each([
+    ['openrouter', 'openai/whisper-1'],
+    ['fish', 'transcribe-1-pro'],
+  ] as const)('routes model transcription through %s when selected', async (provider, model) => {
     vi.useFakeTimers();
-    voiceInputProvider.set('openrouter');
-    isProviderApiKeyConfiguredLocal.mockImplementation((provider: string) => provider === 'openrouter');
+    voiceInputProvider.set(provider);
+    isProviderApiKeyConfiguredLocal.mockImplementation((id: string) => id === 'openrouter');
     invoke.mockResolvedValue('ship the fix');
 
     const onResult = vi.fn();
@@ -393,8 +396,8 @@ describe('createVoiceInputSession', () => {
     await Promise.resolve();
 
     expect(invoke).toHaveBeenCalledWith('ai_transcribe_audio', expect.objectContaining({
-      provider: 'openrouter',
-      model: 'openai/whisper-1',
+      provider,
+      model,
       apiKey: '',
       mimeType: 'audio/wav',
     }));

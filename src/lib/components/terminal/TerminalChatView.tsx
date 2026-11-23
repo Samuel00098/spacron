@@ -1,3 +1,5 @@
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { dropPositionToCss, isTauriRuntime } from '$lib/utils/tauri';
 import { revealAgentChat } from '$lib/services/reveal-agent-chat';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -1608,6 +1610,59 @@ export default function TerminalChatView({
     setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, '')} ${quoted} ` : `${quoted} `));
   }
 
+  const composerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isRunning) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let revision = 0;
+    const overComposer = (x: number, y: number) =>
+      document.elementFromPoint(x, y)?.closest('.terminal-chat-composer') === composerRef.current;
+    const attach = (paths: string[]) => {
+      void attachDroppedPaths(paths);
+      textareaRef.current?.focus();
+    };
+    const onExplorerMove = (event: Event) => {
+      const { clientX, clientY } = (event as CustomEvent<{ clientX: number; clientY: number }>).detail;
+      setDropOver(overComposer(clientX, clientY));
+    };
+    const onExplorerEnd = (event: Event) => {
+      const { path, clientX, clientY } = (event as CustomEvent<{ path?: string; clientX: number; clientY: number }>).detail;
+      setDropOver(false);
+      if (path && overComposer(clientX, clientY)) attach([path]);
+    };
+    window.addEventListener('spacron-explorer-drag-move', onExplorerMove);
+    window.addEventListener('spacron-explorer-drag-end', onExplorerEnd);
+    if (isTauriRuntime()) {
+      void getCurrentWindow().onDragDropEvent(({ payload }) => {
+        const current = ++revision;
+        if (payload.type === 'leave') {
+          setDropOver(false);
+          return;
+        }
+        void dropPositionToCss(payload.position).then((point) => {
+          if (disposed) return;
+          const over = Boolean(point && overComposer(point.x, point.y));
+          if (payload.type === 'drop') {
+            if (current === revision) setDropOver(false);
+            if (over && payload.paths.length) attach(payload.paths);
+          } else if (current === revision) {
+            setDropOver(over);
+          }
+        });
+      }).then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      }).catch((error) => console.warn('Could not listen for desktop file drops', error));
+    }
+    return () => {
+      disposed = true;
+      unlisten?.();
+      window.removeEventListener('spacron-explorer-drag-move', onExplorerMove);
+      window.removeEventListener('spacron-explorer-drag-end', onExplorerEnd);
+    };
+  }, [isRunning, sessionId]);
+
   async function onComposerDrop(event: React.DragEvent) {
     const files = Array.from(event.dataTransfer?.files ?? []);
     const hint = event.dataTransfer?.getData('application/x-spacron-path')?.trim()
@@ -1935,6 +1990,7 @@ export default function TerminalChatView({
         )}
         {structuredMode && <GoalPanel sessionId={sessionId} onCommand={(command) => void runSlashCommand(command)} />}
         <div
+          ref={composerRef}
           className={`terminal-chat-composer${isRunning ? '' : ' exited'}${dropOver ? ' drop-over' : ''}`}
           onDragOver={onComposerDragOver}
           onDragLeave={onComposerDragLeave}

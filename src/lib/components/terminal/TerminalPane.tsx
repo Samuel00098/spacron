@@ -1155,7 +1155,9 @@ function TerminalPane({
         const barRect = barEl.getBoundingClientRect();
         overBar = cx >= barRect.left && cx <= barRect.right && cy >= barRect.top && cy <= barRect.bottom;
       }
-      if (endedPath && overPane && !overBar) {
+      const overComposer = typeof cx === 'number' && typeof cy === 'number'
+        && document.elementFromPoint(cx, cy)?.closest('.terminal-chat-composer');
+      if (endedPath && overPane && !overBar && !overComposer) {
         const text = endedPath.replace(/\\/g, '/');
         pasteIntoTerminal(text);
       }
@@ -1671,6 +1673,7 @@ function TerminalPane({
           // project layers, stage-hidden panes) stay laid out at full size, so
           // their rects contain every drop point.
           if (!isPointOverDropTarget(c, css.x, css.y)) return;
+          if (document.elementFromPoint(css.x, css.y)?.closest('.terminal-chat-composer')) return;
 
           // Don't steal drops from the floating prompt bar
           const barEl = document.querySelector('#floating-prompt-bar');

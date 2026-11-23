@@ -16,7 +16,7 @@ export type AiProviderId =
   | 'chatgpt'
   | 'ollama'
   | 'lmstudio';
-export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'ollama' | 'lmstudio' | 'local';
+export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'fish' | 'ollama' | 'lmstudio' | 'local';
 export interface KeyboardShortcut {
   id: string;
   label: string;

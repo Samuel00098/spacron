@@ -189,7 +189,7 @@ fn base_url_provider_label(provider: &str) -> String {
 // stored like any other key but are never chat providers.
 const MEDIA_KEY_PROVIDERS: &[&str] = &["fal", "replicate", "typesafe"];
 
-// Keys only the chat's Read aloud voices use (`commands::speech`).
+// Keys for Read aloud and Fish Audio dictation.
 const SPEECH_KEY_PROVIDERS: &[&str] = &["elevenlabs", "minimax", "fish"];
 
 fn is_key_provider(provider: &str) -> bool {
@@ -1722,12 +1722,17 @@ pub async fn ai_transcribe_audio(
         && provider != "openai"
         && provider != "openrouter"
         && provider != "vercel"
+        && provider != "fish"
         && !uses_base_url(&provider)
     {
         return Err("Selected provider does not support transcription yet.".to_string());
     }
 
-    let api_key = resolve_api_key(&provider, &api_key)?;
+    let api_key = if provider == "fish" {
+        media_api_key("fish").map_err(|_| "Add a Fish Audio API key under Settings > Voice > Read aloud.".to_string())?
+    } else {
+        resolve_api_key(&provider, &api_key)?
+    };
     let base_url = resolve_base_url(&provider, &base_url)?;
 
     let model = model.trim().to_string();
@@ -1747,6 +1752,35 @@ pub async fn ai_transcribe_audio(
     }
 
     let client = shared_http_client(Duration::from_secs(60))?;
+
+    if provider == "fish" {
+        if model != "transcribe-1-pro" {
+            return Err("Unsupported Fish Audio transcription model".to_string());
+        }
+        let audio = reqwest::multipart::Part::bytes(audio_bytes)
+            .file_name(format!("recording.{audio_format}"))
+            .mime_str(&mime_type)
+            .map_err(|_| "Unsupported audio format".to_string())?;
+        let response = client
+            .post("https://api.fish.audio/v1/asr")
+            .bearer_auth(api_key)
+            .header("model", model)
+            .multipart(reqwest::multipart::Form::new()
+                .part("audio", audio)
+                .text("ignore_timestamps", "true")
+                .text("tag_audio_events", "false")
+                .text("diarize", "false"))
+            .send()
+            .await
+            .map_err(|err| safe_request_error("Failed to contact Fish Audio transcription", err))?;
+        if !response.status().is_success() {
+            return Err(format!("Fish Audio transcription failed ({})", response.status()));
+        }
+        let payload: serde_json::Value = response.json().await
+            .map_err(|err| format!("Fish Audio transcription returned an invalid response: {err}"))?;
+        return payload["text"].as_str().map(|text| text.trim().to_string())
+            .ok_or_else(|| "Fish Audio transcription response is missing text".to_string());
+    }
 
     let audio_b64 = STANDARD.encode(&audio_bytes);
 

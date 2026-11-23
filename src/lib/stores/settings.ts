@@ -332,7 +332,7 @@ export function isCustomProviderId(id: string | null | undefined): id is CustomP
   return typeof id === 'string' && id.startsWith('custom-');
 }
 
-export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'ollama' | 'lmstudio' | 'local' | CustomProviderId;
+export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'fish' | 'ollama' | 'lmstudio' | 'local' | CustomProviderId;
 
 export interface AiModelOption {
   id: string;
@@ -828,6 +828,8 @@ export function getVoiceInputModelOptions(provider: VoiceInputProviderId): AiMod
       return openRouterVoiceInputModels;
     case 'vercel':
       return vercelVoiceInputModels;
+    case 'fish':
+      return [{ id: 'transcribe-1-pro', label: 'Transcribe 1 Pro', description: 'Speech recognition via Fish Audio.' }];
     case 'openai':
       return openAiVoiceInputModels;
     case 'ollama':
@@ -855,6 +857,8 @@ export function getDefaultVoiceInputModel(provider: VoiceInputProviderId): strin
       return 'openai/whisper-1';
     case 'vercel':
       return 'openai/gpt-4o-mini-transcribe';
+    case 'fish':
+      return 'transcribe-1-pro';
     case 'openai':
       return 'whisper-1';
     case 'ollama':
@@ -939,7 +943,7 @@ export function setVoiceInputModel(provider: Exclude<VoiceInputProviderId, 'webs
 }
 
 export function voiceInputUsesModelTranscription(provider: VoiceInputProviderId): boolean {
-  return isCustomProviderId(provider) || provider === 'google' || provider === 'openai' || provider === 'openrouter' || provider === 'vercel' || provider === 'ollama' || provider === 'lmstudio' || provider === 'local';
+  return isCustomProviderId(provider) || provider === 'google' || provider === 'openai' || provider === 'openrouter' || provider === 'vercel' || provider === 'fish' || provider === 'ollama' || provider === 'lmstudio' || provider === 'local';
 }
 
 export const currentVoiceAiModel = derived(
