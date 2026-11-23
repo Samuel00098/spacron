@@ -16,6 +16,9 @@ if (!container) {
   throw new Error('App root container not found');
 }
 
+// Delete chats left untouched past the retention period (Settings > Chat).
+void import('$lib/services/chat-retention').then((m) => m.startChatRetention());
+
 createRoot(container).render(
   <StrictMode>
     <ReactErrorBoundary>

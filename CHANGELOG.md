@@ -4,6 +4,18 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+## [v5.1.10] - 2026-11-23
+
+A follow-up to 5.1.9 that stops "browser storage is full" errors and clears out old chats by itself.
+
+### Added
+
+- **Old chats delete themselves** — chats with no activity for 30 days are deleted automatically, together with their saved history. Open, running and waiting chats are kept, and bots are never touched. Change the period, or turn it off, in Settings > Chat > Delete old chats (10, 30, 60 or 90 days, or Never). Deletion is permanent.
+
+### Fixed
+
+- **"Browser storage is full" when saving a bot** — chat session histories (up to about 1 MB each) were filling the 5 MB browser store and blocking everything else from saving. They now live in IndexedDB, which is limited by free disk space instead, and existing ones move over on first launch.
+
 ## [v5.1.9] - 2026-11-23
 
 A follow-up to 5.1.8 that lets bot visuals take you to the bot they are about, and fixes "storage quota exceeded" errors when saving bots.

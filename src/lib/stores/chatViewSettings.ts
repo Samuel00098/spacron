@@ -151,3 +151,8 @@ export const chatCiLines = persisted('spacron_chat_ci_lines', true, bool(true));
  * chat, which spends that provider's credits, so it is only ever opt-in.
  */
 export const chatModelNames = persisted('spacron_chat_model_names', false, bool(false));
+
+/** Days of no activity before a chat is deleted for good; 0 keeps chats forever. */
+export const CHAT_RETENTION_CHOICES = [10, 30, 60, 90, 0] as const;
+export const chatRetentionDays = persisted('spacron_chat_retention_days', 30, (raw) =>
+  typeof raw === 'number' && (CHAT_RETENTION_CHOICES as readonly number[]).includes(raw) ? raw : 30);

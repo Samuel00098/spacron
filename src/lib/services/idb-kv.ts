@@ -53,3 +53,14 @@ export async function idbSet(key: string, value: string): Promise<void> {
 export function requestPersistentStorage(): void {
   try { void navigator.storage?.persist?.(); } catch { /* optional */ }
 }
+
+export async function idbDelete(key: string): Promise<void> {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}

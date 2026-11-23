@@ -18,6 +18,7 @@
  */
 import { get, writable } from '$lib/stores/storeCompat';
 import { useStore } from '$lib/react/useStore';
+import { idbAvailable, idbDelete, idbGet, idbSet } from '$lib/services/idb-kv';
 import {
   createTerminalSession,
   getActiveTerminalProjectId,
@@ -101,6 +102,11 @@ export interface StructuredSessionRecord {
 
 const RECORDS_KEY = 'spacron_structured_sessions';
 const JOURNAL_PREFIX = 'spacron_structured_journal:';
+// Journals run to ~1 MB each, so fifty of them overran localStorage's 5 MB and
+// stopped everything else (bots, settings) from saving. They live in IndexedDB;
+// this map is the copy read back at startup so loading stays synchronous.
+const idbJournals = new Map<string, string>();
+let idbUsable = idbAvailable();
 const MAX_RECORDS = 50;
 const SAVE_DELAY_MS = 600;
 const DIFF_DELAY_MS = 50;
@@ -128,7 +134,7 @@ function loadRecords(): Record<string, StructuredSessionRecord> {
 
 function loadJournal(id: string): PersistedJournal | null {
   try {
-    const raw = storage()?.getItem(JOURNAL_PREFIX + id);
+    const raw = idbJournals.get(id) ?? storage()?.getItem(JOURNAL_PREFIX + id);
     const parsed = raw ? JSON.parse(raw) as PersistedJournal : null;
     return parsed?.v === 1 ? parsed : null;
   } catch {
@@ -137,6 +143,29 @@ function loadJournal(id: string): PersistedJournal | null {
 }
 
 export const structuredSessions = writable<Record<string, StructuredSessionRecord>>(loadRecords());
+
+/** Read journals back from IndexedDB, and move any still in localStorage over. */
+async function hydrateJournals(): Promise<void> {
+  if (!idbUsable) return;
+  const store = storage();
+  try {
+    for (const id of Object.keys(get(structuredSessions))) {
+      const key = JOURNAL_PREFIX + id;
+      const saved = await idbGet(key);
+      const legacy = store?.getItem(key) ?? null;
+      if (saved) {
+        if (!idbJournals.has(id)) idbJournals.set(id, saved);
+      } else if (legacy) {
+        await idbSet(key, legacy);
+        if (!idbJournals.has(id)) idbJournals.set(id, legacy);
+      }
+      if (legacy) { try { store?.removeItem(key); } catch { /* ignore */ } }
+    }
+  } catch {
+    idbUsable = false;
+  }
+}
+void hydrateJournals();
 
 const journals = new Map<string, StructuredEventJournal>();
 const dirtyJournals = new Set<string>();
@@ -164,12 +193,21 @@ export function flushSessionStore(): void {
   for (const id of Object.keys(all)) {
     if (!keptIds.has(id)) {
       try { store.removeItem(JOURNAL_PREFIX + id); } catch { /* ignore */ }
+      if (idbUsable) { idbJournals.delete(id); void idbDelete(JOURNAL_PREFIX + id).catch(() => {}); }
       journals.delete(id);
     }
   }
   for (const id of dirtyJournals) {
     const journal = journals.get(id);
     if (!journal || !keptIds.has(id)) continue;
+    if (idbUsable) {
+      const json = JSON.stringify(journal.toJSON());
+      idbJournals.set(id, json);
+      void idbSet(JOURNAL_PREFIX + id, json)
+        .then(() => { try { store.removeItem(JOURNAL_PREFIX + id); } catch { /* ignore */ } })
+        .catch(() => { try { store.setItem(JOURNAL_PREFIX + id, json); } catch { /* quota: kept in memory */ } });
+      continue;
+    }
     try {
       store.setItem(JOURNAL_PREFIX + id, JSON.stringify(journal.toJSON()));
     } catch {
@@ -1062,4 +1100,28 @@ export function __resetSessionStoreForTests(): void {
   dirtyJournals.clear();
   structuredSessions.set({});
   shuttingDown = false;
+}
+
+/**
+ * Delete chats whose last activity is before `cutoff`, with their journals.
+ * Chats open in a pane, and chats that are starting or working, are kept.
+ */
+export function pruneStructuredSessions(cutoff: number): number {
+  const live = new Set(paneRecords.values());
+  const doomed = Object.values(get(structuredSessions)).filter((record) =>
+    record.updatedAt > 0 && record.updatedAt < cutoff && !live.has(record.id)
+    && record.lifecycle !== 'working' && record.lifecycle !== 'starting');
+  if (!doomed.length) return 0;
+  const store = storage();
+  for (const record of doomed) {
+    try { store?.removeItem(JOURNAL_PREFIX + record.id); } catch { /* ignore */ }
+    idbJournals.delete(record.id);
+    journals.delete(record.id);
+    dirtyJournals.delete(record.id);
+    if (idbUsable) void idbDelete(JOURNAL_PREFIX + record.id).catch(() => {});
+  }
+  const gone = new Set(doomed.map((record) => record.id));
+  structuredSessions.update((all) => Object.fromEntries(Object.entries(all).filter(([id]) => !gone.has(id))));
+  flushSessionStore();
+  return doomed.length;
 }

@@ -35,6 +35,7 @@ import {
   chatMarkNewMessages,
   chatPullRequests,
   chatQueueFollowUps,
+  chatRetentionDays,
   chatScrollToLatestOnSend,
   chatShowTimestamps,
   chatSuggestedPrompts,
@@ -316,6 +317,7 @@ export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () =>
   const launchByAgent = useStore(agentLaunchViewByAgent);
   const appearance = useStore(chatAppearance);
   const scrollOnSend = useStore(chatScrollToLatestOnSend);
+  const retentionDays = useStore(chatRetentionDays);
   const spellcheck = useStore(chatComposerSpellcheck);
   const inlineVisuals = useStore(chatInlineVisuals);
   const queueFollowUps = useStore(chatQueueFollowUps);
@@ -452,6 +454,14 @@ export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () =>
         </Row>
         <Row title="Scroll to latest when sending" detail="Jump to latest message when sending.">
           <Toggle label="Toggle scroll to latest when sending" checked={scrollOnSend} onChange={chatScrollToLatestOnSend.set} />
+        </Row>
+        <Row title="Delete old chats" detail="Permanently delete chats with no activity for this long. Open, running and waiting chats are kept, and bots are never touched.">
+          <Segmented<string>
+            label="Delete chats after"
+            value={String(retentionDays)}
+            options={[{ value: '10', label: '10 days' }, { value: '30', label: '30 days' }, { value: '60', label: '60 days' }, { value: '90', label: '90 days' }, { value: '0', label: 'Never' }]}
+            onChange={(value) => chatRetentionDays.set(Number(value))}
+          />
         </Row>
         <Row title="Mark new messages when returning to a chat" detail="Mark unread messages received while away.">
           <Toggle label="Toggle mark new messages" checked={markNew} onChange={chatMarkNewMessages.set} />

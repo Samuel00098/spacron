@@ -356,6 +356,7 @@ const settingsSearchEntries: SettingsSearchEntry[] = [
   { id: 'chat-text-size', tab: 'chat', section: 'Appearance', label: 'Text size', keywords: 'chat font size bigger smaller' },
   { id: 'chat-code-size', tab: 'chat', section: 'Appearance', label: 'Code text size', keywords: 'chat code block inline monospace' },
   { id: 'chat-width', tab: 'chat', section: 'Appearance', label: 'Width', keywords: 'chat column wide full comfortable' },
+  { id: 'chat-retention', tab: 'chat', section: 'Behavior', label: 'Delete old chats', keywords: 'chat history retention delete expire days cleanup storage' },
   { id: 'chat-scroll-on-send', tab: 'chat', section: 'Behavior', label: 'Scroll to latest when sending', keywords: 'chat scroll position follow' },
   { id: 'chat-spellcheck', tab: 'chat', section: 'Behavior', label: 'Spellcheck and autocorrect', keywords: 'chat spelling message box' },
   { id: 'chat-inline-visuals', tab: 'chat', section: 'Turn activity', label: 'Inline visuals', keywords: 'chat charts diagrams mockups html' },

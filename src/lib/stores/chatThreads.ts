@@ -1964,3 +1964,18 @@ export function resetChatThreadsForTests(): void {
     activeThreadByProject: {},
   });
 }
+
+/**
+ * Delete threads last active before `cutoff`. Each project's open thread, and
+ * threads that are working or waiting on the user, are kept.
+ */
+export function pruneChatThreads(cutoff: number): number {
+  const state = get(chatThreadState);
+  const open = new Set(Object.values(state.activeThreadByProject).filter((id): id is string => Boolean(id)));
+  const doomed = Object.values(state.threadsByProject).flat().filter((thread) =>
+    thread.updatedAt > 0 && thread.updatedAt < cutoff && !open.has(thread.id)
+    && thread.status !== 'working' && thread.status !== 'needs-input');
+  let removed = 0;
+  for (const thread of doomed) if (deleteChatThread(thread.id)) removed += 1;
+  return removed;
+}
