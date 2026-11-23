@@ -15,6 +15,7 @@ short enough that it says what the note is *about*, never what it says.
 - [agent-history-index](agent-history-index.md) — the read-only Fleet History index over Claude/Codex/OpenCode transcripts, and the traps in their file formats
 - [orca-chat-view](orca-chat-view.md) — how Orca's per-terminal chat toggle reads transcripts and writes the PTY, vs our chat mode
 - [structured-chat](structured-chat.md) — Orca-style structured chat tabs (agent over its own protocol, no terminal): how a pane hosts one, the bridge, what was verified live
+- [bot-connector-delivery](bot-connector-delivery.md) — how each agent type receives a bot run's connectors, and where to add a new agent
 - [structured-chat-attachments](structured-chat-attachments.md) — attachments cross as paths and each adapter inlines or not; the visuals folder for chats with no PTY
 - [agent-background-poll-budget](agent-background-poll-budget.md) — what each running agent costs at rest, and the rules for anything that polls per agent
 - [agent-failover](agent-failover.md) — moving unfinished work off an agent that is running out of usage: the invariants it spans, and two traps

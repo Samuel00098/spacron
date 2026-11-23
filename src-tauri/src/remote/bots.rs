@@ -519,7 +519,7 @@ pub(crate) fn sync(args: Value, root: &Path) -> Result<Value, String> {
 }
 
 /// `mcp.json` can carry connector API keys: only the owner may read it.
-fn restrict(path: &Path) {
+pub(crate) fn restrict(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -764,10 +764,16 @@ async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path
     let run_config = run_mcp_config(root, bot, run_id);
     let mcp = run_config.as_ref().map(|(path, keys)| (path.as_path(), keys.as_slice()));
     let argv = bot_command(bot, prompt, mcp)?;
+    // Agents that read servers from a config file get one in their folder for
+    // the run (see `bot_mcp`); Claude and Codex took theirs on the command line.
+    let config_guard = super::bot_mcp::apply(&cwd, &argv[0], mcp.map(|(path, _)| path));
     // A browser server (Playwright via npx) can take far longer to start than
     // Claude Code's default MCP wait; the app gives its own agents the same budget.
     let env = [("SPACRON_BOT", bot.name.as_str()), ("MCP_TIMEOUT", "120000")];
     let result = spawn_headless(&argv, &cwd, log_path, &env, limit, Some(signal)).await;
+    if let Some(guard) = config_guard {
+        guard.restore();
+    }
     if let Some((path, _)) = run_config {
         let _ = std::fs::remove_file(path);
     }

@@ -44,6 +44,7 @@ use crate::state::WriteRateLimiter;
 mod acp_bridge;
 mod receive;
 mod automations;
+pub(crate) mod bot_mcp;
 pub(crate) mod bots;
 mod box_agents;
 mod box_mcp;

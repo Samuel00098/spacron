@@ -391,7 +391,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
               <span className="bots-field-label">Connectors</span>
               <ConnectorPicker host={host} value={keys} onChange={setKeys} />
               {missing.length > 0 && <p className="bots-helper bots-warn">This template works best with {missing.join(', ')}. Add it in Settings &gt; MCP &amp; plugins{host === LOCAL_HOST ? '' : ', then share the sign-in with this box in Settings > Bots'}.</p>}
-              {keys.length > 0 && program !== 'claude' && program !== 'codex' && <p className="bots-helper">Connectors reach Claude Code and Codex bots for now; other agents use their own MCP config.</p>}
+              {keys.length > 0 && program !== 'claude' && program !== 'codex' && <p className="bots-helper">This agent gets connectors through a config file in the bot’s folder. If it ignores that file, add them in its own MCP config.</p>}
               <label className="bots-check">
                 <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
                 <span>Use a web browser</span>
