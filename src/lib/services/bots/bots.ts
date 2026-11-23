@@ -85,6 +85,8 @@ export interface BotRun {
   log?: string | null;
   /** The chat message that started this run. */
   message?: string | null;
+  /** Files attached to that message, relative to the bot's home folder. */
+  attachments?: string[];
 }
 
 export interface BotProposal {
@@ -410,12 +412,14 @@ export function updateBotSettings(patch: Partial<BotSettings>) {
 
 // ── talking to a host ───────────────────────────────────────────────────────
 
-type HostCommand = 'sync' | 'state' | 'run_now' | 'log' | 'stop' | 'ack';
+type HostCommand = 'sync' | 'state' | 'run_now' | 'log' | 'stop' | 'ack' | 'attach' | 'file';
 const LOCAL_COMMANDS: Record<HostCommand, string> = {
   sync: 'local_bots_sync', state: 'local_bots_state', run_now: 'local_bot_run_now', log: 'local_bot_log', stop: 'local_bot_stop', ack: 'local_bot_proposals_ack',
+  attach: 'local_bot_attach', file: 'local_bot_file',
 };
 const BOX_COMMANDS: Record<HostCommand, string> = {
   sync: 'box_bots_sync', state: 'box_bots_state', run_now: 'box_bot_run_now', log: 'box_bot_log', stop: 'box_bot_stop', ack: 'box_bot_proposals_ack',
+  attach: 'box_bot_attach', file: 'box_bot_file',
 };
 
 /** How long a call to a runner may take before the UI gives up waiting. */
@@ -500,19 +504,55 @@ export async function syncBots(): Promise<void> {
 }
 
 /** Start a run now; with `message`, it is a chat message the bot answers. */
-export async function runBotNow(id: string, message?: string): Promise<string> {
+export async function runBotNow(id: string, message?: string, attachments: string[] = []): Promise<string> {
   const bot = get(bots).find((b) => b.id === id);
   if (!bot) throw new Error('This bot no longer exists.');
   if (!isReachable(bot.boxId)) throw new Error('Connect to this bot’s box to run it.');
   // The host may not have the latest edit yet.
   await syncHost(bot.boxId);
-  const { runId } = await call<{ runId: string }>(bot.boxId, 'run_now', { id, ...(message?.trim() ? { message: message.trim() } : {}) });
+  const { runId } = await call<{ runId: string }>(bot.boxId, 'run_now', {
+    id, ...(message?.trim() ? { message: message.trim() } : {}), ...(attachments.length ? { attachments } : {}),
+  });
   return runId;
 }
 
-export function sendBotMessage(id: string, message: string): Promise<string> {
-  if (!message.trim()) return Promise.reject(new Error('Type a message first.'));
-  return runBotNow(id, message);
+export function sendBotMessage(id: string, message: string, attachments: string[] = []): Promise<string> {
+  if (!message.trim() && !attachments.length) return Promise.reject(new Error('Type a message first.'));
+  return runBotNow(id, message, attachments);
+}
+
+/** Largest file a bot chat takes, and how many per message (the runner checks too). */
+export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+export const MAX_ATTACHMENTS = 10;
+/** What the runner records when a message is files only. */
+export const FILES_ONLY_MESSAGE = '(sent files)';
+
+async function base64Of(file: Blob): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+/** Upload one file into the bot's folder (PC or box); returns its path for the message. */
+export async function attachToBot(bot: Pick<Bot, 'id' | 'boxId'>, file: File): Promise<string> {
+  if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`"${file.name}" is over ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+  if (!isReachable(bot.boxId)) throw new Error('Connect to this bot’s box first.');
+  const { path } = await call<{ path: string }>(bot.boxId, 'attach', { botId: bot.id, name: file.name || 'file', data: await base64Of(file) });
+  return path;
+}
+
+const previews = new Map<string, Promise<string | null>>();
+
+/** A data URL for an attached image, for chat thumbnails (cached). */
+export function attachmentPreview(bot: Pick<Bot, 'id' | 'boxId'>, path: string): Promise<string | null> {
+  if (!/\.(png|jpe?g|gif|webp)$/i.test(path)) return Promise.resolve(null);
+  const key = `${bot.boxId}:${bot.id}:${path}`;
+  if (!previews.has(key)) {
+    previews.set(key, call<{ mime: string; data: string }>(bot.boxId, 'file', { botId: bot.id, path })
+      .then((f) => `data:${f.mime};base64,${f.data}`).catch(() => null));
+  }
+  return previews.get(key)!;
 }
 
 export async function stopBotRun(bot: Pick<Bot, 'boxId'>, runId: string): Promise<void> {

@@ -10,10 +10,11 @@ import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import Dropdown from '$lib/components/shared/Dropdown';
 import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
 import { catalogIconFor } from '$lib/services/mcp-catalog';
-import { sharedSignIns } from '$lib/services/box-signins';
+import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
   BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, closeBots,
   connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
+  attachToBot, attachmentPreview, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
   saveBot, selectedBotId, sendBotMessage, stopBotRun, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
@@ -320,6 +321,8 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [builder, setBuilder] = useState(bot?.canCreateBots ?? template?.canCreateBots ?? false);
   const [computer, setComputer] = useState(bot?.computerUse ?? template?.computerUse ?? false);
   const pcComputer = useComputerUseOnThisPc();
+  const boxInfo = useStore(boxMcpInfo);
+  const boxOs = host === LOCAL_HOST ? null : boxInfo?.os ?? 'linux';
   const [error, setError] = useState('');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const program = agentProgram(agent);
@@ -369,7 +372,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           </label>
           <p className="bots-helper">{host === LOCAL_HOST
             ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
-            : 'Opens and uses real pages in a hidden browser on the box. The box needs Node and a Chromium: run "npx playwright install --with-deps chromium" there once.'}</p>
+            : `Opens and uses real pages in a hidden browser on the box. The box needs Node, and a browser installed once with "${boxOs === 'linux' ? 'npx playwright install --with-deps chromium' : 'npx playwright install chromium'}".`}</p>
           <label className="bots-check">
             <input type="checkbox" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
             <span>Use the computer</span>
@@ -380,7 +383,11 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
               : pcComputer === 'off'
                 ? 'Sees and operates apps on this PC\'s screen. Turn on Settings > Computer use first. Spacron asks you to allow each window it may control, so you need to be there.'
                 : 'Sees and operates apps on this PC\'s screen. Spacron asks you to allow each window it may control, so you need to be there when it runs.'
-            : `Gets its own virtual desktop on the box to open and operate apps, with no one watching. ${access === 'full' ? 'It can start programs there.' : 'It can start programs there only with Full access.'} The box needs this once: "sudo apt-get install -y xvfb xdotool imagemagick".`}</p>
+            : boxOs === 'macos'
+              ? `Operates this Mac box's own screen: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} Allow spacron-server under Screen Recording and Accessibility in System Settings once, and keep a user logged in.`
+              : boxOs === 'windows'
+                ? `Operates this Windows box's own desktop: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} spacron-server must run in a logged-in desktop session (started at sign-in), not as a service.`
+                : `Gets its own virtual desktop on the box to open and operate apps, with no one watching. ${access === 'full' ? 'It can start programs there.' : 'It can start programs there only with Full access.'} The box needs this once: "sudo apt-get install -y xvfb xdotool imagemagick".`}</p>
           <label className="bots-check">
             <input type="checkbox" checked={builder} onChange={(e) => setBuilder(e.target.checked)} />
             <span>Can create other bots</span>
@@ -470,6 +477,21 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
   const [error, setError] = useState('');
   const [replies, setReplies] = useState<Record<string, string>>({});
   const [now, setNow] = useState(Date.now());
+  const [pending, setPending] = useState<{ id: string; file: File; preview: string | null }[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  function addFiles(files: Iterable<File>) {
+    const list = [...files].filter((f) => f.size > 0 || f.type);
+    if (!list.length) return;
+    setPending((cur) => {
+      const room = Math.max(0, MAX_ATTACHMENTS - cur.length);
+      if (list.length > room) setError(`Attach at most ${MAX_ATTACHMENTS} files to one message.`);
+      return [...cur, ...list.slice(0, room).map((file) => ({ id: crypto.randomUUID(), file, preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : null }))];
+    });
+  }
+  function removePending(id: string) {
+    setPending((cur) => { const gone = cur.find((p) => p.id === id); if (gone?.preview) URL.revokeObjectURL(gone.preview); return cur.filter((p) => p.id !== id); });
+  }
   const scroller = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const shown = useMemo(() => runs.slice(0, 30).reverse(), [runs]);
@@ -478,15 +500,17 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
 
   // Fetch each run's reply, and again whenever its status changes: a reply
   // read while the run was still going may be empty or partial.
+  // No "alive" guard: the list changing (a new message sent) must not throw
+  // away a reply already on its way, which is then marked as fetched. This
+  // chat is keyed per bot, so a late reply always belongs here.
   const fetchedAt = useRef<Record<string, BotRun['status']>>({});
   useEffect(() => {
-    let alive = true;
     for (const run of shown) {
       if (!run.log || fetchedAt.current[run.id] === run.status) continue;
       fetchedAt.current[run.id] = run.status;
-      void fetchBotLog(bot, run.id).then((log) => { if (alive) setReplies((r) => ({ ...r, [run.id]: log.text })); }).catch(() => {});
+      void fetchBotLog(bot, run.id).then((log) => setReplies((r) => ({ ...r, [run.id]: log.text })))
+        .catch(() => { delete fetchedAt.current[run.id]; });
     }
-    return () => { alive = false; };
   }, [finishedKey]);
   useEffect(() => {
     if (!active) return;
@@ -507,11 +531,16 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
 
   async function send() {
     const text = draft.trim();
-    if (!text || active) return;
+    if ((!text && !pending.length) || active) return;
     setBusy('send'); setError('');
     try {
-      await sendBotMessage(bot.id, text);
+      // Upload first: the bot is told where each file landed in its folder.
+      const paths: string[] = [];
+      for (const p of pending) paths.push(await attachToBot(bot, p.file));
+      await sendBotMessage(bot.id, text, paths);
       setDraft('');
+      pending.forEach((p) => p.preview && URL.revokeObjectURL(p.preview));
+      setPending([]);
       await refreshBotState();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
@@ -525,7 +554,10 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
     : ['Do your job now', 'What can you do for me?', 'What did you do last time?'];
   return (
     <div
-      className="terminal-chat-view structured-chat-view bots-structured-chat"
+      className={`terminal-chat-view structured-chat-view bots-structured-chat${dragging ? ' bots-dropping' : ''}`}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
+      onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
       data-chat-font={appearance.font === 'app' ? undefined : appearance.font === 'system' || appearance.font === 'terminal' ? appearance.font : 'custom'}
       data-chat-font-size={appearance.fontSize == null ? undefined : 'set'}
       data-contrast={appearance.contrast !== 100 ? '' : undefined}
@@ -552,7 +584,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
               const reply = replies[run.id]?.trim();
               return <div key={run.id} className="bots-exchange">
                 {run.message
-                  ? <UserTurn text={run.message} images={[]} onOpenImage={noImages} />
+                  ? <SentTurn bot={bot} run={run} />
                   : <div className="terminal-chat-notice">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
                 {reply && <div className="tcr-msg"><div className="terminal-chat-agent"><Markdown text={reply} onOpenImage={noImages} /></div></div>}
                 {run.status === 'running' && <div className="terminal-chat-working"><Dots /><span>{bot.name} is working · {Math.max(0, Math.round((now - run.startedAt) / 1000))}s</span></div>}
@@ -571,8 +603,24 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
       <div className="terminal-chat-dock">
         {error && <div className="terminal-chat-error" role="alert"><span>{error}</span></div>}
         <div className="terminal-chat-composer">
+          {pending.length > 0 && (
+            <div className="terminal-chat-attachments">
+              {pending.map((p, index) => (
+                <div key={p.id} className="terminal-chat-attachment" title={p.file.name}>
+                  <span className="terminal-chat-attachment-thumb">
+                    {p.preview ? <img src={p.preview} alt="" /> : <span className="terminal-chat-attachment-icon">{(p.file.name.split('.').pop() || 'FILE').slice(0, 4).toUpperCase()}</span>}
+                  </span>
+                  <button type="button" className="terminal-chat-attachment-remove" aria-label={`Remove ${p.file.name}`} disabled={busy === 'send'} onClick={() => removePending(p.id)}>
+                    <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><path d="M1 1l6 6M7 1 1 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                  </button>
+                  {index === 0 && pending.length > 1 && <span className="terminal-chat-attachment-count">{pending.length}</span>}
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textarea}
+            onPaste={(e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); addFiles(files); } }}
             rows={1}
             value={draft}
             placeholder={active ? `${bot.name} is working… (Stop to send something new)` : `Message ${bot.name}`}
@@ -584,6 +632,10 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
             }}
           />
           <div className="terminal-chat-composer-bar">
+            <button type="button" className="terminal-chat-icon-btn" title="Attach files (or paste or drop them here)" aria-label="Attach files" disabled={Boolean(active) || busy !== null} onClick={() => fileInput.current?.click()}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>
+            </button>
+            <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ''; }} />
             <span className="terminal-chat-pill" title="The agent CLI this bot runs on">
               <span className="terminal-chat-pill-label">{agentProgram(bot.agent)}{bot.model ? ` · ${bot.model}` : ''}</span>
             </span>
@@ -597,7 +649,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
                 <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2.2" fill="currentColor" /></svg>
               </button>
             ) : (
-              <button type="button" className="terminal-chat-send" title="Send (Enter)" aria-label="Send" disabled={busy !== null || !draft.trim()} onClick={() => void send()}>
+              <button type="button" className="terminal-chat-send" title={busy === 'send' && pending.length ? 'Uploading…' : 'Send (Enter)'} aria-label="Send" disabled={busy !== null || (!draft.trim() && !pending.length)} onClick={() => void send()}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
               </button>
             )}
@@ -606,6 +658,24 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
       </div>
     </div>
   );
+}
+
+/** A message you sent, with its attachments: images as thumbnails, other files as chips. */
+function SentTurn({ bot, run }: { bot: Bot; run: BotRun }) {
+  const files = run.attachments ?? [];
+  const [images, setImages] = useState<string[]>([]);
+  const key = files.join('|');
+  useEffect(() => {
+    let alive = true;
+    void Promise.all(files.map((f) => attachmentPreview(bot, f))).then((urls) => { if (alive) setImages(urls.filter((u): u is string => Boolean(u))); });
+    return () => { alive = false; };
+  }, [key]);
+  const others = files.filter((f) => !/\.(png|jpe?g|gif|webp)$/i.test(f));
+  const text = run.message === FILES_ONLY_MESSAGE ? '' : run.message ?? '';
+  return <>
+    <UserTurn text={text} images={images} onOpenImage={() => {}} />
+    {others.length > 0 && <div className="bots-sent-files">{others.map((f) => <span key={f} className="terminal-chat-pill" title={f}><span className="terminal-chat-pill-label">{f.replace(/^attachments\/[0-9a-f]{8}-/, '')}</span></span>)}</div>}
+  </>;
 }
 
 function BotAbout({ bot, runs, homeRoot, active, onEdit }: { bot: Bot; runs: BotRun[]; homeRoot: string; active?: BotRun; onEdit: () => void }) {
@@ -648,7 +718,7 @@ function BotAbout({ bot, runs, homeRoot, active, onEdit }: { bot: Bot; runs: Bot
             <span><strong>May</strong> {access?.label.toLowerCase()}</span>
             <span><strong>Connectors</strong> {connectors.length ? connectors.join(', ') : 'none'}</span>
             <span><strong>Browser</strong> {bot.browser ? 'yes' : 'no'}</span>
-            <span><strong>Computer use</strong> {bot.computerUse ? (bot.boxId === LOCAL_HOST ? 'this PC\'s screen' : 'virtual desktop') : 'no'}</span>
+            <span><strong>Computer use</strong> {bot.computerUse ? (bot.boxId === LOCAL_HOST ? 'this PC\'s screen' : 'the box\'s desktop') : 'no'}</span>
             {bot.canCreateBots && <span><strong>Creates bots</strong> yes</span>}
           </div>
           {homeRoot && <p className="bots-helper">Home folder: <code>{`${homeRoot}/${bot.id}`}</code></p>}

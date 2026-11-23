@@ -55,3 +55,13 @@ pub fn local_bot_stop(args: Value, state: State<AppState>) -> Result<Value, Stri
 pub fn local_bot_proposals_ack(args: Value, state: State<AppState>) -> Result<Value, String> {
     bots::proposals_ack(args, &local_root(&state.config_dir))
 }
+
+#[tauri::command]
+pub fn local_bot_attach(args: Value, state: State<AppState>) -> Result<Value, String> {
+    bots::attach(args, &local_root(&state.config_dir))
+}
+
+#[tauri::command]
+pub fn local_bot_file(args: Value, state: State<AppState>) -> Result<Value, String> {
+    bots::file(args, &local_root(&state.config_dir))
+}

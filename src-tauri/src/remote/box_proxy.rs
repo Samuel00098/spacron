@@ -149,8 +149,8 @@ pub(crate) fn mcp_info(workspace: &Path) -> Result<Value, String> {
         .collect();
     shared.sort();
     Ok(match info().get() {
-        Some(i) => json!({ "proxyBase": format!("http://127.0.0.1:{}/proxy", i.port), "token": i.secret, "shared": shared, "mcpUrl": mcp_url() }),
-        None => json!({ "proxyBase": null, "token": null, "shared": shared, "mcpUrl": null }),
+        Some(i) => json!({ "proxyBase": format!("http://127.0.0.1:{}/proxy", i.port), "token": i.secret, "shared": shared, "mcpUrl": mcp_url(), "os": std::env::consts::OS, "desktop": super::box_mcp::desktop_kind() }),
+        None => json!({ "proxyBase": null, "token": null, "shared": shared, "mcpUrl": null, "os": std::env::consts::OS, "desktop": super::box_mcp::desktop_kind() }),
     })
 }
 

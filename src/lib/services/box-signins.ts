@@ -29,6 +29,10 @@ export interface BoxMcpInfo {
   shared: string[];
   /** The box's own MCP server (`spacron-box`): agents on the box, virtual desktop. */
   mcpUrl?: string | null;
+  /** The box's operating system: `linux`, `macos` or `windows`. */
+  os?: string;
+  /** Where its desktop tools act: a `virtual` desktop (Linux) or the real `screen`. */
+  desktop?: 'virtual' | 'screen' | 'none';
 }
 export const boxMcpInfo = writable<BoxMcpInfo | null>(null);
 

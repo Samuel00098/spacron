@@ -163,13 +163,35 @@ pub(crate) fn plain_text(bytes: &[u8]) -> String {
         .collect::<Vec<_>>().join("\n")
 }
 
-/// What the terminal's shell is running right now (Linux): its child's name.
+/// What the terminal's shell is running right now: its newest child's name.
 fn running_program(pid: Option<u32>) -> Option<String> {
     let pid = pid?;
-    let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
-    let child = children.split_whitespace().last()?;
-    let comm = std::fs::read_to_string(format!("/proc/{child}/comm")).ok()?;
-    Some(comm.trim().to_string()).filter(|c| !c.is_empty())
+    #[cfg(target_os = "linux")]
+    {
+        let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
+        let child = children.split_whitespace().last()?;
+        let comm = std::fs::read_to_string(format!("/proc/{child}/comm")).ok()?;
+        Some(comm.trim().to_string()).filter(|c| !c.is_empty())
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let children = run("pgrep", &["-P", &pid.to_string()], &[], None).ok()?;
+        let child = String::from_utf8_lossy(&children).split_whitespace().last()?.to_string();
+        let comm = run("ps", &["-o", "comm=", "-p", &child], &[], None).ok()?;
+        let name = String::from_utf8_lossy(&comm).trim().rsplit('/').next()?.to_string();
+        Some(name).filter(|c| !c.is_empty())
+    }
+    #[cfg(windows)]
+    {
+        let script = format!("(Get-CimInstance Win32_Process -Filter 'ParentProcessId={pid}' | Sort-Object CreationDate | Select-Object -Last 1).Name");
+        let out = run("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", &script], &[], None).ok()?;
+        let name = String::from_utf8_lossy(&out).trim().trim_end_matches(".exe").to_string();
+        Some(name).filter(|c| !c.is_empty())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
 }
 
 fn list_agents() -> Result<Value, String> {
@@ -223,124 +245,33 @@ fn send_to_agent(args: &Value) -> Result<Value, String> {
     Ok(text_content(format!("Sent to agent {id}.")))
 }
 
-// ── virtual desktop ─────────────────────────────────────────────────────────
+// ── desktop ─────────────────────────────────────────────────────────────────
+//
+// One set of tools, one backend per box OS:
+// - Linux: an Xvfb virtual desktop (xdotool + ImageMagick), started on first use.
+// - macOS: the Mac's own screen, with built-in tools only: `screencapture`,
+//   CoreGraphics events through JavaScript for Automation, System Events for
+//   typing. The server needs Screen Recording and Accessibility permission.
+// - Windows: the logged-in desktop, through PowerShell (.NET screen capture,
+//   user32 for the mouse, SendKeys for typing). Needs the server to run in the
+//   user's desktop session, not as a service.
 
-struct Desktop {
-    display: String,
-    _xvfb: Option<std::process::Child>,
-}
-
-fn desktop() -> &'static Mutex<Option<Desktop>> {
-    static DESKTOP: OnceLock<Mutex<Option<Desktop>>> = OnceLock::new();
-    DESKTOP.get_or_init(|| Mutex::new(None))
-}
-
-fn have(program: &str) -> bool {
-    Command::new("sh").arg("-c").arg(format!("command -v {program} >/dev/null 2>&1")).status().map(|s| s.success()).unwrap_or(false)
-}
-
-/// The display the desktop tools act on, starting a virtual one if needed.
-fn display() -> Result<String, String> {
-    if let Ok(existing) = std::env::var("SPACRON_BOX_DISPLAY") {
-        if !existing.trim().is_empty() {
-            return Ok(existing.trim().to_string());
-        }
+/// Run a program and return its stdout, or its stderr as the error.
+fn run(program: &str, args: &[&str], env: &[(&str, &str)], stdin: Option<&str>) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut cmd = Command::new(program);
+    cmd.args(args).envs(env.iter().copied()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    let mut child = cmd.spawn().map_err(|e| format!("Could not run {program}: {e}"))?;
+    if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        let _ = pipe.write_all(input.as_bytes());
     }
-    let mut guard = desktop().lock().map_err(|_| "desktop state poisoned")?;
-    if let Some(d) = guard.as_ref() {
-        if std::path::Path::new(&format!("/tmp/.X11-unix/X{}", &d.display[1..])).exists() {
-            return Ok(d.display.clone());
-        }
-    }
-    // Reuse the desktop a previous run of this server started, so a restart
-    // does not leave one virtual desktop behind each time.
-    let remembered = server().get().map(|st| st.workspace.join(".spacron").join("desktop-display"));
-    if let Some(saved) = remembered.as_ref().and_then(|p| std::fs::read_to_string(p).ok()) {
-        let saved = saved.trim().to_string();
-        if saved.starts_with(':') && saved[1..].chars().all(|c| c.is_ascii_digit()) && std::path::Path::new(&format!("/tmp/.X11-unix/X{}", &saved[1..])).exists() {
-            *guard = Some(Desktop { display: saved.clone(), _xvfb: None });
-            return Ok(saved);
-        }
-    }
-    if !have("Xvfb") {
-        return Err("The virtual desktop needs Xvfb on the box. Install it once: sudo apt-get install -y xvfb xdotool imagemagick".into());
-    }
-    let num = (90..140).find(|n| !std::path::Path::new(&format!("/tmp/.X{n}-lock")).exists() && !std::path::Path::new(&format!("/tmp/.X11-unix/X{n}")).exists())
-        .ok_or("No free display number for the virtual desktop.")?;
-    let display = format!(":{num}");
-    let child = Command::new("Xvfb").args([display.as_str(), "-screen", "0", SCREEN, "-nolisten", "tcp"])
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
-        .map_err(|e| format!("Could not start the virtual desktop: {e}"))?;
-    let socket = format!("/tmp/.X11-unix/X{num}");
-    for _ in 0..50 {
-        if std::path::Path::new(&socket).exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    if !std::path::Path::new(&socket).exists() {
-        return Err("The virtual desktop did not start.".into());
-    }
-    // A window manager gives windows focus and borders; optional.
-    for wm in ["openbox", "fluxbox", "xfwm4", "matchbox-window-manager"] {
-        if have(wm) {
-            let _ = Command::new(wm).env("DISPLAY", &display).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-            break;
-        }
-    }
-    if let Some(path) = remembered {
-        let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
-        let _ = std::fs::write(path, &display);
-    }
-    *guard = Some(Desktop { display: display.clone(), _xvfb: Some(child) });
-    Ok(display)
-}
-
-fn xdotool(display: &str, args: &[&str]) -> Result<String, String> {
-    if !have("xdotool") {
-        return Err("The desktop tools need xdotool on the box. Install it once: sudo apt-get install -y xdotool".into());
-    }
-    let out = Command::new("xdotool").args(args).env("DISPLAY", display).output().map_err(|e| format!("xdotool failed: {e}"))?;
+    let out = child.wait_with_output().map_err(|e| format!("{program} failed: {e}"))?;
     if !out.status.success() {
-        return Err(format!("xdotool failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() { format!("{program} failed.") } else { err });
     }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
-fn screen_size(display: &str) -> Result<(f64, f64), String> {
-    let out = xdotool(display, &["getdisplaygeometry"])?;
-    let mut parts = out.split_whitespace().filter_map(|p| p.parse::<f64>().ok());
-    Ok((parts.next().ok_or("Unknown screen size.")?, parts.next().ok_or("Unknown screen size.")?))
-}
-
-fn screenshot() -> Result<Value, String> {
-    let display = display()?;
-    if !have("import") {
-        return Err("Screenshots need ImageMagick on the box. Install it once: sudo apt-get install -y imagemagick".into());
-    }
-    let out = Command::new("import").args(["-display", &display, "-window", "root", "png:-"]).output()
-        .map_err(|e| format!("Could not take a screenshot: {e}"))?;
-    if !out.status.success() || out.stdout.is_empty() {
-        return Err(format!("Could not take a screenshot: {}", String::from_utf8_lossy(&out.stderr).trim()));
-    }
-    let (w, h) = screen_size(&display).unwrap_or((0.0, 0.0));
-    Ok(json!({ "content": [
-        { "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(&out.stdout), "mimeType": "image/png" },
-        { "type": "text", "text": format!("Virtual desktop {display}, {w}x{h}. Click with x and y as fractions of this screen.") },
-    ], "isError": false }))
-}
-
-fn list_windows() -> Result<Value, String> {
-    let display = display()?;
-    let ids = xdotool(&display, &["search", "--onlyvisible", "--name", "."]).unwrap_or_default();
-    let mut rows = Vec::new();
-    for id in ids.split_whitespace() {
-        let name = xdotool(&display, &["getwindowname", id]).unwrap_or_default();
-        if !name.trim().is_empty() {
-            rows.push(format!("- {}: {}", id, name.trim()));
-        }
-    }
-    Ok(text_content(if rows.is_empty() { "No windows are open on the virtual desktop.".into() } else { rows.join("\n") }))
+    Ok(out.stdout)
 }
 
 fn fraction(args: &Value, key: &str) -> Result<f64, String> {
@@ -351,19 +282,31 @@ fn fraction(args: &Value, key: &str) -> Result<f64, String> {
     Ok(v)
 }
 
+/// Key combos are plain names (`Return`, `ctrl+l`, `Tab Tab Return`); checked
+/// here before any backend builds a command from them.
+fn checked_keys(args: &Value) -> Result<Vec<String>, String> {
+    let keys = args.get("keys").and_then(|k| k.as_str()).ok_or("Give the keys to press.")?;
+    if keys.trim().is_empty() || !keys.chars().all(|c| c.is_ascii_alphanumeric() || " +_-".contains(c)) {
+        return Err("Keys are names like Return, Tab, ctrl+l, separated by spaces.".into());
+    }
+    Ok(keys.split_whitespace().map(str::to_string).collect())
+}
+
+fn screenshot_content(png: Vec<u8>, what: &str) -> Value {
+    json!({ "content": [
+        { "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(&png), "mimeType": "image/png" },
+        { "type": "text", "text": format!("{what}. Click with x and y as fractions of this screen (0,0 is top left).") },
+    ], "isError": false })
+}
+
+fn screenshot() -> Result<Value, String> { backend::screenshot() }
+fn list_windows() -> Result<Value, String> { backend::list_windows() }
+
 fn click(args: &Value) -> Result<Value, String> {
     let (x, y) = (fraction(args, "x")?, fraction(args, "y")?);
-    let display = display()?;
-    let (w, h) = screen_size(&display)?;
-    let (px, py) = (((w - 1.0) * x).round().to_string(), ((h - 1.0) * y).round().to_string());
-    let button = match args.get("button").and_then(|b| b.as_str()).unwrap_or("left") { "middle" => "2", "right" => "3", _ => "1" };
-    let mut cmd = vec!["mousemove", px.as_str(), py.as_str(), "click"];
-    if args.get("double").and_then(|d| d.as_bool()).unwrap_or(false) {
-        cmd.extend(["--repeat", "2"]);
-    }
-    cmd.push(button);
-    xdotool(&display, &cmd)?;
-    Ok(text_content(format!("Clicked at {px},{py}.")))
+    let button = match args.get("button").and_then(|b| b.as_str()).unwrap_or("left") { "middle" => 2, "right" => 3, _ => 1 };
+    let double = args.get("double").and_then(|d| d.as_bool()).unwrap_or(false);
+    backend::click(x, y, button, double)
 }
 
 fn type_text(args: &Value) -> Result<Value, String> {
@@ -371,39 +314,425 @@ fn type_text(args: &Value) -> Result<Value, String> {
     if text.chars().count() > MAX_TYPE_CHARS {
         return Err(format!("Type at most {MAX_TYPE_CHARS} characters at a time."));
     }
-    let display = display()?;
-    xdotool(&display, &["type", "--delay", "8", "--", text])?;
+    backend::type_text(text)?;
     Ok(text_content(format!("Typed {} characters.", text.chars().count())))
 }
 
 fn press_keys(args: &Value) -> Result<Value, String> {
-    let keys = args.get("keys").and_then(|k| k.as_str()).ok_or("Give the keys to press.")?;
-    if keys.trim().is_empty() || !keys.chars().all(|c| c.is_ascii_alphanumeric() || " +_-".contains(c)) {
-        return Err("Keys are names like Return, Tab, ctrl+l, separated by spaces.".into());
-    }
-    let display = display()?;
-    let mut cmd = vec!["key", "--"];
-    cmd.extend(keys.split_whitespace());
-    xdotool(&display, &cmd)?;
-    Ok(text_content(format!("Pressed {keys}.")))
+    let keys = checked_keys(args)?;
+    backend::press_keys(&keys)?;
+    Ok(text_content(format!("Pressed {}.", keys.join(" "))))
 }
 
 fn scroll(args: &Value) -> Result<Value, String> {
     let dy = args.get("dy").and_then(|v| v.as_i64()).ok_or("Give dy.")?;
-    let display = display()?;
-    let steps = dy.unsigned_abs().clamp(1, 20).to_string();
-    xdotool(&display, &["click", "--repeat", &steps, if dy > 0 { "5" } else { "4" }])?;
+    backend::scroll(dy.clamp(-20, 20))?;
     Ok(text_content(format!("Scrolled {}.", if dy > 0 { "down" } else { "up" })))
 }
 
 fn launch(args: &Value) -> Result<Value, String> {
     let command = args.get("command").and_then(|c| c.as_str()).map(str::trim).filter(|c| !c.is_empty()).ok_or("Give the program to start.")?;
-    let display = display()?;
     let workspace = server().get().map(|s| s.workspace.clone()).unwrap_or_else(std::env::temp_dir);
-    let child = Command::new("sh").arg("-c").arg(command).env("DISPLAY", &display).current_dir(workspace)
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
-        .map_err(|e| format!("Could not start it: {e}"))?;
-    Ok(text_content(format!("Started (pid {}). Take a screenshot in a moment to see it.", child.id())))
+    let pid = backend::launch(command, &workspace)?;
+    Ok(text_content(format!("Started (pid {pid}). Take a screenshot in a moment to see it.")))
+}
+
+// ── macOS and Windows command builders (pure, so they are tested everywhere) ─
+
+/// AppleScript for one key combo: a key code for named keys, a keystroke
+/// for characters, with modifiers.
+pub(crate) fn mac_key_script(combo: &str) -> Result<String, String> {
+    let mut mods = Vec::new();
+    let mut key = None;
+    for part in combo.split('+').map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods.push("control down"),
+            "alt" | "option" => mods.push("option down"),
+            "shift" => mods.push("shift down"),
+            "cmd" | "command" | "super" | "meta" | "win" => mods.push("command down"),
+            _ => key = Some(part.to_string()),
+        }
+    }
+    let key = key.ok_or("A key combo needs a key, not just modifiers.")?;
+    let code = match key.to_ascii_lowercase().as_str() {
+        "return" | "enter" => Some(36), "tab" => Some(48), "escape" | "esc" => Some(53), "space" => Some(49),
+        "backspace" | "delete" => Some(51), "forwarddelete" => Some(117), "up" => Some(126), "down" => Some(125),
+        "left" => Some(123), "right" => Some(124), "home" => Some(115), "end" => Some(119),
+        "page_up" | "pageup" | "prior" => Some(116), "page_down" | "pagedown" | "next" => Some(121),
+        "f1" => Some(122), "f2" => Some(120), "f3" => Some(99), "f4" => Some(118), "f5" => Some(96), "f6" => Some(97),
+        _ => None,
+    };
+    let using = if mods.is_empty() { String::new() } else { format!(" using {{{}}}", mods.join(", ")) };
+    Ok(match code {
+        Some(c) => format!("tell application \"System Events\" to key code {c}{using}"),
+        None if key.chars().count() == 1 => format!("tell application \"System Events\" to keystroke \"{}\"{using}", key.to_ascii_lowercase()),
+        None => return Err(format!("Unknown key: {key}")),
+    })
+}
+
+/// JavaScript for Automation that clicks at a point (in screen points).
+pub(crate) fn mac_click_jxa(x: f64, y: f64, button: u8, double: bool) -> String {
+    // CGEventType and CGMouseButton values, numeric so the bridge has nothing to resolve.
+    let (down, up, btn) = match button { 3 => (3, 4, 1), 2 => (25, 26, 2), _ => (1, 2, 0) };
+    let clicks = if double { 2 } else { 1 };
+    format!("ObjC.import('CoreGraphics'); var p = $.CGPointMake({x:.1}, {y:.1}); \
+function post(t, n) {{ var e = $.CGEventCreateMouseEvent(null, t, p, {btn}); $.CGEventSetIntegerValueField(e, 1, n); $.CGEventPost(0, e); }} \
+post(5, 0); for (var i = 1; i <= {clicks}; i++) {{ post({down}, i); post({up}, i); }}")
+}
+
+/// SendKeys text with its special characters made literal.
+pub(crate) fn win_sendkeys_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '+' | '^' | '%' | '~' | '(' | ')' | '{' | '}' | '[' | ']' => { out.push('{'); out.push(c); out.push('}'); }
+            '\n' => out.push_str("{ENTER}"),
+            '\r' => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// SendKeys for one key combo (`ctrl+l` -> `^l`, `Return` -> `{ENTER}`).
+pub(crate) fn win_sendkeys_combo(combo: &str) -> Result<String, String> {
+    let mut mods = String::new();
+    let mut key = None;
+    for part in combo.split('+').map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods.push('^'),
+            "alt" | "option" => mods.push('%'),
+            "shift" => mods.push('+'),
+            "cmd" | "command" | "super" | "meta" | "win" => return Err("The Windows key cannot be sent this way.".into()),
+            _ => key = Some(part.to_string()),
+        }
+    }
+    let key = key.ok_or("A key combo needs a key, not just modifiers.")?;
+    let lower = key.to_ascii_lowercase();
+    let named = match lower.as_str() {
+        "return" | "enter" => Some("{ENTER}"), "tab" => Some("{TAB}"), "escape" | "esc" => Some("{ESC}"), "space" => Some(" "),
+        "backspace" => Some("{BACKSPACE}"), "delete" => Some("{DEL}"), "up" => Some("{UP}"), "down" => Some("{DOWN}"),
+        "left" => Some("{LEFT}"), "right" => Some("{RIGHT}"), "home" => Some("{HOME}"), "end" => Some("{END}"),
+        "page_up" | "pageup" | "prior" => Some("{PGUP}"), "page_down" | "pagedown" | "next" => Some("{PGDN}"),
+        _ => None,
+    };
+    Ok(match named {
+        Some(k) => format!("{mods}{k}"),
+        None if lower.len() >= 2 && lower.starts_with('f') && lower[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) => format!("{mods}{{{}}}", lower.to_uppercase()),
+        None if key.chars().count() == 1 => format!("{mods}{}", win_sendkeys_text(&lower)),
+        None => return Err(format!("Unknown key: {key}")),
+    })
+}
+
+/// PowerShell that makes the process DPI-aware and loads screen and input helpers.
+const WIN_PRELUDE: &str = r#"$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+Add-Type -Namespace Spacron -Name Input -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);'
+[void][Spacron.Input]::SetProcessDPIAware()
+$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+"#;
+
+pub(crate) fn win_click_script(x: f64, y: f64, button: u8, double: bool) -> String {
+    let (down, up) = match button { 3 => (0x08, 0x10), 2 => (0x20, 0x40), _ => (0x02, 0x04) };
+    let clicks = if double { 2 } else { 1 };
+    format!("{WIN_PRELUDE}$x = [int]($b.Left + ($b.Width - 1) * {x}); $y = [int]($b.Top + ($b.Height - 1) * {y})
+[void][Spacron.Input]::SetCursorPos($x, $y)
+for ($i = 0; $i -lt {clicks}; $i++) {{ [Spacron.Input]::mouse_event({down}, 0, 0, 0, 0); [Spacron.Input]::mouse_event({up}, 0, 0, 0, 0) }}
+\"$x,$y\"")
+}
+
+#[cfg(target_os = "linux")]
+mod backend {
+    //! Linux: an Xvfb virtual desktop.
+    use super::*;
+
+    struct Desktop {
+        display: String,
+        _xvfb: Option<std::process::Child>,
+    }
+
+    fn desktop() -> &'static Mutex<Option<Desktop>> {
+        static DESKTOP: OnceLock<Mutex<Option<Desktop>>> = OnceLock::new();
+        DESKTOP.get_or_init(|| Mutex::new(None))
+    }
+
+    fn have(program: &str) -> bool {
+        Command::new("sh").arg("-c").arg(format!("command -v {program} >/dev/null 2>&1")).status().map(|s| s.success()).unwrap_or(false)
+    }
+
+    /// The display the desktop tools act on, starting a virtual one if needed.
+    pub(super) fn display() -> Result<String, String> {
+        if let Ok(existing) = std::env::var("SPACRON_BOX_DISPLAY") {
+            if !existing.trim().is_empty() {
+                return Ok(existing.trim().to_string());
+            }
+        }
+        let mut guard = desktop().lock().map_err(|_| "desktop state poisoned")?;
+        if let Some(d) = guard.as_ref() {
+            if std::path::Path::new(&format!("/tmp/.X11-unix/X{}", &d.display[1..])).exists() {
+                return Ok(d.display.clone());
+            }
+        }
+        // Reuse the desktop a previous run of this server started, so a restart
+        // does not leave one virtual desktop behind each time.
+        let remembered = server().get().map(|st| st.workspace.join(".spacron").join("desktop-display"));
+        if let Some(saved) = remembered.as_ref().and_then(|p| std::fs::read_to_string(p).ok()) {
+            let saved = saved.trim().to_string();
+            if saved.starts_with(':') && saved[1..].chars().all(|c| c.is_ascii_digit()) && std::path::Path::new(&format!("/tmp/.X11-unix/X{}", &saved[1..])).exists() {
+                *guard = Some(Desktop { display: saved.clone(), _xvfb: None });
+                return Ok(saved);
+            }
+        }
+        if !have("Xvfb") {
+            return Err("The virtual desktop needs Xvfb on the box. Install it once: sudo apt-get install -y xvfb xdotool imagemagick".into());
+        }
+        let num = (90..140).find(|n| !std::path::Path::new(&format!("/tmp/.X{n}-lock")).exists() && !std::path::Path::new(&format!("/tmp/.X11-unix/X{n}")).exists())
+            .ok_or("No free display number for the virtual desktop.")?;
+        let display = format!(":{num}");
+        let child = Command::new("Xvfb").args([display.as_str(), "-screen", "0", SCREEN, "-nolisten", "tcp"])
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+            .map_err(|e| format!("Could not start the virtual desktop: {e}"))?;
+        let socket = format!("/tmp/.X11-unix/X{num}");
+        for _ in 0..50 {
+            if std::path::Path::new(&socket).exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !std::path::Path::new(&socket).exists() {
+            return Err("The virtual desktop did not start.".into());
+        }
+        // A window manager gives windows focus and borders; optional.
+        for wm in ["openbox", "fluxbox", "xfwm4", "matchbox-window-manager"] {
+            if have(wm) {
+                let _ = Command::new(wm).env("DISPLAY", &display).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+                break;
+            }
+        }
+        if let Some(path) = remembered {
+            let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
+            let _ = std::fs::write(path, &display);
+        }
+        *guard = Some(Desktop { display: display.clone(), _xvfb: Some(child) });
+        Ok(display)
+    }
+
+    fn xdotool(display: &str, args: &[&str]) -> Result<String, String> {
+        if !have("xdotool") {
+            return Err("The desktop tools need xdotool on the box. Install it once: sudo apt-get install -y xdotool".into());
+        }
+        run("xdotool", args, &[("DISPLAY", display)], None).map(|o| String::from_utf8_lossy(&o).to_string())
+    }
+
+    fn screen_size(display: &str) -> Result<(f64, f64), String> {
+        let out = xdotool(display, &["getdisplaygeometry"])?;
+        let mut parts = out.split_whitespace().filter_map(|p| p.parse::<f64>().ok());
+        Ok((parts.next().ok_or("Unknown screen size.")?, parts.next().ok_or("Unknown screen size.")?))
+    }
+
+    pub(super) fn screenshot() -> Result<Value, String> {
+        let display = display()?;
+        if !have("import") {
+            return Err("Screenshots need ImageMagick on the box. Install it once: sudo apt-get install -y imagemagick".into());
+        }
+        let png = run("import", &["-display", &display, "-window", "root", "png:-"], &[], None)?;
+        let (w, h) = screen_size(&display).unwrap_or((0.0, 0.0));
+        Ok(screenshot_content(png, &format!("Virtual desktop {display}, {w}x{h}")))
+    }
+
+    pub(super) fn list_windows() -> Result<Value, String> {
+        let display = display()?;
+        let ids = xdotool(&display, &["search", "--onlyvisible", "--name", "."]).unwrap_or_default();
+        let mut rows = Vec::new();
+        for id in ids.split_whitespace() {
+            let name = xdotool(&display, &["getwindowname", id]).unwrap_or_default();
+            if !name.trim().is_empty() {
+                rows.push(format!("- {}: {}", id, name.trim()));
+            }
+        }
+        Ok(text_content(if rows.is_empty() { "No windows are open on the virtual desktop.".into() } else { rows.join("\n") }))
+    }
+
+    pub(super) fn click(x: f64, y: f64, button: u8, double: bool) -> Result<Value, String> {
+        let display = display()?;
+        let (w, h) = screen_size(&display)?;
+        let (px, py) = (((w - 1.0) * x).round().to_string(), ((h - 1.0) * y).round().to_string());
+        let button = button.to_string();
+        let mut cmd = vec!["mousemove", px.as_str(), py.as_str(), "click"];
+        if double {
+            cmd.extend(["--repeat", "2"]);
+        }
+        cmd.push(&button);
+        xdotool(&display, &cmd)?;
+        Ok(text_content(format!("Clicked at {px},{py}.")))
+    }
+
+    pub(super) fn type_text(text: &str) -> Result<(), String> {
+        let display = display()?;
+        xdotool(&display, &["type", "--delay", "8", "--", text]).map(|_| ())
+    }
+
+    pub(super) fn press_keys(keys: &[String]) -> Result<(), String> {
+        let display = display()?;
+        let mut cmd = vec!["key", "--"];
+        cmd.extend(keys.iter().map(String::as_str));
+        xdotool(&display, &cmd).map(|_| ())
+    }
+
+    pub(super) fn scroll(dy: i64) -> Result<(), String> {
+        let display = display()?;
+        let steps = dy.unsigned_abs().max(1).to_string();
+        xdotool(&display, &["click", "--repeat", &steps, if dy > 0 { "5" } else { "4" }]).map(|_| ())
+    }
+
+    pub(super) fn launch(command: &str, cwd: &std::path::Path) -> Result<u32, String> {
+        let display = display()?;
+        let child = Command::new("sh").arg("-c").arg(command).env("DISPLAY", &display).current_dir(cwd)
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+            .map_err(|e| format!("Could not start it: {e}"))?;
+        Ok(child.id())
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod backend {
+    //! macOS: the Mac's own screen, built-in tools only.
+    use super::*;
+
+    const PERMISSION: &str = "macOS blocked it. In System Settings > Privacy & Security, allow spacron-server (or the app that started it) under Screen Recording and Accessibility, then try again.";
+
+    fn osascript(args: &[&str]) -> Result<String, String> {
+        run("osascript", args, &[], None).map(|o| String::from_utf8_lossy(&o).trim().to_string())
+            .map_err(|e| if e.contains("not allowed") || e.contains("-1743") || e.contains("-25211") || e.contains("assistive") { format!("{PERMISSION} ({e})") } else { e })
+    }
+
+    /// The main screen in points, which is what mouse events use.
+    fn screen_size() -> Result<(f64, f64), String> {
+        let out = osascript(&["-l", "JavaScript", "-e", "ObjC.import('AppKit'); var f = $.NSScreen.mainScreen.frame; f.size.width + ' ' + f.size.height"])?;
+        let mut parts = out.split_whitespace().filter_map(|p| p.parse::<f64>().ok());
+        Ok((parts.next().ok_or("Unknown screen size.")?, parts.next().ok_or("Unknown screen size.")?))
+    }
+
+    pub(super) fn screenshot() -> Result<Value, String> {
+        let file = std::env::temp_dir().join(format!("spacron-shot-{}.png", uuid::Uuid::new_v4().simple()));
+        let path = file.to_string_lossy().to_string();
+        run("screencapture", &["-x", "-t", "png", &path], &[], None).map_err(|e| format!("{PERMISSION} ({e})"))?;
+        let png = std::fs::read(&file).map_err(|_| PERMISSION.to_string())?;
+        let _ = std::fs::remove_file(&file);
+        let (w, h) = screen_size().unwrap_or((0.0, 0.0));
+        Ok(screenshot_content(png, &format!("This Mac's screen, {w}x{h} points")))
+    }
+
+    pub(super) fn list_windows() -> Result<Value, String> {
+        let out = osascript(&["-e", "set out to \"\"\ntell application \"System Events\"\nrepeat with p in (every process whose visible is true)\nrepeat with w in (every window of p)\nset out to out & \"- \" & (name of p) & \": \" & (name of w) & linefeed\nend repeat\nend repeat\nend tell\nreturn out"])?;
+        Ok(text_content(if out.trim().is_empty() { "No windows are open.".into() } else { out }))
+    }
+
+    pub(super) fn click(x: f64, y: f64, button: u8, double: bool) -> Result<Value, String> {
+        let (w, h) = screen_size()?;
+        let (px, py) = ((w - 1.0) * x, (h - 1.0) * y);
+        osascript(&["-l", "JavaScript", "-e", &mac_click_jxa(px, py, button, double)])?;
+        Ok(text_content(format!("Clicked at {px:.0},{py:.0}.")))
+    }
+
+    pub(super) fn type_text(text: &str) -> Result<(), String> {
+        // The text goes in as an argument, never into the script itself.
+        osascript(&["-e", "on run argv", "-e", "tell application \"System Events\" to keystroke (item 1 of argv)", "-e", "end run", "--", text]).map(|_| ())
+    }
+
+    pub(super) fn press_keys(keys: &[String]) -> Result<(), String> {
+        for combo in keys {
+            osascript(&["-e", &mac_key_script(combo)?])?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn scroll(dy: i64) -> Result<(), String> {
+        osascript(&["-l", "JavaScript", "-e", &format!("ObjC.import('CoreGraphics'); $.CGEventPost(0, $.CGEventCreateScrollWheelEvent(null, 1, 1, {}));", -dy * 3)]).map(|_| ())
+    }
+
+    pub(super) fn launch(command: &str, cwd: &std::path::Path) -> Result<u32, String> {
+        let child = Command::new("sh").arg("-c").arg(command).current_dir(cwd)
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+            .map_err(|e| format!("Could not start it: {e}"))?;
+        Ok(child.id())
+    }
+}
+
+#[cfg(windows)]
+mod backend {
+    //! Windows: the logged-in desktop, through PowerShell.
+    use super::*;
+
+    const SESSION: &str = "Windows refused. The desktop tools need spacron-server running in your logged-in desktop session (started at sign-in), not as a background service.";
+
+    fn powershell(script: &str, env: &[(&str, &str)]) -> Result<Vec<u8>, String> {
+        // The script goes in on stdin, so nothing is quoted through a command line.
+        run("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"], env, Some(script))
+            .map_err(|e| format!("{SESSION} ({e})"))
+    }
+
+    pub(super) fn screenshot() -> Result<Value, String> {
+        let file = std::env::temp_dir().join(format!("spacron-shot-{}.png", uuid::Uuid::new_v4().simple()));
+        let path = file.to_string_lossy().to_string();
+        let script = format!("{WIN_PRELUDE}$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+$g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+$bmp.Save($env:SPACRON_FILE, [System.Drawing.Imaging.ImageFormat]::Png); \"$($b.Width)x$($b.Height)\"");
+        let size = powershell(&script, &[("SPACRON_FILE", &path)])?;
+        let png = std::fs::read(&file).map_err(|_| SESSION.to_string())?;
+        let _ = std::fs::remove_file(&file);
+        Ok(screenshot_content(png, &format!("This PC's screen, {}", String::from_utf8_lossy(&size).trim())))
+    }
+
+    pub(super) fn list_windows() -> Result<Value, String> {
+        let out = powershell("Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { \"- $($_.ProcessName): $($_.MainWindowTitle)\" }", &[])?;
+        let text = String::from_utf8_lossy(&out).trim().to_string();
+        Ok(text_content(if text.is_empty() { "No windows are open.".into() } else { text }))
+    }
+
+    pub(super) fn click(x: f64, y: f64, button: u8, double: bool) -> Result<Value, String> {
+        let out = powershell(&win_click_script(x, y, button, double), &[])?;
+        Ok(text_content(format!("Clicked at {}.", String::from_utf8_lossy(&out).trim())))
+    }
+
+    pub(super) fn type_text(text: &str) -> Result<(), String> {
+        let keys = win_sendkeys_text(text);
+        powershell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait($env:SPACRON_KEYS)", &[("SPACRON_KEYS", &keys)]).map(|_| ())
+    }
+
+    pub(super) fn press_keys(keys: &[String]) -> Result<(), String> {
+        let joined = keys.iter().map(|k| win_sendkeys_combo(k)).collect::<Result<Vec<_>, _>>()?.join("");
+        powershell("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait($env:SPACRON_KEYS)", &[("SPACRON_KEYS", &joined)]).map(|_| ())
+    }
+
+    pub(super) fn scroll(dy: i64) -> Result<(), String> {
+        powershell(&format!("{WIN_PRELUDE}[Spacron.Input]::mouse_event(0x0800, 0, 0, {}, 0)", -dy * 120), &[]).map(|_| ())
+    }
+
+    pub(super) fn launch(command: &str, cwd: &std::path::Path) -> Result<u32, String> {
+        let child = Command::new("cmd").args(["/C", "start", "\"\""]).arg(command).current_dir(cwd)
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+            .map_err(|e| format!("Could not start it: {e}"))?;
+        Ok(child.id())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+mod backend {
+    use super::*;
+    const NO: &str = "The desktop tools are not available on this box's operating system.";
+    pub(super) fn screenshot() -> Result<Value, String> { Err(NO.into()) }
+    pub(super) fn list_windows() -> Result<Value, String> { Err(NO.into()) }
+    pub(super) fn click(_: f64, _: f64, _: u8, _: bool) -> Result<Value, String> { Err(NO.into()) }
+    pub(super) fn type_text(_: &str) -> Result<(), String> { Err(NO.into()) }
+    pub(super) fn press_keys(_: &[String]) -> Result<(), String> { Err(NO.into()) }
+    pub(super) fn scroll(_: i64) -> Result<(), String> { Err(NO.into()) }
+    pub(super) fn launch(_: &str, _: &std::path::Path) -> Result<u32, String> { Err(NO.into()) }
+}
+
+/// Where the desktop tools act on this box, for `box_mcp_info`.
+pub(crate) fn desktop_kind() -> &'static str {
+    if cfg!(target_os = "linux") { "virtual" } else if cfg!(any(target_os = "macos", windows)) { "screen" } else { "none" }
 }
 
 #[cfg(test)]
@@ -427,6 +756,28 @@ mod tests {
         assert!(names.contains(&"list_agents") && names.contains(&"desktop_screenshot") && names.contains(&"desktop_launch"));
         let missing = respond(&json!({ "jsonrpc": "2.0", "id": 3, "method": "nope" })).await.unwrap();
         assert_eq!(missing["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn mac_commands_are_built_safely() {
+        assert_eq!(mac_key_script("Return").unwrap(), "tell application \"System Events\" to key code 36");
+        assert_eq!(mac_key_script("cmd+shift+t").unwrap(), "tell application \"System Events\" to keystroke \"t\" using {command down, shift down}");
+        assert_eq!(mac_key_script("ctrl+l").unwrap(), "tell application \"System Events\" to keystroke \"l\" using {control down}");
+        assert!(mac_key_script("ctrl").is_err() && mac_key_script("Banana").is_err());
+        let js = mac_click_jxa(100.0, 50.5, 3, true);
+        assert!(js.contains("CGPointMake(100.0, 50.5)") && js.contains("post(3, i); post(4, i)") && js.contains("i <= 2"));
+    }
+
+    #[test]
+    fn windows_commands_are_built_safely() {
+        assert_eq!(win_sendkeys_text("a+b {x} 100% (ok)~\n"), "a{+}b {{}x{}} 100{%} {(}ok{)}{~}{ENTER}");
+        assert_eq!(win_sendkeys_combo("ctrl+l").unwrap(), "^l");
+        assert_eq!(win_sendkeys_combo("ctrl+shift+Tab").unwrap(), "^+{TAB}");
+        assert_eq!(win_sendkeys_combo("Return").unwrap(), "{ENTER}");
+        assert_eq!(win_sendkeys_combo("alt+F4").unwrap(), "%{F4}");
+        assert!(win_sendkeys_combo("win+r").is_err() && win_sendkeys_combo("Banana").is_err());
+        let ps = win_click_script(0.5, 0.25, 1, false);
+        assert!(ps.contains("* 0.5)") && ps.contains("* 0.25)") && ps.contains("mouse_event(2, 0, 0, 0, 0)") && ps.contains("-lt 1"));
     }
 
     #[test]

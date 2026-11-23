@@ -394,6 +394,8 @@ pub fn run() {
             commands::local_bots::local_bot_log,
             commands::local_bots::local_bot_stop,
             commands::local_bots::local_bot_proposals_ack,
+            commands::local_bots::local_bot_attach,
+            commands::local_bots::local_bot_file,
             commands::remote_tunnel::remote_share_mcp_grants,
             commands::chat_workspace::chat_workspace_reveal,
             commands::chat_workspace::chat_workspace_export,

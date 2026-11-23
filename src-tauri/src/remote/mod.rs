@@ -629,6 +629,8 @@ fn handle_control(
                 "box_bot_log" => bots::log(args, &state.workspace),
                 "box_bot_stop" => bots::stop(args, &state.workspace),
                 "box_bot_proposals_ack" => bots::proposals_ack(args, &state.workspace),
+                "box_bot_attach" => bots::attach(args, &state.workspace),
+                "box_bot_file" => bots::file(args, &state.workspace),
                 "box_mcp_grants_sync" => box_proxy::grants_sync(args),
                 "box_mcp_info" => box_proxy::mcp_info(&state.workspace),
                 "workspace_git_log" => git_log(args, &root),

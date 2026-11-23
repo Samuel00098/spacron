@@ -308,3 +308,34 @@ it('a builder can only hand out computer use if it has it', async () => {
   const able = api.saveBot({ ...input, name: 'Builder 2', canCreateBots: true, computerUse: true });
   expect(api.botFromProposal('local', { id: 'b', createdBy: able.id, createdByName: 'Builder 2', creatorAccess: 'folder', createdAt: 1, spec })).toMatchObject({ computerUse: true });
 });
+
+it('uploads attachments into the bot folder on its host, then sends their paths with the message', async () => {
+  const { api } = await setup('box-1');
+  const bot = api.saveBot(input);
+  mock.local.mockImplementation(async (cmd: string) => (cmd === 'local_bot_attach' ? { path: 'attachments/abcd1234-photo.png' } : { runId: 'r' }));
+  const file = new File([new Uint8Array([1, 2, 3, 250])], 'photo.png', { type: 'image/png' });
+  expect(await api.attachToBot(bot, file)).toBe('attachments/abcd1234-photo.png');
+  const [cmd, payload] = mock.local.mock.calls.find((c) => c[0] === 'local_bot_attach')!;
+  expect(cmd).toBe('local_bot_attach');
+  expect(payload).toEqual({ args: { botId: bot.id, name: 'photo.png', data: btoa(String.fromCharCode(1, 2, 3, 250)) } });
+  await api.sendBotMessage(bot.id, '', ['attachments/abcd1234-photo.png']);
+  expect(mock.local.mock.calls.at(-1)).toEqual(['local_bot_run_now', { args: { id: bot.id, attachments: ['attachments/abcd1234-photo.png'] } }]);
+  const box = api.saveBot({ ...input, boxId: 'box-1' });
+  mock.box.mockImplementation(async () => ({ path: 'attachments/ffff0000-notes.txt' }));
+  await api.attachToBot(box, new File(['hi'], 'notes.txt'));
+  expect(mock.box.mock.calls.at(-1)![0]).toBe('box_bot_attach');
+  mock.local.mockImplementation(async () => ({ runId: 'local-run' }));
+  mock.box.mockImplementation(async () => ({ runId: 'box-run' }));
+});
+
+it('refuses oversized attachments before uploading, and previews images only', async () => {
+  const { api } = await setup();
+  const bot = api.saveBot(input);
+  const big = { name: 'big.zip', size: api.MAX_ATTACHMENT_BYTES + 1 } as File;
+  await expect(api.attachToBot(bot, big)).rejects.toThrow('over 8 MB');
+  expect(mock.local.mock.calls.some((c) => c[0] === 'local_bot_attach')).toBe(false);
+  expect(await api.attachmentPreview(bot, 'attachments/aaaa1111-report.pdf')).toBeNull();
+  mock.local.mockImplementation(async () => ({ mime: 'image/png', data: 'AAAA' }));
+  expect(await api.attachmentPreview(bot, 'attachments/aaaa1111-shot.png')).toBe('data:image/png;base64,AAAA');
+  mock.local.mockImplementation(async () => ({ runId: 'local-run' }));
+});

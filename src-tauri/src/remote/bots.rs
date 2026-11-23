@@ -44,6 +44,11 @@ const MAX_LOG_BYTES: usize = 64 * 1024;
 const MAX_INSTRUCTIONS: usize = 20_000;
 const MAX_MCP_CONFIG: usize = 256 * 1024;
 const MAX_MESSAGE: usize = 8_000;
+/// One attached file, after decoding.
+const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ATTACHMENTS: usize = 10;
+/// Images sent back for chat thumbnails.
+const MAX_PREVIEW_BYTES: u64 = 3 * 1024 * 1024;
 /// The box's own MCP server key (`box_mcp.rs`) and its tools.
 pub(crate) const BOX_TOOLS_KEY: &str = "spacron-box";
 /// Spacron's own MCP server on the desktop (`spacron-mcp`) and its desktop
@@ -164,6 +169,9 @@ pub(crate) struct BotRun {
     /// The chat message that started this run, if the user sent one.
     #[serde(default)]
     pub message: Option<String>,
+    /// Files the user attached to that message, relative to the bot's home.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 fn dir(root: &Path) -> PathBuf {
@@ -269,6 +277,11 @@ fn conversation(root: &Path, bot_id: &str, skip_run: &str) -> String {
 /// Everything one run is told: who it is and its job, what it may do, what
 /// has been said so far, and the user's new message if there is one.
 pub(crate) fn run_prompt(bot: &BoxBot, history: &str, message: Option<&str>) -> String {
+    run_prompt_with(bot, history, message, &[])
+}
+
+/// [`run_prompt`] plus the files the user attached to the message.
+pub(crate) fn run_prompt_with(bot: &BoxBot, history: &str, message: Option<&str>, attachments: &[String]) -> String {
     let mut prompt = bot_prompt(bot);
     if bot.can_create_bots {
         prompt.push_str(BUILDER_PROMPT);
@@ -284,6 +297,12 @@ pub(crate) fn run_prompt(bot: &BoxBot, history: &str, message: Option<&str>) -> 
     if let Some(m) = message.filter(|m| !m.trim().is_empty()) {
         prompt.push_str("\n\nThe user just sent you this message. Answer them directly, using your job and the conversation as context:\n");
         prompt.push_str(m.trim());
+    }
+    if !attachments.is_empty() {
+        prompt.push_str("\n\nThe user attached these files, saved in your folder (paths relative to it). Open them with your tools; images can be read directly:\n");
+        for a in attachments {
+            prompt.push_str(&format!("- {a}\n"));
+        }
     }
     prompt
 }
@@ -448,8 +467,10 @@ pub(crate) fn run_now(args: Value, root: &Path) -> Result<Value, String> {
     if is_running(root, id) {
         return Err("This bot is already running. Stop it or wait for its answer.".into());
     }
+    let attachments = checked_attachments(root, id, &args)?;
+    let message = message.or_else(|| (!attachments.is_empty()).then(|| "(sent files)".to_string()));
     let trigger = if message.is_some() { "chat" } else { "manual" };
-    let run_id = start_run(root.to_path_buf(), bot, trigger, max_run(&config), message);
+    let run_id = start_run(root.to_path_buf(), bot, trigger, max_run(&config), message, attachments);
     Ok(json!({ "runId": run_id }))
 }
 
@@ -476,6 +497,84 @@ pub(crate) fn log(args: Value, root: &Path) -> Result<Value, String> {
     let truncated = bytes.len() > MAX_LOG_BYTES;
     let tail = if truncated { &bytes[bytes.len() - MAX_LOG_BYTES..] } else { &bytes[..] };
     Ok(json!({ "text": String::from_utf8_lossy(tail), "truncated": truncated }))
+}
+
+// ── attachments ─────────────────────────────────────────────────────────────
+
+/// A file name safe to keep: its last path part, plain characters only.
+fn safe_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = base.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || "._- ".contains(c) { c } else { '_' })
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
+    let cleaned: String = cleaned.chars().rev().take(100).collect::<Vec<_>>().into_iter().rev().collect();
+    if cleaned.is_empty() { "file".into() } else { cleaned }
+}
+
+/// Save one attached file into the bot's home (`attachments/`), returning its
+/// path relative to that home, to send with the next message.
+pub(crate) fn attach(args: Value, root: &Path) -> Result<Value, String> {
+    use base64::Engine;
+    let bot_id = args.get("botId").and_then(|v| v.as_str()).ok_or("Missing bot id.")?;
+    if !valid_id(bot_id) {
+        return Err("This bot's id is not valid.".into());
+    }
+    let name = safe_file_name(args.get("name").and_then(|v| v.as_str()).unwrap_or("file"));
+    let data = args.get("data").and_then(|v| v.as_str()).ok_or("Missing file data.")?;
+    if data.len() > MAX_ATTACHMENT_BYTES / 3 * 4 + 8 {
+        return Err(format!("Attach files up to {} MB.", MAX_ATTACHMENT_BYTES / 1024 / 1024));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| "The file could not be read.".to_string())?;
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!("Attach files up to {} MB.", MAX_ATTACHMENT_BYTES / 1024 / 1024));
+    }
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let rel = format!("attachments/{}-{name}", &id[..8]);
+    let path = home(root, bot_id).join(&rel);
+    std::fs::create_dir_all(path.parent().ok_or("Bad path.")?).map_err(|e| format!("Could not save the file: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("Could not save the file: {e}"))?;
+    Ok(json!({ "path": rel, "bytes": bytes.len() }))
+}
+
+/// Attachment paths from a run request, each a file this bot's `attachments/`
+/// really holds. Anything else (a path out of the folder, a missing file) is refused.
+fn checked_attachments(root: &Path, bot_id: &str, args: &Value) -> Result<Vec<String>, String> {
+    let list: Vec<String> = args.get("attachments").and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    if list.len() > MAX_ATTACHMENTS {
+        return Err(format!("Attach at most {MAX_ATTACHMENTS} files to one message."));
+    }
+    let base = home(root, bot_id).join("attachments");
+    list.into_iter().map(|rel| {
+        let file = rel.strip_prefix("attachments/").filter(|f| !f.is_empty() && *f == safe_file_name(f) && !f.contains(".."))
+            .ok_or_else(|| format!("Not an attachment of this bot: {rel}"))?;
+        if !base.join(file).is_file() {
+            return Err(format!("The attached file is gone: {rel}"));
+        }
+        Ok(rel)
+    }).collect()
+}
+
+/// An attached image's bytes, for the chat's thumbnails. Only files in the
+/// bot's `attachments/`, only images, only small ones.
+pub(crate) fn file(args: Value, root: &Path) -> Result<Value, String> {
+    use base64::Engine;
+    let bot_id = args.get("botId").and_then(|v| v.as_str()).ok_or("Missing bot id.")?;
+    if !valid_id(bot_id) {
+        return Err("This bot's id is not valid.".into());
+    }
+    let rel = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path.")?;
+    let [path] = checked_attachments(root, bot_id, &json!({ "attachments": [rel] }))?.try_into().map_err(|_| "Bad path.".to_string())?;
+    let lower = path.to_ascii_lowercase();
+    let mime = [("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("gif", "image/gif"), ("webp", "image/webp")]
+        .iter().find(|(ext, _)| lower.ends_with(&format!(".{ext}"))).map(|(_, m)| *m).ok_or("Only images can be previewed.")?;
+    let full = home(root, bot_id).join(&path);
+    if std::fs::metadata(&full).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_PREVIEW_BYTES {
+        return Err("Too large to preview.".into());
+    }
+    let bytes = std::fs::read(&full).map_err(|e| e.to_string())?;
+    Ok(json!({ "mime": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes) }))
 }
 
 // ── scheduling ──────────────────────────────────────────────────────────────
@@ -525,10 +624,10 @@ fn tick(root: &Path) {
             update_runs(root, |runs| runs.insert(0, BotRun {
                 id: uuid::Uuid::new_v4().to_string(), bot_id: id, name, started_at: now, finished_at: Some(now),
                 status: "missed".into(), trigger: "schedule".into(),
-                detail: Some("The scheduled time passed while this computer could not run it.".into()), log: None, message: None,
+                detail: Some("The scheduled time passed while this computer could not run it.".into()), log: None, message: None, attachments: Vec::new(),
             }));
         } else if !is_running(root, &b.id) {
-            start_run(root.to_path_buf(), b, "schedule", limit, None);
+            start_run(root.to_path_buf(), b, "schedule", limit, None, Vec::new());
         }
     }
     if changed {
@@ -539,15 +638,15 @@ fn tick(root: &Path) {
 
 // ── running ─────────────────────────────────────────────────────────────────
 
-fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration, message: Option<String>) -> String {
+fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration, message: Option<String>, attachments: Vec<String>) -> String {
     let run_id = uuid::Uuid::new_v4().to_string();
     let log_rel = format!(".spacron/bots/logs/{run_id}.log");
     // The conversation is read before this run is recorded, so it never sees itself.
     let history = conversation(&root, &bot.id, &run_id);
-    let prompt = run_prompt(&bot, &history, message.as_deref());
+    let prompt = run_prompt_with(&bot, &history, message.as_deref(), &attachments);
     let run = BotRun {
         id: run_id.clone(), bot_id: bot.id.clone(), name: bot.name.clone(), started_at: now_ms(), finished_at: None,
-        status: "running".into(), trigger: trigger.into(), detail: None, log: Some(log_rel.clone()), message,
+        status: "running".into(), trigger: trigger.into(), detail: None, log: Some(log_rel.clone()), message, attachments,
     };
     update_runs(&root, |runs| runs.insert(0, run));
     let signal = Arc::new(Notify::new());
@@ -858,7 +957,7 @@ mod tests {
         std::fs::write(ws.join(rel), &body).unwrap();
         update_runs(ws, |runs| runs.push(BotRun {
             id: "r1".into(), bot_id: "a".into(), name: "n".into(), started_at: 1, finished_at: Some(2),
-            status: "completed".into(), trigger: "manual".into(), detail: None, log: Some(rel.into()), message: None,
+            status: "completed".into(), trigger: "manual".into(), detail: None, log: Some(rel.into()), message: None, attachments: Vec::new(),
         }));
         let out = log(json!({ "runId": "r1" }), ws).unwrap();
         assert_eq!(out["truncated"], json!(true));
@@ -871,7 +970,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         update_runs(dir.path(), |runs| runs.push(BotRun {
             id: "ghost".into(), bot_id: "a".into(), name: "n".into(), started_at: 1, finished_at: None,
-            status: "running".into(), trigger: "manual".into(), detail: None, log: None, message: None,
+            status: "running".into(), trigger: "manual".into(), detail: None, log: None, message: None, attachments: Vec::new(),
         }));
         stop(json!({ "runId": "ghost" }), dir.path()).unwrap();
         let runs: Vec<BotRun> = read_json(&super::dir(dir.path()).join("runs.json"));
@@ -1028,6 +1127,35 @@ echo 'not json' > new-bots/broken.json; echo '[1,2]' > new-bots/array.json; echo
         assert_eq!(run_mcp_config(dir.path(), &b, "run3").unwrap().1.len(), 3, "older bots keep every connector");
         b.connectors = false;
         assert!(run_mcp_config(dir.path(), &b, "run4").is_none());
+    }
+
+    #[test]
+    fn attachments_are_saved_in_the_bot_folder_and_only_those_can_be_sent() {
+        use base64::Engine;
+        let dir = tempfile::tempdir().unwrap();
+        let png = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G', 1, 2, 3]);
+        let saved = attach(json!({ "botId": "a", "name": "../../etc/My Photo!.png", "data": png }), dir.path()).unwrap();
+        let rel = saved["path"].as_str().unwrap().to_string();
+        assert!(rel.starts_with("attachments/") && rel.ends_with("-My Photo_.png"), "{rel}");
+        assert!(home(dir.path(), "a").join(&rel).is_file());
+        assert_eq!(checked_attachments(dir.path(), "a", &json!({ "attachments": [rel] })).unwrap().len(), 1);
+        for bad in ["../../etc/passwd", "attachments/../../x", "attachments/", "notes.md", "attachments/missing.png"] {
+            assert!(checked_attachments(dir.path(), "a", &json!({ "attachments": [bad] })).is_err(), "{bad}");
+        }
+        assert!(checked_attachments(dir.path(), "b", &json!({ "attachments": [rel] })).is_err(), "another bot's file");
+        let preview = file(json!({ "botId": "a", "path": rel }), dir.path()).unwrap();
+        assert_eq!(preview["mime"], "image/png");
+        let big = base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_ATTACHMENT_BYTES + 1]);
+        assert!(attach(json!({ "botId": "a", "name": "big.bin", "data": big }), dir.path()).is_err());
+        assert!(attach(json!({ "botId": "../x", "name": "a", "data": png }), dir.path()).is_err());
+    }
+
+    #[test]
+    fn the_prompt_lists_attached_files() {
+        let b = parsed(bot("a", vec![]));
+        let p = run_prompt_with(&b, "", Some("what is in this?"), &["attachments/1234abcd-photo.png".into()]);
+        assert!(p.ends_with("- attachments/1234abcd-photo.png\n"));
+        assert!(p.find("what is in this?").unwrap() < p.find("attachments/1234abcd").unwrap());
     }
 
     #[test]

@@ -228,3 +228,8 @@
 .bots-structured-chat .bots-chat-empty { margin: 10vh auto 24px; }
 .bots-structured-chat .bots-chat-empty h3 { margin: 4px 0 0; }
 .bots-structured-chat .bots-chat-suggestions .terminal-chat-pill { cursor: pointer; }
+.bots-structured-chat.bots-dropping .terminal-chat-composer { box-shadow: 0 0 0 2px var(--accent); }
+.bots-sent-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-self: flex-end; max-width: min(82%, 600px); margin-top: -10px; }
+.bots-sent-files .terminal-chat-pill { padding: 4px 10px; border-radius: 999px; background: var(--tc-surface-strong, var(--bg-tertiary)); font-size: 12px; }
+/* The structured chat's icon buttons size themselves; Bots' base button padding must not apply. */
+.bots-structured-chat .terminal-chat-icon-btn { padding: 0; }
