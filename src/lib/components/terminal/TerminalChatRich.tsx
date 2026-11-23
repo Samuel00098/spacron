@@ -10,6 +10,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { copyTextToClipboard } from '$lib/utils/clipboard';
+import { useStore } from '$lib/react/useStore';
+import { readAloudMessageId, readAloudSupported, toggleReadAloud } from '$lib/services/read-aloud';
+import { readAloudSettings } from '$lib/stores/readAloud';
 import { highlightLines, languageForPath } from '$lib/services/chat-highlight';
 import {
   formatClock,
@@ -851,46 +854,120 @@ export function UsageLimitRow({
 export function MessageActions({
   text,
   time,
+  replyId,
+  onResend,
+  canResend = true,
   onFork,
   onRewind,
   align = 'start',
 }: {
   text: string;
   time?: number | null;
+  replyId?: string;
+  onResend?: (text: string) => Promise<boolean | void>;
+  canResend?: boolean;
   onFork?: () => void;
   onRewind?: () => void;
   align?: 'start' | 'end';
 }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const [edit, setEdit] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [editError, setEditError] = useState('');
+  const editButton = useRef<HTMLButtonElement>(null);
+  const editedText = edit?.trim() ?? '';
+  const changed = Boolean(editedText && editedText !== text.trim());
+
+  function closeEditor() {
+    setEdit(null);
+    setEditError('');
+    requestAnimationFrame(() => editButton.current?.focus({ preventScroll: true }));
+  }
+
+  async function resend() {
+    if (!onResend || !canResend || !changed || sending) return;
+    setSending(true);
+    setEditError('');
+    try {
+      if (await onResend(editedText) !== false) closeEditor();
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : 'Could not send the edited request.');
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
-    <div className={`tcr-actions ${align} tcr-skip-find`}>
-      {time != null && <span className="tcr-time">{formatClock(time)}</span>}
-      <button
-        type="button"
-        title={copied ? 'Copied' : 'Copy'}
-        aria-label="Copy message"
-        onClick={() => {
-          void copyTextToClipboard(text).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1400);
-          });
-        }}
-      >
-        {copied
-          ? <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
-      </button>
-      {onRewind && (
-        <button type="button" title="Go back to here (opens the agent's rewind in the terminal)" aria-label="Rewind to here" onClick={onRewind}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
-        </button>
-      )}
-      {onFork && (
-        <button type="button" title="Fork this conversation into a new pane" aria-label="Fork conversation" onClick={onFork}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 12v5" /></svg>
-        </button>
-      )}
-    </div>
+    <>
+      <div className={`tcr-actions ${align} tcr-skip-find`}>
+        {time != null && <span className="tcr-time">{formatClock(time)}</span>}
+        {text.trim() && <button
+          type="button"
+          title={copied ? 'Copied' : copyError ? 'Copy failed. Try again' : 'Copy message'}
+          aria-label={copied ? 'Copied message' : 'Copy message'}
+          onClick={() => {
+            setCopyError(false);
+            void copyTextToClipboard(text).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1400);
+            }, () => setCopyError(true));
+          }}
+        >
+          {copied
+            ? <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+        </button>}
+        {replyId && text.trim() && <ReplyPlayback id={replyId} text={text} />}
+        {onResend && text.trim() && (
+          <button ref={editButton} type="button" aria-label="Edit request" title="Edit request" aria-expanded={edit !== null}
+            onClick={() => { if (edit === null) setEdit(text); else if (!sending) closeEditor(); }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m14 6 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z" /></svg>
+          </button>
+        )}
+        {onRewind && (
+          <button type="button" title="Go back to here (opens the agent's rewind in the terminal)" aria-label="Rewind to here" onClick={onRewind}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+          </button>
+        )}
+        {onFork && (
+          <button type="button" title="Fork this conversation into a new pane" aria-label="Fork conversation" onClick={onFork}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 12v5" /></svg>
+          </button>
+        )}
+      </div>
+      {edit !== null && <form className="tcr-request-editor tcr-skip-find" onSubmit={(event) => { event.preventDefault(); void resend(); }}>
+        <textarea autoFocus aria-label="Edit request" rows={3} value={edit} disabled={sending}
+          onChange={(event) => setEdit(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !sending) {
+              event.preventDefault();
+              event.stopPropagation();
+              closeEditor();
+            }
+          }} />
+        {editError && <p role="alert">{editError}</p>}
+        <div className="tcr-request-editor-footer">
+          <span>Sends as a new message.</span>
+          <button type="button" disabled={sending} onClick={closeEditor}>Cancel</button>
+          <button className="tcr-send-revision" type="submit" disabled={!canResend || !changed || sending}>{sending ? 'Sending…' : 'Send revision'}</button>
+        </div>
+      </form>}
+    </>
+  );
+}
+
+function ReplyPlayback({ id, text }: { id: string; text: string }) {
+  const reading = useStore(readAloudMessageId) === id;
+  const { engine } = useStore(readAloudSettings);
+  if (!reading && engine === 'system' && !readAloudSupported()) return null;
+  const label = reading ? 'Stop reading' : 'Read reply aloud';
+  return (
+    <button type="button" title={label} aria-label={label} aria-pressed={reading} onClick={() => toggleReadAloud(id, text)}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        {reading ? <rect x="6" y="6" width="12" height="12" rx="2" /> : <path d="M7 5a1 1 0 0 1 1.5-.9l12 7a1 1 0 0 1 0 1.8l-12 7A1 1 0 0 1 7 19Z" />}
+      </svg>
+    </button>
   );
 }
 

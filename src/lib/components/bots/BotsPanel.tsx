@@ -31,7 +31,7 @@ import {
   botChatTimestamps,
   botChatVisuals,
 } from '$lib/stores/botChatSettings';
-import { ChatVisual, ChatVisualStatus, splitReply } from '$lib/components/terminal/ChatVisual';
+import { ChatVisual, ChatVisualStatus, splitReply, visualReplyText } from '$lib/components/terminal/ChatVisual';
 import type { ChatVisualsSpot } from '$lib/stores/terminal';
 import '$lib/components/terminal/TerminalChatRich.css';
 import '$lib/components/terminal/TerminalChatView.css';
@@ -610,20 +610,25 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [draft]);
 
-  async function send() {
-    const text = draft.trim();
-    if ((!text && !pending.length) || active) return;
+  async function send(revision?: { text: string; paths: string[] }) {
+    const text = revision?.text ?? draft.trim();
+    if ((!text && !pending.length) || active || busy !== null) return false;
     setBusy('send'); setError('');
     try {
       // Upload first: the bot is told where each file landed in its folder.
-      const paths: string[] = [];
-      for (const p of pending) paths.push(await attachToBot(bot, p.file));
+      const paths = revision?.paths ?? [];
+      if (!revision) for (const p of pending) paths.push(await attachToBot(bot, p.file));
       await sendBotMessage(bot.id, text, paths);
-      setDraft('');
-      pending.forEach((p) => p.preview && URL.revokeObjectURL(p.preview));
-      setPending([]);
-      await refreshBotState();
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
+      if (!revision) {
+        setDraft('');
+        pending.forEach((p) => p.preview && URL.revokeObjectURL(p.preview));
+        setPending([]);
+      }
+      await refreshBotState().catch((error) => setError(`Message sent. Could not refresh runs: ${String(error)}`));
+    } catch (e) {
+      if (revision) throw e;
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(null); }
   }
   // A visual's "send to the bot" button fills the message box for review.
   function composeFromVisual(text: string) {
@@ -645,6 +650,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
       onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
       data-chat-font={appearance.font === 'app' ? undefined : appearance.font === 'system' || appearance.font === 'terminal' ? appearance.font : 'custom'}
       data-chat-font-size={appearance.fontSize == null ? undefined : 'set'}
+      data-timestamps={showTimes ? '' : undefined}
       data-contrast={appearance.contrast !== 100 ? '' : undefined}
       style={{
         '--tc-col': CHAT_WIDTH_COLUMN[appearance.width],
@@ -675,11 +681,20 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
             {shown.map((run) => {
               const reply = replies[run.id]?.trim();
               const segments = reply ? splitReply(reply) : [];
-              const replyText = segments.flatMap((segment) => segment.type === 'text' ? [segment.text] : []).join('\n\n').trim();
+              const replyText = visualReplyText(segments);
               const replyTime = showTimes ? run.finishedAt ?? run.startedAt : null;
               return <div key={run.id} className="bots-exchange">
                 {run.message
-                  ? <SentTurn bot={bot} run={run} />
+                  ? <div className="tcr-msg user">
+                    <SentTurn bot={bot} run={run} />
+                    {run.message !== FILES_ONLY_MESSAGE && <MessageActions
+                      align="end"
+                      text={run.message}
+                      time={showTimes ? run.startedAt : null}
+                      canResend={!active && busy === null}
+                      onResend={(text) => send({ text, paths: run.attachments ?? [] })}
+                    />}
+                  </div>
                   : <div className="terminal-chat-notice">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
                 {reply && <div className="tcr-msg">
                   <div className="terminal-chat-agent">
@@ -688,7 +703,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
                       : visualsOn && <BotVisual key={`v${i}-${segment.visual.file}`} bot={bot} visual={segment.visual} status={run.status} onCompose={composeFromVisual} />)}
                   </div>
                   {replyText
-                    ? <MessageActions text={replyText} time={replyTime} />
+                    ? <MessageActions text={replyText} time={replyTime} replyId={`bot:${bot.id}:${run.id}`} />
                     : replyTime !== null && <div className="bots-reply-time">{clock(replyTime)}</div>}
                 </div>}
                 {run.status === 'running' && <div className="terminal-chat-working"><Dots /><span>{bot.name} is working · {Math.max(0, Math.round((now - run.startedAt) / 1000))}s</span></div>}

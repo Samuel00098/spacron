@@ -576,14 +576,14 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--chat-surface-ink, var(--text-primary));
   cursor: pointer;
 }
 .app-shell .chat-mode-message-actions button:hover,
 .app-shell .chat-mode-message-actions button:focus-visible,
 .app-shell .chat-mode-message-actions button.active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--chat-surface-ink) 10%, transparent);
+  color: var(--chat-surface-ink, var(--text-primary));
 }
 .app-shell .chat-mode-message-actions svg {
   width: 13px;

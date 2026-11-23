@@ -55,12 +55,16 @@
 :root {
   --app-surface: #101010;
   --app-surface-rgb: 16, 16, 16;
+  --chat-surface-ink: #f4f4f5;
+  --chat-surface-muted: #b0bac9;
 }
 
 :root.light-theme {
   color-scheme: light;
   --app-surface: #efefef;
   --app-surface-rgb: 239, 239, 239;
+  --chat-surface-ink: #171717;
+  --chat-surface-muted: #495467;
 }
 
 /* App-wide motion tokens. Every transition references these instead of a

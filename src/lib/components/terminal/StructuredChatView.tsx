@@ -77,7 +77,7 @@ import { openFile } from '$lib/stores/editor';
 import { getAgentRoster } from '$lib/stores/runs';
 import { enqueue, moveQueued, removeQueued, shiftQueue, updateQueued, useQueue } from '$lib/services/terminal-chat-queue';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
-import { ChatVisual, splitReply } from './ChatVisual';
+import { ChatVisual, splitReply, visualReplyText } from './ChatVisual';
 import { structuredVisualsSpot } from '$lib/services/structured-chat/visuals';
 import {
   Markdown,
@@ -1092,15 +1092,22 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
                       align="end"
                       text={block.item.text}
                       time={itemTime(block.item.time)}
+                      canResend={ready && !working && !pendingSend}
+                      onResend={async (text) => {
+                        if (!ready || working || pendingSend) return false;
+                        if (scrollOnSend) stickRef.current = true;
+                        await deliver(text);
+                      }}
                       onRewind={canRewind && index === lastUserIndex ? () => void rewindTo(block.item) : undefined}
                     />
                   </div>
                 );
               } else if (block.type === 'assistant') {
+                const segments = splitReply(block.item.text);
                 body = (
                   <div key={key} className="tcr-msg">
                     <div className="terminal-chat-agent">
-                      {splitReply(block.item.text).map((segment, segmentIndex) => segment.type === 'visual' ? (
+                      {segments.map((segment, segmentIndex) => segment.type === 'visual' ? (
                         <ChatVisual
                           key={`${key}-visual-${segmentIndex}`}
                           visual={segment.visual}
@@ -1112,7 +1119,8 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
                       ))}
                     </div>
                     <MessageActions
-                      text={block.item.text}
+                      text={visualReplyText(segments)}
+                      replyId={`structured:${sessionId}:${block.item.id}`}
                       time={itemTime(block.item.time)}
                       onFork={canFork && index === lastAssistantIndex ? () => void forkHere() : undefined}
                     />

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-import { parseVisualDirective, splitReply } from './ChatVisual';
+import { parseVisualDirective, splitReply, visualReplyText } from './ChatVisual';
 
 describe('inline chat visuals', () => {
   it('reads a whole-line directive with file and optional title', () => {
@@ -43,5 +43,11 @@ describe('inline chat visuals', () => {
   it('caps visuals per reply at eight', () => {
     const reply = Array.from({ length: 10 }, (_, i) => `::spacron-visual{file="v${i}.html"}`).join('\n');
     expect(splitReply(reply).filter((s) => s.type === 'visual')).toHaveLength(8);
+  });
+
+  it('keeps Markdown text available for copy and playback without visual directives', () => {
+    const reply = '## Summary\n::spacron-visual{file="chart.html"}\nTotal: 42';
+    expect(visualReplyText(splitReply(reply))).toBe('## Summary\n\nTotal: 42');
+    expect(visualReplyText(splitReply('::spacron-visual{file="chart.html"}'))).toBe('');
   });
 });

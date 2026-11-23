@@ -58,7 +58,7 @@ import { toggleTerminalTranscription, transcriptionActive } from '$lib/services/
 import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { getSessionVisuals, requestTerminalInput, terminalInputRequest, terminalChatInputRequest } from '$lib/stores/terminal';
-import { ChatVisual, splitReply } from './ChatVisual';
+import { ChatVisual, splitReply, visualReplyText } from './ChatVisual';
 import { AgentModeChip, AnswerReceipts, GoalPanel, SignInNotice, looksLikeAuthError } from './StructuredChatExtras';
 import { readChatDraft, writeChatDraft } from '$lib/services/structured-chat/drafts';
 import { parseDroppedPaths } from '$lib/services/structured-chat/attachments';
@@ -1827,6 +1827,11 @@ export default function TerminalChatView({
                     align="end"
                     text={block.item.text}
                     time={itemTime(block.item.time)}
+                    canResend={isRunning && !busy && !sending}
+                    onResend={async (text) => {
+                      if (!isRunning || busy || sending) return false;
+                      await deliver(text, []);
+                    }}
                     onRewind={canRewind ? () => void rewindHere() : undefined}
                   />
                 </div>
@@ -1834,15 +1839,17 @@ export default function TerminalChatView({
             } else if (block.type === 'notice') {
               body = <div key={key} className="terminal-chat-notice">{block.item.text}</div>;
             } else if (block.type === 'assistant') {
+              const segments = splitReply(block.item.text);
               body = (
                 <div key={key} className="tcr-msg">
                   <div className="terminal-chat-agent">
-                    {splitReply(block.item.text).map((segment, i) => (segment.type === 'visual'
+                    {segments.map((segment, i) => (segment.type === 'visual'
                       ? <ChatVisual key={`v-${i}`} visual={segment.visual} spot={visualsSpot} onCompose={composeFromVisual} />
                       : <Markdown key={`t-${i}`} text={segment.text} onOpenImage={openViewer} />))}
                   </div>
                   <MessageActions
-                    text={block.item.text}
+                    text={visualReplyText(segments)}
+                    replyId={`terminal:${sessionId}:${block.item.id}`}
                     time={itemTime(block.item.time)}
                     onFork={canFork && index === lastAssistantIndex && !busy ? () => void forkConversation() : undefined}
                   />

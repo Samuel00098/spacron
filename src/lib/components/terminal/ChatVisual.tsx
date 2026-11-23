@@ -40,6 +40,10 @@ export function parseVisualDirective(line: string): VisualDirective | null {
 
 export type ReplySegment = { type: 'text'; text: string } | { type: 'visual'; visual: VisualDirective };
 
+export function visualReplyText(segments: ReplySegment[]): string {
+  return segments.flatMap((segment) => segment.type === 'text' ? [segment.text] : []).join('\n\n').trim();
+}
+
 /** Split a reply into Markdown runs and visuals, leaving directives inside code fences alone. */
 export function splitReply(text: string): ReplySegment[] {
   const segments: ReplySegment[] = [];
@@ -82,7 +86,7 @@ function themeTokens(): Record<string, string> {
   const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
   const light = document.documentElement.classList.contains('light-theme');
   const background = v('--app-surface', light ? '#efefef' : '#101010');
-  const foreground = v('--chat-visual-ink', light ? '#171717' : '#f4f4f5');
+  const foreground = v('--chat-surface-ink', light ? '#171717' : '#f4f4f5');
   const themeAccent = v('--accent', '#7c6af7');
   const onAccent = v('--on-accent', light ? '#ffffff' : '#101010');
   const tint = (amount: number) => `color-mix(in srgb, ${foreground} ${amount}%, ${background})`;
@@ -99,7 +103,7 @@ function themeTokens(): Record<string, string> {
     '--secondary': tint(8),
     '--secondary-foreground': foreground,
     '--muted': tint(10),
-    '--muted-foreground': v('--chat-visual-muted', light ? '#495467' : '#b0bac9'),
+    '--muted-foreground': v('--chat-surface-muted', light ? '#495467' : '#b0bac9'),
     '--accent': themeAccent,
     '--accent-foreground': onAccent,
     '--destructive': v('--error', '#ef4444'),

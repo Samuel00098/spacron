@@ -536,31 +536,73 @@
 .tcr-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  min-height: 22px;
-  margin-top: -4px;
-  opacity: 0;
-  transition: opacity var(--dur-fast, 120ms);
-  color: var(--text-muted);
+  gap: 4px;
+  min-height: 28px;
+  color: var(--chat-surface-muted, var(--text-muted));
 }
 .tcr-actions.end { justify-content: flex-end; }
-.tcr-msg:hover > .tcr-actions,
-.tcr-msg:focus-within > .tcr-actions,
-.terminal-chat-view[data-timestamps] .tcr-actions:has(.tcr-time) { opacity: 1; }
-.terminal-chat-view[data-timestamps] .tcr-msg:not(:hover) .tcr-actions button { visibility: hidden; }
-.terminal-chat-view:not([data-timestamps]) .tcr-msg:not(:hover) .tcr-time { visibility: hidden; }
+.terminal-chat-view:not([data-timestamps]) .tcr-msg:not(:hover):not(:focus-within) .tcr-time { visibility: hidden; }
 .tcr-time { padding: 0 6px; font-variant-numeric: tabular-nums; }
 .terminal-chat-view .tcr-actions button {
-  width: 24px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
+  padding: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--chat-surface-ink) 6%, var(--app-surface)) !important;
+  color: var(--chat-surface-ink, var(--text-primary)) !important;
 }
-.terminal-chat-view .tcr-actions button:hover { background: var(--tc-surface-strong); color: var(--text-primary); }
+.terminal-chat-view .tcr-actions button:hover,
+.terminal-chat-view .tcr-actions button[aria-pressed="true"],
+.terminal-chat-view .tcr-actions button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--chat-surface-ink) 13%, var(--app-surface)) !important;
+}
+.terminal-chat-view .tcr-actions button:focus-visible {
+  outline: 2px solid var(--chat-surface-ink);
+  outline-offset: 2px;
+}
+.terminal-chat-view .tcr-actions button svg { color: inherit !important; }
+
+.tcr-request-editor {
+  display: grid;
+  gap: 10px;
+  align-self: flex-end;
+  width: min(100%, 640px);
+  padding: 12px;
+  border-radius: var(--radius-lg, 12px);
+  color: var(--chat-surface-ink);
+  background: color-mix(in srgb, var(--chat-surface-ink) 5%, var(--app-surface));
+  box-shadow: var(--surface-outline);
+}
+.terminal-chat-view .tcr-request-editor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 76px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  color: var(--chat-surface-ink);
+  background: var(--app-surface);
+  box-shadow: var(--surface-outline) !important;
+  resize: vertical;
+}
+.tcr-request-editor [role="alert"] { margin: 0; color: var(--error); }
+.tcr-request-editor-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.tcr-request-editor-footer span { flex: 1 1 140px; color: var(--chat-surface-muted); }
+.terminal-chat-view .tcr-request-editor-footer button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md, 8px);
+  color: var(--chat-surface-ink);
+  background: color-mix(in srgb, var(--chat-surface-ink) 8%, var(--app-surface));
+}
+.terminal-chat-view .tcr-request-editor-footer .tcr-send-revision {
+  color: var(--button-text, var(--on-accent)) !important;
+  background: var(--button-bg, var(--accent)) !important;
+}
+.tcr-request-editor-footer button:disabled { opacity: .5; cursor: default; }
 
 .tcr-msg { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .tcr-msg.user { align-items: stretch; }

@@ -193,8 +193,8 @@ function CopyIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2" /></svg>;
 }
 
-function SpeakerIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>;
+function PlayReplyIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 12 7-12 7z" /></svg>;
 }
 
 function StopSpeakingIcon() {
@@ -2261,7 +2261,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                       </button>
                       {message.role === 'assistant' && canReadAloud && message.text.trim() && (
                         <button type="button" className={readingMessageId === message.id ? 'active' : undefined} onClick={() => toggleReadAloud(message.id, message.text)} title={readingMessageId === message.id ? 'Stop reading' : 'Read aloud'} aria-label={readingMessageId === message.id ? 'Stop reading' : 'Read aloud'} aria-pressed={readingMessageId === message.id}>
-                          {readingMessageId === message.id ? <StopSpeakingIcon /> : <SpeakerIcon />}
+                          {readingMessageId === message.id ? <StopSpeakingIcon /> : <PlayReplyIcon />}
                         </button>
                       )}
                       {/* Replies are the model's record of the turn; only your own messages can be edited and resent. */}
