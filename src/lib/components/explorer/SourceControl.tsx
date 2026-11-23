@@ -14,7 +14,7 @@ import {
   deleteBranch,
   refreshBranches,
 } from '$lib/stores/gitBranch';
-import type { GitBranchInfo } from '$lib/stores/zustand/gitBranch';
+import { useGitBranchStore, type GitBranchInfo } from '$lib/stores/zustand/gitBranch';
 import {
   aiProvider,
   currentAiModel,
@@ -597,11 +597,24 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
     if (!id) return;
 
     setIsFetching(true);
-    showToast('Fetching from GitHub...', 'info');
+    showToast('Fetching remote updates...', 'info');
     try {
-      const response = await invoke<string>('workspace_git_fetch', { projectId: id });
-      showToast(response || 'Successfully fetched from GitHub!', 'success');
+      await invoke<string>('workspace_git_fetch', { projectId: id });
+      if (projectIdRef.current !== id) return;
       await refreshAll();
+      if (projectIdRef.current !== id) return;
+      const info = useGitBranchStore.getState().branchInfoByProject[id];
+      if (info?.upstream && info.behind > 0) {
+        const incoming = `${info.behind} incoming commit${info.behind === 1 ? '' : 's'} from ${info.upstream}`;
+        const local = info.ahead > 0 ? ` It also has ${info.ahead} local commit${info.ahead === 1 ? '' : 's'} to preserve.` : '';
+        showToast(`Fetch complete. ${info.current} has ${incoming} to integrate.${local}`, 'info');
+      } else if (info?.upstream) {
+        showToast(`Fetch complete. No incoming commits from ${info.upstream}.`, 'success');
+      } else if (info) {
+        showToast('Fetch complete. Select a branch that tracks a remote to see incoming commits.', 'info');
+      } else {
+        showToast('Fetch complete. Could not refresh branch status.', 'info');
+      }
     } catch (err) {
       console.error(err);
       showToast(String(err) || 'Git fetch failed.', 'error');
@@ -987,7 +1000,7 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
                 <IssueIcon size={14} />
               </button>
             )}
-            <button className="header-btn" onClick={() => void triggerGitFetch()} title="Fetch from Remote" disabled={isFetching}>
+            <button className="header-btn" onClick={() => void triggerGitFetch()} title="Fetch remote updates and check for incoming commits" disabled={isFetching}>
               {isFetching ? (
                 <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                   <path d="M21 12a9 9 0 1 1-6.219-8.56" />

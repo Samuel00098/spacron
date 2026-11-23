@@ -521,7 +521,7 @@ pub fn workspace_git_fetch(project_id: String, state: State<AppState>) -> Result
     check_git_available()?;
 
     let output = git_base()
-        .args(["fetch", "origin"])
+        .arg("fetch")
         .current_dir(root_path)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
