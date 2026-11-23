@@ -1,6 +1,6 @@
 /**
- * Built-in bot avatars: raster images in `static/bot-avatars/<id>.webp`,
- * rendered by `scripts/generate-bot-avatars.cjs` (keep the two lists in step).
+ * Built-in bot avatars: mascot portraits in `static/bot-avatars/<id>.webp`.
+ * Keep these IDs stable so saved bots can resolve their selected avatar.
  * A bot can also use an uploaded picture, kept as a small data URL.
  */
 export const BOT_AVATARS: { id: string; label: string }[] = [
