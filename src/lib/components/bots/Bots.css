@@ -103,6 +103,7 @@
 .bots-editor-grid h4 { margin-bottom: 16px; }
 .bots-editor-grid .bots-editor-section { margin-top: 20px; padding-top: 16px; box-shadow: 0 -1px 0 var(--border); }
 .bots-editor textarea { display: block; margin-bottom: 0; }
+.bots-editor textarea + .bots-helper { margin-top: 10px; }
 .bots-editor-side .dropdown, .bots-editor-side .dd-trigger { width: 100%; box-sizing: border-box; }
 .bots-editor-side > .dropdown { margin-bottom: 16px; }
 .bots-panel label, .bots-field-label { display: block; margin: 0 0 8px; }

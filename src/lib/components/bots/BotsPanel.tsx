@@ -383,8 +383,8 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
                 </div>
               </div>
               <label htmlFor="bot-job">Job</label>
-              <textarea id="bot-job" required rows={8} maxLength={20_000} placeholder="What is this bot for? Say what result you want, and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
-              <p className="bots-helper">Each run starts a fresh agent with access to the bot’s saved files and recent chat.</p>
+              <textarea id="bot-job" aria-describedby="bot-job-help" required rows={8} maxLength={20_000} placeholder="What is this bot for? Say what result you want, and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+              <p id="bot-job-help" className="bots-helper">Each run starts a fresh agent with access to the bot’s saved files and recent chat.</p>
               <h4 className="bots-editor-section">Tools and connectors</h4>
               <span className="bots-field-label">Connectors</span>
               <ConnectorPicker host={host} value={keys} onChange={setKeys} />
