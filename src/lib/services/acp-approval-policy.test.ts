@@ -38,6 +38,16 @@ describe('ACP approval policy', () => {
     expect(acpApprovalDecision('full-access', 'edit', [])).toBeNull();
   });
 
+  it('asks about requests Antigravity Auto still sends', () => {
+    expect(acpApprovalDecision('auto', 'execute', options, {})).toBeNull();
+    expect(acpApprovalDecision('auto', 'read', options, {})).toBeNull();
+    expect(acpApprovalDecision('full-access', 'execute', options, {})).toMatchObject({ reason: 'full-access' });
+  });
+
+  it('leaves Antigravity fixed-choice questions to the user in Full access', () => {
+    expect(acpApprovalDecision('full-access', 'other', options, { toolCallId: 'interaction_1' })).toBeNull();
+  });
+
   it('recognises v1 options that carry no kind', () => {
     const v1 = [{ id: 'y', label: 'Approve' }, { id: 'n', label: 'Deny' }];
     expect(acpApprovalDecision('full-access', 'edit', v1)?.option.id).toBe('y');

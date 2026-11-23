@@ -97,3 +97,13 @@ export function acpModeNeedsSwitch(state: AcpModeState | null | undefined, mode:
   const desired = chooseAcpMode(state, mode);
   return Boolean(desired) && desired !== state.currentModeId;
 }
+
+export function chooseAntigravityAcpMode(
+  state: AcpModeState | null | undefined,
+  mode: ChatAccessMode | null | undefined,
+): string | null {
+  const tier = accessTier(mode);
+  const nativeMode = tier === 'auto' ? 'auto' : tier === 'auto-edits' ? 'accept-edits' : 'default';
+  if (state?.availableModes.some(({ id }) => id === nativeMode)) return nativeMode;
+  return state?.availableModes.some(({ id }) => id === 'default') ? 'default' : null;
+}

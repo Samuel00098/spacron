@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { ANTIGRAVITY_ACP_SERVER, acpLauncherNote, builtinAcpLauncher, resolveAcpLaunchCommand } from './acp-launchers';
+import { ANTIGRAVITY_ACP_SERVER, acpLauncherNote, builtinAcpLauncher, isAntigravityAcpCommand, resolveAcpLaunchCommand } from './acp-launchers';
 
 describe('ACP launch entry points', () => {
+  it('recognizes managed Antigravity binaries and the CLI ACP command', () => {
+    expect(isAntigravityAcpCommand('"C:/Program Files/agy_acp_server.exe"')).toBe(true);
+    expect(isAntigravityAcpCommand('./agy_acp_server.par')).toBe(true);
+    expect(isAntigravityAcpCommand('agy acp')).toBe(true);
+    expect(isAntigravityAcpCommand('cursor-agent acp')).toBe(false);
+  });
   it('resolves the vendor ACP entry point for each chat preset', () => {
     expect(resolveAcpLaunchCommand('claude')).toBe('npx -y @agentclientprotocol/claude-agent-acp');
     expect(resolveAcpLaunchCommand('codex')).toBe('npx -y @agentclientprotocol/codex-acp');

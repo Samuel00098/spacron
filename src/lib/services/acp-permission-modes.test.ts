@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState } from './acp-permission-modes';
+import { acpModeNeedsSwitch, chooseAcpMode, chooseAntigravityAcpMode, parseAcpModeState } from './acp-permission-modes';
 
 const cursorModes = {
   currentModeId: 'auto',
@@ -12,6 +12,13 @@ const cursorModes = {
 };
 
 describe('ACP permission modes', () => {
+  it('uses Antigravity native Auto only when advertised and handles Full access in default', () => {
+    const defaultMode = { id: 'default' };
+    const state = { currentModeId: 'plan', availableModes: [defaultMode, { id: 'auto' }, { id: 'plan' }] };
+    expect(chooseAntigravityAcpMode(state, 'auto')).toBe('auto');
+    expect(chooseAntigravityAcpMode(state, 'full-access')).toBe('default');
+    expect(chooseAntigravityAcpMode({ ...state, availableModes: [defaultMode] }, 'auto')).toBe('default');
+  });
   it('reads modes from a session/new result or from the modes object alone', () => {
     const parsed = parseAcpModeState({ sessionId: 's1', modes: cursorModes });
     expect(parsed).toEqual({

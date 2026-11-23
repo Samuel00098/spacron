@@ -64,13 +64,17 @@ export function acpApprovalDecision(
   mode: ChatAccessMode | null | undefined,
   toolKind: string | undefined,
   options: readonly AcpApprovalOption[],
+  antigravity?: { toolCallId?: string },
 ): AcpApprovalDecision | null {
+  const tier = accessTier(mode);
+  if (antigravity && (tier === 'auto' || antigravity.toolCallId?.startsWith('interaction_'))) {
+    return null;
+  }
   const kind = (toolKind ?? '').toLowerCase();
   if (READ_KINDS.has(kind)) {
     const option = grant(options);
     return option ? { option, reason: 'read-only' } : null;
   }
-  const tier = accessTier(mode);
   if (tier === 'supervised') return null;
   const option = grant(options);
   if (!option) return null;

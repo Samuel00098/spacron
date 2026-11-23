@@ -68,6 +68,11 @@ function executableName(command: string): string {
   return token.replace(/\\/g, '/').split('/').pop()?.replace(/\.(?:cmd|exe|bat|ps1)$/i, '').toLowerCase() ?? '';
 }
 
+export function isAntigravityAcpCommand(command: string): boolean {
+  const executable = executableName(command).replace(/\.par$/, '');
+  return ['agy', 'antigravity', 'antigravity-acp', ANTIGRAVITY_ACP_SERVER].includes(executable);
+}
+
 /** The ACP entry point shipped alongside this CLI, if we know one. */
 export function builtinAcpLauncher(command: string | null | undefined): AcpLauncher | null {
   const executable = executableName(command ?? '');

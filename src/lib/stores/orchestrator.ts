@@ -204,10 +204,10 @@ import { agentReadsRulesFile } from '$lib/services/orchestrator/agent-rules-file
 import { getAgentProviderLaunchOptions, isChatAgentProvider, isClaudeProvider, isCodexProvider, isCursorProvider, isMuseProvider, isOpenCodeProvider, isPiProvider } from '$lib/services/agent-provider-catalogue';
 import { PI_RPC_ARGS } from '$lib/services/chat-provider-adapters';
 import { isAcpChatCommand } from '$lib/services/acp-capabilities';
-import { acpModeNeedsSwitch, chooseAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
+import { chooseAcpMode, chooseAntigravityAcpMode, parseAcpModeState, type AcpModeState } from '$lib/services/acp-permission-modes';
 import { accessTier, CHAT_ACCESS_TIER_LABELS } from '$lib/services/orchestrator/access-policy';
 import { acpApprovalDecision } from '$lib/services/acp-approval-policy';
-import { resolveAcpLaunchCommand } from '$lib/services/acp-launchers';
+import { isAntigravityAcpCommand, resolveAcpLaunchCommand } from '$lib/services/acp-launchers';
 import { isChatDirectMode } from '$lib/stores/chatDirectMode';
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { threadWorkingRoot } from '$lib/services/thread-worktree';
@@ -240,6 +240,7 @@ type AcpApprovalWaiter = {
   respond: (result: Record<string, unknown>, error?: Record<string, unknown>) => Promise<void>;
   options: Array<{ id: string; label: string; value?: string }>;
   threadId: string;
+  requiresChoice?: boolean;
 };
 const acpApprovalWaiters = new Map<string, AcpApprovalWaiter>();
 const acpTerminals = new Map<string, { session: PtySession; threadId: string }>();
@@ -4723,6 +4724,7 @@ function acpPermissionRequest(value: Record<string, unknown>): {
   prompt: string;
   toolKind?: string;
   options: Array<{ id: string; label: string; value?: string; kind?: string }>;
+  toolCallId?: string;
 } | null {
   const params = value.params && typeof value.params === 'object'
     ? value.params as Record<string, unknown>
@@ -4754,6 +4756,7 @@ function acpPermissionRequest(value: Record<string, unknown>): {
     id: `acp-approval-${String(requestId)}`,
     title,
     prompt: `${title}${description}`,
+    ...(typeof toolCall.toolCallId === 'string' ? { toolCallId: toolCall.toolCallId } : {}),
     ...(toolKind ? { toolKind } : {}),
     options: options.length ? options : [
       { id: 'allow', label: 'Allow', value: 'allow', kind: 'allow_once' },
@@ -4943,6 +4946,8 @@ async function sendNativeAcpChatTurn(
 
   const { executable, args } = splitAcpCommand(agentCommand);
   const session = await openAcpSession(executable, args, cwd);
+  const antigravity = isAntigravityAcpCommand(agentCommand)
+    || isAntigravityAcpCommand(displayName ?? '');
   activeAcpTurns.set(thread.id, { session });
   let responseText = '';
   let stderrText = '';
@@ -5018,13 +5023,12 @@ async function sendNativeAcpChatTurn(
       await handleAcpClientRequest(request, session, thread.id, cwd);
       return;
     }
-    // The tier answers first: Full access and Auto approve, Auto-accept edits
-    // covers file changes, Supervised asks about everything. Whatever the
-    // policy declines to decide falls through to the approval card below.
+    // Antigravity's native Auto already reviews actions before it asks.
     const decision = acpApprovalDecision(
       getChatThread(thread.id)?.accessMode ?? accessMode,
       permission.toolKind,
       permission.options,
+      antigravity ? { toolCallId: permission.toolCallId } : undefined,
     );
     if (decision) {
       try {
@@ -5048,6 +5052,7 @@ async function sendNativeAcpChatTurn(
       respond: (result, error) => session.respond(request.requestId, result, error),
       options: permission.options,
       threadId: thread.id,
+      requiresChoice: antigravity && permission.toolCallId?.startsWith('interaction_'),
     });
     appendChat(projectId, {
       id: msgId(),
@@ -5203,12 +5208,11 @@ async function sendNativeAcpChatTurn(
     // Express the composer's tier through the agent's own modes. An agent that
     // advertises nothing suitable keeps its default — a tier is never faked.
     const requestedTier = accessMode ?? thread.accessMode;
-    if (nativeSessionId && acpModeNeedsSwitch(modeState, requestedTier)) {
-      const desired = chooseAcpMode(modeState, requestedTier);
-      if (desired) {
-        await setAcpSessionMode(session, nativeSessionId, desired).catch(() => undefined);
-        if (modeState) modeState = { ...modeState, currentModeId: desired };
-      }
+    const desired = antigravity
+      ? chooseAntigravityAcpMode(modeState, requestedTier)
+      : chooseAcpMode(modeState, requestedTier);
+    if (nativeSessionId && desired && desired !== modeState?.currentModeId) {
+      await setAcpSessionMode(session, nativeSessionId, desired).catch(() => undefined);
     }
     const result = await promptAcpNativeSession(session, nativeSessionId, prompt);
     if (exited) throw new Error('ACP agent exited before completing the prompt');
@@ -6204,13 +6208,15 @@ export async function sendChatMessage(
     }
     const selected = waiter.options.find((option) =>
       option.label.toLowerCase() === trimmed.toLowerCase() || option.id.toLowerCase() === trimmed.toLowerCase()
-    ) ?? waiter.options[0];
+    );
+    if (waiter.requiresChoice && !selected) return;
+    const answer = selected ?? waiter.options[0];
     applyResendTruncation();
     markInlineRequestAnswered(projectId, pendingInput.id, trimmed);
     acpApprovalWaiters.delete(pendingInput.inlineRequest.id);
     await waiter.respond({
-      outcome: selected
-        ? { outcome: 'selected', optionId: selected.id }
+      outcome: answer
+        ? { outcome: 'selected', optionId: answer.id }
         : { outcome: 'cancelled' },
     });
     return;
