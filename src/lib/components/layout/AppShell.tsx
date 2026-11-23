@@ -48,7 +48,7 @@ import ToolboxPanel from '$lib/components/toolbox/ToolboxPanelLazy.tsx';
 import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import ChatModePanel from '$lib/components/workspace/ChatModePanel.tsx';
 import BotsPanel from '$lib/components/bots/BotsPanel';
-import { botsOpen } from '$lib/services/bots/bots';
+import { botsOpen, closeBots } from '$lib/services/bots/bots';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import MobilePanel, { MobilePanelFloatingHostLazy } from '$lib/components/mobile/MobilePanelLazy.tsx';
 import { useShallow } from 'zustand/react/shallow';
@@ -2021,6 +2021,7 @@ export default function AppShell() {
   }
 
   function activateRightTab(tab: RightSidebarTabItem) {
+    closeBots();
     setActiveRightTabId(tab.id);
     applyRightTab(tab);
   }
@@ -2361,6 +2362,7 @@ export default function AppShell() {
   }
 
   function setPanelRoomOpen(id: AuxPanelId, open: boolean) {
+    if (open) closeBots();
     // Same rule as `focusRoom`: opening a panel that takes a new Split slot
     // re-tiles the stage, so it must not go through a view transition.
     // Opening a panel while a pane is zoomed carries the zoom onto it, as
@@ -2471,6 +2473,7 @@ export default function AppShell() {
   }
 
   function focusRoom(id: RoomId) {
+    closeBots();
     // In Split, never a view transition — for either of the two things this can
     // do there:
     //
@@ -4077,7 +4080,7 @@ export default function AppShell() {
                     {renderAmbientLayout()}
                   </div>
                   {currentInteractionMode === 'chat' && (
-                    <div className="chat-mode-layer" inert={Boolean(activeChatPanel)} aria-hidden={Boolean(activeChatPanel) || undefined}>
+                    <div className="chat-mode-layer" inert={botsLayerOpen || Boolean(activeChatPanel)} aria-hidden={botsLayerOpen || Boolean(activeChatPanel) || undefined}>
                       <ChatModePanel />
                     </div>
                   )}

@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { get } from 'svelte/store';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useStore } from '$lib/react/useStore';
+import { closeBots } from '$lib/services/bots/bots';
 import {
   recentWorkspaces,
   renameProject,
@@ -814,6 +815,7 @@ export default function ProjectHUD() {
 
   // Handle open project
   async function handleOpen(wsId: string, path: string) {
+    closeBots();
     showProjectChat();
     if (wsId !== activeWsId) {
       if (path) {
