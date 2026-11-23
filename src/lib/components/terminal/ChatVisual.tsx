@@ -3,6 +3,69 @@ import { createPortal } from 'react-dom';
 import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import type { ChatVisualsSpot } from '$lib/stores/terminal';
 import { useModalFocus } from '$lib/react/useModalFocus';
+import { get } from 'svelte/store';
+import { bots as botsStore, openBots, queueBotDraft, visibleBots } from '$lib/services/bots/bots';
+import { avatarUrl, BOT_AVATARS } from '$lib/services/bots/avatars';
+
+const NEW_BOT_ID = '__new__';
+const iconCache = new Map<string, Promise<string>>();
+
+/** A bot's picture as a data URL: the sandboxed page has no way to load the app's own files. */
+function iconData(avatar: string): Promise<string> {
+  const url = avatarUrl(avatar);
+  if (url.startsWith('data:')) return Promise.resolve(url);
+  let cached = iconCache.get(url);
+  if (!cached) {
+    cached = fetch(url).then((r) => r.blob()).then((blob) => new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    }));
+    cached.catch(() => iconCache.delete(url));
+    iconCache.set(url, cached);
+  }
+  return cached;
+}
+
+/** Every bot as `{ id, name, icon }`, with the same picture the app shows for it. */
+async function botsForVisual(): Promise<{ id: string; name: string; icon: string }[]> {
+  const list = visibleBots();
+  const out = await Promise.all(list.map(async (bot) => {
+    try { return { id: bot.id, name: bot.name, icon: await iconData(bot.avatar) }; } catch { return null; }
+  }));
+  return out.filter((b): b is { id: string; name: string; icon: string } => b !== null);
+}
+
+/** The 24 built-in bot pictures: the only icons a visual may use for a bot. */
+async function avatarsForVisual(): Promise<{ id: string; label: string; icon: string }[]> {
+  const out = await Promise.all(BOT_AVATARS.map(async ({ id, label }) => {
+    try { return { id, label, icon: await iconData(id) }; } catch { return null; }
+  }));
+  return out.filter((a): a is { id: string; label: string; icon: string } => a !== null);
+}
+
+/** A visual's "send to this bot": open the bot and put the text in its message box. */
+function sendToBot(bot: unknown, text: unknown): void {
+  if (typeof bot !== 'string' || typeof text !== 'string' || !text.trim()) return;
+  const want = bot.trim().toLowerCase();
+  const match = get(botsStore).find((b) => b.id === bot || b.name.trim().toLowerCase() === want);
+  queueBotDraft(match ? match.id : bot, text.slice(0, 4000));
+  openBots(match ? match.id : null);
+}
+
+/** The page's `window.spacron.openBot(…)` and friends: take the user to the thing the visual is about. */
+function openTarget(target: unknown): void {
+  const t = target as { kind?: string; id?: string } | null;
+  if (!t || typeof t !== 'object') return;
+  if (t.kind === 'new-bot') openBots(NEW_BOT_ID);
+  else if (t.kind === 'bots') openBots(null);
+  else if (t.kind === 'bot' && typeof t.id === 'string') {
+    const want = t.id.trim().toLowerCase();
+    const match = get(botsStore).find((bot) => bot.id === t.id || bot.name.trim().toLowerCase() === want);
+    openBots(match ? match.id : null);
+  }
+}
 
 /**
  * Inline interactive visuals in agent replies (Orca's convention, Spacron's
@@ -126,11 +189,15 @@ function themeTokens(): Record<string, string> {
 const MIN_HEIGHT = 60;
 const MAX_INLINE_HEIGHT = 900;
 
-function VisualFrame({ src, title, height, onHeight, onCompose, onEscape, className }: {
+function VisualFrame({ src, title, height, onHeight, onCompose, onNavigate, onEscape, botMode, className }: {
   src: string;
   title: string;
   height: number | null;
   onHeight?: (h: number) => void;
+  /** Called after the page sent the user somewhere (a bot, the bot list); the expanded view closes. */
+  onNavigate?: () => void;
+  /** Bot chats only: the page gets the bots and the 24 avatars and may open or message a bot. */
+  botMode?: boolean;
   /** The page's `window.spacron.compose(text)`: a request handed back to the chat composer. */
   onCompose?: (text: string) => void;
   onEscape?: () => void;
@@ -169,10 +236,35 @@ function VisualFrame({ src, title, height, onHeight, onCompose, onEscape, classN
     };
   }, [channel]);
 
+  function sendBots() {
+    if (!botMode) return;
+    void Promise.all([botsForVisual(), avatarsForVisual()]).then(([list, avatars]) => {
+      frameRef.current?.contentWindow?.postMessage({ spacronVisual: channel, action: 'bots', bots: list, avatars }, '*');
+    });
+  }
+
+  // Keep the page's bot list (names and pictures) current as bots change.
+  useEffect(() => {
+    const unsubscribe = botsStore.subscribe(() => sendBots());
+    return unsubscribe;
+  }, [channel]);
+
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      const data = event.data as { spacronVisual?: string; height?: number; action?: string; text?: string } | null;
+      const data = event.data as { spacronVisual?: string; height?: number; action?: string; text?: string; target?: unknown; bot?: unknown } | null;
       if (!data || data.spacronVisual !== channel || event.source !== frameRef.current?.contentWindow) return;
+      if (data.action === 'send-to-bot') {
+        if (!botMode) return;
+        sendToBot(data.bot, data.text);
+        onNavigate?.();
+        return;
+      }
+      if (data.action === 'open') {
+        if (!botMode) return;
+        openTarget(data.target);
+        onNavigate?.();
+        return;
+      }
       if (data.action === 'compose') {
         if (typeof data.text === 'string' && data.text.trim()) onCompose?.(data.text.slice(0, 4000));
         return;
@@ -194,7 +286,7 @@ function VisualFrame({ src, title, height, onHeight, onCompose, onEscape, classN
       aria-label={title}
       tabIndex={0}
       src={`${src}?c=${channel}${onHeight ? '&layout=inline' : ''}#${initialTheme}`}
-      onLoad={() => sendTheme(true)}
+      onLoad={() => { sendTheme(true); sendBots(); }}
       // Scripts run so the page can be interactive; no allow-same-origin, so it
       // cannot reach the app, its storage or the chat around it.
       sandbox="allow-scripts allow-downloads"
@@ -214,10 +306,12 @@ export function ChatVisualStatus({ title, text }: { title: string; text: string 
 }
 
 /** One visual in a reply: a card with the live page, sized to its content, with a full-size view. */
-export function ChatVisual({ visual, spot, onCompose }: {
+export function ChatVisual({ visual, spot, onCompose, botMode }: {
   visual: VisualDirective;
   spot: ChatVisualsSpot | null;
   onCompose?: (text: string) => void;
+  /** Set only by the Bots chat; agent chats keep the plain visual. */
+  botMode?: boolean;
 }) {
   const [height, setHeight] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -250,6 +344,7 @@ export function ChatVisual({ visual, spot, onCompose }: {
         title={title}
         className="chat-visual-frame"
         onCompose={onCompose}
+        botMode={botMode}
         height={height}
         onHeight={(h) => setHeight(Math.min(MAX_INLINE_HEIGHT, Math.max(MIN_HEIGHT, h)))}
       />
@@ -268,6 +363,8 @@ export function ChatVisual({ visual, spot, onCompose }: {
               className="chat-visual-frame full"
               height={null}
               onEscape={close}
+              onNavigate={close}
+              botMode={botMode}
               onCompose={(text) => {
                 onCompose?.(text);
                 close();

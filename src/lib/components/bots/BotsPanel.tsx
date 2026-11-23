@@ -19,7 +19,7 @@ import {
   BOT_TEMPLATES, LOCAL_HOST, MAX_BOT_STARTER_LENGTH, MAX_BOT_STARTER_PROMPTS, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, botStarterPrompts, bots, canRunHeadless, closeBots,
   connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
   attachToBot, attachmentPreview, botVisualSpot, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
-  saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
+  botDraftQueue, saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
@@ -638,6 +638,16 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(null); }
   }
+  // A visual's "send to this bot" button queues text for this bot (by id or name).
+  const queued = useStore(botDraftQueue);
+  useEffect(() => {
+    const keys = [bot.id.toLowerCase(), bot.name.trim().toLowerCase()].filter((k) => queued[k]);
+    if (!keys.length) return;
+    const text = keys.map((k) => queued[k]).join('\n');
+    botDraftQueue.update((q) => { const next = { ...q }; keys.forEach((k) => delete next[k]); return next; });
+    setDraft((cur) => (cur.trim() ? `${cur.trim()}\n${text}` : text));
+    requestAnimationFrame(() => textarea.current?.focus());
+  }, [queued, bot.id, bot.name]);
   // A visual's "send to the bot" button fills the message box for review.
   function composeFromVisual(text: string) {
     setDraft((cur) => (cur.trim() ? `${cur.trim()}\n${text}` : text));
@@ -810,7 +820,7 @@ function BotVisual({ bot, visual, status, onCompose }: {
       .catch((e) => { if (alive) setState({ error: e instanceof Error ? e.message : String(e) }); });
     return () => { alive = false; };
   }, [bot.id, bot.boxId, visual.file, status]);
-  if (state && 'spot' in state) return <ChatVisual visual={visual} spot={state.spot} onCompose={onCompose} />;
+  if (state && 'spot' in state) return <ChatVisual visual={visual} spot={state.spot} onCompose={onCompose} botMode />;
   return <ChatVisualStatus title={visual.title ?? visual.file}
     text={state ? (status === 'running' ? 'Waiting for the bot to finish this visual…' : `Could not load this visual. ${state.error}`) : 'Loading visual…'} />;
 }

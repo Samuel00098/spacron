@@ -108,9 +108,24 @@ function applyTheme(t){
   window.dispatchEvent(new CustomEvent('spacron:theme',{detail:t}));
 }
 function applyFragment(){try{applyTheme(JSON.parse(decodeURIComponent(location.hash.slice(1)||'%7B%7D')))}catch(e){}}
-window.spacron={get theme(){return Object.assign({},currentTheme)},compose:function(t){parent.postMessage({spacronVisual:channel,action:'compose',text:String(t==null?'':t).slice(0,4000)},'*')}};
+var botList=[];
+function findBot(q){q=String(q==null?'':q).trim().toLowerCase();if(!q)return null;for(var i=0;i<botList.length;i++){var b=botList[i];if(b.id.toLowerCase()===q||b.name.toLowerCase()===q)return b}return null}
+var avatarList=[];
+function findAvatar(q){q=String(q==null?'':q).trim().toLowerCase();for(var i=0;i<avatarList.length;i++){if(avatarList[i].id===q||avatarList[i].label.toLowerCase()===q)return avatarList[i]}return null}
+function fillBotIcons(){var els=document.querySelectorAll('img[data-spacron-bot-icon]');for(var i=0;i<els.length;i++){var b=findBot(els[i].getAttribute('data-spacron-bot-icon'));if(b&&els[i].getAttribute('src')!==b.icon)els[i].setAttribute('src',b.icon)}
+els=document.querySelectorAll('img[data-spacron-avatar]');for(i=0;i<els.length;i++){var a=findAvatar(els[i].getAttribute('data-spacron-avatar'));if(a&&els[i].getAttribute('src')!==a.icon)els[i].setAttribute('src',a.icon)}}
+function cleanIcons(list,named){return Array.isArray(list)?list.filter(function(b){return b&&typeof b.id==='string'&&typeof b[named]==='string'&&typeof b.icon==='string'&&b.icon.indexOf('data:image/')===0}):[]}
+function applyAvatars(list){avatarList=cleanIcons(list,'label').map(function(a){return{id:a.id,label:a.label,icon:a.icon}});fillBotIcons();window.dispatchEvent(new CustomEvent('spacron:avatars',{detail:avatarList.slice()}))}
+function applyBots(list){if(!Array.isArray(list))return;botList=list.filter(function(b){return b&&typeof b.id==='string'&&typeof b.name==='string'&&typeof b.icon==='string'&&b.icon.indexOf('data:image/')===0}).map(function(b){return{id:b.id,name:b.name,icon:b.icon}});fillBotIcons();window.dispatchEvent(new CustomEvent('spacron:bots',{detail:botList.slice()}))}
+function go(target){parent.postMessage({spacronVisual:channel,action:'open',target:target},'*')}
+window.spacron={get theme(){return Object.assign({},currentTheme)},compose:function(t){parent.postMessage({spacronVisual:channel,action:'compose',text:String(t==null?'':t).slice(0,4000)},'*')},
+get bots(){return botList.slice()},get avatars(){return avatarList.slice()},avatar:function(q){var a=findAvatar(q);return a?Object.assign({},a):null},
+sendToBot:function(q,t){var b=findBot(q);parent.postMessage({spacronVisual:channel,action:'send-to-bot',bot:b?b.id:String(q==null?'':q).slice(0,200),text:String(t==null?'':t).slice(0,4000)},'*')},bot:function(q){var b=findBot(q);return b?Object.assign({},b):null},
+openBot:function(q){var b=findBot(q);go({kind:'bot',id:b?b.id:String(q==null?'':q).slice(0,200)})},
+openBots:function(){go({kind:'bots'})},newBot:function(){go({kind:'new-bot'})}};
+if(window.MutationObserver)new MutationObserver(fillBotIcons).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['data-spacron-bot-icon']});
 applyFragment();window.addEventListener('hashchange',applyFragment);
-window.addEventListener('message',function(e){var d=e.data;if(channel&&e.source===parent&&d&&d.spacronVisual===channel&&d.action==='theme')applyTheme(d.theme)});
+window.addEventListener('message',function(e){var d=e.data;if(!(channel&&e.source===parent&&d&&d.spacronVisual===channel))return;if(d.action==='theme')applyTheme(d.theme);else if(d.action==='bots'){applyAvatars(d.avatars);applyBots(d.bots)}});
 window.addEventListener('keydown',function(e){if(channel&&e.key==='Escape'&&!e.defaultPrevented)parent.postMessage({spacronVisual:channel,action:'escape'},'*')});
 var last=0;function report(){var b=document.body;if(!b)return;var h=Math.ceil(b.getBoundingClientRect().height+parseFloat(getComputedStyle(b).marginTop||0)+parseFloat(getComputedStyle(b).marginBottom||0));if(Math.abs(h-last)>1){last=h;parent.postMessage({spacronVisual:channel,height:h},'*')}}
 var ro=new ResizeObserver(report);ro.observe(document.documentElement);document.addEventListener('DOMContentLoaded',function(){ro.observe(document.body);report()});window.addEventListener('load',report);setInterval(report,1000);

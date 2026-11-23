@@ -199,6 +199,20 @@ export function openBots(botId?: string | null): void {
   botsOpen.set(true);
 }
 
+/**
+ * Text a visual's button wants to send to a bot, keyed by the bot's id or
+ * lower-cased name (the bot may not exist yet). The bot's chat takes it into
+ * its message box for the user to review and send.
+ */
+export const botDraftQueue = writable<Record<string, string>>({});
+
+export function queueBotDraft(bot: string, text: string): void {
+  const key = bot.trim().toLowerCase();
+  if (!key || !text.trim()) return;
+  botDraftQueue.update((q) => ({ ...q, [key]: q[key] ? `${q[key]}
+${text}` : text }));
+}
+
 export function closeBots(): void {
   botsOpen.set(false);
 }

@@ -266,7 +266,8 @@ Use these variables for every surface, label and control, and leave the host's r
 --accent-foreground, and use --foreground for headings rather than fixed white or black. Check readability in both themes. For canvas and JS charts, \
 read the computed CSS variables at startup and redraw on the window's spacron:theme event while preserving user input. To let the \
 user send something back to you, add a button that calls window.spacron.compose(\"a plain-language request\"): it puts that \
-text in their message box for them to review and send. Always also write the key result in plain text.";
+text in their message box for them to review and send. When the visual is about a bot, take the user there with \
+window.spacron.openBot(\"bot name or id\") (or openBots() for the list, newBot() to start one). Show a bot only with its real app picture, never an emoji or other icon: <img data-spacron-bot-icon=\"bot name or id\"> is filled in automatically with the picture the bot actually has (window.spacron.bots lists {id, name, icon}). The pictures are the 24 built-in avatars in window.spacron.avatars ({id, label, icon}), shown with <img data-spacron-avatar=\"avatar id\">; use only those. The window events spacron:bots and spacron:avatars fire when the lists arrive. A button that sends a message to a bot, such as the one just created, calls window.spacron.sendToBot(\"bot name or id\", \"message\"): it opens that bot and puts the message in its box. Always also write the key result in plain text.";
 
 /// Extract assistant text from OpenCode's newline-delimited run events.
 fn opencode_reply(log: &str) -> Option<String> {
