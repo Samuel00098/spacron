@@ -4,7 +4,7 @@ import { loadBoolean } from '$lib/utils/storage';
 import { activeRemoteId, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { showToast } from '$lib/stores/notification';
 import { botHostState, bots, botsOpen, latestRun, openBots, selectedBotId, startBotWatcher, visibleBots } from '$lib/services/bots/bots';
-import { BotIcon, NEW_BOT } from './BotsPanel';
+import { BotAvatar, BotIcon, NEW_BOT } from './BotsPanel';
 import './Bots.css';
 
 /** The Bots list in the sidebar, under Projects: outside every project. */
@@ -45,7 +45,10 @@ export default function BotsSidebar() {
           const active = open && selected === bot.id;
           return (
             <button key={bot.id} type="button" className={`bots-sidebar-row${active ? ' active' : ''}`} aria-current={active ? 'true' : undefined} onClick={() => openBots(bot.id)} title={bot.name}>
-              <span className={`bots-dot ${run?.status === 'running' ? 'running' : bot.enabled && bot.schedule !== 'manual' ? 'scheduled' : 'idle'}`} aria-hidden="true" />
+              <span className="bots-sidebar-avatar">
+                <BotAvatar avatar={bot.avatar} size={20} />
+                {(run?.status === 'running' || (bot.enabled && bot.schedule !== 'manual')) && <span className={`bots-dot ${run?.status === 'running' ? 'running' : 'scheduled'}`} aria-hidden="true" />}
+              </span>
               <span>{bot.name}</span>
             </button>
           );

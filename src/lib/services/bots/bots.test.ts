@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 
 const mock = vi.hoisted(() => ({
   tauri: true,
+  shared: {} as Record<string, string[]>,
   local: vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => ({ runId: 'local-run' })),
   box: vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => ({ runId: 'box-run' })),
 }));
@@ -20,16 +21,19 @@ vi.mock('$lib/stores/runs', () => ({
 vi.mock('$lib/stores/mcpBridge', () => ({
   getMcpUrl: async () => 'http://127.0.0.1:7777/sse',
   getMcpHttpUrl: async () => 'http://127.0.0.1:7777',
+  botBrowserEntry: async (pc: boolean) => ({ command: pc ? 'node' : 'npx', args: ['--headless'] }),
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mock.local }));
 vi.mock('$lib/services/backend', () => ({ backendInvoke: mock.box }));
 vi.mock('$lib/utils/tauri', () => ({ isTauriRuntime: () => mock.tauri }));
+vi.mock('$lib/services/box-signins', () => ({ sharedWith: (id: string) => mock.shared[id] ?? [] }));
 
 beforeEach(() => {
   vi.resetModules();
   mock.local.mockClear();
   mock.box.mockClear();
   mock.tauri = true;
+  mock.shared = {};
   const data = new Map<string, string>();
   vi.stubGlobal('localStorage', { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => data.set(k, v) });
 });
@@ -48,6 +52,7 @@ async function setup(box: string | null = null) {
 const input = {
   name: 'Digest', instructions: 'Summarise the news.', agent: 'claude', model: null, schedule: 'daily' as const,
   time: '08:00', day: 1, enabled: true, boxId: 'local', access: 'folder' as const, connectors: true,
+  browser: false, canCreateBots: false, avatar: 'robot',
 };
 const lastSync = (fn: typeof mock.local, name: string) =>
   fn.mock.calls.filter((c) => c[0] === name).at(-1)?.[1] as { args?: Record<string, unknown> } & Record<string, unknown>;
@@ -173,4 +178,107 @@ it('ignores corrupt saved data and upgrades old bots', async () => {
   vi.resetModules();
   const again = await setup();
   expect(again.get(again.api.bots)).toEqual([]);
+});
+
+const servers = [
+  { id: '1', name: 'linear', transport: 'http', url: 'https://mcp.linear.app/sse', enabled: true },
+  { id: '2', name: 'Gmail', transport: 'http', url: 'https://gmailmcp.googleapis.com/mcp/v1', enabled: true, oauth: true, catalogId: 'gmail' },
+];
+
+it('each bot sends only its own connectors, plus the browser when it wants one', async () => {
+  const { api, settings } = await setup();
+  (settings.mcpServers as unknown as Settable<unknown[]>).set(servers);
+  api.saveBot({ ...input, mcpKeys: ['spacron-gmail'], browser: true });
+  await api.syncHost('local');
+  const { args } = lastSync(mock.local, 'local_bots_sync');
+  const sent = (args!.bots as { mcpKeys: string[]; connectors: boolean }[])[0];
+  expect(sent.mcpKeys).toEqual(['spacron-gmail', 'spacron-playwright']);
+  expect(sent.connectors).toBe(true);
+  const cfg = JSON.parse(args!.mcpConfig as string).mcpServers;
+  expect(cfg['spacron-playwright']).toEqual({ command: 'node', args: ['--headless'] });
+});
+
+it('a box gets signed-in connectors only when shared, through its own proxy', async () => {
+  const { api, settings } = await setup('box-1');
+  (settings.mcpServers as unknown as Settable<unknown[]>).set(servers);
+  expect(api.connectorChoices('box-1').find((c) => c.key === 'spacron-gmail')).toMatchObject({ usable: false });
+  expect(Object.keys(JSON.parse((await api.botMcpConfig('box-1'))!).mcpServers)).toEqual(['spacron-linear']);
+  mock.shared['box-1'] = ['spacron-gmail'];
+  expect(api.connectorChoices('box-1').find((c) => c.key === 'spacron-gmail')).toMatchObject({ usable: true });
+  const cfg = JSON.parse((await api.botMcpConfig('box-1', true))!).mcpServers;
+  expect(cfg['spacron-gmail']).toEqual({ type: 'http', url: 'spacron-box-proxy://spacron-gmail' });
+  expect(cfg['spacron-playwright'].command).toBe('npx');
+  expect(cfg['spacron-mcp']).toBeUndefined();
+});
+
+it('chat messages go to the host with the run', async () => {
+  const { api } = await setup();
+  const bot = api.saveBot(input);
+  await expect(api.sendBotMessage(bot.id, '  ')).rejects.toThrow('Type a message');
+  await api.sendBotMessage(bot.id, ' hello there ');
+  expect(mock.local.mock.calls.at(-1)).toEqual(['local_bot_run_now', { args: { id: bot.id, message: 'hello there' } }]);
+});
+
+it('only built-in avatars or small uploaded pictures are accepted', async () => {
+  const { api } = await setup();
+  expect(api.saveBot({ ...input, avatar: 'owl' }).avatar).toBe('owl');
+  expect(api.saveBot({ ...input, avatar: 'data:image/webp;base64,AAAA' }).avatar).toContain('data:image/webp');
+  expect(() => api.saveBot({ ...input, avatar: 'https://evil.example/x.png' })).toThrow('picture');
+  expect(() => api.saveBot({ ...input, avatar: `data:image/png;base64,${'A'.repeat(200_000)}` })).toThrow('picture');
+});
+
+it('a builder bot is told what it can choose from', async () => {
+  const { api, settings } = await setup();
+  (settings.mcpServers as unknown as Settable<unknown[]>).set(servers);
+  api.saveBot({ ...input, canCreateBots: true });
+  await api.syncHost('local');
+  const sent = (lastSync(mock.local, 'local_bots_sync').args!.bots as { extraContext: string; canCreateBots: boolean }[])[0];
+  expect(sent.canCreateBots).toBe(true);
+  expect(sent.extraContext).toContain('Gmail');
+  expect(sent.extraContext).toContain('owl');
+});
+
+it('bots a builder proposes are capped, paused and never builders themselves', async () => {
+  const { api, settings } = await setup();
+  (settings.mcpServers as unknown as Settable<unknown[]>).set(servers);
+  const builder = api.saveBot({ ...input, name: 'Bot Builder', access: 'folder', canCreateBots: true });
+  const made = api.botFromProposal('local', {
+    id: 'p1', createdBy: builder.id, createdByName: 'Bot Builder', creatorAccess: 'full', createdAt: 1,
+    spec: { name: 'Inbox bot', instructions: 'Triage mail', schedule: 'daily', time: '07:30', access: 'full', connectors: ['gmail'], browser: true, avatar: 'mail', canCreateBots: true },
+  });
+  expect(made).toMatchObject({ name: 'Inbox bot', access: 'folder', enabled: false, canCreateBots: false, browser: true, avatar: 'mail', schedule: 'daily', time: '07:30', createdBy: 'Bot Builder' });
+  expect((made as { mcpKeys: string[] }).mcpKeys).toEqual(['spacron-gmail']);
+  expect(api.botFromProposal('local', { id: 'p2', createdBy: 'x', createdByName: '', creatorAccess: 'research', createdAt: 1, spec: { name: '' } })).toBe('it had no name or job');
+  const odd = api.botFromProposal('local', { id: 'p3', createdBy: 'gone', createdByName: 'Old', creatorAccess: 'research', createdAt: 1, spec: { name: 'X', instructions: 'Y', schedule: 'every minute', avatar: 'nope', access: 'folder' } });
+  expect(odd).toMatchObject({ schedule: 'manual', avatar: 'robot', access: 'research' });
+});
+
+it('adopts proposals from the host, then acks them', async () => {
+  const { api, get } = await setup();
+  api.saveBot({ ...input, name: 'Bot Builder', canCreateBots: true });
+  mock.local.mockImplementation(async (cmd: string) => cmd === 'local_bots_state'
+    ? { runs: [], homeRoot: '/h', proposals: [{ id: 'p9', createdBy: 'b', createdByName: 'Bot Builder', creatorAccess: 'folder', createdAt: 1, spec: { name: 'Digest', instructions: 'News' } }] }
+    : { runId: 'r' });
+  await api.refreshBotState();
+  await vi.waitFor(() => expect(mock.local.mock.calls.some((c) => c[0] === 'local_bot_proposals_ack')).toBe(true));
+  expect(get(api.bots).map((b) => b.name).sort()).toEqual(['Bot Builder', 'Digest']);
+  expect(mock.local.mock.calls.find((c) => c[0] === 'local_bot_proposals_ack')![1]).toEqual({ args: { ids: ['p9'] } });
+  mock.local.mockImplementation(async () => ({ runId: 'local-run' }));
+});
+
+it('a stalled host call gives up with a clear error instead of hanging', async () => {
+  vi.useFakeTimers();
+  try {
+    const { api } = await setup();
+    const bot = api.saveBot(input);
+    await vi.runAllTimersAsync();
+    mock.local.mockImplementation(() => new Promise(() => {}));
+    const pending = api.stopBotRun(bot, 'r1');
+    const caught = pending.catch((e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(await caught).toContain('did not answer in time');
+  } finally {
+    mock.local.mockImplementation(async () => ({ runId: 'local-run' }));
+    vi.useRealTimers();
+  }
 });

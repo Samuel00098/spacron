@@ -43,6 +43,14 @@ const MAX_RUNS: usize = 300;
 const MAX_LOG_BYTES: usize = 64 * 1024;
 const MAX_INSTRUCTIONS: usize = 20_000;
 const MAX_MCP_CONFIG: usize = 256 * 1024;
+const MAX_MESSAGE: usize = 8_000;
+/// How much of the conversation each run sees: the last few exchanges, each
+/// reply trimmed to its end.
+const CONTEXT_RUNS: usize = 6;
+const CONTEXT_REPLY_CHARS: usize = 1_500;
+/// Bot Builder limits per run.
+const MAX_PROPOSALS: usize = 10;
+const MAX_PROPOSAL_BYTES: u64 = 32 * 1024;
 
 /// What a bot may do on its own. Nobody is there to approve anything, so the
 /// level is decided up front and turned into each CLI's own flags.
@@ -78,6 +86,17 @@ pub(crate) struct BoxBot {
     /// Give the agent the synced MCP servers (`mcp.json`).
     #[serde(default)]
     pub connectors: bool,
+    /// Which of the synced MCP servers this bot gets (config keys). `None`
+    /// means all of them when `connectors` is on (bots saved before the picker).
+    #[serde(default)]
+    pub mcp_keys: Option<Vec<String>>,
+    /// May create other bots (see [`collect_proposals`]).
+    #[serde(default)]
+    pub can_create_bots: bool,
+    /// Extra context the desktop adds to the prompt (the Bot Builder gets the
+    /// connectors, agents and avatars it may choose from).
+    #[serde(default)]
+    pub extra_context: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -114,7 +133,7 @@ pub(crate) struct BotRun {
     pub finished_at: Option<u64>,
     /// running | completed | failed | stopped | missed | interrupted
     pub status: String,
-    /// manual | schedule
+    /// manual | schedule | chat
     #[serde(default)]
     pub trigger: String,
     #[serde(default)]
@@ -122,6 +141,9 @@ pub(crate) struct BotRun {
     /// Root-relative log path.
     #[serde(default)]
     pub log: Option<String>,
+    /// The chat message that started this run, if the user sent one.
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 fn dir(root: &Path) -> PathBuf {
@@ -189,6 +211,73 @@ questions; do the work and finish with a short summary of what you did.\n\nYour 
     )
 }
 
+/// The end of a run's output, for the conversation the next run sees.
+fn reply_tail(root: &Path, run: &BotRun) -> String {
+    let text = run.log.as_deref().and_then(|l| std::fs::read(root.join(l)).ok())
+        .map(|b| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default();
+    if text.chars().count() <= CONTEXT_REPLY_CHARS {
+        return text;
+    }
+    let skip = text.chars().count() - CONTEXT_REPLY_CHARS;
+    format!("…{}", text.chars().skip(skip).collect::<String>())
+}
+
+/// The recent conversation with this bot, oldest first: each finished run's
+/// message (if the user sent one) and the end of what the bot answered.
+fn conversation(root: &Path, bot_id: &str, skip_run: &str) -> String {
+    let runs: Vec<BotRun> = read_json(&dir(root).join("runs.json"));
+    let mut recent: Vec<&BotRun> = runs.iter()
+        .filter(|r| r.bot_id == bot_id && r.id != skip_run && r.status == "completed")
+        .take(CONTEXT_RUNS)
+        .collect();
+    recent.reverse();
+    let mut out = String::new();
+    for run in recent {
+        match run.message.as_deref() {
+            Some(m) => out.push_str(&format!("User: {}\n", m.trim())),
+            None => out.push_str(&format!("({} run)\n", if run.trigger == "schedule" { "Scheduled" } else { "Manual" })),
+        }
+        let reply = reply_tail(root, run);
+        if !reply.is_empty() {
+            out.push_str(&format!("You: {reply}\n"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Everything one run is told: who it is and its job, what it may do, what
+/// has been said so far, and the user's new message if there is one.
+pub(crate) fn run_prompt(bot: &BoxBot, history: &str, message: Option<&str>) -> String {
+    let mut prompt = bot_prompt(bot);
+    if bot.can_create_bots {
+        prompt.push_str(BUILDER_PROMPT);
+    }
+    if let Some(extra) = bot.extra_context.as_deref().filter(|e| !e.trim().is_empty()) {
+        prompt.push_str("\n\n");
+        prompt.push_str(extra.trim());
+    }
+    if !history.trim().is_empty() {
+        prompt.push_str("\n\nRecent conversation with the user, oldest first:\n");
+        prompt.push_str(history.trim_end());
+    }
+    if let Some(m) = message.filter(|m| !m.trim().is_empty()) {
+        prompt.push_str("\n\nThe user just sent you this message. Answer them directly, using your job and the conversation as context:\n");
+        prompt.push_str(m.trim());
+    }
+    prompt
+}
+
+const BUILDER_PROMPT: &str = "\n\nYou can create new bots for the user. To create one, write a JSON file in the \
+new-bots folder of your home folder (for example new-bots/morning-digest.json), one file per bot, with these fields: \
+\"name\" (short), \"instructions\" (that bot's standing job, written as instructions to it), \"schedule\" \
+(\"manual\", \"hourly\", \"daily\", \"weekdays\" or \"weekly\"), \"time\" (\"HH:MM\"), \"day\" (0 = Sunday, for weekly), \
+\"access\" (\"research\", \"folder\" or \"full\"; never more than your own access), \"browser\" (true if it needs to open \
+and use web pages), \"connectors\" (a list of connector names it needs, from the ones listed below), \"avatar\" \
+(one of the avatar names listed below) and \"agent\" (optional, one of the agents listed below). Spacron adds each \
+bot for the user right after this run, with its schedule off until the user turns it on. Ask the user a question \
+instead if you do not know enough to write a good bot, and tell them which bots you created.";
+
 /// The MCP server keys in an `mcp.json` body, for Claude's allow list.
 fn mcp_keys(config: &str) -> Vec<String> {
     serde_json::from_str::<Value>(config)
@@ -199,8 +288,8 @@ fn mcp_keys(config: &str) -> Vec<String> {
 
 /// The full headless command for one run: the agent's own headless form plus
 /// the flags for the bot's access level and connectors.
-pub(crate) fn bot_command(bot: &BoxBot, mcp: Option<(&Path, &[String])>) -> Result<Vec<String>, String> {
-    let mut argv = agent_command(&bot.agent, &bot_prompt(bot), bot.model.as_deref())?;
+pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[String])>) -> Result<Vec<String>, String> {
+    let mut argv = agent_command(&bot.agent, prompt, bot.model.as_deref())?;
     let exe = argv[0].clone();
     let name = Path::new(&exe).file_stem().and_then(|s| s.to_str()).unwrap_or(&exe).to_ascii_lowercase();
     let mut flags: Vec<String> = Vec::new();
@@ -301,7 +390,7 @@ fn restrict(path: &Path) {
 /// Run records, newest first, plus where bot homes live.
 pub(crate) fn state(root: &Path) -> Result<Value, String> {
     let runs: Vec<BotRun> = read_json(&dir(root).join("runs.json"));
-    Ok(json!({ "runs": runs, "homeRoot": dir(root).join("home").to_string_lossy() }))
+    Ok(json!({ "runs": runs, "homeRoot": dir(root).join("home").to_string_lossy(), "proposals": proposals(root) }))
 }
 
 /// Start one bot immediately.
@@ -309,10 +398,15 @@ pub(crate) fn run_now(args: Value, root: &Path) -> Result<Value, String> {
     let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing bot id.")?;
     let config: BotsConfig = read_json(&dir(root).join("bots.json"));
     let bot = config.bots.iter().find(|b| b.id == id).cloned().ok_or("This bot has not been synced yet.")?;
-    if is_running(root, id) {
-        return Err("This bot is already running.".into());
+    let message = args.get("message").and_then(|v| v.as_str()).map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
+    if message.as_ref().is_some_and(|m| m.len() > MAX_MESSAGE) {
+        return Err(format!("Keep the message under {MAX_MESSAGE} characters."));
     }
-    let run_id = start_run(root.to_path_buf(), bot, "manual", max_run(&config));
+    if is_running(root, id) {
+        return Err("This bot is already running. Stop it or wait for its answer.".into());
+    }
+    let trigger = if message.is_some() { "chat" } else { "manual" };
+    let run_id = start_run(root.to_path_buf(), bot, trigger, max_run(&config), message);
     Ok(json!({ "runId": run_id }))
 }
 
@@ -388,10 +482,10 @@ fn tick(root: &Path) {
             update_runs(root, |runs| runs.insert(0, BotRun {
                 id: uuid::Uuid::new_v4().to_string(), bot_id: id, name, started_at: now, finished_at: Some(now),
                 status: "missed".into(), trigger: "schedule".into(),
-                detail: Some("The scheduled time passed while this computer could not run it.".into()), log: None,
+                detail: Some("The scheduled time passed while this computer could not run it.".into()), log: None, message: None,
             }));
         } else if !is_running(root, &b.id) {
-            start_run(root.to_path_buf(), b, "schedule", limit);
+            start_run(root.to_path_buf(), b, "schedule", limit, None);
         }
     }
     if changed {
@@ -402,12 +496,15 @@ fn tick(root: &Path) {
 
 // ── running ─────────────────────────────────────────────────────────────────
 
-fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration) -> String {
+fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration, message: Option<String>) -> String {
     let run_id = uuid::Uuid::new_v4().to_string();
     let log_rel = format!(".spacron/bots/logs/{run_id}.log");
+    // The conversation is read before this run is recorded, so it never sees itself.
+    let history = conversation(&root, &bot.id, &run_id);
+    let prompt = run_prompt(&bot, &history, message.as_deref());
     let run = BotRun {
         id: run_id.clone(), bot_id: bot.id.clone(), name: bot.name.clone(), started_at: now_ms(), finished_at: None,
-        status: "running".into(), trigger: trigger.into(), detail: None, log: Some(log_rel.clone()),
+        status: "running".into(), trigger: trigger.into(), detail: None, log: Some(log_rel.clone()), message,
     };
     update_runs(&root, |runs| runs.insert(0, run));
     let signal = Arc::new(Notify::new());
@@ -416,7 +513,7 @@ fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration) -> Stri
     }
     let id = run_id.clone();
     tokio::spawn(async move {
-        let (status, detail) = match execute(&root, &bot, &root.join(&log_rel), limit, signal).await {
+        let (status, detail) = match execute(&root, &bot, &id, &prompt, &root.join(&log_rel), limit, signal).await {
             Ok(0) => ("completed", None),
             Ok(code) => ("failed", Some(format!("The agent exited with code {code}. See the output."))),
             Err(e) if e == STOPPED_BY_USER => ("stopped", Some(e)),
@@ -425,22 +522,120 @@ fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration) -> Stri
         if let Ok(mut map) = running().lock() {
             map.remove(&id);
         }
+        if bot.can_create_bots {
+            collect_proposals(&root, &bot);
+        }
         finish(&root, &id, status, detail);
     });
     run_id
 }
 
-async fn execute(root: &Path, bot: &BoxBot, log_path: &Path, limit: Duration, signal: Arc<Notify>) -> Result<i32, String> {
+async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path: &Path, limit: Duration, signal: Arc<Notify>) -> Result<i32, String> {
     if !valid_id(&bot.id) {
         return Err("This bot's id is not valid.".into());
     }
     let cwd = home(root, &bot.id);
     std::fs::create_dir_all(&cwd).map_err(|e| format!("Could not create the bot's folder: {e}"))?;
-    let mcp_path = dir(root).join("mcp.json");
-    let keys = if bot.connectors { std::fs::read_to_string(&mcp_path).map(|c| mcp_keys(&c)).unwrap_or_default() } else { vec![] };
-    let mcp = (!keys.is_empty()).then_some((mcp_path.as_path(), keys.as_slice()));
-    let argv = bot_command(bot, mcp)?;
-    spawn_headless(&argv, &cwd, log_path, ("SPACRON_BOT", &bot.name), limit, Some(signal)).await
+    if bot.can_create_bots {
+        let _ = std::fs::create_dir_all(cwd.join("new-bots"));
+    }
+    let run_config = run_mcp_config(root, bot, run_id);
+    let mcp = run_config.as_ref().map(|(path, keys)| (path.as_path(), keys.as_slice()));
+    let argv = bot_command(bot, prompt, mcp)?;
+    // A browser server (Playwright via npx) can take far longer to start than
+    // Claude Code's default MCP wait; the app gives its own agents the same budget.
+    let env = [("SPACRON_BOT", bot.name.as_str()), ("MCP_TIMEOUT", "120000")];
+    let result = spawn_headless(&argv, &cwd, log_path, &env, limit, Some(signal)).await;
+    if let Some((path, _)) = run_config {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+/// The MCP servers this bot gets for one run: the synced set narrowed to the
+/// bot's own picks, with a box's shared sign-ins resolved to its proxy.
+/// Written owner-only for the run and removed after.
+fn run_mcp_config(root: &Path, bot: &BoxBot, run_id: &str) -> Option<(PathBuf, Vec<String>)> {
+    if !bot.connectors {
+        return None;
+    }
+    let text = std::fs::read_to_string(dir(root).join("mcp.json")).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    let servers = value.get("mcpServers")?.as_object()?;
+    let picked: serde_json::Map<String, Value> = servers.iter()
+        .filter(|(key, _)| bot.mcp_keys.as_ref().is_none_or(|keys| keys.iter().any(|k| k == *key)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if picked.is_empty() {
+        return None;
+    }
+    let keys: Vec<String> = picked.keys().cloned().collect();
+    let body = super::box_proxy::resolve(&json!({ "mcpServers": picked }).to_string());
+    let path = dir(root).join("run-mcp").join(format!("{run_id}.json"));
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    std::fs::write(&path, body).ok()?;
+    restrict(&path);
+    Some((path, keys))
+}
+
+// ── Bot Builder ─────────────────────────────────────────────────────────────
+
+fn proposals_dir(root: &Path) -> PathBuf {
+    dir(root).join("proposals")
+}
+
+/// After a run of a bot that may create bots: move the specs it wrote to
+/// `new-bots/` into the proposal queue, where the desktop picks them up,
+/// checks them and adds the bots (`proposals`, `proposals_ack`).
+fn collect_proposals(root: &Path, bot: &BoxBot) {
+    let source = home(root, &bot.id).join("new-bots");
+    let Ok(entries) = std::fs::read_dir(&source) else { return };
+    let queue = proposals_dir(root);
+    if std::fs::create_dir_all(&queue).is_err() {
+        return;
+    }
+    let mut taken = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let small = entry.metadata().map(|m| m.is_file() && m.len() <= MAX_PROPOSAL_BYTES).unwrap_or(false);
+        let spec = small.then(|| std::fs::read_to_string(&path).ok()).flatten()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .filter(|v| v.is_object());
+        let _ = std::fs::remove_file(&path);
+        let Some(spec) = spec else { continue };
+        if taken >= MAX_PROPOSALS {
+            continue;
+        }
+        taken += 1;
+        let id = uuid::Uuid::new_v4().to_string();
+        let proposal = json!({
+            "id": id, "createdBy": bot.id, "createdByName": bot.name, "creatorAccess": bot.access,
+            "createdAt": now_ms(), "spec": spec,
+        });
+        let _ = write_json(&queue.join(format!("{id}.json")), &proposal);
+    }
+}
+
+/// Bots waiting to be added by the desktop.
+fn proposals(root: &Path) -> Vec<Value> {
+    let mut out: Vec<Value> = std::fs::read_dir(proposals_dir(root)).into_iter().flatten().flatten()
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|t| serde_json::from_str(&t).ok())
+        .collect();
+    out.sort_by_key(|p: &Value| p["createdAt"].as_u64().unwrap_or(0));
+    out
+}
+
+/// The desktop added (or rejected) these proposals: drop them from the queue.
+pub(crate) fn proposals_ack(args: Value, root: &Path) -> Result<Value, String> {
+    let ids: Vec<String> = serde_json::from_value(args.get("ids").cloned().unwrap_or(json!([]))).map_err(|e| e.to_string())?;
+    for id in ids.iter().filter(|id| valid_id(id)) {
+        let _ = std::fs::remove_file(proposals_dir(root).join(format!("{id}.json")));
+    }
+    Ok(json!({ "ok": true }))
 }
 
 #[cfg(test)]
@@ -505,7 +700,7 @@ mod tests {
     #[test]
     fn claude_flags_follow_the_access_level_and_keep_the_prompt_last() {
         let mut b = parsed(bot("a", vec![]));
-        let research = bot_command(&b, None).unwrap();
+        let research = bot_command(&b, "Summarise the news.", None).unwrap();
         assert_eq!(&research[..2], ["claude", "-p"]);
         assert!(research.windows(2).any(|w| w == ["--permission-mode", "dontAsk"]));
         assert!(research.contains(&"WebSearch".to_string()) && !research.contains(&"Write".to_string()));
@@ -513,7 +708,7 @@ mod tests {
 
         b.access = Access::Folder;
         let keys = vec!["spacron-linear".to_string()];
-        let folder = bot_command(&b, Some((Path::new("/m.json"), &keys))).unwrap();
+        let folder = bot_command(&b, "Summarise the news.", Some((Path::new("/m.json"), &keys))).unwrap();
         let at = |s: &str| folder.iter().position(|x| x == s).unwrap();
         assert!(folder.windows(2).any(|w| w == ["--mcp-config", "/m.json"]));
         assert!(folder.contains(&"mcp__spacron-linear".to_string()) && folder.contains(&"Write".to_string()));
@@ -522,7 +717,7 @@ mod tests {
         assert_eq!(at("--permission-mode") + 2, folder.len() - 1);
 
         b.access = Access::Full;
-        let full = bot_command(&b, None).unwrap();
+        let full = bot_command(&b, "Summarise the news.", None).unwrap();
         assert!(full.windows(2).any(|w| w == ["--permission-mode", "bypassPermissions"]));
         assert!(!full.contains(&"--allowedTools".to_string()));
     }
@@ -532,11 +727,11 @@ mod tests {
         let mut b = parsed(bot("a", vec![]));
         b.agent = "codex".into();
         b.access = Access::Folder;
-        let codex = bot_command(&b, None).unwrap();
+        let codex = bot_command(&b, "Summarise the news.", None).unwrap();
         assert_eq!(&codex[..4], ["codex", "exec", "--sandbox", "workspace-write"]);
         b.agent = "gemini".into();
         b.access = Access::Full;
-        let gemini = bot_command(&b, None).unwrap();
+        let gemini = bot_command(&b, "Summarise the news.", None).unwrap();
         let n = gemini.len();
         assert_eq!(gemini[n - 3], "--yolo");
         assert_eq!(gemini[n - 2], "-p", "-p still sits right before its prompt");
@@ -589,7 +784,7 @@ mod tests {
         std::fs::write(ws.join(rel), &body).unwrap();
         update_runs(ws, |runs| runs.push(BotRun {
             id: "r1".into(), bot_id: "a".into(), name: "n".into(), started_at: 1, finished_at: Some(2),
-            status: "completed".into(), trigger: "manual".into(), detail: None, log: Some(rel.into()),
+            status: "completed".into(), trigger: "manual".into(), detail: None, log: Some(rel.into()), message: None,
         }));
         let out = log(json!({ "runId": "r1" }), ws).unwrap();
         assert_eq!(out["truncated"], json!(true));
@@ -602,7 +797,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         update_runs(dir.path(), |runs| runs.push(BotRun {
             id: "ghost".into(), bot_id: "a".into(), name: "n".into(), started_at: 1, finished_at: None,
-            status: "running".into(), trigger: "manual".into(), detail: None, log: None,
+            status: "running".into(), trigger: "manual".into(), detail: None, log: None, message: None,
         }));
         stop(json!({ "runId": "ghost" }), dir.path()).unwrap();
         let runs: Vec<BotRun> = read_json(&super::dir(dir.path()).join("runs.json"));
@@ -652,6 +847,113 @@ mod tests {
             }
             assert!(!alive, "the agent's child ({child_pid}) was left running");
         }
+    }
+
+    #[cfg(unix)]
+    fn fake_agent(dir: &Path, script: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let agent = bin.join("claude");
+        std::fs::write(&agent, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        agent.to_string_lossy().to_string()
+    }
+
+    #[cfg(unix)]
+    async fn wait_run(root: &Path, run_id: &str) -> BotRun {
+        for _ in 0..100 {
+            let runs: Vec<BotRun> = read_json(&super::dir(root).join("runs.json"));
+            if let Some(r) = runs.iter().find(|r| r.id == run_id && r.status != "running") {
+                return r.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("run {run_id} did not finish");
+    }
+
+    /// A chat: the second message's run sees the first exchange, and the
+    /// message itself is recorded on the run.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chat_messages_carry_the_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        // Answers with the last line of its prompt, and says whether it saw history.
+        let agent = fake_agent(dir.path(), r#"for a; do last="$a"; done
+case "$last" in *"User: hello"*) echo "SAW-HISTORY";; esac
+printf '%s\n' "$last" | tail -n 1"#);
+        let mut b = bot("chat", vec![]);
+        b["agent"] = json!(agent);
+        sync(json!({ "bots": [b] }), dir.path()).unwrap();
+        let first = run_now(json!({ "id": "chat", "message": "hello" }), dir.path()).unwrap()["runId"].as_str().unwrap().to_string();
+        let r1 = wait_run(dir.path(), &first).await;
+        assert_eq!((r1.status.as_str(), r1.trigger.as_str(), r1.message.as_deref()), ("completed", "chat", Some("hello")));
+        assert!(log(json!({ "runId": first }), dir.path()).unwrap()["text"].as_str().unwrap().trim().ends_with("hello"));
+        let second = run_now(json!({ "id": "chat", "message": "and again" }), dir.path()).unwrap()["runId"].as_str().unwrap().to_string();
+        wait_run(dir.path(), &second).await;
+        let text = log(json!({ "runId": second }), dir.path()).unwrap()["text"].as_str().unwrap().to_string();
+        assert!(text.contains("SAW-HISTORY"), "{text}");
+        assert!(run_now(json!({ "id": "chat", "message": "x".repeat(MAX_MESSAGE + 1) }), dir.path()).is_err());
+    }
+
+    #[test]
+    fn the_run_prompt_layers_job_history_and_message() {
+        let mut b = parsed(bot("a", vec![]));
+        b.extra_context = Some("Connectors you can use: Gmail".into());
+        let p = run_prompt(&b, "User: hi\nYou: hello\n", Some("what's new?"));
+        let job = p.find("Your job:").unwrap();
+        let extra = p.find("Connectors you can use").unwrap();
+        let history = p.find("User: hi").unwrap();
+        let message = p.find("what's new?").unwrap();
+        assert!(job < extra && extra < history && history < message);
+        assert!(!p.contains("new-bots"), "only builder bots are told how to create bots");
+        b.can_create_bots = true;
+        assert!(run_prompt(&b, "", None).contains("new-bots"));
+    }
+
+    /// The Bot Builder: specs it writes become proposals (bad ones are
+    /// dropped, at most MAX_PROPOSALS), and acked ones leave the queue.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_builder_bot_proposes_bots_and_the_desktop_acks_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = fake_agent(dir.path(), r#"i=0; while [ $i -lt 12 ]; do echo "{\"name\":\"Bot $i\",\"instructions\":\"Do $i\"}" > "new-bots/b$i.json"; i=$((i+1)); done
+echo 'not json' > new-bots/broken.json; echo '[1,2]' > new-bots/array.json; echo ok"#);
+        let mut b = bot("builder", vec![]);
+        b["agent"] = json!(agent);
+        b["canCreateBots"] = json!(true);
+        b["access"] = json!("folder");
+        sync(json!({ "bots": [b] }), dir.path()).unwrap();
+        let id = run_now(json!({ "id": "builder", "message": "make me bots" }), dir.path()).unwrap()["runId"].as_str().unwrap().to_string();
+        assert_eq!(wait_run(dir.path(), &id).await.status, "completed");
+        let st = state(dir.path()).unwrap();
+        let list = st["proposals"].as_array().unwrap();
+        assert_eq!(list.len(), MAX_PROPOSALS);
+        assert!(list.iter().all(|p| p["createdBy"] == "builder" && p["creatorAccess"] == "folder" && p["spec"]["name"].is_string()));
+        assert_eq!(std::fs::read_dir(home(dir.path(), "builder").join("new-bots")).unwrap().count(), 0, "specs are consumed");
+        let ids: Vec<String> = list.iter().take(3).map(|p| p["id"].as_str().unwrap().to_string()).collect();
+        proposals_ack(json!({ "ids": ids }), dir.path()).unwrap();
+        assert_eq!(state(dir.path()).unwrap()["proposals"].as_array().unwrap().len(), MAX_PROPOSALS - 3);
+    }
+
+    #[test]
+    fn each_bot_gets_only_its_own_connectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = r#"{"mcpServers":{"spacron-gmail":{"type":"http","url":"spacron-box-proxy://spacron-gmail"},"spacron-playwright":{"command":"npx","args":[]},"spacron-linear":{"type":"http","url":"https://l"}}}"#;
+        sync(json!({ "bots": [], "mcpConfig": cfg }), dir.path()).unwrap();
+        let mut b = parsed(bot("a", vec![]));
+        b.connectors = true;
+        b.mcp_keys = Some(vec!["spacron-gmail".into(), "spacron-playwright".into(), "spacron-missing".into()]);
+        let (path, mut keys) = run_mcp_config(dir.path(), &b, "run1").unwrap();
+        keys.sort();
+        assert_eq!(keys, ["spacron-gmail", "spacron-playwright"]);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("spacron-linear"));
+        b.mcp_keys = Some(vec![]);
+        assert!(run_mcp_config(dir.path(), &b, "run2").is_none());
+        b.mcp_keys = None;
+        assert_eq!(run_mcp_config(dir.path(), &b, "run3").unwrap().1.len(), 3, "older bots keep every connector");
+        b.connectors = false;
+        assert!(run_mcp_config(dir.path(), &b, "run4").is_none());
     }
 
     #[test]

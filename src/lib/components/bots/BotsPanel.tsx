@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { useStore } from '$lib/react/useStore';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
@@ -8,11 +10,15 @@ import { showToast } from '$lib/stores/notification';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import Dropdown from '$lib/components/shared/Dropdown';
 import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
+import { catalogIconFor } from '$lib/services/mcp-catalog';
+import { sharedSignIns } from '$lib/services/box-signins';
 import {
-  BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botHostState, botSettings, bots, closeBots, connectorNames, fetchBotLog,
-  latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor, saveBot, selectedBotId, stopBotRun,
-  toggleBot, visibleBots, type Bot, type BotAccess, type BotRun, type BotSchedule,
+  BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, closeBots,
+  connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
+  saveBot, selectedBotId, sendBotMessage, stopBotRun, toggleBot, visibleBots,
+  type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
+import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
 import './Bots.css';
 
 /** `selectedBotId` value that opens the editor for a new bot. */
@@ -20,7 +26,7 @@ export const NEW_BOT = '__new__';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const SCHEDULES: { value: BotSchedule; label: string }[] = [
-  { value: 'manual', label: 'Only when I run it' },
+  { value: 'manual', label: 'Only when I run it or chat' },
   { value: 'hourly', label: 'Every hour' },
   { value: 'daily', label: 'Every day' },
   { value: 'weekdays', label: 'Weekdays' },
@@ -32,8 +38,14 @@ export function BotIcon({ size = 18 }: { size?: number }) {
     <rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4M9 14h.01M15 14h.01M2 13v3M22 13v3" /></svg>;
 }
 
+/** A bot's picture: a built-in avatar or the one the user uploaded. */
+export function BotAvatar({ avatar, size = 32, className = '' }: { avatar?: string | null; size?: number; className?: string }) {
+  return <img className={`bot-avatar ${className}`} src={avatarUrl(avatar)} alt="" width={size} height={size} draggable={false}
+    onError={(e) => { const img = e.currentTarget; if (!img.src.endsWith(`/${DEFAULT_AVATAR}.webp`)) img.src = avatarUrl(DEFAULT_AVATAR); }} />;
+}
+
 export function botScheduleLabel(b: Pick<Bot, 'schedule' | 'time' | 'day'>): string {
-  if (b.schedule === 'manual') return 'Runs when you start it';
+  if (b.schedule === 'manual') return 'On demand';
   if (b.schedule === 'hourly') return `Every hour at :${b.time.slice(3)}`;
   const when = b.schedule === 'weekly' ? WEEKDAYS[b.day] : b.schedule === 'weekdays' ? 'Mon to Fri' : 'Every day';
   return `${when} at ${b.time}`;
@@ -41,6 +53,12 @@ export function botScheduleLabel(b: Pick<Bot, 'schedule' | 'time' | 'day'>): str
 
 function when(ms?: number | null): string {
   return ms ? new Date(ms).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+}
+
+function clock(ms: number): string {
+  const d = new Date(ms);
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : when(ms);
 }
 
 function duration(run: BotRun): string {
@@ -77,7 +95,7 @@ export default function BotsPanel() {
     let alive = true;
     const load = () => refreshBotState().then(() => { if (alive) setStateError(''); }).catch((e) => { if (alive) setStateError(String(e)); });
     void load();
-    const timer = window.setInterval(load, anyRunning ? 3_000 : 15_000);
+    const timer = window.setInterval(load, anyRunning ? 2_000 : 15_000);
     return () => { alive = false; window.clearInterval(timer); };
   }, [canHost, boxId, anyRunning]);
 
@@ -94,22 +112,21 @@ export default function BotsPanel() {
 
   if (!canHost) return <NoHost />;
   const bot = mine.find((b) => b.id === selected) ?? null;
+  if (bot) return <section className="bots-panel" aria-label={`Bot ${bot.name}`}><BotView key={bot.id} bot={bot} runs={runsFor(state, bot)} homeRoot={state[bot.boxId]?.homeRoot ?? ''} /></section>;
   return (
     <section className="bots-panel" aria-label="Bots">
       <header className="bots-header">
         <span className="bots-header-icon"><BotIcon size={22} /></span>
         <div>
           <h2>Bots</h2>
-          <p>Agents with a standing job, outside every project. {remote ? 'Bots on your box keep working while this laptop is closed.' : 'They run on this PC while Spacron is open, or on a box once you connect one.'}</p>
+          <p>Agents with a standing job, outside every project. Chat with them, or let them work on a schedule. {remote ? 'Bots on your box keep working while this laptop is closed.' : 'They run on this PC while Spacron is open, or on a box once you connect one.'}</p>
         </div>
         {selected !== NEW_BOT && <button type="button" className="bots-primary" onClick={() => selectedBotId.set(NEW_BOT)}>+ New bot</button>}
         <CloseButton />
       </header>
       {stateError && <p role="alert" className="bots-error">Could not load runs: {stateError}</p>}
       <div className="bots-body">
-        {selected === NEW_BOT ? <BotEditor onDone={(id) => selectedBotId.set(id)} />
-          : bot ? <BotDetail key={bot.id} bot={bot} runs={runsFor(state, bot)} homeRoot={state[bot.boxId]?.homeRoot ?? ''} />
-          : <BotList bots={mine} />}
+        {selected === NEW_BOT ? <BotEditor onDone={(id) => selectedBotId.set(id)} /> : <BotList bots={mine} />}
       </div>
     </section>
   );
@@ -127,7 +144,7 @@ function NoHost() {
     <section className="bots-panel" aria-label="Bots">
       <div className="bots-panel-close"><CloseButton /></div>
       <div className="bots-empty">
-        <div className="bots-empty-icon"><BotIcon size={30} /></div>
+        <BotAvatar avatar="robot" size={72} className="bots-empty-avatar" />
         <h3>Bots need somewhere to run</h3>
         <p>A bot is an agent with a standing job, like a daily digest or a weekly research report. It runs on this PC in the Spacron desktop app, or on your remote box so it keeps working while the laptop is closed.</p>
         {connections.length > 0 && <div className="bots-connect-list">
@@ -145,9 +162,9 @@ function BotList({ bots: list }: { bots: Bot[] }) {
   const hostName = useHostName();
   if (!list.length) return (
     <div className="bots-empty">
-      <div className="bots-empty-icon"><BotIcon size={30} /></div>
+      <BotAvatar avatar="robot" size={72} className="bots-empty-avatar" />
       <h3>Put an agent on the night shift</h3>
-      <p>Give a bot a job and a schedule. It gets its own folder that it keeps between runs, so it can remember what it did last time. It runs with the agent CLIs you already have installed.</p>
+      <p>Give a bot a job, chat with it, or put it on a schedule. It keeps its own folder between runs, so it remembers what it did. It runs with the agent CLIs you already have installed.</p>
       <button type="button" className="bots-primary" onClick={() => selectedBotId.set(NEW_BOT)}>+ Create your first bot</button>
       <TemplateGrid />
     </div>
@@ -163,98 +180,190 @@ function BotList({ bots: list }: { bots: Bot[] }) {
           return (
             <button key={b.id} type="button" className="bots-card" onClick={() => selectedBotId.set(b.id)}>
               <div className="bots-card-top">
-                <AgentBrandMark command={b.agent} name={b.agent} className="bots-agent-mark" />
-                <strong>{b.name}</strong>
+                <BotAvatar avatar={b.avatar} size={40} />
+                <div className="bots-card-title">
+                  <strong>{b.name}</strong>
+                  <small>{botScheduleLabel(b)}{next ? ` · next ${when(next)}` : ''}</small>
+                </div>
                 <StatusChip bot={b} run={run} />
               </div>
               <p>{b.instructions}</p>
-              <small>{botScheduleLabel(b)}{next ? ` · next ${when(next)}` : ''}{run ? ` · last ${STATUS_LABEL[run.status].toLowerCase()} ${when(run.startedAt)}` : ''}</small>
+              <small>{[b.canCreateBots && 'Creates bots', b.browser && 'Browser', ...botConnectorNames(b)].filter(Boolean).join(' · ') || ' '}</small>
             </button>
           );
         })}
       </div>
     </section>
-  ))}</>;
+  ))}
+  <TemplateGrid title="Add another from a template" /></>;
 }
 
 function StatusChip({ bot, run }: { bot: Bot; run?: BotRun }) {
   const settings = useStore(botSettings);
-  if (run?.status === 'running') return <span className="bots-chip running">Running</span>;
+  if (run?.status === 'running') return <span className="bots-chip running">Working</span>;
   if (bot.schedule === 'manual') return <span className="bots-chip">On demand</span>;
   const on = bot.enabled && settings.enabled;
   return <span className={`bots-chip ${on ? 'scheduled' : ''}`}>{on ? 'Scheduled' : 'Paused'}</span>;
 }
 
-/** A template picked from the empty state, applied when the editor opens. */
-let pendingTemplate: (typeof BOT_TEMPLATES)[number] | null = null;
+/** A template picked from the list, applied when the editor opens. */
+let pendingTemplate: BotTemplate | null = null;
 
-function TemplateGrid({ onPick }: { onPick?: (t: (typeof BOT_TEMPLATES)[number]) => void }) {
+function TemplateGrid({ onPick, title = 'Or start from a template' }: { onPick?: (t: BotTemplate) => void; title?: string }) {
   return (
     <div className="bots-templates">
-      <span>Or start from a template</span>
+      <span>{title}</span>
       <div className="bots-template-grid">
         {BOT_TEMPLATES.map((t) => <button key={t.id} type="button" className="bots-template" onClick={() => {
           if (onPick) onPick(t);
           else { pendingTemplate = t; selectedBotId.set(NEW_BOT); }
-        }}><strong>{t.name}</strong><small>{t.blurb}</small></button>)}
+        }}>
+          <BotAvatar avatar={t.avatar} size={36} />
+          <span><strong>{t.name}</strong><small>{t.blurb}</small></span>
+        </button>)}
       </div>
     </div>
   );
+}
+
+// ── editor ──────────────────────────────────────────────────────────────────
+
+function AvatarPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  async function upload(file: File | undefined) {
+    if (!file) return;
+    try { onChange(await resizeAvatar(file)); setOpen(false); } catch (e) { showToast(e instanceof Error ? e.message : String(e), 'error'); }
+  }
+  return (
+    <div className="bots-avatar-picker">
+      <button type="button" className="bots-avatar-current" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Change the bot's picture" title="Change picture">
+        <BotAvatar avatar={value} size={64} />
+        <span>Change</span>
+      </button>
+      {open && <div className="bots-avatar-grid" role="listbox" aria-label="Bot pictures">
+        {BOT_AVATARS.map((a) => <button key={a.id} type="button" role="option" aria-selected={value === a.id} title={a.label} onClick={() => { onChange(a.id); setOpen(false); }}>
+          <BotAvatar avatar={a.id} size={44} />
+        </button>)}
+        <button type="button" className="bots-avatar-upload" onClick={() => fileRef.current?.click()} title="Upload your own picture">
+          <span>＋</span><small>Upload</small>
+        </button>
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ''; }} />
+      </div>}
+    </div>
+  );
+}
+
+function ConnectorPicker({ host, value, onChange }: { host: string; value: string[]; onChange: (v: string[]) => void }) {
+  useStore(mcpServers);
+  useStore(sharedSignIns);
+  useStore(botSettings);
+  const choices = connectorChoices(host);
+  if (!choices.length) return <p className="bots-helper">No connectors yet. Add Gmail, Google Drive, Notion and more in Settings &gt; MCP &amp; plugins.</p>;
+  return (
+    <div className="bots-connectors">
+      {choices.map((c) => {
+        const on = value.includes(c.key);
+        const icon = catalogIconFor(c.catalogId ?? c.name);
+        return <label key={c.key} className={`bots-connector${on ? ' on' : ''}${c.usable ? '' : ' disabled'}`} title={c.reason}>
+          <input type="checkbox" checked={on && c.usable} disabled={!c.usable} onChange={(e) => onChange(e.target.checked ? [...value, c.key] : value.filter((k) => k !== c.key))} />
+          {icon ? <img src={icon} alt="" width={16} height={16} /> : <span className="bots-connector-letter">{c.name.slice(0, 1).toUpperCase()}</span>}
+          <span>{c.name}</span>
+        </label>;
+      })}
+    </div>
+  );
+}
+
+/** Connector keys a template wants that are set up on `host`. */
+function templateKeys(t: BotTemplate | null, host: string): string[] {
+  if (!t?.connectors?.length) return [];
+  return connectorChoices(host).filter((c) => c.usable && c.catalogId && t.connectors!.includes(c.catalogId)).map((c) => c.key);
 }
 
 function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => void }) {
   useStore(customAgents);
   useStore(removedPresetAgents);
   useStore(usageState);
-  useStore(mcpServers);
   const settings = useStore(botSettings);
   const box = useStore(activeConnection);
   const remote = useStore(remoteTarget);
   const agents = botAgents();
-  const start = bot ?? pendingTemplate;
-  pendingTemplate = null;
+  const [template, setTemplate] = useState<BotTemplate | null>(() => { const t = pendingTemplate; pendingTemplate = null; return t; });
+  const start = bot ?? template;
   const hosts = [...(localAvailable() ? [{ value: LOCAL_HOST, label: 'This PC' }] : []), ...(remote && box ? [{ value: box.id, label: box.name }] : [])];
-  const [host, setHost] = useState(bot?.boxId ?? (remote && box ? box.id : hosts[0]?.value ?? LOCAL_HOST));
+  const [host, setHost] = useState(bot?.boxId ?? hosts[0]?.value ?? LOCAL_HOST);
   const [name, setName] = useState(start?.name ?? '');
   const [instructions, setInstructions] = useState(start?.instructions ?? '');
+  const [avatar, setAvatar] = useState(start?.avatar ?? DEFAULT_AVATAR);
   const [agent, setAgent] = useState(bot?.agent ?? agents[0]?.command ?? '');
   const [model, setModel] = useState(bot?.model ?? '');
   const [schedule, setSchedule] = useState<BotSchedule>(start?.schedule ?? 'manual');
   const [time, setTime] = useState(start?.time ?? '09:00');
   const [day, setDay] = useState(start?.day ?? 1);
   const [access, setAccess] = useState<BotAccess>(start?.access ?? settings.defaultAccess);
-  const [connectors, setConnectors] = useState(bot?.connectors ?? true);
+  const [keys, setKeys] = useState<string[]>(() => bot ? (bot.mcpKeys ?? (bot.connectors ? connectorChoices(bot.boxId).filter((c) => c.usable).map((c) => c.key) : [])) : templateKeys(template, host));
+  const [browser, setBrowser] = useState(bot?.browser ?? template?.browser ?? false);
+  const [builder, setBuilder] = useState(bot?.canCreateBots ?? template?.canCreateBots ?? false);
   const [error, setError] = useState('');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const program = agentProgram(agent);
-  const tools = connectorNames(host);
   let next = '';
   try { next = when(nextBotRun({ schedule, time, day, enabled: true })); } catch { /* incomplete time input */ }
-  function applyTemplate(t: (typeof BOT_TEMPLATES)[number]) { setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day); setAccess(t.access); }
+  const missing = template?.connectors?.filter((id) => !connectorChoices(host).some((c) => c.usable && c.catalogId === id)) ?? [];
+  function applyTemplate(t: BotTemplate) {
+    setTemplate(t); setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day);
+    setAccess(t.access); setAvatar(t.avatar); setBrowser(t.browser ?? false); setBuilder(t.canCreateBots ?? false); setKeys(templateKeys(t, host));
+  }
   function submit() {
     setError('');
     try {
-      const saved = saveBot({ id: bot?.id, boxId: host, name, instructions, agent, model: model.trim() || null, schedule, time, day, access, connectors, enabled: bot?.enabled ?? true });
-      showToast(bot ? `Saved "${saved.name}".` : `"${saved.name}" is ready to work.`, 'success');
+      const saved = saveBot({
+        id: bot?.id, boxId: host, name, instructions, agent, model: model.trim() || null, schedule, time, day, access,
+        connectors: keys.length > 0, mcpKeys: keys, browser, canCreateBots: builder, avatar, enabled: bot?.enabled ?? true,
+        ...(bot?.createdBy ? { createdBy: bot.createdBy } : {}),
+      });
+      showToast(bot ? `Saved "${saved.name}".` : `"${saved.name}" is ready. Say hi to it.`, 'success');
       onDone(saved.id);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
   return (
     <form className="bots-editor" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <div className="bots-editor-heading"><h3>{bot ? `Edit ${bot.name}` : 'New bot'}</h3></div>
-      {!bot && <TemplateGrid onPick={applyTemplate} />}
+      {!bot && <TemplateGrid onPick={applyTemplate} title="Start from a template" />}
       {error && <p role="alert" className="bots-error">{error}</p>}
       <div className="bots-editor-grid">
         <div>
-          <label htmlFor="bot-name">Name</label>
-          <input id="bot-name" required maxLength={80} placeholder="e.g. Morning tech digest" value={name} onChange={(e) => setName(e.target.value)} />
+          <div className="bots-identity">
+            <AvatarPicker value={avatar} onChange={setAvatar} />
+            <div>
+              <label htmlFor="bot-name">Name</label>
+              <input id="bot-name" required maxLength={80} placeholder="e.g. Morning tech digest" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+          </div>
           <label htmlFor="bot-job">Job</label>
-          <textarea id="bot-job" required rows={9} maxLength={20_000} placeholder="What should this bot do every time it runs? Say what result you want and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
-          <p className="bots-helper">Each run starts a fresh agent in the bot's own folder. Files it saves there are still there next run.</p>
+          <textarea id="bot-job" required rows={8} maxLength={20_000} placeholder="What is this bot for? Say what result you want, and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+          <p className="bots-helper">Every run, and every message you send it, starts a fresh agent in the bot's own folder. Files it saves there are still there next time, and it sees your recent chat.</p>
+          <span className="bots-field-label">Connectors</span>
+          <ConnectorPicker host={host} value={keys} onChange={setKeys} />
+          {missing.length > 0 && <p className="bots-helper bots-warn">This template works best with {missing.join(', ')}. Add it in Settings &gt; MCP &amp; plugins{host === LOCAL_HOST ? '' : ', then share the sign-in with this box in Settings > Bots'}.</p>}
+          {keys.length > 0 && program !== 'claude' && <p className="bots-helper">Connectors reach Claude Code bots for now; other agents use their own MCP config.</p>}
+          <label className="bots-check">
+            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+            <span>Use a web browser</span>
+          </label>
+          <p className="bots-helper">{host === LOCAL_HOST
+            ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
+            : 'Opens and uses real pages in a hidden browser on the box. The box needs Node and a Chromium: run "npx playwright install --with-deps chromium" there once.'}</p>
+          <label className="bots-check">
+            <input type="checkbox" checked={builder} onChange={(e) => setBuilder(e.target.checked)} />
+            <span>Can create other bots</span>
+          </label>
+          <p className="bots-helper">Bots it creates get no more access than it has, can't create bots themselves, and start with their schedule off until you turn it on.</p>
         </div>
         <aside className="bots-editor-side">
           <span className="bots-field-label">Runs on</span>
-          <Dropdown ariaLabel="Where the bot runs" value={host} onChange={setHost} disabled={Boolean(bot)} options={hosts.length ? hosts : [{ value: host, label: host === LOCAL_HOST ? 'This PC' : 'Box (not connected)' }]} />
+          <Dropdown ariaLabel="Where the bot runs" value={host} onChange={(v) => { setHost(v); setKeys(templateKeys(template, v)); }} disabled={Boolean(bot)} options={hosts.length ? hosts : [{ value: host, label: host === LOCAL_HOST ? 'This PC' : 'Box (not connected)' }]} />
           <p className="bots-helper">{host === LOCAL_HOST ? 'Runs while Spacron is open on this PC.' : 'Runs on the box, even while this laptop is closed.'}</p>
           <span className="bots-field-label">Run with</span>
           <Dropdown ariaLabel="Bot agent" value={agent} onChange={setAgent} placeholder="Choose an agent"
@@ -267,13 +376,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           <span className="bots-field-label">It may</span>
           <Dropdown ariaLabel="What the bot may do" value={access} onChange={(v) => setAccess(v as BotAccess)} options={ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))} />
           <p className={`bots-helper${access === 'full' ? ' bots-warn' : ''}`}>{ACCESS_OPTIONS.find((o) => o.value === access)?.detail}{program === 'opencode' ? ' opencode uses the permissions from its own config.' : ''}</p>
-          <label className="bots-check">
-            <input type="checkbox" checked={connectors} onChange={(e) => setConnectors(e.target.checked)} />
-            <span>Use my connectors</span>
-          </label>
-          <p className="bots-helper">{!connectors ? 'No MCP servers.' : tools.length ? tools.join(', ') : 'No connectors set up yet. Add them in Settings > MCP & plugins.'}
-            {connectors && tools.length > 0 && program !== 'claude' ? ' Connectors reach Claude Code bots for now; other agents use their own MCP config.' : ''}</p>
-          <span className="bots-field-label">Runs</span>
+          <span className="bots-field-label">Also runs on its own</span>
           <Dropdown ariaLabel="Bot schedule" value={schedule} onChange={(v) => setSchedule(v as BotSchedule)} options={SCHEDULES} />
           {schedule !== 'manual' && <div className="bots-time-row">
             <div>
@@ -288,7 +391,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           {schedule !== 'manual' && <p className="bots-helper">Next run <strong>{next || 'choose a time'}</strong> ({timezone}){settings.enabled ? '' : '. Schedules are paused in Settings > Bots.'}</p>}
         </aside>
       </div>
-      <p className="bots-note">Bots run unattended and can't stop to ask you anything, so what they may do is decided here. A run stops after {settings.maxRunMinutes >= 60 ? `${settings.maxRunMinutes / 60} hour${settings.maxRunMinutes === 60 ? '' : 's'}` : `${settings.maxRunMinutes} minutes`} (Settings &gt; Bots), and you can stop it any time.</p>
+      <p className="bots-note">Bots work unattended and can't stop to ask permission, so what they may do is decided here. A run stops after {settings.maxRunMinutes >= 60 ? `${settings.maxRunMinutes / 60} hour${settings.maxRunMinutes === 60 ? '' : 's'}` : `${settings.maxRunMinutes} minutes`} (Settings &gt; Bots), and you can stop it any time.</p>
       <footer className="bots-editor-footer">
         <button type="button" onClick={() => onDone(bot?.id ?? null)}>Cancel</button>
         <button type="submit" className="bots-primary" disabled={!agents.some((a) => a.command === agent)}>{bot ? 'Save changes' : 'Create bot'}</button>
@@ -297,111 +400,196 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   );
 }
 
-function BotDetail({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: string }) {
+// ── a bot: chat and details ─────────────────────────────────────────────────
+
+/** Bot replies are Markdown; they can quote web pages, so they are sanitized. */
+function Reply({ text }: { text: string }) {
+  const html = useMemo(() => {
+    try { return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }) as string); } catch { return DOMPurify.sanitize(text); }
+  }, [text]);
+  return <div className="bots-reply-md" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: string }) {
   const hostName = useHostName();
+  const [tab, setTab] = useState<'chat' | 'about'>('chat');
   const [editing, setEditing] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [busy, setBusy] = useState<'start' | 'stop' | null>(null);
-  const [error, setError] = useState('');
-  const [openLog, setOpenLog] = useState<{ id: string; text: string } | null>(null);
   const active = runs.find((r) => r.status === 'running');
   const next = nextBotRun(bot);
-  // Keep an open log fresh while that run is still going.
-  const openRunning = openLog ? runs.find((r) => r.id === openLog.id)?.status === 'running' : false;
-  useEffect(() => {
-    if (!openLog || !openRunning) return;
-    const timer = window.setInterval(() => { void fetchBotLog(bot, openLog.id).then((log) => setOpenLog({ id: openLog.id, text: format(log) })).catch(() => {}); }, 3_000);
-    return () => window.clearInterval(timer);
-  }, [openLog?.id, openRunning]);
-
-  if (editing) return <BotEditor bot={bot} onDone={() => setEditing(false)} />;
-
-  async function runNow() {
-    setBusy('start'); setError('');
-    try {
-      const runId = await runBotNow(bot.id);
-      await refreshBotState();
-      setOpenLog({ id: runId, text: '(Starting…)' });
-      // Show the first output as soon as there is some, not on the next poll.
-      window.setTimeout(() => { void fetchBotLog(bot, runId).then((log) => setOpenLog((cur) => (cur?.id === runId ? { id: runId, text: format(log) } : cur))).catch(() => {}); }, 800);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
-  }
-  async function stop(run: BotRun) {
-    setBusy('stop'); setError('');
-    try {
-      await stopBotRun(bot, run.id);
-      // The runner records the stop as soon as the agent exits.
-      for (let i = 0; i < 10; i++) {
-        const state = await refreshBotState();
-        if (runsFor(state, bot).find((r) => r.id === run.id)?.status !== 'running') break;
-        await new Promise((r) => setTimeout(r, 600));
-      }
-      if (openLog?.id === run.id) setOpenLog({ id: run.id, text: format(await fetchBotLog(bot, run.id)) });
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
-  }
-  async function toggleLog(run: BotRun) {
-    if (openLog?.id === run.id) { setOpenLog(null); return; }
-    try { setOpenLog({ id: run.id, text: format(await fetchBotLog(bot, run.id)) }); } catch (e) { setOpenLog({ id: run.id, text: `Could not read the output: ${String(e)}` }); }
-  }
-  const access = ACCESS_OPTIONS.find((o) => o.value === bot.access);
+  if (editing) return <div className="bots-body"><BotEditor bot={bot} onDone={() => setEditing(false)} /></div>;
   return (
-    <div className="bots-detail">
-      <button type="button" className="bots-back" onClick={() => selectedBotId.set(null)}>← All bots</button>
-      <div className="bots-detail-head">
-        <span className="bots-detail-icon"><AgentBrandMark command={bot.agent} name={bot.agent} className="bots-agent-mark large" /></span>
-        <div>
+    <div className="bots-view">
+      <header className="bots-view-header">
+        <button type="button" className="bots-back" onClick={() => selectedBotId.set(null)} aria-label="All bots">←</button>
+        <BotAvatar avatar={bot.avatar} size={40} />
+        <div className="bots-view-title">
           <h3>{bot.name} <StatusChip bot={bot} run={runs[0]} /></h3>
-          <p>{hostName(bot.boxId)} · {botScheduleLabel(bot)}{next ? ` · next ${when(next)}` : ''} · {bot.agent}{bot.model ? ` (${bot.model})` : ''}</p>
+          <p>{hostName(bot.boxId)} · {botScheduleLabel(bot)}{next ? ` · next ${when(next)}` : ''}{bot.createdBy ? ` · made by ${bot.createdBy}` : ''}</p>
         </div>
-      </div>
-      {error && <p role="alert" className="bots-error">{error}</p>}
-      <div className="bots-actions">
-        {active
-          ? <button type="button" className="bots-stop" disabled={busy !== null} onClick={() => void stop(active)}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
-              {busy === 'stop' ? 'Stopping…' : 'Stop'}
-            </button>
-          : <button type="button" className="bots-primary" disabled={busy !== null} onClick={() => void runNow()}>{busy === 'start' ? 'Starting…' : 'Run now'}</button>}
-        {bot.schedule !== 'manual' && <button type="button" onClick={() => toggleBot(bot.id)}>{bot.enabled ? 'Pause schedule' : 'Resume schedule'}</button>}
-        <button type="button" onClick={() => setEditing(true)}>Edit</button>
-        {confirmDelete ? <>
-          <span className="bots-confirm">Delete this bot? Its folder is kept.</span>
-          <button type="button" className="bots-danger" disabled={Boolean(active)} onClick={() => removeBot(bot.id)}>Delete</button>
-          <button type="button" onClick={() => setConfirmDelete(false)}>Keep</button>
-        </> : <button type="button" className="bots-subtle" disabled={Boolean(active)} title={active ? 'Stop the run first' : undefined} onClick={() => setConfirmDelete(true)}>Delete</button>}
-      </div>
-      <div className="bots-section">
-        <h4>Job</h4>
-        <p className="bots-job">{bot.instructions}</p>
-        <div className="bots-facts">
-          <span><strong>May</strong> {access?.label.toLowerCase()}</span>
-          <span><strong>Connectors</strong> {bot.connectors ? (connectorNames(bot.boxId).join(', ') || 'none set up') : 'off'}</span>
+        <div className="bots-tabs" role="tablist" aria-label="Bot views">
+          <button type="button" role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Chat</button>
+          <button type="button" role="tab" aria-selected={tab === 'about'} onClick={() => setTab('about')}>About</button>
         </div>
-        {homeRoot && <p className="bots-helper">Home folder: <code>{`${homeRoot}/${bot.id}`}</code></p>}
-      </div>
-      <div className="bots-section">
-        <h4>Runs</h4>
-        {!runs.length ? <p className="bots-helper">No runs yet. Hit Run now to see it work.</p> : runs.map((run) => (
-          <article key={run.id} className="bots-run">
-            <span className={`bots-dot ${run.status}`} aria-hidden="true" />
-            <div>
-              <strong>{STATUS_LABEL[run.status]}</strong>
-              <p>{when(run.startedAt)} · {run.trigger === 'schedule' ? 'scheduled' : 'manual'}{duration(run) ? ` · ${duration(run)}` : ''}</p>
-              {run.detail && <small>{run.detail}</small>}
-              {openLog?.id === run.id && <pre className="bots-log">{openLog.text}</pre>}
-            </div>
-            <div className="bots-run-actions">
-              {run.status === 'running' && <button type="button" className="bots-stop small" disabled={busy !== null} onClick={() => void stop(run)} aria-label="Stop this run">Stop</button>}
-              {run.log && <button type="button" onClick={() => void toggleLog(run)}>{openLog?.id === run.id ? 'Hide output' : 'View output'}</button>}
-            </div>
-          </article>
-        ))}
-      </div>
+        <CloseButton />
+      </header>
+      {tab === 'chat'
+        ? <BotChat bot={bot} runs={runs} active={active} />
+        : <BotAbout bot={bot} runs={runs} homeRoot={homeRoot} active={active} onEdit={() => setEditing(true)} />}
     </div>
   );
 }
 
-function format(log: { text: string; truncated: boolean }): string {
-  if (!log.text) return '(Nothing printed yet.)';
-  return log.truncated ? `… earlier output hidden …\n${log.text}` : log.text;
+function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: BotRun }) {
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState<'send' | 'stop' | null>(null);
+  const [error, setError] = useState('');
+  const [replies, setReplies] = useState<Record<string, string>>({});
+  const scroller = useRef<HTMLDivElement>(null);
+  const shown = useMemo(() => runs.slice(0, 30).reverse(), [runs]);
+  const finishedKey = shown.map((r) => `${r.id}:${r.status}`).join('|');
+
+  // Load replies for finished runs once, and keep the running one fresh.
+  useEffect(() => {
+    let alive = true;
+    for (const run of shown) {
+      if (!run.log || (replies[run.id] !== undefined && run.status !== 'running')) continue;
+      void fetchBotLog(bot, run.id).then((log) => { if (alive) setReplies((r) => ({ ...r, [run.id]: log.text })); }).catch(() => {});
+    }
+    return () => { alive = false; };
+  }, [finishedKey]);
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => {
+      void fetchBotLog(bot, active.id).then((log) => setReplies((r) => ({ ...r, [active.id]: log.text }))).catch(() => {});
+    }, 1_500);
+    return () => window.clearInterval(timer);
+  }, [active?.id]);
+  useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [shown.length, active ? replies[active.id]?.length : 0]);
+
+  async function send() {
+    const text = draft.trim();
+    if (!text) return;
+    setBusy('send'); setError('');
+    try {
+      await sendBotMessage(bot.id, text);
+      setDraft('');
+      await refreshBotState();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
+  }
+  async function stop() {
+    if (!active) return;
+    setBusy('stop'); setError('');
+    try { await stopBotRun(bot, active.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
+  }
+  return (
+    <div className="bots-chat">
+      <div className="bots-chat-log" ref={scroller}>
+        {!shown.length && <div className="bots-chat-empty">
+          <BotAvatar avatar={bot.avatar} size={72} />
+          <h3>{bot.name}</h3>
+          <p>{bot.instructions.length > 220 ? `${bot.instructions.slice(0, 220)}…` : bot.instructions}</p>
+          <div className="bots-chat-suggestions">
+            {(bot.canCreateBots
+              ? ['Make me a bot that sends me a daily AI news digest', 'I want a bot that checks my inbox every morning', 'Build a bot that finds YouTube video ideas weekly']
+              : ['Do your job now', 'What can you do for me?', 'What did you do last time?']
+            ).map((s) => <button key={s} type="button" onClick={() => setDraft(s)}>{s}</button>)}
+          </div>
+        </div>}
+        {shown.map((run) => {
+          const reply = replies[run.id];
+          return <div key={run.id} className="bots-exchange">
+            {run.message
+              ? <div className="bots-msg user"><div className="bots-bubble">{run.message}</div><time>{clock(run.startedAt)}</time></div>
+              : <div className="bots-event">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
+            <div className="bots-msg bot">
+              <BotAvatar avatar={bot.avatar} size={28} />
+              <div className="bots-bubble">
+                {run.status === 'running' && !reply?.trim() && <span className="bots-typing" aria-label="Working"><i /><i /><i /></span>}
+                {reply?.trim() ? <Reply text={reply} /> : run.status !== 'running' && <em className="bots-muted">{run.status === 'missed' ? 'Missed its scheduled time.' : '(No reply.)'}</em>}
+                {run.status !== 'running' && run.status !== 'completed' && <div className={`bots-run-note ${run.status}`}>{STATUS_LABEL[run.status]}{run.detail ? `: ${run.detail}` : ''}</div>}
+              </div>
+            </div>
+          </div>;
+        })}
+      </div>
+      {error && <p role="alert" className="bots-error">{error}</p>}
+      <form className="bots-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+        <textarea rows={1} placeholder={active ? `${bot.name} is working…` : `Message ${bot.name}`} value={draft} disabled={Boolean(active)}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
+        {active
+          ? <button type="button" className="bots-stop" disabled={busy !== null} onClick={() => void stop()} aria-label="Stop">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>{busy === 'stop' ? 'Stopping…' : 'Stop'}
+            </button>
+          : <button type="submit" className="bots-primary" disabled={busy !== null || !draft.trim()}>{busy === 'send' ? 'Sending…' : 'Send'}</button>}
+      </form>
+    </div>
+  );
+}
+
+function BotAbout({ bot, runs, homeRoot, active, onEdit }: { bot: Bot; runs: BotRun[]; homeRoot: string; active?: BotRun; onEdit: () => void }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [openLog, setOpenLog] = useState<{ id: string; text: string } | null>(null);
+  const access = ACCESS_OPTIONS.find((o) => o.value === bot.access);
+  const connectors = botConnectorNames(bot);
+  async function runNow() {
+    setBusy(true); setError('');
+    try { await runBotNow(bot.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  }
+  async function toggleLog(run: BotRun) {
+    if (openLog?.id === run.id) { setOpenLog(null); return; }
+    try { const log = await fetchBotLog(bot, run.id); setOpenLog({ id: run.id, text: log.text || '(Nothing printed.)' }); } catch (e) { setOpenLog({ id: run.id, text: `Could not read the output: ${String(e)}` }); }
+  }
+  return (
+    <div className="bots-body">
+      <div className="bots-detail">
+        {error && <p role="alert" className="bots-error">{error}</p>}
+        <div className="bots-actions">
+          {active
+            ? <button type="button" className="bots-stop" onClick={() => void stopBotRun(bot, active.id).then(() => refreshBotState())}>Stop</button>
+            : <button type="button" className="bots-primary" disabled={busy} onClick={() => void runNow()}>{busy ? 'Starting…' : 'Run now'}</button>}
+          {bot.schedule !== 'manual' && <button type="button" onClick={() => toggleBot(bot.id)}>{bot.enabled ? 'Pause schedule' : 'Turn on schedule'}</button>}
+          <button type="button" onClick={onEdit}>Edit</button>
+          {confirmDelete ? <>
+            <span className="bots-confirm">Delete this bot? Its folder is kept.</span>
+            <button type="button" className="bots-danger" disabled={Boolean(active)} onClick={() => removeBot(bot.id)}>Delete</button>
+            <button type="button" onClick={() => setConfirmDelete(false)}>Keep</button>
+          </> : <button type="button" className="bots-subtle" disabled={Boolean(active)} title={active ? 'Stop the run first' : undefined} onClick={() => setConfirmDelete(true)}>Delete</button>}
+        </div>
+        {bot.createdBy && bot.schedule !== 'manual' && !bot.enabled && <p className="bots-note">{bot.createdBy} created this bot. Its schedule is off until you turn it on.</p>}
+        <div className="bots-section">
+          <h4>Job</h4>
+          <p className="bots-job">{bot.instructions}</p>
+          <div className="bots-facts">
+            <span><strong>Agent</strong> {bot.agent}{bot.model ? ` (${bot.model})` : ''}</span>
+            <span><strong>May</strong> {access?.label.toLowerCase()}</span>
+            <span><strong>Connectors</strong> {connectors.length ? connectors.join(', ') : 'none'}</span>
+            <span><strong>Browser</strong> {bot.browser ? 'yes' : 'no'}</span>
+            {bot.canCreateBots && <span><strong>Creates bots</strong> yes</span>}
+          </div>
+          {homeRoot && <p className="bots-helper">Home folder: <code>{`${homeRoot}/${bot.id}`}</code></p>}
+        </div>
+        <div className="bots-section">
+          <h4>All runs</h4>
+          {!runs.length ? <p className="bots-helper">No runs yet.</p> : runs.map((run) => (
+            <article key={run.id} className="bots-run">
+              <span className={`bots-dot ${run.status}`} aria-hidden="true" />
+              <div>
+                <strong>{STATUS_LABEL[run.status]}</strong>
+                <p>{when(run.startedAt)} · {run.trigger === 'schedule' ? 'scheduled' : run.trigger === 'chat' ? 'chat' : 'manual'}{duration(run) ? ` · ${duration(run)}` : ''}</p>
+                {run.message && <small>“{run.message.length > 120 ? `${run.message.slice(0, 120)}…` : run.message}”</small>}
+                {run.detail && <small>{run.detail}</small>}
+                {openLog?.id === run.id && <pre className="bots-log">{openLog.text}</pre>}
+              </div>
+              <div className="bots-run-actions">
+                {run.log && <button type="button" onClick={() => void toggleLog(run)}>{openLog?.id === run.id ? 'Hide output' : 'Raw output'}</button>}
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -10,6 +10,7 @@
  *   4. Provide the MCP server port for writing agent config files.
  */
 import { invoke } from '@tauri-apps/api/core';
+import { boxProxyUrl } from '$lib/services/box-signins';
 import { backendInvoke } from '$lib/services/backend';
 import { listen } from '@tauri-apps/api/event';
 import { get } from './storeCompat';
@@ -914,6 +915,29 @@ function wantsBrowserTools(): boolean {
  * the prune below then removes any we wrote earlier — which is wrong but
  * recoverable on the next real project open, whereas guessing a list is not.
  */
+/** The user's servers as saved, without the sign-in proxy rewrite. */
+function rawUserServers(): McpServer[] {
+  try {
+    const value = get(mcpServers);
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The browser (Playwright MCP) for a bot: headless, isolated. On this PC it
+ * uses the copy Spacron installs; on a box it runs through npx, which needs
+ * Node there (and a Chromium: `npx playwright install --with-deps chromium`).
+ */
+export async function botBrowserEntry(onThisPc: boolean): Promise<{ command: string; args: string[] }> {
+  if (onThisPc) {
+    const { command, args } = await playwrightArgv(null);
+    return { command, args: [...args, '--headless'] };
+  }
+  return { command: PLAYWRIGHT_COMMAND, args: ['-y', `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`, '--isolated', '--headless', '--browser', 'chromium'] };
+}
+
 function userServers(): McpServer[] {
   try {
     const value = get(mcpServers);
@@ -1131,6 +1155,14 @@ export async function mcpLaunchFlags(
     if (wantsBrowserTools()) servers[BROWSER_SERVER_KEY] = await playwrightStdioEntry(projectRoot);
     for (const { key, server } of enabledServers(userServers())) {
       servers[key] = standardEntry(server);
+    }
+    // On a box, a sign-in shared with it goes through the box's own proxy, so
+    // it keeps working after this laptop disconnects (see box-signins.ts).
+    if (get(remoteTarget)) {
+      for (const { key, server } of enabledServers(rawUserServers())) {
+        const boxUrl = server.oauth ? boxProxyUrl(key) : null;
+        if (boxUrl) servers[key] = { type: 'http', url: boxUrl };
+      }
     }
     const content = JSON.stringify({ mcpServers: servers }, null, 2);
     // On a remote the agent runs on the box, so its config has to be there too.

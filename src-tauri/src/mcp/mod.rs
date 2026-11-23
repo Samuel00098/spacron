@@ -1988,6 +1988,18 @@ async fn proxy_handler(
     if let Err(rejection) = authorize(&state, &headers, &query) {
         return rejection;
     }
+    proxy_signed_in(&key, &method, &headers, &body).await
+}
+
+/// Forward one MCP request to the server `key` is signed in to, with a fresh
+/// access token. Shared by the desktop's proxy and a box's (`remote/mod.rs`),
+/// which reads the grants the desktop shared with it.
+pub(crate) async fn proxy_signed_in(
+    key: &str,
+    method: &axum::http::Method,
+    headers: &HeaderMap,
+    body: &axum::body::Bytes,
+) -> Response {
     // 403, not 401: a 401 would send the agent's own OAuth client looking for
     // sign-in metadata on 127.0.0.1, which is not where the sign-in lives.
     let not_signed_in = |detail: String| {
@@ -1997,18 +2009,18 @@ async fn proxy_handler(
         )
             .into_response()
     };
-    let grant = match crate::commands::mcp_oauth::fresh_grant(&key, false).await {
+    let grant = match crate::commands::mcp_oauth::fresh_grant(key, false).await {
         Ok(grant) => grant,
         Err(e) => return not_signed_in(e),
     };
-    let mut upstream = match proxy_send(&method, &headers, &body, &grant).await {
+    let mut upstream = match proxy_send(method, headers, body, &grant).await {
         Ok(res) => res,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("Could not reach {}: {e}", grant.resource)).into_response(),
     };
     // The token can be revoked or expire early; one forced refresh, then give up.
     if upstream.status() == reqwest::StatusCode::UNAUTHORIZED {
-        match crate::commands::mcp_oauth::fresh_grant(&key, true).await {
-            Ok(fresh) => match proxy_send(&method, &headers, &body, &fresh).await {
+        match crate::commands::mcp_oauth::fresh_grant(key, true).await {
+            Ok(fresh) => match proxy_send(method, headers, body, &fresh).await {
                 Ok(res) => upstream = res,
                 Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
             },

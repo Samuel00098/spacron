@@ -1,5 +1,12 @@
+import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
-import { botSettings, bots, closeBots, openBots, updateBotSettings, LOCAL_HOST, type BotAccess } from '$lib/services/bots/bots';
+import { activeConnection, activeRemoteId } from '$lib/stores/remoteWorkspace';
+import { mcpServers } from '$lib/stores/settings';
+import { showToast } from '$lib/stores/notification';
+import { enabledServers, type McpServer } from '$lib/services/mcp-servers';
+import { boxMcpInfo, refreshBoxMcpInfo, setSharedSignIns, sharedSignIns } from '$lib/services/box-signins';
+import { botSettings, bots, closeBots, openBots, syncBots, updateBotSettings, LOCAL_HOST, type BotAccess } from '$lib/services/bots/bots';
 import Dropdown from './Dropdown';
 import './AutomationSettingsSection.css';
 
@@ -61,6 +68,8 @@ export default function BotSettingsSection({ onOpenBots }: { onOpenBots?: () => 
       </Row>
     </Section>
 
+    <BoxSignInsSection />
+
     <Section title="Results">
       <Row title="Notify when a run finishes" detail="Shows a notice when a scheduled run finishes, fails or is missed, while Spacron is open.">
         <Toggle label="Notify when a bot run finishes" checked={settings.notify} onChange={(notify) => updateBotSettings({ notify })} />
@@ -70,4 +79,49 @@ export default function BotSettingsSection({ onOpenBots }: { onOpenBots?: () => 
       </Row>
     </Section>
   </div>;
+}
+
+/**
+ * Settings > Bots > Sign-ins on your box: share a connector's sign-in with the
+ * connected box, so bots and agents there can use it with the laptop closed.
+ */
+function BoxSignInsSection() {
+  const box = useStore(activeConnection);
+  const boxId = useStore(activeRemoteId);
+  const servers = useStore(mcpServers) as McpServer[];
+  const shared = useStore(sharedSignIns);
+  const info = useStore(boxMcpInfo);
+  const [signedIn, setSignedIn] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const signIns = enabledServers(servers ?? []).filter(({ server }) => server.oauth);
+  const keysKey = signIns.map((s) => s.key).join(',');
+  useEffect(() => {
+    if (!signIns.length) return;
+    void invoke<Record<string, boolean>>('mcp_oauth_status', { keys: signIns.map((s) => s.key) }).then(setSignedIn).catch(() => setSignedIn({}));
+  }, [keysKey]);
+  useEffect(() => { if (boxId) void refreshBoxMcpInfo(); }, [boxId]);
+  const mine = boxId ? shared[boxId] ?? [] : [];
+  async function toggle(key: string, on: boolean) {
+    setBusy(true);
+    try {
+      await setSharedSignIns(on ? [...mine, key] : mine.filter((k) => k !== key));
+      await syncBots();
+      showToast(on ? `Shared with ${box?.name}. Bots and agents there can use it with the laptop closed.` : `Removed from ${box?.name}.`, 'success');
+    } catch (e) { showToast(e instanceof Error ? e.message : String(e), 'error'); } finally { setBusy(false); }
+  }
+  return <Section title="Sign-ins on your box">
+    <Row title="How it works" detail="Connectors you signed in to through Spacron (Gmail, Google Drive, Notion and more) live on this computer. While you're connected, agents on your box borrow them. Share one with the box to keep it working there with the laptop closed. This copies that account's sign-in to your box; remove it here at any time.">
+      <span className="automation-settings-value">{box ? box.name : 'No box connected'}</span>
+    </Row>
+    {!box ? <Row title="Connect a box" detail="Connect to your box from the Remote workspace menu to choose what to share."><span /></Row>
+      : info === null ? <Row title="Update the box server" detail="This box's server is too old to keep sign-ins. Redeploy it from the remote setup wizard."><span /></Row>
+      : !signIns.length ? <Row title="No signed-in connectors" detail="Add one from Settings > MCP & plugins and sign in first."><span /></Row>
+      : signIns.map(({ key, server }) => {
+        const ready = signedIn[key] === true;
+        const on = mine.includes(key) && (info?.shared ?? []).includes(key);
+        return <Row key={key} title={server.name} detail={!ready ? 'Sign in on this computer first (Settings > MCP & plugins).' : on ? `Works on ${box.name} with the laptop closed.` : 'Only while this laptop is connected.'}>
+          <Toggle label={`Share ${server.name} with ${box.name}`} checked={on} onChange={(v) => { if (!busy && (ready || !v)) void toggle(key, v); }} />
+        </Row>;
+      })}
+  </Section>;
 }

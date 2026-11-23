@@ -319,7 +319,7 @@ fn start_run(workspace: PathBuf, automation: BoxAutomation) -> String {
 
 async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result<i32, String> {
     let argv = agent_command(&a.agent, &a.prompt, a.model.as_deref())?;
-    spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, ("SPACRON_AUTOMATION", &a.name), RUN_TIMEOUT, None).await
+    spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, &[("SPACRON_AUTOMATION", &a.name)], RUN_TIMEOUT, None).await
 }
 
 /// What `spawn_headless` reports when a run was stopped through its cancel signal.
@@ -336,7 +336,7 @@ pub(crate) async fn spawn_headless(
     argv: &[String],
     cwd: &Path,
     log_path: &Path,
-    env: (&str, &str),
+    env: &[(&str, &str)],
     limit: Duration,
     cancel: Option<std::sync::Arc<tokio::sync::Notify>>,
 ) -> Result<i32, String> {
@@ -366,7 +366,7 @@ pub(crate) async fn spawn_headless(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
-        .env(env.0, env.1)
+        .envs(env.iter().copied())
         .kill_on_drop(true);
     let mut child = command.spawn().map_err(|e| format!("Could not start {}: {e}", argv[0]))?;
     let cancelled = async {
