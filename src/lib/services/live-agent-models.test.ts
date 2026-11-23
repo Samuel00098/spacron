@@ -45,6 +45,20 @@ describe('live agent models', () => {
     expect(runEmbeddedCommand).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['agy', 'Fetching available models...\nmodel-id\tModel label', 'model-id'],
+    ['pi', 'provider  model  context  max-out  thinking  images\nopenrouter  ~vendor/model  1M  64K  yes  no', 'openrouter/~vendor/model'],
+    ['kilo', 'kilo/~vendor/model\n', 'kilo/~vendor/model'],
+  ])('reads the installed %s model catalogue when a box is active', async (command, output, modelId) => {
+    remoteState.value = { url: 'ws://box', token: 'test' };
+    invoke.mockResolvedValueOnce({ exitCode: 0, output });
+
+    const models = await freshLiveAgentProviderModels(command, false, 'local');
+    expect(models.map(({ id }) => id)).toEqual([modelId]);
+    expect(invoke).toHaveBeenCalledWith('agent_list_models', { command });
+    expect(runEmbeddedCommand).not.toHaveBeenCalled();
+  });
+
   it('keeps structured native model capabilities from Codex', async () => {
     invoke.mockResolvedValue({
       exitCode: 0,

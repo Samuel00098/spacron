@@ -48,8 +48,10 @@ function persist(key: string, models: AgentProviderModel[]): void {
   }
 }
 
-function catalogueKey(provider: string): string {
-  return `${get(remoteTarget) ? 'remote' : 'local'}:${provider}`;
+type ModelHost = 'local' | `box:${string}`;
+
+function catalogueKey(provider: string, host?: ModelHost): string {
+  return `${host ?? (get(remoteTarget) ? 'remote' : 'local')}:${provider}`;
 }
 
 /**
@@ -63,13 +65,13 @@ export function peekLiveAgentProviderModels(command: string): AgentProviderModel
 }
 
 /** Ask the selected CLI for its current account/configured model list. */
-export function loadLiveAgentProviderModels(command: string): Promise<AgentProviderModel[]> {
+export function loadLiveAgentProviderModels(command: string, host?: ModelHost): Promise<AgentProviderModel[]> {
   const provider = getAgentProviderCapabilities(command).provider;
-  const key = catalogueKey(provider);
+  const key = catalogueKey(provider, host);
   const cached = catalogueCache.get(key);
   if (cached && Date.now() - cached.at < CATALOGUE_TTL_MS) return cached.models;
 
-  const models = probeLiveAgentProviderModels(command);
+  const models = probeLiveAgentProviderModels(command, host ? host !== 'local' : Boolean(get(remoteTarget)));
   catalogueCache.set(key, { at: Date.now(), models });
   // An empty or failed probe is not a catalogue; let the next caller retry.
   void models.then(
@@ -93,10 +95,10 @@ export function loadLiveAgentProviderModels(command: string): Promise<AgentProvi
  * that stays open (the chat composer's) also needs the fresh probe, or it
  * keeps offering models the account no longer has.
  */
-export function freshLiveAgentProviderModels(command: string, force = false): Promise<AgentProviderModel[]> {
-  const key = catalogueKey(getAgentProviderCapabilities(command).provider);
+export function freshLiveAgentProviderModels(command: string, force = false, host?: ModelHost): Promise<AgentProviderModel[]> {
+  const key = catalogueKey(getAgentProviderCapabilities(command).provider, host);
   if (force) catalogueCache.delete(key);
-  void loadLiveAgentProviderModels(command);
+  void loadLiveAgentProviderModels(command, host);
   return catalogueCache.get(key)?.models ?? Promise.resolve([]);
 }
 
@@ -118,7 +120,7 @@ export function resetLiveAgentModelCacheForTests(): void {
   try { localStorage.removeItem(PERSISTED_KEY); } catch { /* no storage */ }
 }
 
-async function probeLiveAgentProviderModels(command: string): Promise<AgentProviderModel[]> {
+async function probeLiveAgentProviderModels(command: string, remote: boolean): Promise<AgentProviderModel[]> {
   const provider = getAgentProviderCapabilities(command).provider;
   const liveCommand = getLiveAgentModelCommand(command);
   const nativeCatalogueProvider = provider === 'codex' || provider === 'claude';
@@ -128,7 +130,7 @@ async function probeLiveAgentProviderModels(command: string): Promise<AgentProvi
   // background process — never through a terminal session, which would take
   // a pane and hold the user's shell. When the CLI cannot answer, the picker
   // offers only "CLI default".
-  if (!get(remoteTarget)) {
+  if (!remote) {
     try {
       const result = await invoke<{ output: string; exitCode: number | null; error?: string | null; models?: AgentProviderModel[] }>(
         'agent_list_models',

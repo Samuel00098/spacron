@@ -4,6 +4,8 @@ import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remo
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { usageState } from '$lib/stores/usage';
 import { getAgentRoster } from '$lib/stores/runs';
+import { freshLiveAgentProviderModels } from '$lib/services/live-agent-models';
+import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import { computerUse as computerUseSetting, mcpServers } from '$lib/stores/settings';
 import { computerUseSupported } from '$lib/stores/computerUse';
 import { showToast } from '$lib/stores/notification';
@@ -140,9 +142,9 @@ export default function BotsPanel() {
         <CloseButton />
       </header>
       {stateError && <p role="alert" className="bots-error">Could not load runs: {stateError}</p>}
-      <div className="bots-body">
-        {selected === NEW_BOT ? <BotEditor onDone={(id) => selectedBotId.set(id)} /> : <BotList bots={mine} />}
-      </div>
+      {selected === NEW_BOT
+        ? <BotEditor onDone={(id) => selectedBotId.set(id)} />
+        : <div className="bots-body"><BotList bots={mine} /></div>}
     </section>
   );
 }
@@ -327,6 +329,20 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [error, setError] = useState('');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const program = agentProgram(agent);
+  const modelHost = host === LOCAL_HOST ? 'local' : box?.id === host && remote ? `box:${host}` as const : null;
+  const [modelCatalogue, setModelCatalogue] = useState<{ host: string; program: string; models: AgentProviderModel[] }>();
+  const currentCatalogue = modelCatalogue?.host === modelHost && modelCatalogue.program === program ? modelCatalogue : undefined;
+  const reportedModels = currentCatalogue?.models.filter((entry) => entry.id !== 'default' && entry.supported !== false) ?? [];
+  const savedModelMissing = Boolean(model && !reportedModels.some((entry) => entry.id === model));
+  useEffect(() => {
+    if (!modelHost || !program || program === 'dsh') return;
+    let current = true;
+    const update = (models: AgentProviderModel[]) => {
+      if (current) setModelCatalogue({ host: modelHost, program, models });
+    };
+    void freshLiveAgentProviderModels(program, false, modelHost).then(update, () => update([]));
+    return () => { current = false; };
+  }, [modelHost, program]);
   const usesAgentPermissions = program && !['claude', 'codex', 'gemini'].includes(program);
   const interactiveAgents = getAgentRoster().filter((entry) => !canRunHeadless(entry.command));
   let next = '';
@@ -350,99 +366,115 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   }
   return (
     <form className="bots-editor" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <div className="bots-editor-heading"><h3>{bot ? `Edit ${bot.name}` : 'New bot'}</h3></div>
-      {!bot && <details className="bots-template-picker">
-        <summary>{template ? `Template: ${template.name}` : 'Browse templates'}</summary>
-        <TemplateGrid onPick={applyTemplate} title="" selectedId={template?.id} />
-      </details>}
-      {error && <p role="alert" className="bots-error">{error}</p>}
-      <div className="bots-editor-grid">
-        <div className="bots-editor-main">
-          <h4>Bot details</h4>
-          <div className="bots-identity">
-            <AvatarPicker value={avatar} onChange={setAvatar} />
-            <div>
-              <label htmlFor="bot-name">Name</label>
-              <input id="bot-name" required maxLength={80} placeholder="e.g. Morning tech digest" value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="bots-body bots-editor-scroll">
+        <div className="bots-editor-content">
+          <div className="bots-editor-heading"><h3>{bot ? `Edit ${bot.name}` : 'New bot'}</h3></div>
+          {!bot && <details className="bots-template-picker">
+            <summary>{template ? `Template: ${template.name}` : 'Browse templates'}</summary>
+            <TemplateGrid onPick={applyTemplate} title="" selectedId={template?.id} />
+          </details>}
+          {error && <p role="alert" className="bots-error">{error}</p>}
+          <div className="bots-editor-grid">
+            <div className="bots-editor-main">
+              <h4>Bot details</h4>
+              <div className="bots-identity">
+                <AvatarPicker value={avatar} onChange={setAvatar} />
+                <div>
+                  <label htmlFor="bot-name">Name</label>
+                  <input id="bot-name" required maxLength={80} placeholder="e.g. Morning tech digest" value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+              </div>
+              <label htmlFor="bot-job">Job</label>
+              <textarea id="bot-job" required rows={8} maxLength={20_000} placeholder="What is this bot for? Say what result you want, and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+              <p className="bots-helper">Each run starts a fresh agent with access to the bot’s saved files and recent chat.</p>
+              <h4 className="bots-editor-section">Tools and connectors</h4>
+              <span className="bots-field-label">Connectors</span>
+              <ConnectorPicker host={host} value={keys} onChange={setKeys} />
+              {missing.length > 0 && <p className="bots-helper bots-warn">This template works best with {missing.join(', ')}. Add it in Settings &gt; MCP &amp; plugins{host === LOCAL_HOST ? '' : ', then share the sign-in with this box in Settings > Bots'}.</p>}
+              {keys.length > 0 && program !== 'claude' && <p className="bots-helper">Connectors reach Claude Code bots for now; other agents use their own MCP config.</p>}
+              <label className="bots-check">
+                <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+                <span>Use a web browser</span>
+              </label>
+              <p className="bots-helper">{host === LOCAL_HOST
+                ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
+                : `Opens and uses real pages in a hidden browser on the box. The box needs Node, and a browser installed once with "${boxOs === 'linux' ? 'npx playwright install --with-deps chromium' : 'npx playwright install chromium'}".`}</p>
+              <label className="bots-check">
+                <input type="checkbox" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
+                <span>Use the computer</span>
+              </label>
+              <p className={`bots-helper${computer && host === LOCAL_HOST && pcComputer !== 'ready' ? ' bots-warn' : ''}`}>{host === LOCAL_HOST
+                ? pcComputer === 'unsupported'
+                  ? 'Sees and operates apps on this PC\'s screen, but this session does not allow it. On Linux, sign in with an X11 (Xorg) session instead of Wayland.'
+                  : pcComputer === 'off'
+                    ? 'Sees and operates apps on this PC\'s screen. Turn on Settings > Computer use first. Spacron asks you to allow each window it may control, so you need to be there.'
+                    : 'Sees and operates apps on this PC\'s screen. Spacron asks you to allow each window it may control, so you need to be there when it runs.'
+                : boxOs === 'macos'
+                  ? `Operates this Mac box's own screen: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} Allow spacron-server under Screen Recording and Accessibility in System Settings once, and keep a user logged in.`
+                  : boxOs === 'windows'
+                    ? `Operates this Windows box's own desktop: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} spacron-server must run in a logged-in desktop session (started at sign-in), not as a service.`
+                    : `Gets its own virtual desktop on the box to open and operate apps, with no one watching. ${access === 'full' ? 'It can start programs there.' : 'It can start programs there only with Full access.'} The box needs this once: "sudo apt-get install -y xvfb xdotool imagemagick".`}</p>
+              <label className="bots-check">
+                <input type="checkbox" checked={builder} onChange={(e) => setBuilder(e.target.checked)} />
+                <span>Can create other bots</span>
+              </label>
+              <p className="bots-helper">Bots it creates get no more access than it has, can't create bots themselves, and start with their schedule off until you turn it on.</p>
             </div>
+            <aside className="bots-editor-side">
+              <h4>Run settings</h4>
+              <span className="bots-field-label">Runs on</span>
+              <Dropdown ariaLabel="Where the bot runs" value={host} onChange={(v) => { setHost(v); setModel(''); setKeys(templateKeys(template, v)); }} disabled={Boolean(bot)} options={hosts.length ? hosts : [{ value: host, label: host === LOCAL_HOST ? 'This PC' : 'Box (not connected)' }]} />
+              <p className="bots-helper">{host === LOCAL_HOST ? 'Runs while Spacron is open on this PC.' : 'Runs on the box, even while this laptop is closed.'}</p>
+              <span className="bots-field-label">Run with</span>
+              <Dropdown ariaLabel="Bot agent" value={agent} onChange={(value) => { setAgent(value); setModel(''); }} placeholder="Choose an agent"
+                options={[...agents.map((a) => ({ value: a.command, label: a.name, icon: <AgentBrandMark command={a.command} name={a.name} className="bots-agent-mark" /> })),
+                  ...interactiveAgents.map((a) => ({ value: a.command, label: `${a.name} (unavailable for bots)`, disabled: true })),
+                  ...(agent && !agents.some((a) => a.command === agent) && !interactiveAgents.some((a) => a.command === agent)
+                    ? [{ value: agent, label: `${agent} (not installed here)`, disabled: true }] : [])]} />
+              {agents.length ? <p className="bots-helper">Uses the agent CLI installed where the bot runs.</p>
+                : <p className="bots-error">Install an agent that supports unattended bot runs.</p>}
+              {program === 'dsh' ? <p className="bots-helper">DeepSeek Harness uses the model configured in its headless profile.</p> : <>
+                <span className="bots-field-label">Model</span>
+                <Dropdown ariaLabel="Bot model" value={model} onChange={setModel} disabled={!reportedModels.length && !model}
+                  options={[
+                    { value: '', label: 'Agent default' },
+                    ...reportedModels.map((entry) => ({ value: entry.id, label: entry.label, tooltip: entry.id })),
+                    ...(savedModelMissing ? [{ value: model, label: `${model} (saved model)`, disabled: true }] : []),
+                  ]} />
+                {modelHost && program && !currentCatalogue
+                  ? <p className="bots-helper" role="status">Loading models from the agent…</p>
+                  : !reportedModels.length && <p className="bots-helper">No model list reported. The agent can use its configured default.</p>}
+              </>}
+              <span className="bots-field-label">Permissions</span>
+              <Dropdown ariaLabel="What the bot may do" value={access} onChange={(v) => setAccess(v as BotAccess)} options={ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))} />
+              <p className={`bots-helper${access === 'full' ? ' bots-warn' : ''}`}>{usesAgentPermissions
+                ? 'This guides the bot’s instructions. The agent CLI enforces its own permissions.'
+                : ACCESS_OPTIONS.find((o) => o.value === access)?.detail}</p>
+              <span className="bots-field-label">Schedule</span>
+              <Dropdown ariaLabel="Bot schedule" value={schedule} onChange={(v) => setSchedule(v as BotSchedule)} options={SCHEDULES} />
+              {schedule !== 'manual' && <div className="bots-time-row">
+                <div>
+                  <label htmlFor="bot-time">{schedule === 'hourly' ? 'Minute past the hour' : 'Time'}</label>
+                  {schedule === 'hourly'
+                    ? <input id="bot-time" type="number" min={0} max={59} value={Number(time.slice(3))} onChange={(e) => setTime(`09:${String(Math.min(59, Math.max(0, Number(e.target.value) || 0))).padStart(2, '0')}`)} />
+                    : <input id="bot-time" type="time" required value={time} onChange={(e) => setTime(e.target.value)} />}
+                </div>
+                {schedule === 'weekly' && <div><span className="bots-field-label">Day</span>
+                  <Dropdown ariaLabel="Bot weekday" value={String(day)} onChange={(v) => setDay(Number(v))} options={WEEKDAYS.map((label, i) => ({ value: String(i), label }))} /></div>}
+              </div>}
+              {schedule !== 'manual' && <p className="bots-helper">Next run <strong>{next || 'choose a time'}</strong> ({timezone}){settings.enabled ? '' : '. Schedules are paused in Settings > Bots.'}</p>}
+            </aside>
           </div>
-          <label htmlFor="bot-job">Job</label>
-          <textarea id="bot-job" required rows={8} maxLength={20_000} placeholder="What is this bot for? Say what result you want, and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
-          <p className="bots-helper">Each run starts a fresh agent with access to the bot’s saved files and recent chat.</p>
-          <h4 className="bots-editor-section">Tools and connectors</h4>
-          <span className="bots-field-label">Connectors</span>
-          <ConnectorPicker host={host} value={keys} onChange={setKeys} />
-          {missing.length > 0 && <p className="bots-helper bots-warn">This template works best with {missing.join(', ')}. Add it in Settings &gt; MCP &amp; plugins{host === LOCAL_HOST ? '' : ', then share the sign-in with this box in Settings > Bots'}.</p>}
-          {keys.length > 0 && program !== 'claude' && <p className="bots-helper">Connectors reach Claude Code bots for now; other agents use their own MCP config.</p>}
-          <label className="bots-check">
-            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
-            <span>Use a web browser</span>
-          </label>
-          <p className="bots-helper">{host === LOCAL_HOST
-            ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
-            : `Opens and uses real pages in a hidden browser on the box. The box needs Node, and a browser installed once with "${boxOs === 'linux' ? 'npx playwright install --with-deps chromium' : 'npx playwright install chromium'}".`}</p>
-          <label className="bots-check">
-            <input type="checkbox" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
-            <span>Use the computer</span>
-          </label>
-          <p className={`bots-helper${computer && host === LOCAL_HOST && pcComputer !== 'ready' ? ' bots-warn' : ''}`}>{host === LOCAL_HOST
-            ? pcComputer === 'unsupported'
-              ? 'Sees and operates apps on this PC\'s screen, but this session does not allow it. On Linux, sign in with an X11 (Xorg) session instead of Wayland.'
-              : pcComputer === 'off'
-                ? 'Sees and operates apps on this PC\'s screen. Turn on Settings > Computer use first. Spacron asks you to allow each window it may control, so you need to be there.'
-                : 'Sees and operates apps on this PC\'s screen. Spacron asks you to allow each window it may control, so you need to be there when it runs.'
-            : boxOs === 'macos'
-              ? `Operates this Mac box's own screen: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} Allow spacron-server under Screen Recording and Accessibility in System Settings once, and keep a user logged in.`
-              : boxOs === 'windows'
-                ? `Operates this Windows box's own desktop: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} spacron-server must run in a logged-in desktop session (started at sign-in), not as a service.`
-                : `Gets its own virtual desktop on the box to open and operate apps, with no one watching. ${access === 'full' ? 'It can start programs there.' : 'It can start programs there only with Full access.'} The box needs this once: "sudo apt-get install -y xvfb xdotool imagemagick".`}</p>
-          <label className="bots-check">
-            <input type="checkbox" checked={builder} onChange={(e) => setBuilder(e.target.checked)} />
-            <span>Can create other bots</span>
-          </label>
-          <p className="bots-helper">Bots it creates get no more access than it has, can't create bots themselves, and start with their schedule off until you turn it on.</p>
         </div>
-        <aside className="bots-editor-side">
-          <h4>Run settings</h4>
-          <span className="bots-field-label">Runs on</span>
-          <Dropdown ariaLabel="Where the bot runs" value={host} onChange={(v) => { setHost(v); setKeys(templateKeys(template, v)); }} disabled={Boolean(bot)} options={hosts.length ? hosts : [{ value: host, label: host === LOCAL_HOST ? 'This PC' : 'Box (not connected)' }]} />
-          <p className="bots-helper">{host === LOCAL_HOST ? 'Runs while Spacron is open on this PC.' : 'Runs on the box, even while this laptop is closed.'}</p>
-          <span className="bots-field-label">Run with</span>
-          <Dropdown ariaLabel="Bot agent" value={agent} onChange={setAgent} placeholder="Choose an agent"
-            options={[...agents.map((a) => ({ value: a.command, label: a.name, icon: <AgentBrandMark command={a.command} name={a.name} className="bots-agent-mark" /> })),
-              ...interactiveAgents.map((a) => ({ value: a.command, label: `${a.name} (unavailable for bots)`, disabled: true })),
-              ...(agent && !agents.some((a) => a.command === agent) && !interactiveAgents.some((a) => a.command === agent)
-                ? [{ value: agent, label: `${agent} (not installed here)`, disabled: true }] : [])]} />
-          {agents.length ? <p className="bots-helper">Uses the agent CLI installed where the bot runs.</p>
-            : <p className="bots-error">Install an agent that supports unattended bot runs.</p>}
-          {program === 'dsh' ? <p className="bots-helper">DeepSeek Harness uses the model configured in its headless profile.</p> : <>
-            <label htmlFor="bot-model">Model <small>(optional)</small></label>
-            <input id="bot-model" placeholder="Agent default" value={model} onChange={(e) => setModel(e.target.value)} />
-          </>}
-          <span className="bots-field-label">Permissions</span>
-          <Dropdown ariaLabel="What the bot may do" value={access} onChange={(v) => setAccess(v as BotAccess)} options={ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))} />
-          <p className={`bots-helper${access === 'full' ? ' bots-warn' : ''}`}>{usesAgentPermissions
-            ? 'This guides the bot’s instructions. The agent CLI enforces its own permissions.'
-            : ACCESS_OPTIONS.find((o) => o.value === access)?.detail}</p>
-          <span className="bots-field-label">Schedule</span>
-          <Dropdown ariaLabel="Bot schedule" value={schedule} onChange={(v) => setSchedule(v as BotSchedule)} options={SCHEDULES} />
-          {schedule !== 'manual' && <div className="bots-time-row">
-            <div>
-              <label htmlFor="bot-time">{schedule === 'hourly' ? 'Minute past the hour' : 'Time'}</label>
-              {schedule === 'hourly'
-                ? <input id="bot-time" type="number" min={0} max={59} value={Number(time.slice(3))} onChange={(e) => setTime(`09:${String(Math.min(59, Math.max(0, Number(e.target.value) || 0))).padStart(2, '0')}`)} />
-                : <input id="bot-time" type="time" required value={time} onChange={(e) => setTime(e.target.value)} />}
-            </div>
-            {schedule === 'weekly' && <div><span className="bots-field-label">Day</span>
-              <Dropdown ariaLabel="Bot weekday" value={String(day)} onChange={(v) => setDay(Number(v))} options={WEEKDAYS.map((label, i) => ({ value: String(i), label }))} /></div>}
-          </div>}
-          {schedule !== 'manual' && <p className="bots-helper">Next run <strong>{next || 'choose a time'}</strong> ({timezone}){settings.enabled ? '' : '. Schedules are paused in Settings > Bots.'}</p>}
-        </aside>
       </div>
-      <p className="bots-note">Bots work unattended and can't stop to ask permission, so what they may do is decided here. A run stops after {settings.maxRunMinutes >= 60 ? `${settings.maxRunMinutes / 60} hour${settings.maxRunMinutes === 60 ? '' : 's'}` : `${settings.maxRunMinutes} minutes`} (Settings &gt; Bots), and you can stop it any time.</p>
       <footer className="bots-editor-footer">
-        <button type="button" onClick={() => onDone(bot?.id ?? null)}>Cancel</button>
-        <button type="submit" className="bots-primary" disabled={!agents.some((a) => a.command === agent)}>{bot ? 'Save changes' : 'Create bot'}</button>
+        <div className="bots-editor-content">
+          <p className="bots-note">Bots run unattended. Each run stops after {settings.maxRunMinutes >= 60 ? `${settings.maxRunMinutes / 60} hour${settings.maxRunMinutes === 60 ? '' : 's'}` : `${settings.maxRunMinutes} minutes`} (Settings &gt; Bots), and you can stop it any time.</p>
+          <div className="bots-editor-actions">
+            <button type="button" onClick={() => onDone(bot?.id ?? null)}>Cancel</button>
+            <button type="submit" className="bots-primary" disabled={!agents.some((a) => a.command === agent)}>{bot ? 'Save changes' : 'Create bot'}</button>
+          </div>
+        </div>
       </footer>
     </form>
   );
@@ -456,7 +488,7 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
   const [editing, setEditing] = useState(false);
   const active = runs.find((r) => r.status === 'running');
   const next = nextBotRun(bot);
-  if (editing) return <div className="bots-body"><BotEditor bot={bot} onDone={() => setEditing(false)} /></div>;
+  if (editing) return <BotEditor bot={bot} onDone={() => setEditing(false)} />;
   return (
     <div className="bots-view">
       <header className="bots-view-header">

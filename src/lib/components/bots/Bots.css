@@ -87,7 +87,9 @@
 .bots-chip.scheduled { background: color-mix(in srgb, var(--success, #3fb950) 15%, transparent); color: var(--success, #3fb950); }
 .bots-chip.running { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 
-.bots-editor { max-width: 1120px; margin-inline: auto; container-type: inline-size; }
+.bots-editor { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.bots-editor-content { max-width: 1120px; margin-inline: auto; container-type: inline-size; }
+.bots-editor-scroll { padding-bottom: 20px; }
 .bots-editor-heading { margin-bottom: 16px; }
 #app .bots-editor-heading h3 { font-size: 1.5em !important; }
 .bots-editor-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -110,18 +112,17 @@
 :where(.bots-panel) textarea { min-height: 180px; resize: vertical; line-height: 1.6; }
 .bots-time-row { display: flex; gap: 12px; }
 .bots-time-row > div { flex: 1; min-width: 0; }
-.bots-body:has(.bots-editor) { scroll-padding-bottom: 76px; }
 .bots-editor-footer {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
+  flex-shrink: 0;
+  padding: 12px 28px;
+  background: var(--app-surface);
+  box-shadow: 0 -1px 0 var(--border);
+}
+.bots-editor-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 18px;
-  padding: 12px 0;
-  background: var(--app-surface);
-  box-shadow: 0 -1px 0 var(--border);
+  margin-top: 10px;
 }
 @container (max-width: 680px) {
   .bots-editor-grid { grid-template-columns: minmax(0, 1fr); }
@@ -146,7 +147,7 @@
 .bots-log { max-height: 360px; margin: 10px 0 0; padding: 12px; overflow: auto; border-radius: 8px; background: var(--bg-primary, #000); font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 
 @media (max-width: 720px) {
-  .bots-header, .bots-body { padding-left: 16px; padding-right: 16px; }
+  .bots-header, .bots-body, .bots-editor-footer { padding-left: 16px; padding-right: 16px; }
 }
 
 /* The layer that covers the workspace while Bots is open (see AppShell). */
@@ -176,7 +177,6 @@
 .bots-panel label.bots-check { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; cursor: pointer; }
 .bots-editor-main label.bots-check { margin-top: 16px; }
 .bots-editor-main label.bots-check + .bots-helper { margin: 4px 0 0 24px; }
-.bots-editor > .bots-note { margin-top: 16px; }
 .bots-panel .bots-check input { width: 16px; height: 16px; margin: 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
 .bots-facts { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; color: var(--text-muted); font-size: 12px; }
 .bots-facts strong { color: var(--text-primary); font-weight: 500; margin-right: 4px; }

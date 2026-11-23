@@ -566,6 +566,9 @@ fn probe(command: &str) -> AgentModelProbe {
         "cursor-agent" => capture("cursor-agent", &["models"], PROBE_TIMEOUT),
         "grok" => capture("grok", &["models"], PROBE_TIMEOUT),
         "opencode" => capture("opencode", &["models"], SLOW_PROBE_TIMEOUT),
+        "kilo" => capture("kilo", &["models"], SLOW_PROBE_TIMEOUT),
+        "pi" => capture("pi", &["--list-models"], PROBE_TIMEOUT),
+        "agy" => capture("agy", &["models"], PROBE_TIMEOUT),
         _ => AgentModelProbe::failed("This agent does not expose a live model catalogue"),
     }
 }

@@ -183,9 +183,31 @@ function parseOpenCodeModels(output: string): AgentProviderModel[] {
     addUniqueModel(models, seen, {
       id: trimmed,
       label: humanizeModelId(trimmed),
-      description: 'Reported by the installed OpenCode CLI.',
+      description: 'Reported by the installed agent CLI.',
       free: /(?:^|[-/])free(?:$|-)/i.test(trimmed),
     });
+  }
+  return models;
+}
+
+function parsePiModels(output: string): AgentProviderModel[] {
+  const models: AgentProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const line of cleanModelOutput(output).split('\n')) {
+    const match = line.trim().match(/^([\w.-]+)\s+(\S+)\s+\S+\s+\S+\s+(?:yes|no)\s+(?:yes|no)$/);
+    if (!match) continue;
+    const [, provider, model] = match;
+    addUniqueModel(models, seen, { id: `${provider}/${model}`, label: `${model} (${provider})` });
+  }
+  return models;
+}
+
+function parseAntigravityModels(output: string): AgentProviderModel[] {
+  const models: AgentProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const line of cleanModelOutput(output).split('\n')) {
+    const match = line.trim().match(/^([\w.-]+)\t(.+)$/);
+    if (match) addUniqueModel(models, seen, { id: match[1], label: match[2] });
   }
   return models;
 }
@@ -361,7 +383,7 @@ const piAdapter: ChatProviderAdapter = {
   models: [{ id: 'default', label: 'Configured model', description: 'Use Pi’s configured provider and model.' }],
   accessModes: ['supervised', 'full-access'],
   reasoningEfforts: [],
-  modelCommand: null,
+  modelCommand: 'pi --list-models',
   buildLaunchOptions(selection) {
     const model = safeProviderValue(selection.model);
     return {
@@ -376,16 +398,11 @@ const piAdapter: ChatProviderAdapter = {
       runtimeArgs: model && model !== 'default' ? `--model ${model}` : '',
     };
   },
-  parseModels: () => [],
+  parseModels: parsePiModels,
 };
 
 /**
- * Antigravity (the `agy` CLI) as a Chat agent.
- *
- * Its CLI advertises neither a machine-readable model list nor documented
- * permission flags in this build, so the adapter deliberately invents nothing:
- * the model list stays "CLI default" and a tier never becomes an argument the
- * CLI would reject. Chat still drives it like any other selected agent.
+ * Antigravity's CLI reports models as tab-separated IDs and display names.
  */
 const antigravityAdapter: ChatProviderAdapter = {
   id: 'agy',
@@ -396,7 +413,7 @@ const antigravityAdapter: ChatProviderAdapter = {
   models: [{ id: 'default', label: 'CLI default', description: 'Let Antigravity choose the available model.' }],
   accessModes: ['supervised', 'full-access'],
   reasoningEfforts: [],
-  modelCommand: null,
+  modelCommand: 'agy models',
   buildLaunchOptions(selection) {
     return {
       permissionArgs: permissionArgs(selection.accessMode ?? 'inherit', this.accessModes, {
@@ -406,7 +423,7 @@ const antigravityAdapter: ChatProviderAdapter = {
       runtimeArgs: runtimeModelArgs(safeProviderValue(selection.model)).join(' '),
     };
   },
-  parseModels: () => [],
+  parseModels: parseAntigravityModels,
 };
 
 const museAdapter: ChatProviderAdapter = {
@@ -532,10 +549,12 @@ export function getAgentProviderLaunchOptions(
 }
 
 export function getLiveAgentModelCommand(command: string): string | null {
+  if (executableName(command) === 'kilo') return 'kilo models';
   return getChatProviderAdapter(command)?.modelCommand ?? null;
 }
 
 export function parseLiveAgentModels(command: string, output: string): AgentProviderModel[] {
+  if (executableName(command) === 'kilo') return parseOpenCodeModels(output);
   return getChatProviderAdapter(command)?.parseModels(output) ?? [];
 }
 
