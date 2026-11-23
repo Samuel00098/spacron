@@ -584,15 +584,12 @@ html.bg-palette-light:not(.has-bg-media) {
 
 .theme-transitioning,
 .theme-transitioning * {
-  transition: background-color 420ms var(--ease-standard),
-    background       420ms var(--ease-standard),
-    border-color     420ms var(--ease-standard),
-    box-shadow       420ms var(--ease-standard),
-    color            420ms var(--ease-standard),
-    stroke           420ms var(--ease-standard),
-    fill             420ms var(--ease-standard),
-    outline-color    420ms var(--ease-standard),
-    caret-color      420ms var(--ease-standard) !important;
+  /* A theme switch snaps. Fading it started ~7 colour animations on every
+     element at once (28,000 for a 4,000-element page): the recalculation took
+     ~3x longer and the fade then ran for 420 ms on top. Switching transitions
+     off for the change also stops each component's own `transition: all`
+     from animating the new colours. */
+  transition: none !important;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

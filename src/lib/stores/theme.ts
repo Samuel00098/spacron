@@ -7,6 +7,7 @@ import { applyInterfaceFrost, applyBackgroundAppearance, applyBackgroundImage, h
 import { presetThemes, currentPresetTheme } from './presetThemes';
 import { useThemeStore } from './zustand/theme';
 import { analyseImage, deriveForegroundPalette } from '$lib/utils/imageAnalysis';
+import { isWebkitGtk } from '$lib/utils/tauri';
 
 function syncWritable<T>(key: string, defaultValue: T): import('$lib/stores/storeCompat').Writable<T> {
   const zustandVal = (useThemeStore.getState() as any)[key];
@@ -341,7 +342,9 @@ export function applyForegroundPalette(
 }
 
 let themeTransitionTimeout: any = null;
-const THEME_TRANSITION_MS = 420;
+// Long enough for the new colours to be computed with transitions off; the
+// colours are final by then, so removing the class starts no animation.
+const THEME_TRANSITION_MS = 120;
 
 // WebKitGTK's tiled compositor sometimes fails to invalidate composited tiles
 // when only CSS custom properties change (a theme switch). The stale tiles show
@@ -355,6 +358,9 @@ const THEME_TRANSITION_MS = 420;
 let repaintRaf: number | null = null;
 function forceWebkitRepaint() {
   if (typeof document === 'undefined' || typeof requestAnimationFrame === 'undefined') return;
+  // Only WebKitGTK has the stale-tile bug. Elsewhere, promoting the whole app
+  // to a GPU layer and back just makes the switch re-rasterize everything twice.
+  if (!isWebkitGtk()) return;
   const el = document.querySelector<HTMLElement>('.app-shell') ?? document.body;
   if (!el) return;
   if (repaintRaf !== null) cancelAnimationFrame(repaintRaf);
