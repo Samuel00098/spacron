@@ -10,8 +10,7 @@
 //! A bot is an automation that is not tied to a project folder. Each bot gets
 //! its own home folder, which persists between runs, so a bot can keep notes,
 //! drafts and results from one run to the next. Agents are the installed CLIs
-//! in their headless mode (`claude -p`, `codex exec`, `gemini -p`,
-//! `opencode run`).
+//! in their CLI's headless mode.
 //!
 //! Scheduling works exactly like automations (see `automations.rs`): the
 //! desktop owns the schedule language and the time zone, so it sends each
@@ -331,10 +330,35 @@ fn mcp_keys(config: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Bot-only launch modes. Box Automations keep their existing supported agents.
+fn bot_agent_command(agent: &str, prompt: &str, model: Option<&str>) -> Result<Vec<String>, String> {
+    let mut parts = agent.split_whitespace();
+    let exe = parts.next().ok_or("No agent chosen.")?;
+    let name = exe.rsplit(['/', '\\']).next().unwrap_or(exe);
+    let name = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or(name).to_ascii_lowercase();
+    let (mode, model_flag, prompt_flag) = match name.as_str() {
+        "agy" => (None, Some("--model"), Some("--print")),
+        "pi" | "cursor-agent" => (Some("--print"), Some("--model"), None),
+        "grok" => (None, Some("--model"), Some("--single")),
+        "dsh" => (Some("headless"), None, None),
+        "kilo" => (Some("run"), Some("--model"), None),
+        _ => return agent_command(agent, prompt, model),
+    };
+    let mut argv = vec![exe.to_owned()];
+    argv.extend(parts.map(str::to_owned));
+    argv.extend(mode.map(str::to_owned));
+    if let (Some(flag), Some(model)) = (model_flag, model.filter(|m| !m.is_empty() && *m != "default")) {
+        argv.extend([flag.to_owned(), model.to_owned()]);
+    }
+    argv.extend(prompt_flag.map(str::to_owned));
+    argv.push(prompt.to_owned());
+    Ok(argv)
+}
+
 /// The full headless command for one run: the agent's own headless form plus
 /// the flags for the bot's access level and connectors.
 pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[String])>) -> Result<Vec<String>, String> {
-    let mut argv = agent_command(&bot.agent, prompt, bot.model.as_deref())?;
+    let mut argv = bot_agent_command(&bot.agent, prompt, bot.model.as_deref())?;
     let exe = argv[0].clone();
     let name = Path::new(&exe).file_stem().and_then(|s| s.to_str()).unwrap_or(&exe).to_ascii_lowercase();
     let mut flags: Vec<String> = Vec::new();
@@ -396,7 +420,7 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
             Access::Folder => vec!["--approval-mode".into(), "auto_edit".into()],
             Access::Full => vec!["--yolo".into()],
         }),
-        // opencode reads its permissions from its own config.
+        // Other agents use their own permission settings.
         _ => {}
     }
     // The prompt is the last argument; Gemini's `-p` takes it as its value, so
@@ -421,7 +445,7 @@ pub(crate) fn sync(args: Value, root: &Path) -> Result<Value, String> {
         if b.instructions.len() > MAX_INSTRUCTIONS {
             return Err(format!("Bot '{}' has instructions longer than {MAX_INSTRUCTIONS} characters.", b.name));
         }
-        agent_command(&b.agent, "check", b.model.as_deref())?;
+        bot_agent_command(&b.agent, "check", b.model.as_deref())?;
     }
     let mcp = incoming.mcp_config.as_deref().filter(|c| !c.trim().is_empty());
     if let Some(c) = mcp {
@@ -843,6 +867,22 @@ mod tests {
         assert!(sync(json!({ "bots": [], "mcpConfig": "{not json" }), dir.path()).is_err());
         sync(json!({ "bots": [] }), dir.path()).unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn additional_bot_agents_launch_with_their_headless_modes() {
+        let prompt = "Summarise the news.\nKeep the prompt together.";
+        for (agent, expected) in [
+            ("agy", vec!["agy", "--model", "example", "--print", prompt]),
+            ("pi", vec!["pi", "--print", "--model", "example", prompt]),
+            ("cursor-agent", vec!["cursor-agent", "--print", "--model", "example", prompt]),
+            ("grok", vec!["grok", "--model", "example", "--single", prompt]),
+            ("dsh", vec!["dsh", "headless", prompt]),
+            ("kilo", vec!["kilo", "run", "--model", "example", prompt]),
+        ] {
+            assert_eq!(bot_agent_command(agent, prompt, Some("example")).unwrap(), expected);
+        }
+        assert!(bot_agent_command("freebuff", prompt, None).is_err());
     }
 
     #[test]

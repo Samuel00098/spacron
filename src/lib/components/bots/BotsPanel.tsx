@@ -3,6 +3,7 @@ import { useStore } from '$lib/react/useStore';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { usageState } from '$lib/stores/usage';
+import { getAgentRoster } from '$lib/stores/runs';
 import { computerUse as computerUseSetting, mcpServers } from '$lib/stores/settings';
 import { computerUseSupported } from '$lib/stores/computerUse';
 import { showToast } from '$lib/stores/notification';
@@ -12,7 +13,7 @@ import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
 import { catalogIconFor } from '$lib/services/mcp-catalog';
 import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
-  BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, closeBots,
+  BOT_TEMPLATES, LOCAL_HOST, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, bots, canRunHeadless, closeBots,
   connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
   attachToBot, attachmentPreview, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
   saveBot, selectedBotId, sendBotMessage, stopBotRun, toggleBot, visibleBots,
@@ -326,6 +327,8 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [error, setError] = useState('');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const program = agentProgram(agent);
+  const usesAgentPermissions = program && !['claude', 'codex', 'gemini'].includes(program);
+  const interactiveAgents = getAgentRoster().filter((entry) => !canRunHeadless(entry.command));
   let next = '';
   try { next = when(nextBotRun({ schedule, time, day, enabled: true })); } catch { /* incomplete time input */ }
   const missing = template?.connectors?.filter((id) => !connectorChoices(host).some((c) => c.usable && c.catalogId === id)) ?? [];
@@ -407,14 +410,20 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           <span className="bots-field-label">Run with</span>
           <Dropdown ariaLabel="Bot agent" value={agent} onChange={setAgent} placeholder="Choose an agent"
             options={[...agents.map((a) => ({ value: a.command, label: a.name, icon: <AgentBrandMark command={a.command} name={a.name} className="bots-agent-mark" /> })),
-              ...(agent && !agents.some((a) => a.command === agent) ? [{ value: agent, label: `${agent} (not installed here)`, disabled: true }] : [])]} />
-          <p className="bots-helper">{agents.length ? 'Uses the agent CLI installed where the bot runs.' : ''}</p>
-          {!agents.length && <p className="bots-error">Install Claude Code, Codex, Gemini CLI or opencode. Bots need an agent that can run unattended.</p>}
-          <label htmlFor="bot-model">Model <small>(optional)</small></label>
-          <input id="bot-model" placeholder="Agent default" value={model} onChange={(e) => setModel(e.target.value)} />
+              ...interactiveAgents.map((a) => ({ value: a.command, label: `${a.name} (unavailable for bots)`, disabled: true })),
+              ...(agent && !agents.some((a) => a.command === agent) && !interactiveAgents.some((a) => a.command === agent)
+                ? [{ value: agent, label: `${agent} (not installed here)`, disabled: true }] : [])]} />
+          {agents.length ? <p className="bots-helper">Uses the agent CLI installed where the bot runs.</p>
+            : <p className="bots-error">Install an agent that supports unattended bot runs.</p>}
+          {program === 'dsh' ? <p className="bots-helper">DeepSeek Harness uses the model configured in its headless profile.</p> : <>
+            <label htmlFor="bot-model">Model <small>(optional)</small></label>
+            <input id="bot-model" placeholder="Agent default" value={model} onChange={(e) => setModel(e.target.value)} />
+          </>}
           <span className="bots-field-label">Permissions</span>
           <Dropdown ariaLabel="What the bot may do" value={access} onChange={(v) => setAccess(v as BotAccess)} options={ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))} />
-          <p className={`bots-helper${access === 'full' ? ' bots-warn' : ''}`}>{ACCESS_OPTIONS.find((o) => o.value === access)?.detail}{program === 'opencode' ? ' opencode uses the permissions from its own config.' : ''}</p>
+          <p className={`bots-helper${access === 'full' ? ' bots-warn' : ''}`}>{usesAgentPermissions
+            ? 'This guides the bot’s instructions. The agent CLI enforces its own permissions.'
+            : ACCESS_OPTIONS.find((o) => o.value === access)?.detail}</p>
           <span className="bots-field-label">Schedule</span>
           <Dropdown ariaLabel="Bot schedule" value={schedule} onChange={(v) => setSchedule(v as BotSchedule)} options={SCHEDULES} />
           {schedule !== 'manual' && <div className="bots-time-row">

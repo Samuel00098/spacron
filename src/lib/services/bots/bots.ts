@@ -121,7 +121,9 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
 
 const KEY = 'spacron_bots_v1';
 /** Agent CLIs with a headless mode the runner knows (see `agent_command`). */
-const HEADLESS = new Set(['claude', 'codex', 'gemini', 'opencode']);
+const HEADLESS = new Set([
+  'claude', 'codex', 'gemini', 'opencode', 'agy', 'pi', 'cursor-agent', 'grok', 'dsh', 'kilo',
+]);
 /** How far ahead run times are sent; refreshed on every connect and change. */
 const WINDOW_MS = 14 * 24 * 60 * 60_000;
 const MAX_OCCURRENCES = 400;
@@ -372,7 +374,7 @@ export function saveBot(input: BotInput): Bot {
   const instructions = input.instructions.trim();
   if (!name || !instructions) throw new Error('Give the bot a name and a job.');
   if (instructions.length > MAX_INSTRUCTIONS) throw new Error(`Keep the job under ${MAX_INSTRUCTIONS.toLocaleString()} characters.`);
-  if (!canRunHeadless(input.agent)) throw new Error('Choose Claude Code, Codex, Gemini CLI or opencode: bots need an agent that can run unattended.');
+  if (!canRunHeadless(input.agent)) throw new Error('Choose an agent that supports unattended bot runs.');
   if (!['research', 'folder', 'full'].includes(input.access)) throw new Error('Choose what the bot may do.');
   if (!validAvatar(input.avatar)) throw new Error('That picture could not be used. Try a smaller PNG, JPEG or WebP.');
   // Throws on a malformed time or day, before anything is saved.

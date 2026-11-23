@@ -16,7 +16,11 @@ vi.mock('$lib/stores/settings', async () => {
   return { mcpServers: writable<unknown[]>([]) };
 });
 vi.mock('$lib/stores/runs', () => ({
-  getAgentRoster: () => [{ command: 'claude', name: 'Claude Code' }, { command: 'aider', name: 'Aider' }, { command: '/opt/bin/codex.exe', name: 'Codex' }],
+  getAgentRoster: () => [
+    ...['claude', '/opt/bin/codex.exe', 'agy', 'pi', 'cursor-agent', 'grok', 'dsh', 'kilo']
+      .map((command) => ({ command, name: command })),
+    { command: 'freebuff', name: 'Freebuff' },
+  ],
 }));
 vi.mock('$lib/stores/mcpBridge', () => ({
   getMcpUrl: async () => 'http://127.0.0.1:7777/sse',
@@ -59,7 +63,9 @@ const lastSync = (fn: typeof mock.local, name: string) =>
 
 it('only offers agents that can run unattended', async () => {
   const { api } = await setup();
-  expect(api.botAgents().map((a) => a.command)).toEqual(['claude', '/opt/bin/codex.exe']);
+  expect(api.botAgents().map((a) => a.command)).toEqual([
+    'claude', '/opt/bin/codex.exe', 'agy', 'pi', 'cursor-agent', 'grok', 'dsh', 'kilo',
+  ]);
 });
 
 it('runs on this PC without any box', async () => {
