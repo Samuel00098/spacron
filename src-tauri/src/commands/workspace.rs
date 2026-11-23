@@ -503,7 +503,7 @@ pub fn workspace_git_push(project_id: String, state: State<AppState>) -> Result<
 }
 
 #[tauri::command(async)]
-pub fn workspace_git_fetch(project_id: String, state: State<AppState>) -> Result<String, String> {
+pub fn workspace_git_pull(project_id: String, state: State<AppState>) -> Result<(), String> {
     let projects = state.workspace_manager.list_projects();
     let project = projects
         .iter()
@@ -521,24 +521,20 @@ pub fn workspace_git_fetch(project_id: String, state: State<AppState>) -> Result
     check_git_available()?;
 
     let output = git_base()
-        .arg("fetch")
+        .args(["pull", "--no-rebase", "--ff", "--no-edit", "--no-autostash"])
         .current_dir(root_path)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
-        .map_err(|e| format!("Failed to execute git fetch: {}", e))?;
+        .map_err(|e| format!("Failed to execute git pull: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if output.status.success() {
-        Ok(format!(
-            "Successfully fetched from remote!\n{}{}",
-            sanitize_git_error(&stdout),
-            sanitize_git_error(&stderr)
-        ))
+        Ok(())
     } else {
         Err(format!(
-            "Git fetch failed:\n{}{}",
+            "Git pull failed:\n{}{}",
             sanitize_git_error(&stderr),
             sanitize_git_error(&stdout)
         ))

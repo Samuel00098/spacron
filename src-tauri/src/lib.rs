@@ -397,7 +397,7 @@ pub fn run() {
             commands::workspace::workspace_get_recent_daily_notes,
             commands::workspace::workspace_git_push,
             commands::workspace::workspace_git_commit,
-            commands::workspace::workspace_git_fetch,
+            commands::workspace::workspace_git_pull,
             commands::workspace::workspace_git_status,
             commands::workspace::workspace_git_diff,
             commands::workspace::workspace_resolve_conflict,

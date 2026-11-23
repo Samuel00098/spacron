@@ -14,7 +14,7 @@ import {
   deleteBranch,
   refreshBranches,
 } from '$lib/stores/gitBranch';
-import { useGitBranchStore, type GitBranchInfo } from '$lib/stores/zustand/gitBranch';
+import type { GitBranchInfo } from '$lib/stores/zustand/gitBranch';
 import {
   aiProvider,
   currentAiModel,
@@ -95,7 +95,7 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
   const [commitMessage, setCommitMessage] = useState('');
   const [isCommitting, setIsCommitting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
-  const [isFetching, setIsFetching] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
   const [isGeneratingMsg, setIsGeneratingMsg] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [changesExpanded, setChangesExpanded] = useState(true);
@@ -592,34 +592,21 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
     }
   }
 
-  async function triggerGitFetch() {
+  async function triggerGitPull() {
     const id = projectIdRef.current;
-    if (!id) return;
+    if (!id || isPulling) return;
 
-    setIsFetching(true);
-    showToast('Fetching remote updates...', 'info');
+    setIsPulling(true);
+    showToast('Pulling remote changes...', 'info');
     try {
-      await invoke<string>('workspace_git_fetch', { projectId: id });
-      if (projectIdRef.current !== id) return;
-      await refreshAll();
-      if (projectIdRef.current !== id) return;
-      const info = useGitBranchStore.getState().branchInfoByProject[id];
-      if (info?.upstream && info.behind > 0) {
-        const incoming = `${info.behind} incoming commit${info.behind === 1 ? '' : 's'} from ${info.upstream}`;
-        const local = info.ahead > 0 ? ` It also has ${info.ahead} local commit${info.ahead === 1 ? '' : 's'} to preserve.` : '';
-        showToast(`Fetch complete. ${info.current} has ${incoming} to integrate.${local}`, 'info');
-      } else if (info?.upstream) {
-        showToast(`Fetch complete. No incoming commits from ${info.upstream}.`, 'success');
-      } else if (info) {
-        showToast('Fetch complete. Select a branch that tracks a remote to see incoming commits.', 'info');
-      } else {
-        showToast('Fetch complete. Could not refresh branch status.', 'info');
-      }
+      await invoke<void>('workspace_git_pull', { projectId: id });
+      showToast('Pull complete.', 'success');
     } catch (err) {
       console.error(err);
-      showToast(String(err) || 'Git fetch failed.', 'error');
+      showToast(String(err) || 'Git pull failed.', 'error');
     } finally {
-      setIsFetching(false);
+      setIsPulling(false);
+      if (projectIdRef.current === id) void refreshAll();
     }
   }
 
@@ -1000,8 +987,8 @@ export default function SourceControl({ onOpenIssues }: { onOpenIssues: () => vo
                 <IssueIcon size={14} />
               </button>
             )}
-            <button className="header-btn" onClick={() => void triggerGitFetch()} title="Fetch remote updates and check for incoming commits" disabled={isFetching}>
-              {isFetching ? (
+            <button type="button" className="header-btn" onClick={() => void triggerGitPull()} title="Pull remote changes (fetch and merge)" aria-label="Pull remote changes" disabled={isPulling}>
+              {isPulling ? (
                 <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                   <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                 </svg>
