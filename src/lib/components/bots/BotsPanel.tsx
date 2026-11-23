@@ -710,8 +710,9 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
                 <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2.2" fill="currentColor" /></svg>
               </button>
             ) : (
-              <button type="button" className="terminal-chat-send" title={busy === 'send' && pending.length ? 'Uploading…' : 'Send (Enter)'} aria-label="Send" disabled={busy !== null || (!draft.trim() && !pending.length)} onClick={() => void send()}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+              <button type="button" className="terminal-chat-send bots-composer-send" title="Send (Enter)" disabled={busy !== null || (!draft.trim() && !pending.length)} onClick={() => void send()}>
+                <span>{busy === 'send' && pending.length ? 'Uploading…' : busy === 'send' ? 'Sending…' : 'Send'}</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
               </button>
             )}
           </div>
