@@ -256,12 +256,15 @@ function AvatarPicker({ value, onChange }: { value: string; onChange: (v: string
         <BotAvatar avatar={value} size={64} />
         <span>Change</span>
       </button>
-      {open && <div className="bots-avatar-grid" role="listbox" aria-label="Bot pictures">
-        {BOT_AVATARS.map((a) => <button key={a.id} type="button" role="option" aria-selected={value === a.id} title={a.label} onClick={() => { onChange(a.id); setOpen(false); }}>
-          <BotAvatar avatar={a.id} size={44} />
-        </button>)}
-        <button type="button" className="bots-avatar-upload" onClick={() => fileRef.current?.click()} title="Upload your own picture">
-          <span>＋</span><small>Upload</small>
+      {open && <div className="bots-avatar-popover">
+        <div className="bots-avatar-grid" role="listbox" aria-label="Bot pictures">
+          {BOT_AVATARS.map((a) => <button key={a.id} type="button" role="option" aria-selected={value === a.id} title={a.label} onClick={() => { onChange(a.id); setOpen(false); }}>
+            <BotAvatar avatar={a.id} size={44} />
+          </button>)}
+        </div>
+        <button type="button" className="bots-avatar-upload" onClick={() => fileRef.current?.click()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" /></svg>
+          <span>Upload an image</span>
         </button>
         <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ''; }} />
       </div>}
