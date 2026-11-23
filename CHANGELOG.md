@@ -6,15 +6,17 @@ All notable changes to Spacron will be documented here.
 
 ## [v5.1.11] - 2026-11-23
 
-A follow-up to 5.1.10: bots stop opening terminal windows, you can now watch a bot's browser work, GitHub avatars show again, and switching between light and dark is much faster.
+A follow-up to 5.1.10: bots stop opening terminal windows, you can now watch a bot's browser work, GitHub avatars show again, switching between light and dark is much faster, and scrolling carries on from interactive visuals.
 
 ### Added
 
 - **Watch a bot's browser** — when a bot uses a web browser on this PC, tick "Show the browser while it works" in its settings to open a real browser window and watch it click and type. Leave it off to keep the browser hidden. Agents already show their browser.
+- **Visuals only when they help** — bots are now told to answer in plain text for greetings, short answers and simple lists, and to make an interactive visual only when it explains the result clearly better.
 - **Clearer interactive visuals** — agents are now told not to give page elements names that clash with the browser's own (such as `open` or `close`), which could leave a button silently doing nothing.
 
 ### Fixed
 
+- **Scrolling carries on from interactive visuals** — in agent and bot chats, scrolling past the top or bottom of an interactive visual now keeps scrolling the chat instead of getting stuck on the visual. The full-size view keeps its own scrolling.
 - **Switching between light and dark is much faster** — the theme change used to fade every element on screen at once, which made it slow on busy windows. It now switches instantly, and a repaint workaround meant only for Linux no longer runs on Windows and macOS.
 - **GitHub avatars show again** — profile pictures next to pull requests, issues and Actions runs were blocked by the app's image policy and showed as empty circles. Pictures from GitHub are now allowed.
 - **Terminal windows no longer pop up when bots run** — on Windows, running a bot or automation with OpenCode, Antigravity and other command-line agents opened a visible console window for every run. They now run hidden, as do the stop commands.

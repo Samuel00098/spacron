@@ -1392,7 +1392,9 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   min-width: 0;
   border-radius: var(--bento-radius, 16px);
   overflow: hidden;
-  overscroll-behavior: none;
+  /* Not `none`: scrolling past the top or bottom of the visual must carry on
+     scrolling the chat. The full-size modal below keeps its own. */
+  overscroll-behavior: auto;
   background: var(--visual-surface);
 }
 
@@ -1451,7 +1453,7 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   border: 0;
   background: var(--visual-surface);
   color-scheme: inherit;
-  overscroll-behavior: none;
+  overscroll-behavior: auto;
 }
 
 .chat-visual-frame:focus-visible {

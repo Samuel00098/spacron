@@ -254,7 +254,7 @@ fn wants_visuals(bot: &BoxBot) -> bool {
 }
 
 const VISUALS_PROMPT: &str = "\n\nYour answer is shown in a chat that can display interactive visuals (charts, tables, \
-dashboards, small tools) inline. When one would explain the result better than text, write ONE complete, self-contained \
+dashboards, small tools) inline. Most answers should be plain text: do not make one for a greeting, a short answer, a yes or no, or a simple list. Only when a visual would explain the result clearly better than text, write ONE complete, self-contained \
 HTML file in the visuals folder of your home folder, under 512 KB, with a new file name each time (letters, digits, \
 . _ - only, ending in .html, for example latency-by-region-7c1e.html), then put this on its own line in your answer, \
 outside any code block: ::spacron-visual{file=\"latency-by-region-7c1e.html\" title=\"Latency by region\"} (file is the bare \

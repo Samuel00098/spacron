@@ -75,12 +75,15 @@ html{color-scheme:light dark}
 html,body{margin:0;background:var(--background,light-dark(#efefef,#101010));color:var(--foreground,light-dark(#171717,#e5e7eb))}
 /* Keep scrolling inside the visual and match the quiet chat scrollbar. */
 :where(html,body,body *){
-  overscroll-behavior:none!important;
   scrollbar-width:thin;
   scrollbar-color:color-mix(in srgb,var(--foreground,light-dark(#171717,#f4f4f5)) 22%,transparent) transparent;
 }
 ::-webkit-scrollbar{width:6px;height:6px;background:transparent}
 ::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--foreground,light-dark(#171717,#f4f4f5)) 22%,transparent);border-radius:999px}
+/* Inline in the chat: scrolling past the top or bottom of the visual carries on
+   scrolling the chat. The full-size view keeps its scrolling to itself. */
+html[data-spacron-layout=inline],html[data-spacron-layout=inline] body,html[data-spacron-layout=inline] body *{overscroll-behavior:auto!important}
+html:not([data-spacron-layout=inline]),html:not([data-spacron-layout=inline]) body,html:not([data-spacron-layout=inline]) body *{overscroll-behavior:none!important}
 body{font-family:var(--font-sans,system-ui,sans-serif);font-size:14px;line-height:1.55;padding:16px}
 html[data-spacron-layout=inline] body{padding:10px 4px}
 button,input,select,textarea{box-sizing:border-box;max-width:100%;font:inherit;color:var(--foreground,light-dark(#171717,#e5e7eb));accent-color:var(--accent,light-dark(#5345c7,#a49aff));background:var(--card,light-dark(#f8f8f8,#191919));border:1px solid var(--border,light-dark(#d2d2d2,#3a3a3a));border-radius:var(--radius,10px)}
