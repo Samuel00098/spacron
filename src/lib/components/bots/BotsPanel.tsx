@@ -30,6 +30,9 @@ import './Bots.css';
 /** `selectedBotId` value that opens the editor for a new bot. */
 export const NEW_BOT = '__new__';
 
+/** Agents with no per-project MCP file: kept in step with `GLOBAL_ONLY` in `remote/bot_mcp.rs`. */
+const GLOBAL_MCP_ONLY = new Set(['agy', 'droid']);
+
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const SCHEDULES: { value: BotSchedule; label: string }[] = [
   { value: 'manual', label: 'Only when I run it or chat' },
@@ -391,7 +394,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
               <span className="bots-field-label">Connectors</span>
               <ConnectorPicker host={host} value={keys} onChange={setKeys} />
               {missing.length > 0 && <p className="bots-helper bots-warn">This template works best with {missing.join(', ')}. Add it in Settings &gt; MCP &amp; plugins{host === LOCAL_HOST ? '' : ', then share the sign-in with this box in Settings > Bots'}.</p>}
-              {keys.length > 0 && program !== 'claude' && program !== 'codex' && <p className="bots-helper">This agent gets connectors through a config file in the bot’s folder. If it ignores that file, add them in its own MCP config.</p>}
+              {keys.length > 0 && GLOBAL_MCP_ONLY.has(program) && <p className="bots-helper">This agent only reads its own global MCP config, so it gets every connector from Settings &gt; MCP &amp; plugins, not just these.</p>}
               <label className="bots-check">
                 <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
                 <span>Use a web browser</span>

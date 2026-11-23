@@ -766,7 +766,13 @@ async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path
     let argv = bot_command(bot, prompt, mcp)?;
     // Agents that read servers from a config file get one in their folder for
     // the run (see `bot_mcp`); Claude and Codex took theirs on the command line.
-    let config_guard = super::bot_mcp::apply(&cwd, &argv[0], mcp.map(|(path, _)| path));
+    let mut argv = argv;
+    let config_guard = super::bot_mcp::apply(&cwd, &argv[0], mcp.map(|(path, _)| path)).map(|applied| {
+        // The prompt is the last argument; the flags go just before it.
+        let at = argv.len() - 1;
+        argv.splice(at..at, applied.flags);
+        applied.guard
+    });
     // A browser server (Playwright via npx) can take far longer to start than
     // Claude Code's default MCP wait; the app gives its own agents the same budget.
     let env = [("SPACRON_BOT", bot.name.as_str()), ("MCP_TIMEOUT", "120000")];
