@@ -73,6 +73,19 @@ pub fn run() {
         }
     }));
 
+    // Computer use's stop shortcut on macOS and Linux (docs/computer-use.md).
+    // Registered only while computer use is on (see `desktop::start_guard`).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let builder = builder.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|_app, _shortcut, event| {
+                if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    desktop::stop_shortcut_pressed();
+                }
+            })
+            .build(),
+    );
+
     builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -245,6 +258,19 @@ pub fn run() {
             // agent's tool call until the frontend's dialog answers through
             // `mcp_desktop_grant_respond` (or it times out); the indicator is a
             // native overlay window; notices become toasts.
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                let shortcut_ah = app_handle.clone();
+                desktop::set_stop_shortcut_registrar(Arc::new(move |on| {
+                    let shortcut = "Ctrl+Alt+Escape";
+                    if on {
+                        shortcut_ah.global_shortcut().register(shortcut).is_ok()
+                    } else {
+                        shortcut_ah.global_shortcut().unregister(shortcut).is_ok()
+                    }
+                }));
+            }
             let desktop_hooks = {
                 let grant_ah = app_handle.clone();
                 let notice_ah = app_handle.clone();

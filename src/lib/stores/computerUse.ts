@@ -97,7 +97,7 @@ export function answerDesktopGrant(requestId: string, allow: boolean): void {
   });
 }
 
-/** Whether this platform can do computer use at all (Windows only for now). */
+/** Whether this computer can do computer use at all: Windows, macOS, and Linux on an X11 session. */
 export async function computerUseSupported(): Promise<boolean> {
   try {
     return (await invoke<boolean>('mcp_computer_use_supported')) === true;

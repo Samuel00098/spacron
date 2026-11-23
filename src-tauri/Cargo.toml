@@ -180,6 +180,11 @@ strip = true
 lto = true
 codegen-units = 1
 
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+# The computer-use stop shortcut (Ctrl+Alt+Esc) on macOS and Linux; Windows
+# registers it with its own hook (src/desktop/win.rs).
+tauri-plugin-global-shortcut = "~2.3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6.4"

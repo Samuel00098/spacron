@@ -75,7 +75,7 @@ const STATUS_LABEL: Record<BotRun['status'], string> = {
   running: 'Running', completed: 'Done', failed: 'Failed', stopped: 'Stopped', missed: 'Missed', interrupted: 'Interrupted',
 };
 
-/** Whether computer use works on this PC: Windows only, behind its Settings switch. */
+/** Whether computer use works on this PC (Windows, macOS, Linux on X11), behind its Settings switch. */
 function useComputerUseOnThisPc(): 'ready' | 'off' | 'unsupported' | 'unknown' {
   const enabled = useStore(computerUseSetting);
   const [supported, setSupported] = useState<boolean | null>(null);
@@ -379,7 +379,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           </label>
           <p className={`bots-helper${computer && host === LOCAL_HOST && pcComputer !== 'ready' ? ' bots-warn' : ''}`}>{host === LOCAL_HOST
             ? pcComputer === 'unsupported'
-              ? 'Sees and operates apps on this PC\'s screen. Spacron supports that on Windows only for now, so this bot can\'t use it here.'
+              ? 'Sees and operates apps on this PC\'s screen, but this session does not allow it. On Linux, sign in with an X11 (Xorg) session instead of Wayland.'
               : pcComputer === 'off'
                 ? 'Sees and operates apps on this PC\'s screen. Turn on Settings > Computer use first. Spacron asks you to allow each window it may control, so you need to be there.'
                 : 'Sees and operates apps on this PC\'s screen. Spacron asks you to allow each window it may control, so you need to be there when it runs.'

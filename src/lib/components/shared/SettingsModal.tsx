@@ -2135,6 +2135,14 @@ function AntigravityRuntimeRow() {
   );
 }
 
+/** What computer use needs on this computer's OS, beyond the switch. */
+function computerUseSetupHint(): string {
+  const platform = typeof navigator === 'undefined' ? '' : `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
+  if (platform.includes('mac')) return ' On macOS, allow Spacron under Screen Recording and Accessibility in System Settings > Privacy & Security.';
+  if (platform.includes('linux')) return ' On Linux it needs xdotool, ImageMagick and x11-utils (sudo apt-get install -y xdotool imagemagick x11-utils); xprintidle is optional.';
+  return '';
+}
+
 export default function SettingsModal({ onclose }: SettingsModalProps) {
   // Re-render when custom providers load or change: every provider picker
   // here reads `aiProviders`, which they are merged into.
@@ -4417,8 +4425,8 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                     title="Allow computer use"
                     detail={
                       computerUseAvailable === false
-                        ? 'Available on Windows only for now. macOS support is planned.'
-                        : 'While off, desktop automation tools are disabled.'
+                        ? 'Not available in this session. On Linux, Wayland does not let one app control another: sign in with an X11 (Xorg) session to use it.'
+                        : `While off, desktop automation tools are disabled.${computerUseSetupHint()}`
                     }
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
