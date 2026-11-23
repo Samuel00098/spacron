@@ -2,6 +2,15 @@
 
 All notable changes to Spacron will be documented here.
 
+## [v5.1.7] - 2026-11-23
+
+A small follow-up to 5.1.6 that makes setting up a remote box pick up the new server, and tidies the Focus panel control.
+
+### Fixed
+
+- **Updating the app now refreshes the remote server build** — a server downloaded by "Set up a new VPS…" is remembered with the app version that fetched it and only reused by that version. Before, an older cached build kept showing as ready after an update, so redeploying put the old server back on the box.
+- **Compact Focus panel picker** — the "1/2 · Tasks" control at the bottom of the workspace sizes to the panel name instead of a fixed width, so the count, name and arrow sit together without empty space.
+
 ## [v5.1.6] - 2026-11-23
 
 Spacron 5.1.6 makes remote workspaces a full place to work. Agents on the box get Spacron's MCP tools, the chat view and automations run there while your laptop is closed, any folder on the box opens as its own project, and a local project can be sent to the box in one step. It also adds brand-styled 3D device chassis, Fish Audio voices, an Automations settings page with templates, and agents that can see each other's status.
