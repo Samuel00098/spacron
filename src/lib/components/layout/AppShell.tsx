@@ -47,6 +47,8 @@ import ReviewPanel from '$lib/components/review/ReviewPanelLazy.tsx';
 import ToolboxPanel from '$lib/components/toolbox/ToolboxPanelLazy.tsx';
 import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import ChatModePanel from '$lib/components/workspace/ChatModePanel.tsx';
+import BotsPanel from '$lib/components/bots/BotsPanel';
+import { botsOpen } from '$lib/services/bots/bots';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import MobilePanel, { MobilePanelFloatingHostLazy } from '$lib/components/mobile/MobilePanelLazy.tsx';
 import { useShallow } from 'zustand/react/shallow';
@@ -636,6 +638,7 @@ export default function AppShell() {
     ),
   );
   const currentInteractionMode = useStore(interactionMode);
+  const botsLayerOpen = useStore(botsOpen);
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   // Home is an overlay on top of the still-mounted workspace (see
   // `homeScreenOpen`). With no workspace open at all there is nothing behind it,
@@ -4070,7 +4073,7 @@ export default function AppShell() {
                     ? ` ${ambientLayout}-solo`
                     : ''
                 }`} aria-label="Spacron ambient layout">
-                  <div className="cli-mode-layer" inert={currentInteractionMode === 'chat' && !activeChatPanel} aria-hidden={currentInteractionMode === 'chat' && !activeChatPanel || undefined}>
+                  <div className="cli-mode-layer" inert={botsLayerOpen || (currentInteractionMode === 'chat' && !activeChatPanel)} aria-hidden={botsLayerOpen || (currentInteractionMode === 'chat' && !activeChatPanel) || undefined}>
                     {renderAmbientLayout()}
                   </div>
                   {currentInteractionMode === 'chat' && (
@@ -4078,6 +4081,9 @@ export default function AppShell() {
                       <ChatModePanel />
                     </div>
                   )}
+                  {/* Bots live outside every project, so they cover the
+                      workspace rather than a room; rooms stay mounted. */}
+                  {botsLayerOpen && <div className="bots-layer"><BotsPanel /></div>}
                 </main>
 
                 {renderRightUtilityPanel()}

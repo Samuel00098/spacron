@@ -379,6 +379,9 @@ export async function connectRemote(id: string): Promise<void> {
     void import('$lib/services/automations/automations')
       .then(({ syncBoxAutomations }) => syncBoxAutomations())
       .catch((err) => console.warn('[remoteWorkspace] Could not sync automations to the box:', err));
+    void import('$lib/services/bots/bots')
+      .then(({ syncBots }) => syncBots())
+      .catch((err) => console.warn('[remoteWorkspace] Could not sync bots to the box:', err));
   } catch (err) {
     console.error('Failed to connect to remote workspace:', err);
     // Roll back cleanly to Local so we don't leave a half-connected state.

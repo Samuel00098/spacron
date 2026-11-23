@@ -2,6 +2,12 @@
 
 All notable changes to Spacron will be documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Bots** — agents that live outside every project and work for you from your remote box, so they keep running while your laptop is closed. Give a bot a job, pick Claude Code, Codex, Gemini CLI or opencode, and run it on demand or on a schedule (hourly, daily, weekdays, weekly). Each bot gets its own home folder on the box that persists between runs, so it can keep notes and build on earlier work. Open Bots from the new section in the sidebar to create bots, start a run, pause schedules and read each run's output. Starts with four templates: a morning tech digest, a content idea scout, a security advisory watch and an on-demand research assistant.
+
 ## [v5.1.7] - 2026-11-23
 
 A small follow-up to 5.1.6 that makes setting up a remote box pick up the new server, lets a Windows box start npm-installed agents, and tidies the Focus panel control.

@@ -44,6 +44,7 @@ use crate::state::WriteRateLimiter;
 mod acp_bridge;
 mod receive;
 mod automations;
+mod bots;
 mod tunnel;
 
 /// Binary frame kinds (first byte of a server→client binary message).
@@ -167,6 +168,8 @@ pub async fn serve(cfg: ServerConfig) -> anyhow::Result<()> {
 
     // Automations that run here, so they fire while the laptop is closed.
     tokio::spawn(automations::run_loop(state.workspace.clone()));
+    // Bots live outside every project and run here on their own schedules.
+    tokio::spawn(bots::run_loop(state.workspace.clone()));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     if let Some((cert, key)) = cfg.tls {
@@ -613,6 +616,10 @@ fn handle_control(
                 "box_automations_sync" => automations::sync(args, &state.workspace),
                 "box_automations_state" => automations::state(&state.workspace),
                 "box_automation_run_now" => automations::run_now(args, &state.workspace),
+                "box_bots_sync" => bots::sync(args, &state.workspace),
+                "box_bots_state" => bots::state(&state.workspace),
+                "box_bot_run_now" => bots::run_now(args, &state.workspace),
+                "box_bot_log" => bots::log(args, &state.workspace),
                 "workspace_git_log" => git_log(args, &root),
                 "workspace_git_status" => git_status(&root),
                 "workspace_git_diff" => git_diff(args, &root),

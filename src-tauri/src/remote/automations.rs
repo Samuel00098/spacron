@@ -105,7 +105,7 @@ pub(super) struct BoxRun {
     pub log: Option<String>,
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
@@ -119,11 +119,11 @@ fn file_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
+pub(super) fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
     std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -319,6 +319,16 @@ fn start_run(workspace: PathBuf, automation: BoxAutomation) -> String {
 
 async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result<i32, String> {
     let argv = agent_command(&a.agent, &a.prompt, a.model.as_deref())?;
+    spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, ("SPACRON_AUTOMATION", &a.name)).await
+}
+
+/// Run one headless agent invocation in `cwd`, writing everything it prints to
+/// `log_path`, and wait for it (stopping it after [`RUN_TIMEOUT`]). Shared by
+/// automations and bots so both start agents the same way.
+pub(super) async fn spawn_headless(argv: &[String], cwd: &Path, log_path: &Path, env: (&str, &str)) -> Result<i32, String> {
+    if argv.is_empty() {
+        return Err("No agent command.".into());
+    }
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -332,15 +342,15 @@ async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result
         // A login shell, so a server started at boot finds CLIs on the user's PATH.
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let mut c = tokio::process::Command::new(shell);
-        c.arg("-lc").arg("exec \"$0\" \"$@\"").args(&argv);
+        c.arg("-lc").arg("exec \"$0\" \"$@\"").args(argv);
         c
     };
     command
-        .current_dir(run_dir(workspace, a.cwd.as_deref()))
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
-        .env("SPACRON_AUTOMATION", &a.name)
+        .env(env.0, env.1)
         .kill_on_drop(true);
     let mut child = command.spawn().map_err(|e| format!("Could not start {}: {e}", argv[0]))?;
     match tokio::time::timeout(RUN_TIMEOUT, child.wait()).await {
