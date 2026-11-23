@@ -800,6 +800,7 @@ function ReadAloudSection() {
           options={[...READ_ALOUD_ENGINES]}
           onChange={(engine: ReadAloudEngine) => readAloudSettings.update((s) => ({ ...s, engine }))}
           ariaLabel="Read aloud voice engine"
+          renderIcon={(id) => id === 'fish' ? providerIcon(id) : null}
         />
       </SettingRow>
       <SettingRow

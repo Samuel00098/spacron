@@ -117,6 +117,7 @@ export function getProviderBrand(id: string, label: string): AgentBrand {
   if (key.startsWith('custom-')) return customBrand(key, label);
   const asset = PROVIDER_ASSETS[key];
   if (asset) return { color: asset.color, mark: assetMark(asset.file, asset.color) };
+  if (key === 'fish') return { color: 'mono', mark: imageMark('/provider-icons/fish.png') };
   if (key === 'local') return localMark();
 
   const shared = SHARED_BRANDS[key];
