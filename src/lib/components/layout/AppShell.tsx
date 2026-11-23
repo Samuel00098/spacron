@@ -1970,7 +1970,9 @@ export default function AppShell() {
     closeRightUtility();
   }
   function toggleRightTool(tool: RightTool) {
-    if (rightActiveTool === tool) {
+    const leavingBots = get(botsOpen);
+    if (leavingBots) closeBots();
+    if (!leavingBots && rightActiveTool === tool) {
       closeRightUtility();
       rightSidebarTabStore.set('files');
     }
@@ -2413,7 +2415,15 @@ export default function AppShell() {
   }
 
   function togglePanelRoom(id: AuxPanelId) {
+    if (id === 'review') {
+      toggleRightTool('review');
+      return;
+    }
+    // The first click on the room under Bots should reveal it.
+    const leavingBots = get(botsOpen);
+    if (leavingBots) closeBots();
     if (currentInteractionMode === 'chat' && (id === 'tasks' || id === 'sketch' || id === 'library')) {
+      if (leavingBots && activeChatPanel === id) return;
       if (layoutState[PANEL_VISIBILITY_KEYS[id]] && activeChatPanel !== id) {
         setChatPanelRoom(id);
         focusRoom(id);
@@ -2422,14 +2432,10 @@ export default function AppShell() {
       }
       return;
     }
-    if (id === 'review') {
-      toggleRightTool('review');
-      return;
-    }
     if (id === 'preview') {
       if (previewDockedOpen) {
         // Showing → close it; open but hidden behind another tab → show it.
-        if (showingDockedPreview && rightSidebarOpen) {
+        if (!leavingBots && showingDockedPreview && rightSidebarOpen) {
           togglePreviewVisible();
           closeRightSidebar();
         }
@@ -2442,6 +2448,7 @@ export default function AppShell() {
       }
     }
     const isOpen = Boolean(layoutState[PANEL_VISIBILITY_KEYS[id]]);
+    if (leavingBots && isOpen && activeRoom === id) return;
     if (isOpen && activeRoom !== id) {
       if (id === 'tasks' || id === 'sketch' || id === 'library') setChatPanelRoom(id);
       focusRoom(id);
@@ -3053,7 +3060,10 @@ export default function AppShell() {
     id: tool,
     title: LEFT_TOOL_META[tool].title,
     active: !rightDrawerOpen && rightNavigatorTool === tool,
-    onClick: () => selectRightNavigatorTool(tool),
+    onClick: () => {
+      closeBots();
+      selectRightNavigatorTool(tool);
+    },
     icon: LEFT_TOOL_META[tool].icon,
   }));
 
