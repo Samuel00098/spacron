@@ -1357,3 +1357,23 @@ describe('user MCP servers', () => {
     expect(Object.keys(config.mcpServers)).toEqual(['spacron-mcp']);
   });
 });
+
+describe('Codex on a box gets its servers on the command line', () => {
+  it('turns servers into single-quoted -c overrides and skips what it cannot carry', async () => {
+    const { codexServerFlags } = await import('./mcpBridge');
+    const flags = codexServerFlags([
+      { key: 'spacron-gmail', server: { id: '1', name: 'gmail', transport: 'http', url: 'http://127.0.0.1:4000/proxy/spacron-gmail?token=abc', enabled: true } },
+      { key: 'spacron-fs', server: { id: '2', name: 'fs', transport: 'stdio', command: 'npx', args: ['-y', '@x/fs', ' '], env: { ROOT: '/data' }, enabled: true } },
+      { key: 'spacron-keyed', server: { id: '3', name: 'keyed', transport: 'http', url: 'https://k', headers: { 'X-Api-Key': 's' }, enabled: true } },
+      { key: 'spacron-quote', server: { id: '4', name: 'quote', transport: 'http', url: "https://q/it's", enabled: true } },
+    ], 'http://127.0.0.1:7000/mcp?token=t');
+    expect(flags).toContain(`-c 'mcp_servers.spacron-mcp.url="http://127.0.0.1:7000/mcp?token=t"'`);
+    expect(flags).toContain(`-c 'mcp_servers.spacron-gmail.url="http://127.0.0.1:4000/proxy/spacron-gmail?token=abc"'`);
+    expect(flags).toContain(`-c 'mcp_servers.spacron-fs.command="npx"'`);
+    expect(flags).toContain(`-c 'mcp_servers.spacron-fs.args=["-y", "@x/fs"]'`);
+    expect(flags).toContain(`-c 'mcp_servers.spacron-fs.env={ "ROOT" = "/data" }'`);
+    expect(flags).not.toContain('spacron-keyed');
+    expect(flags).not.toContain('spacron-quote');
+    expect(codexServerFlags([], null)).toBe('');
+  });
+});

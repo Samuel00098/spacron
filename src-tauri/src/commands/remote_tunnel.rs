@@ -181,6 +181,40 @@ async fn open_reverse(url: String, token: String, box_port: u16, mcp_port: u16) 
     Ok(())
 }
 
+/// Share the chosen sign-ins with a box, so its own proxy can serve them
+/// while the laptop is closed (`remote/box_proxy.rs`). The box keeps exactly
+/// this set: an empty `keys` removes every shared sign-in from it.
+///
+/// The grants go from this process straight to the box over its
+/// authenticated socket, so tokens never pass through the web UI.
+#[tauri::command]
+pub async fn remote_share_mcp_grants(url: String, token: String, keys: Vec<String>) -> Result<usize, String> {
+    let mut grants = serde_json::Map::new();
+    for key in &keys {
+        let grant = crate::commands::mcp_oauth::load_grant(key).ok_or_else(|| format!("Not signed in to {key} on this computer."))?;
+        grants.insert(key.clone(), serde_json::to_value(grant).map_err(|e| e.to_string())?);
+    }
+    let pty_url = tunnel_url(&url, "/pty", "")?;
+    let mut ws = open_ws(pty_url.trim_end_matches('?'), &token).await?;
+    let request = serde_json::json!({ "t": "invoke", "reqId": 1, "cmd": "box_mcp_grants_sync", "args": { "grants": grants } });
+    ws.send(Message::Text(request.to_string().into())).await.map_err(|e| format!("Could not reach the box: {e}"))?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let next = tokio::time::timeout_at(deadline, ws.next()).await.map_err(|_| "The box did not answer.".to_string())?;
+        let Some(msg) = next else { return Err("The box closed the connection.".into()) };
+        let Message::Text(text) = msg.map_err(|e| format!("Could not reach the box: {e}"))? else { continue };
+        let value: serde_json::Value = serde_json::from_str(text.as_str()).unwrap_or_default();
+        if value["reqId"].as_u64() != Some(1) {
+            continue;
+        }
+        let _ = ws.close(None).await;
+        return match value["t"].as_str() {
+            Some("invokeOk") => Ok(value["value"]["count"].as_u64().unwrap_or(0) as usize),
+            _ => Err(value["message"].as_str().unwrap_or("The box refused the sign-ins.").to_string()),
+        };
+    }
+}
+
 /// Forward a port on the box to a local loopback port and return the local
 /// port. Reuses an existing forward for the same remote and box port.
 #[tauri::command]

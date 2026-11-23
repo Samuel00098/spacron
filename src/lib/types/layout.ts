@@ -25,6 +25,7 @@ export type SettingsTab =
   | 'stats'
   | 'shortcuts'
   | 'automations'
+  | 'bots'
   | 'cleanup'
   | 'about';
 

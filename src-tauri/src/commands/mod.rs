@@ -18,6 +18,7 @@ pub mod browser_shim;
 pub mod browser_tools;
 pub mod chatgpt;
 pub mod chat_workspace;
+pub mod local_bots;
 pub mod claude;
 pub mod custom_providers;
 pub mod cursor;
