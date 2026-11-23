@@ -2,6 +2,43 @@
 
 All notable changes to Spacron will be documented here.
 
+## [v5.1.6] - 2026-11-23
+
+Spacron 5.1.6 makes remote workspaces a full place to work. Agents on the box get Spacron's MCP tools, the chat view and automations run there while your laptop is closed, any folder on the box opens as its own project, and a local project can be sent to the box in one step. It also adds brand-styled 3D device chassis, Fish Audio voices, an Automations settings page with templates, and agents that can see each other's status.
+
+### Added
+
+- **Spacron MCP for agents on a remote box** — agents running on the box now reach `report_status`, `list_agents`, `delegate_task` and the other Spacron tools through an authenticated tunnel, using the config they already receive.
+- **Agent chat view on remote** — chat-view agents (Claude Code, Codex and others) run on the box, and their replies keep streaming after a dropped connection reconnects.
+- **Automations that run on the box** — automations saved while connected run on the remote server, so they fire while the laptop is closed. Run history shows each box run with a log viewer, and Run now runs it on the box.
+- **Open any folder on the box** — "Open folder on <remote>…" browses the server's folder and opens a folder as its own project. Git, worktrees, search and automations follow the open folder.
+- **Send a project to the box** — copies a local git project to the remote, with its full history (unpushed commits included), its origin and its current branch, then opens it there. Uncommitted changes are reported and stay on this computer.
+- **Remote previews and search** — the built-in browser shows dev servers running on the box, and project search runs on the box.
+- **Agent status in `list_agents`** — each agent's status (working, finished, blocked, failed), how long it has held it, its task and its last report, so one agent can tell whether another is done.
+- **Workspace choice for spawned agents** — `spawn_agent` and `delegate_task` require a new isolated worktree, the main checkout or an existing worktree, and agents are told to ask you first.
+- **Automations settings** — Settings > Automations controls scheduling, catch-up of missed runs, run history and finish notices, and lists every automation with pause and delete.
+- **Automation templates** — five starter automations: morning code review, daily standup summary, test health check, dependency and security check, and a weekly TODO sweep.
+- **Run notices** — a notice when an automation finishes, fails or needs your approval.
+- **Fish Audio voices** — Fish Audio as a read-aloud engine with S2.1 Pro, S2 Pro, Drama 3 and S1 models. Voices and models load as soon as the key is saved, and each model keeps its own voice.
+- **Brand-styled device chassis** — original 3D bodies with camera layouts and finishes in the style of each phone family, plus tablets and foldables, with no logos or manufacturer models.
+- **Device hub appearance icon** — the light and dark button shows a sun or a moon to match the device.
+- **Preview drawing mode** — draw on the preview and send it to a terminal or chat agent.
+- **Mobile previews** — foldable-aware Android and iOS simulator controls, resolution overrides, boot readiness checks and in-app emulator streaming.
+- **Document viewing** — DOCX and PDF files open in the system viewer.
+
+### Changed
+
+- **Design Mode** is no longer labelled "Orca" in settings or the preview.
+- **Device screens** run to the edge of the chassis with corners that follow the body.
+- **Links** from chat open in the app browser, and chat images resolve their paths.
+- **Interactive visuals** follow the app theme.
+
+### Fixed
+
+- **Remote agents after a restart** re-attach to their terminals on the box and return to their task cards instead of being relaunched.
+- **Automations buttons** are readable in glass themes.
+- **Schedule time zone** is explained as this computer's time zone.
+
 ## [v5.1.5] - 2026-11-22
 
 Spacron 5.1.5 keeps long Antigravity turns connected, makes agent chats easier to read in narrow panes, and refreshes workflow progress while the Actions tab is open.
