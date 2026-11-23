@@ -453,6 +453,24 @@ fn download_cache_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("spacron").join("servers"))
 }
 
+/// The app version a cached download was fetched for, kept in a
+/// `<asset>.version` file beside it.
+fn version_stamp_path(binary: &std::path::Path) -> PathBuf {
+    let mut name = binary.as_os_str().to_owned();
+    name.push(".version");
+    PathBuf::from(name)
+}
+
+/// A downloaded build is only reused by the app version that fetched it.
+/// Without this, updating the app kept deploying the old cached server (and
+/// the wizard reported it "ready"), so the box never got the new features.
+/// A build with no stamp predates stamping and counts as stale.
+fn cached_build_is_current(binary: &std::path::Path, version: &str) -> bool {
+    std::fs::read_to_string(version_stamp_path(binary))
+        .map(|v| v.trim() == version)
+        .unwrap_or(false)
+}
+
 /// Find a spacron-server build that runs on `platform`. Priority:
 ///
 /// 1. `SPACRON_SERVER_PATH` env override — explicit; whoever sets it asserts
@@ -475,10 +493,16 @@ pub fn resolve_server_binary_for(platform: DeployPlatform) -> Result<PathBuf, St
         }
     }
 
+    let cache = download_cache_dir();
     for triple in platform.triples() {
         for dir in artifact_dirs() {
             let candidate = dir.join(triple_artifact_name(triple));
             if candidate.is_file() {
+                if cache.as_deref() == Some(dir.as_path())
+                    && !cached_build_is_current(&candidate, env!("CARGO_PKG_VERSION"))
+                {
+                    continue;
+                }
                 return Ok(candidate);
             }
         }
@@ -652,6 +676,8 @@ pub async fn remote_download_server(platform: String) -> Result<ServerDownloadRe
                 }
                 std::fs::rename(&tmp, &dest)
                     .map_err(|e| format!("Failed to store the download: {e}"))?;
+                std::fs::write(version_stamp_path(&dest), env!("CARGO_PKG_VERSION"))
+                    .map_err(|e| format!("Failed to record the download's version: {e}"))?;
                 return Ok(ServerDownloadResult {
                     path: dest.to_string_lossy().to_string(),
                     bytes: bytes.len() as u64,
@@ -1021,6 +1047,25 @@ fn temp_script_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_build_is_only_reused_by_the_version_that_fetched_it() {
+        let dir = std::env::temp_dir().join(format!("spacron-stamp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("spacron-server-x86_64-unknown-linux-gnu");
+        std::fs::write(&bin, b"bin").unwrap();
+        // No stamp: a pre-stamping download, treated as stale.
+        assert!(!cached_build_is_current(&bin, "5.1.6"));
+        std::fs::write(version_stamp_path(&bin), "5.1.5\n").unwrap();
+        assert!(!cached_build_is_current(&bin, "5.1.6"));
+        std::fs::write(version_stamp_path(&bin), "5.1.6").unwrap();
+        assert!(cached_build_is_current(&bin, "5.1.6"));
+        assert_eq!(
+            version_stamp_path(&bin).file_name().unwrap(),
+            "spacron-server-x86_64-unknown-linux-gnu.version"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn published_assets_are_named_per_target_os() {

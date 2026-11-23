@@ -732,8 +732,7 @@
   }
 
   .app-shell .workspace-overlays .split-expanded-room-picker {
-    width: 150px;
-    min-width: 0;
+    max-width: 150px;
   }
 }
 
@@ -762,6 +761,7 @@
   min-height: 26px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   padding: 0 9px;
   border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
   border-radius: 8px;
@@ -791,9 +791,12 @@
   white-space: nowrap;
 }
 
+/* Sized to the panel name ("Tasks" stays a small chip) up to a cap, so the
+   count, name and chevron sit together without a stretch of empty button. */
 .app-shell .split-expanded-room-picker {
-  width: min(190px, 24vw);
-  min-width: 130px;
+  width: auto;
+  min-width: 0;
+  max-width: min(190px, 24vw);
 }
 
 .app-shell .split-expanded-room-picker .dropdown,
@@ -802,12 +805,19 @@
 }
 
 .app-shell .split-expanded-room-picker .dd-trigger {
+  width: auto;
   height: 26px;
   min-width: 0;
+  gap: 5px;
+  padding: 0 7px 0 9px;
   border-color: color-mix(in srgb, var(--accent) 14%, var(--border));
   background: color-mix(in srgb, var(--accent) 6%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
   border-radius: 8px;
   font-size: 10px;
+}
+
+.app-shell .split-expanded-room-picker .dd-value {
+  flex: 0 1 auto;
 }
 
 .app-shell .split-expanded-room-picker .dd-trigger:hover:not(:disabled),
@@ -845,7 +855,7 @@
   }
 
   .app-shell .split-expanded-room-picker {
-    width: min(170px, 34vw);
+    max-width: min(170px, 34vw);
   }
 }
 
