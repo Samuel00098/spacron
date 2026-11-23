@@ -4,6 +4,11 @@
 .rfp-head h2 { margin:0; font-size:16px !important; font-weight:600 !important; }
 .rfp-head p { margin:5px 0 0; color:var(--text-muted); line-height:1.5; }
 .rfp-close { margin-left:auto; width:28px; height:28px; border:0; border-radius:7px; background:transparent; color:var(--text-muted); font-size:20px !important; cursor:pointer; }
+.rfp-send { display:flex; flex-direction:column; gap:7px; margin:0 22px 12px; padding:12px; border-radius:10px; background:var(--bg-tertiary); }
+.rfp-send-title { font-weight:600; }
+.rfp-send-row { display:flex; gap:8px; }
+.rfp-send-row select, .rfp-send-row input { min-width:0; flex:1; height:30px; border:0; border-radius:6px; padding:0 8px; background:var(--bg-secondary); color:var(--text-primary); font:inherit; box-shadow:var(--surface-outline) !important; }
+.rfp-send .rfp-muted { padding:0; white-space:normal; line-height:1.45; }
 .rfp-crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; padding:0 22px 10px; color:var(--text-muted); box-shadow:0 1px 0 var(--border); }
 .rfp-crumbs button { border:0; background:transparent; color:var(--text-primary); padding:3px 5px; border-radius:5px; cursor:pointer; font:inherit; }
 .rfp-crumbs button:hover { background:var(--bg-hover); }

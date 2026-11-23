@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { backendInvoke } from '$lib/services/backend';
 import { useModalFocus } from '$lib/react/useModalFocus';
-import { openRemoteFolder } from '$lib/stores/workspace';
+import { openRemoteFolder, projects } from '$lib/stores/workspace';
+import { useStore } from '$lib/react/useStore';
+import { boxFolderName, sendProjectToBox } from '$lib/services/remote-send';
 import { showToast } from '$lib/stores/notification';
 import './RemoteFolderPicker.css';
 
@@ -25,6 +27,37 @@ export default function RemoteFolderPicker({ remoteName, onClose }: { remoteName
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState(false);
+  // "Send a project from this computer": local (non-remote) projects only.
+  const allProjects = useStore(projects);
+  const localProjects = [...allProjects.values()].filter((p) => !p.id.startsWith('remote:'));
+  const [sendRoot, setSendRoot] = useState('');
+  const [sendName, setSendName] = useState('');
+  const [sendProgress, setSendProgress] = useState('');
+  const [sending, setSending] = useState(false);
+  const chooseSend = (root: string) => { setSendRoot(root); setSendName(root ? boxFolderName(root) : ''); };
+  const send = async () => {
+    if (!sendRoot || !sendName.trim()) return;
+    setSending(true);
+    setError('');
+    setSendProgress('Packing the project…');
+    try {
+      const result = await sendProjectToBox(sendRoot, sendName.trim(), (sent, total) =>
+        setSendProgress(`Uploading ${Math.round((sent / total) * 100)}% (${(total / 1048576).toFixed(1)} MB)…`));
+      setSendProgress('Opening it on the box…');
+      if (result.uncommitted > 0) {
+        showToast(`Sent. ${result.uncommitted} uncommitted file${result.uncommitted === 1 ? ' was' : 's were'} left on this computer; commit and send again to include them.`, 'warning', 9000);
+      }
+      await openRemoteFolder(result.path);
+      onClose();
+    } catch (e) {
+      setError(String(e).includes('unsupported remote command')
+        ? 'This box runs an older Spacron server. Redeploy it from "Set up a new VPS…" to send projects.'
+        : String(e));
+    } finally {
+      setSending(false);
+      setSendProgress('');
+    }
+  };
 
   const browse = (path?: string) => {
     setLoading(true);
@@ -68,6 +101,18 @@ export default function RemoteFolderPicker({ remoteName, onClose }: { remoteName
           </div>
           <button className="rfp-close" onClick={onClose} aria-label="Close">×</button>
         </header>
+        <section className="rfp-send" aria-label="Send a project from this computer">
+          <span className="rfp-send-title">Send a project from this computer</span>
+          <div className="rfp-send-row">
+            <select aria-label="Local project to send" value={sendRoot} onChange={(e) => chooseSend(e.target.value)} disabled={sending}>
+              <option value="">Choose a project…</option>
+              {localProjects.map((p) => <option key={p.id} value={p.root_path}>{p.name}</option>)}
+            </select>
+            <input aria-label="Folder name on the box" value={sendName} onChange={(e) => setSendName(e.target.value)} placeholder="Folder name" disabled={sending || !sendRoot} />
+            <button className="rfp-open" disabled={!sendRoot || !sendName.trim() || sending} onClick={() => void send()}>{sending ? 'Sending…' : 'Send'}</button>
+          </div>
+          <small className="rfp-muted">{sendProgress || 'Copies the git history, unpushed commits included, and keeps its origin. Uncommitted changes stay here.'}</small>
+        </section>
         {listing && (
           <nav className="rfp-crumbs" aria-label="Folder path">
             <button onClick={() => browse(listing.root)}>{rootName}</button>

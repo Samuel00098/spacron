@@ -42,6 +42,7 @@ use crate::pty::shell::{self, ShellConfig};
 use crate::state::WriteRateLimiter;
 
 mod acp_bridge;
+mod receive;
 mod automations;
 mod tunnel;
 
@@ -555,6 +556,17 @@ fn handle_control(
                 send_json(out, json!({ "t": "invokeErr", "reqId": req_id, "message": format!("unsupported remote command: {cmd}") }));
             }
         }
+        ClientMsg::Invoke { req_id, cmd, args } if cmd == "remote_clone_repo" => {
+            // A clone can take a while; answer when it is done.
+            let out = out.clone();
+            let workspace = state.workspace.clone();
+            tokio::task::spawn_blocking(move || {
+                match receive::clone_upload(&args, &workspace) {
+                    Ok(value) => send_json(&out, json!({ "t": "invokeOk", "reqId": req_id, "value": value })),
+                    Err(e) => send_json(&out, json!({ "t": "invokeErr", "reqId": req_id, "message": e })),
+                }
+            });
+        }
         ClientMsg::Invoke { req_id, cmd, args } if cmd == "search_in_project" => {
             // Project search walks the whole tree, so it runs off this loop and
             // answers when done. The desktop's project id means nothing here:
@@ -591,6 +603,7 @@ fn handle_control(
             let result = match cmd.as_str() {
                 "remote_set_project_root" => set_project_root(&args, state),
                 "remote_list_folders" => list_folders(&args, state),
+                "remote_upload_chunk" => receive::upload_chunk(&args, &state.workspace),
                 "lsp_check_server" => lsp_check_server(args),
                 "lsp_start" => lsp_start(args, state),
                 "workspace_info" => workspace_info(state),
@@ -2089,5 +2102,51 @@ mod tls_material_tests {
             err.contains("contains no private key"),
             "expected the no-key message, got: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    fn state(workspace: PathBuf) -> ServerState {
+        ServerState { pty: PtyManager::new(), rate: WriteRateLimiter::new(), workspace, token: "t".into(), lsp_tokens: DashMap::new() }
+    }
+
+    /// One test, because the active folder is process-wide state.
+    #[test]
+    fn folders_are_listed_opened_and_confined_to_the_box_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = crate::commands::clean_path_buf(std::fs::canonicalize(tmp.path()).unwrap());
+        std::fs::create_dir_all(ws.join("app/.git")).unwrap();
+        std::fs::create_dir_all(ws.join("api/src")).unwrap();
+        std::fs::create_dir_all(ws.join(".hidden")).unwrap();
+        std::fs::create_dir_all(ws.join("node_modules")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let s = state(ws.clone());
+
+        // Listing: sorted, hidden and node_modules skipped, repos marked, no parent at the top.
+        let top = list_folders(&json!({}), &s).unwrap();
+        let names: Vec<&str> = top["folders"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["api", "app"]);
+        assert_eq!(top["folders"][1]["isRepo"], true);
+        assert!(top["parent"].is_null());
+        let inner = list_folders(&json!({ "path": ws.join("api").to_string_lossy() }), &s).unwrap();
+        assert_eq!(inner["folders"][0]["name"], "src");
+        assert!(inner["parent"].is_string());
+
+        // Nothing outside the box folder, by path or by `..`.
+        assert!(list_folders(&json!({ "path": outside.path().to_string_lossy() }), &s).is_err());
+        assert!(set_project_root(&json!({ "path": ws.join("..").to_string_lossy() }), &s).is_err());
+        assert!(set_project_root(&json!({ "path": ws.join("missing").to_string_lossy() }), &s).is_err());
+
+        // Opening a folder makes it the root git, worktrees and search use.
+        assert_eq!(active_root(&s), ws);
+        let opened = set_project_root(&json!({ "path": ws.join("app").to_string_lossy() }), &s).unwrap();
+        assert_eq!(opened["name"], "app");
+        assert_eq!(active_root(&s), ws.join("app"));
+        // A folder that disappears falls back to the box folder.
+        std::fs::remove_dir_all(ws.join("app")).unwrap();
+        assert_eq!(active_root(&s), ws);
     }
 }
