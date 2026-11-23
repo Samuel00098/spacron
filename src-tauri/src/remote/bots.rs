@@ -44,6 +44,22 @@ const MAX_LOG_BYTES: usize = 64 * 1024;
 const MAX_INSTRUCTIONS: usize = 20_000;
 const MAX_MCP_CONFIG: usize = 256 * 1024;
 const MAX_MESSAGE: usize = 8_000;
+/// The box's own MCP server key (`box_mcp.rs`) and its tools.
+pub(crate) const BOX_TOOLS_KEY: &str = "spacron-box";
+/// Spacron's own MCP server on the desktop (`spacron-mcp`) and its desktop
+/// tools (computer use on this PC, Windows; see docs/computer-use.md).
+pub(crate) const SPACRON_TOOLS_KEY: &str = "spacron-mcp";
+const PC_DESKTOP_TOOLS: [&str; 10] = [
+    "desktop_list_windows", "desktop_ui_tree", "desktop_screenshot", "desktop_find", "desktop_click",
+    "desktop_type", "desktop_key", "desktop_scroll", "desktop_drag", "desktop_focus_window",
+];
+const BOX_DESKTOP_TOOLS: [&str; 7] = [
+    "desktop_screenshot", "desktop_list_windows", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "desktop_launch",
+];
+const BOX_TOOLS: &[&str] = &[
+    "list_agents", "read_agent_output", "send_to_agent", "desktop_screenshot", "desktop_list_windows",
+    "desktop_click", "desktop_type", "desktop_key", "desktop_scroll", "desktop_launch",
+];
 /// How much of the conversation each run sees: the last few exchanges, each
 /// reply trimmed to its end.
 const CONTEXT_RUNS: usize = 6;
@@ -93,6 +109,10 @@ pub(crate) struct BoxBot {
     /// May create other bots (see [`collect_proposals`]).
     #[serde(default)]
     pub can_create_bots: bool,
+    /// May use the desktop tools (`desktop_*`): the box's virtual desktop,
+    /// or this PC's screen through Spacron's own tools.
+    #[serde(default)]
+    pub computer_use: bool,
     /// Extra context the desktop adds to the prompt (the Bot Builder gets the
     /// connectors, agents and avatars it may choose from).
     #[serde(default)]
@@ -295,12 +315,35 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
     let mut flags: Vec<String> = Vec::new();
     match name.as_str() {
         "claude" => {
-            // `--mcp-config` and `--allowedTools` each take a list, so each is
-            // followed by another option rather than by the prompt.
+            // `--mcp-config`, `--allowedTools` and `--disallowedTools` each take
+            // a list, so each is followed by another option, never the prompt.
             let mut allowed: Vec<String> = Vec::new();
+            let mut denied: Vec<String> = Vec::new();
             if let Some((path, keys)) = mcp {
                 flags.extend(["--mcp-config".into(), path.to_string_lossy().to_string()]);
-                allowed.extend(keys.iter().map(|k| format!("mcp__{k}")));
+                for key in keys {
+                    let desktop: &[&str] = match key.as_str() {
+                        BOX_TOOLS_KEY => &BOX_DESKTOP_TOOLS,
+                        SPACRON_TOOLS_KEY => &PC_DESKTOP_TOOLS,
+                        _ => &[],
+                    };
+                    if !bot.computer_use {
+                        denied.extend(desktop.iter().map(|t| format!("mcp__{key}__{t}")));
+                    }
+                    if key == BOX_TOOLS_KEY && bot.access != Access::Full {
+                        // Starting programs is running commands: full access only.
+                        allowed.extend(BOX_TOOLS.iter()
+                            .filter(|t| bot.computer_use || !t.starts_with("desktop_"))
+                            .filter(|t| **t != "desktop_launch")
+                            .map(|t| format!("mcp__{key}__{t}")));
+                    } else {
+                        allowed.push(format!("mcp__{key}"));
+                    }
+                }
+            }
+            if !denied.is_empty() {
+                flags.push("--disallowedTools".into());
+                flags.extend(denied);
             }
             match bot.access {
                 Access::Research => {
@@ -720,6 +763,37 @@ mod tests {
         let full = bot_command(&b, "Summarise the news.", None).unwrap();
         assert!(full.windows(2).any(|w| w == ["--permission-mode", "bypassPermissions"]));
         assert!(!full.contains(&"--allowedTools".to_string()));
+    }
+
+    #[test]
+    fn box_tools_never_let_a_limited_bot_launch_programs() {
+        let mut b = parsed(bot("a", vec![]));
+        b.access = Access::Folder;
+        let keys = vec!["spacron-box".to_string()];
+        let no_desktop = bot_command(&b, "p", Some((Path::new("/m.json"), &keys))).unwrap();
+        assert!(no_desktop.contains(&"mcp__spacron-box__list_agents".to_string()));
+        let allow_at = no_desktop.iter().position(|a| a == "--allowedTools").unwrap();
+        let deny_at = no_desktop.iter().position(|a| a == "--disallowedTools").unwrap();
+        assert!(!no_desktop[allow_at..].iter().any(|a| a.contains("desktop_")), "computer use off: no desktop tool is allowed");
+        assert!(no_desktop[deny_at..allow_at].iter().any(|a| a == "mcp__spacron-box__desktop_click"), "and they are denied outright");
+        b.computer_use = true;
+        let argv = bot_command(&b, "p", Some((Path::new("/m.json"), &keys))).unwrap();
+        assert!(argv.contains(&"mcp__spacron-box__desktop_click".to_string()));
+        assert!(argv.contains(&"mcp__spacron-box__list_agents".to_string()));
+        assert!(!argv.iter().any(|a| a == "mcp__spacron-box" || a.ends_with("desktop_launch")));
+        b.access = Access::Full;
+        assert!(bot_command(&b, "p", Some((Path::new("/m.json"), &keys))).unwrap().iter().all(|a| !a.starts_with("mcp__")), "full access needs no allow list");
+        // Full access still keeps the desktop off unless computer use is on.
+        b.computer_use = false;
+        let full = bot_command(&b, "p", Some((Path::new("/m.json"), &keys))).unwrap();
+        assert!(full.contains(&"--disallowedTools".to_string()) && full.iter().any(|a| a == "mcp__spacron-box__desktop_click"));
+        // On this PC, Spacron's own desktop tools follow the same switch.
+        let pc = vec!["spacron-mcp".to_string()];
+        b.access = Access::Folder;
+        let off = bot_command(&b, "p", Some((Path::new("/m.json"), &pc))).unwrap();
+        assert!(off.iter().any(|a| a == "mcp__spacron-mcp__desktop_click") && off.contains(&"mcp__spacron-mcp".to_string()));
+        b.computer_use = true;
+        assert!(!bot_command(&b, "p", Some((Path::new("/m.json"), &pc))).unwrap().contains(&"--disallowedTools".to_string()));
     }
 
     #[test]

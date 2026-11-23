@@ -52,7 +52,7 @@ async function setup(box: string | null = null) {
 const input = {
   name: 'Digest', instructions: 'Summarise the news.', agent: 'claude', model: null, schedule: 'daily' as const,
   time: '08:00', day: 1, enabled: true, boxId: 'local', access: 'folder' as const, connectors: true,
-  browser: false, canCreateBots: false, avatar: 'robot',
+  browser: false, canCreateBots: false, computerUse: false, avatar: 'robot',
 };
 const lastSync = (fn: typeof mock.local, name: string) =>
   fn.mock.calls.filter((c) => c[0] === name).at(-1)?.[1] as { args?: Record<string, unknown> } & Record<string, unknown>;
@@ -130,9 +130,11 @@ it('gives local bots connectors through the sign-in proxy plus Spacron tools', a
   expect(Object.keys(local).sort()).toEqual(['spacron-linear', 'spacron-mcp', 'spacron-notion']);
   expect(local['spacron-mcp']).toEqual({ type: 'sse', url: 'http://127.0.0.1:7777/sse' });
   expect(local['spacron-notion'].url).toContain('127.0.0.1:7777');
-  // A box can't reach this app: no signed-in connectors, no Spacron tools.
+  // A box can't reach this app: no signed-in connectors and no spacron-mcp,
+  // but it gets the box's own Spacron tools.
   const box = JSON.parse((await api.botMcpConfig('box-1'))!).mcpServers;
-  expect(Object.keys(box)).toEqual(['spacron-linear']);
+  expect(Object.keys(box).sort()).toEqual(['spacron-box', 'spacron-linear']);
+  expect(box['spacron-mcp']).toBeUndefined();
   api.updateBotSettings({ spacronTools: false });
   expect(Object.keys(JSON.parse((await api.botMcpConfig('local'))!).mcpServers)).not.toContain('spacron-mcp');
 });
@@ -202,7 +204,7 @@ it('a box gets signed-in connectors only when shared, through its own proxy', as
   const { api, settings } = await setup('box-1');
   (settings.mcpServers as unknown as Settable<unknown[]>).set(servers);
   expect(api.connectorChoices('box-1').find((c) => c.key === 'spacron-gmail')).toMatchObject({ usable: false });
-  expect(Object.keys(JSON.parse((await api.botMcpConfig('box-1'))!).mcpServers)).toEqual(['spacron-linear']);
+  expect(Object.keys(JSON.parse((await api.botMcpConfig('box-1'))!).mcpServers).sort()).toEqual(['spacron-box', 'spacron-linear']);
   mock.shared['box-1'] = ['spacron-gmail'];
   expect(api.connectorChoices('box-1').find((c) => c.key === 'spacron-gmail')).toMatchObject({ usable: true });
   const cfg = JSON.parse((await api.botMcpConfig('box-1', true))!).mcpServers;
@@ -281,4 +283,28 @@ it('a stalled host call gives up with a clear error instead of hanging', async (
     mock.local.mockImplementation(async () => ({ runId: 'local-run' }));
     vi.useRealTimers();
   }
+});
+
+it('computer use adds the desktop tools of the host: Spacron tools on this PC, the box tools on a box', async () => {
+  const { api } = await setup('box-1');
+  api.updateBotSettings({ spacronTools: false });
+  api.saveBot({ ...input, mcpKeys: [], computerUse: true });
+  await api.syncHost('local');
+  const local = lastSync(mock.local, 'local_bots_sync').args!;
+  expect((local.bots as { mcpKeys: string[]; computerUse: boolean }[])[0]).toMatchObject({ mcpKeys: ['spacron-mcp'], computerUse: true });
+  expect(JSON.parse(local.mcpConfig as string).mcpServers['spacron-mcp']).toEqual({ type: 'sse', url: 'http://127.0.0.1:7777/sse' });
+  api.saveBot({ ...input, boxId: 'box-1', mcpKeys: [], computerUse: true });
+  await api.syncHost('box-1');
+  const box = lastSync(mock.box, 'box_bots_sync');
+  expect((box.bots as { mcpKeys: string[] }[])[0].mcpKeys).toEqual(['spacron-box']);
+  expect(JSON.parse(box.mcpConfig as string).mcpServers['spacron-box']).toEqual({ type: 'http', url: 'spacron-box-mcp://' });
+});
+
+it('a builder can only hand out computer use if it has it', async () => {
+  const { api } = await setup();
+  const spec = { name: 'Clicker', instructions: 'Click things', computerUse: true };
+  const plain = api.saveBot({ ...input, name: 'Builder', canCreateBots: true });
+  expect(api.botFromProposal('local', { id: 'a', createdBy: plain.id, createdByName: 'Builder', creatorAccess: 'folder', createdAt: 1, spec })).toMatchObject({ computerUse: false });
+  const able = api.saveBot({ ...input, name: 'Builder 2', canCreateBots: true, computerUse: true });
+  expect(api.botFromProposal('local', { id: 'b', createdBy: able.id, createdByName: 'Builder 2', creatorAccess: 'folder', createdAt: 1, spec })).toMatchObject({ computerUse: true });
 });

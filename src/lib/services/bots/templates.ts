@@ -16,6 +16,8 @@ export interface BotTemplate {
   browser?: boolean;
   /** The Bot Builder. */
   canCreateBots?: boolean;
+  /** Uses the computer (this PC's screen, or the box's virtual desktop). */
+  computerUse?: boolean;
 }
 
 /** Ready-made bots. Nothing here touches a project. */
@@ -38,6 +40,8 @@ export const BOT_TEMPLATES: BotTemplate[] = [
     instructions: 'Read my Google Calendar for today and tomorrow. Give me a short plan for today: what is fixed, where the free blocks are, and what to prepare for each meeting. Flag clashes and anything that needs travel time.' },
   { id: 'deals', name: 'Price and flight watcher', blurb: 'Browser · every day at 12:00', avatar: 'globe', schedule: 'daily', time: '12:00', day: 1, access: 'folder', browser: true,
     instructions: 'Read WATCHLIST.md in your folder (create it with two example lines and stop if it is missing). For each item, a product page or a flight route and date, open the pages and record today’s price in prices.csv. Reply with anything that dropped by more than 10% since the lowest price you have seen.' },
+  { id: 'desktop', name: 'Desktop operator', blurb: 'Computer use · chat with it', avatar: 'robot', schedule: 'manual', time: '09:00', day: 1, access: 'full', computerUse: true,
+    instructions: 'You operate a computer for me. Use the desktop tools: take a screenshot first, then click, type and press keys to get the task done, taking a new screenshot after each step to check the result. On a box you have your own virtual desktop and can start programs there. Stop and tell me if something needs a password or a payment.' },
   { id: 'research', name: 'Research assistant', blurb: 'Chat with it on demand', avatar: 'search', schedule: 'manual', time: '09:00', day: 1, access: 'folder', browser: true,
     instructions: 'You are my research assistant. Research whatever I ask thoroughly from reliable sources, open pages when you need the details, and answer with a clear summary and the sources. For anything long, also save a report to reports/<today’s date>-<topic>.md.' },
 ];

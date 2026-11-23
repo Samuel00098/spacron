@@ -23,7 +23,13 @@ const KEY = 'spacron_box_signins_v1';
 export const sharedSignIns = writable<Record<string, string[]>>(load());
 
 /** What the connected box reports: its proxy address and what it holds. */
-export interface BoxMcpInfo { proxyBase: string | null; token: string | null; shared: string[] }
+export interface BoxMcpInfo {
+  proxyBase: string | null;
+  token: string | null;
+  shared: string[];
+  /** The box's own MCP server (`spacron-box`): agents on the box, virtual desktop. */
+  mcpUrl?: string | null;
+}
 export const boxMcpInfo = writable<BoxMcpInfo | null>(null);
 
 function load(): Record<string, string[]> {
@@ -74,4 +80,10 @@ export function boxProxyUrl(key: string): string | null {
   const info = get(boxMcpInfo);
   if (!info?.proxyBase || !info.token || !info.shared.includes(key)) return null;
   return `${info.proxyBase}/${key}?token=${info.token}`;
+}
+
+/** The box's own tools as a server entry, for agents running on the box. */
+export function boxToolsServer(): { id: string; name: string; transport: 'http'; url: string; enabled: true } | null {
+  const url = get(boxMcpInfo)?.mcpUrl;
+  return url ? { id: 'spacron-box', name: 'box', transport: 'http', url, enabled: true } : null;
 }

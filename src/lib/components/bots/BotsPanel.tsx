@@ -3,7 +3,8 @@ import { useStore } from '$lib/react/useStore';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
 import { usageState } from '$lib/stores/usage';
-import { mcpServers } from '$lib/stores/settings';
+import { computerUse as computerUseSetting, mcpServers } from '$lib/stores/settings';
+import { computerUseSupported } from '$lib/stores/computerUse';
 import { showToast } from '$lib/stores/notification';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import Dropdown from '$lib/components/shared/Dropdown';
@@ -72,6 +73,16 @@ function duration(run: BotRun): string {
 const STATUS_LABEL: Record<BotRun['status'], string> = {
   running: 'Running', completed: 'Done', failed: 'Failed', stopped: 'Stopped', missed: 'Missed', interrupted: 'Interrupted',
 };
+
+/** Whether computer use works on this PC: Windows only, behind its Settings switch. */
+function useComputerUseOnThisPc(): 'ready' | 'off' | 'unsupported' | 'unknown' {
+  const enabled = useStore(computerUseSetting);
+  const [supported, setSupported] = useState<boolean | null>(null);
+  useEffect(() => { void computerUseSupported().then(setSupported).catch(() => setSupported(false)); }, []);
+  if (supported === null) return 'unknown';
+  if (!supported) return 'unsupported';
+  return enabled ? 'ready' : 'off';
+}
 
 /** "This PC" or the box's name. */
 function useHostName() {
@@ -190,7 +201,7 @@ function BotList({ bots: list }: { bots: Bot[] }) {
                 <StatusChip bot={b} run={run} />
               </div>
               <p>{b.instructions}</p>
-              <small>{[b.canCreateBots && 'Creates bots', b.browser && 'Browser', ...botConnectorNames(b)].filter(Boolean).join(' · ') || ' '}</small>
+              <small>{[b.canCreateBots && 'Creates bots', b.computerUse && 'Computer use', b.browser && 'Browser', ...botConnectorNames(b)].filter(Boolean).join(' · ') || ' '}</small>
             </button>
           );
         })}
@@ -307,6 +318,8 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [keys, setKeys] = useState<string[]>(() => bot ? (bot.mcpKeys ?? (bot.connectors ? connectorChoices(bot.boxId).filter((c) => c.usable).map((c) => c.key) : [])) : templateKeys(template, host));
   const [browser, setBrowser] = useState(bot?.browser ?? template?.browser ?? false);
   const [builder, setBuilder] = useState(bot?.canCreateBots ?? template?.canCreateBots ?? false);
+  const [computer, setComputer] = useState(bot?.computerUse ?? template?.computerUse ?? false);
+  const pcComputer = useComputerUseOnThisPc();
   const [error, setError] = useState('');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const program = agentProgram(agent);
@@ -315,14 +328,14 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const missing = template?.connectors?.filter((id) => !connectorChoices(host).some((c) => c.usable && c.catalogId === id)) ?? [];
   function applyTemplate(t: BotTemplate) {
     setTemplate(t); setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day);
-    setAccess(t.access); setAvatar(t.avatar); setBrowser(t.browser ?? false); setBuilder(t.canCreateBots ?? false); setKeys(templateKeys(t, host));
+    setAccess(t.access); setAvatar(t.avatar); setBrowser(t.browser ?? false); setBuilder(t.canCreateBots ?? false); setComputer(t.computerUse ?? false); setKeys(templateKeys(t, host));
   }
   function submit() {
     setError('');
     try {
       const saved = saveBot({
         id: bot?.id, boxId: host, name, instructions, agent, model: model.trim() || null, schedule, time, day, access,
-        connectors: keys.length > 0, mcpKeys: keys, browser, canCreateBots: builder, avatar, enabled: bot?.enabled ?? true,
+        connectors: keys.length > 0, mcpKeys: keys, browser, canCreateBots: builder, computerUse: computer, avatar, enabled: bot?.enabled ?? true,
         ...(bot?.createdBy ? { createdBy: bot.createdBy } : {}),
       });
       showToast(bot ? `Saved "${saved.name}".` : `"${saved.name}" is ready. Say hi to it.`, 'success');
@@ -357,6 +370,17 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           <p className="bots-helper">{host === LOCAL_HOST
             ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
             : 'Opens and uses real pages in a hidden browser on the box. The box needs Node and a Chromium: run "npx playwright install --with-deps chromium" there once.'}</p>
+          <label className="bots-check">
+            <input type="checkbox" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
+            <span>Use the computer</span>
+          </label>
+          <p className={`bots-helper${computer && host === LOCAL_HOST && pcComputer !== 'ready' ? ' bots-warn' : ''}`}>{host === LOCAL_HOST
+            ? pcComputer === 'unsupported'
+              ? 'Sees and operates apps on this PC\'s screen. Spacron supports that on Windows only for now, so this bot can\'t use it here.'
+              : pcComputer === 'off'
+                ? 'Sees and operates apps on this PC\'s screen. Turn on Settings > Computer use first. Spacron asks you to allow each window it may control, so you need to be there.'
+                : 'Sees and operates apps on this PC\'s screen. Spacron asks you to allow each window it may control, so you need to be there when it runs.'
+            : `Gets its own virtual desktop on the box to open and operate apps, with no one watching. ${access === 'full' ? 'It can start programs there.' : 'It can start programs there only with Full access.'} The box needs this once: "sudo apt-get install -y xvfb xdotool imagemagick".`}</p>
           <label className="bots-check">
             <input type="checkbox" checked={builder} onChange={(e) => setBuilder(e.target.checked)} />
             <span>Can create other bots</span>
@@ -563,9 +587,10 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
             <span className="terminal-chat-pill" title="The agent CLI this bot runs on">
               <span className="terminal-chat-pill-label">{agentProgram(bot.agent)}{bot.model ? ` · ${bot.model}` : ''}</span>
             </span>
-            {(bot.browser || botConnectorNames(bot).length > 0) && <span className="terminal-chat-pill" title={[bot.browser && 'Browser', ...botConnectorNames(bot)].filter(Boolean).join(', ')}>
-              <span className="terminal-chat-pill-label">{[bot.browser && 'Browser', ...botConnectorNames(bot)].filter(Boolean).length} tools</span>
-            </span>}
+            {(() => {
+              const tools = [bot.computerUse && 'Computer use', bot.browser && 'Browser', ...botConnectorNames(bot)].filter(Boolean) as string[];
+              return tools.length > 0 && <span className="terminal-chat-pill" title={tools.join(', ')}><span className="terminal-chat-pill-label">{tools.length} tool{tools.length === 1 ? '' : 's'}</span></span>;
+            })()}
             <span className="terminal-chat-bar-spacer" />
             {active ? (
               <button type="button" className="terminal-chat-send stop" title="Stop (Esc)" aria-label="Stop" disabled={busy !== null} onClick={() => void stop()}>
@@ -623,6 +648,7 @@ function BotAbout({ bot, runs, homeRoot, active, onEdit }: { bot: Bot; runs: Bot
             <span><strong>May</strong> {access?.label.toLowerCase()}</span>
             <span><strong>Connectors</strong> {connectors.length ? connectors.join(', ') : 'none'}</span>
             <span><strong>Browser</strong> {bot.browser ? 'yes' : 'no'}</span>
+            <span><strong>Computer use</strong> {bot.computerUse ? (bot.boxId === LOCAL_HOST ? 'this PC\'s screen' : 'virtual desktop') : 'no'}</span>
             {bot.canCreateBots && <span><strong>Creates bots</strong> yes</span>}
           </div>
           {homeRoot && <p className="bots-helper">Home folder: <code>{`${homeRoot}/${bot.id}`}</code></p>}

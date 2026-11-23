@@ -10,7 +10,7 @@
  *   4. Provide the MCP server port for writing agent config files.
  */
 import { invoke } from '@tauri-apps/api/core';
-import { boxMcpInfo, boxProxyUrl } from '$lib/services/box-signins';
+import { boxMcpInfo, boxProxyUrl, boxToolsServer } from '$lib/services/box-signins';
 import { backendInvoke } from '$lib/services/backend';
 import { listen } from '@tauri-apps/api/event';
 import { get } from './storeCompat';
@@ -958,10 +958,14 @@ function projectServers(): McpServer[] {
   const proxied = userServers();
   if (!isRemote()) return proxied;
   const byId = new Map(proxied.map((s) => [s.id, s]));
-  return rawUserServers().map((s) => {
+  const list = rawUserServers().map((s) => {
     const boxUrl = s.oauth ? boxProxyUrl(serverKey(s)) : null;
     return boxUrl ? { ...s, transport: 'http' as const, url: boxUrl, oauth: false, headers: undefined } : byId.get(s.id) ?? s;
   });
+  // The box's own Spacron tools (other agents on the box, its virtual
+  // desktop), which keep working after this laptop disconnects.
+  const boxTools = boxToolsServer();
+  return boxTools ? [...list, boxTools] : list;
 }
 
 function isRemote(): boolean {

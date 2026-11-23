@@ -29,6 +29,8 @@ use serde_json::{json, Value};
 /// URL scheme bots on a box use for a shared sign-in; the runner swaps it
 /// for this proxy's current address at run time (its port changes per run).
 pub(crate) const PLACEHOLDER: &str = "spacron-box-proxy://";
+/// The box's own MCP server (`box_mcp.rs`), resolved the same way.
+pub(crate) const MCP_PLACEHOLDER: &str = "spacron-box-mcp://";
 
 struct Info {
     port: u16,
@@ -64,6 +66,18 @@ async fn handler(
     crate::mcp::proxy_signed_in(&key, &method, &headers, &body).await
 }
 
+/// `/mcp`: the box's own MCP server (`box_mcp.rs`), behind the same secret.
+async fn mcp_handler(Query(query): Query<TokenQuery>, body: axum::body::Bytes) -> Response {
+    let Some(info) = info().get() else { return StatusCode::SERVICE_UNAVAILABLE.into_response() };
+    if !query.token.as_deref().is_some_and(|t| same(t, &info.secret)) {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing token").into_response();
+    }
+    match serde_json::from_slice::<Value>(&body) {
+        Ok(message) => super::box_mcp::handle(message).await,
+        Err(e) => (StatusCode::BAD_REQUEST, format!("Invalid JSON-RPC: {e}")).into_response(),
+    }
+}
+
 /// Start the proxy and point the grant store at the box's folder. Called once
 /// by `serve`.
 pub(crate) async fn start(workspace: &Path) -> Result<(), String> {
@@ -72,7 +86,9 @@ pub(crate) async fn start(workspace: &Path) -> Result<(), String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let secret = uuid::Uuid::new_v4().simple().to_string();
     let _ = info().set(Info { port, secret });
-    let app = Router::new().route("/proxy/{key}", axum::routing::any(handler));
+    let app = Router::new()
+        .route("/proxy/{key}", axum::routing::any(handler))
+        .route("/mcp", axum::routing::post(mcp_handler).get(super::box_mcp::no_stream));
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -84,9 +100,19 @@ pub(crate) fn url_for(key: &str) -> Option<String> {
     info().get().map(|i| format!("http://127.0.0.1:{}/proxy/{key}?token={}", i.port, i.secret))
 }
 
+/// The box's own MCP server address, when the proxy is running.
+pub(crate) fn mcp_url() -> Option<String> {
+    info().get().map(|i| format!("http://127.0.0.1:{}/mcp?token={}", i.port, i.secret))
+}
+
 /// Swap every `spacron-box-proxy://<key>` in an MCP config for this proxy's
 /// real address. Left alone when the proxy is not running (this PC).
 pub(crate) fn resolve(config: &str) -> String {
+    let config = match (config.contains(MCP_PLACEHOLDER), mcp_url()) {
+        (true, Some(url)) => config.replace(MCP_PLACEHOLDER, &url),
+        _ => config.to_string(),
+    };
+    let config = config.as_str();
     if !config.contains(PLACEHOLDER) {
         return config.to_string();
     }
@@ -123,8 +149,8 @@ pub(crate) fn mcp_info(workspace: &Path) -> Result<Value, String> {
         .collect();
     shared.sort();
     Ok(match info().get() {
-        Some(i) => json!({ "proxyBase": format!("http://127.0.0.1:{}/proxy", i.port), "token": i.secret, "shared": shared }),
-        None => json!({ "proxyBase": null, "token": null, "shared": shared }),
+        Some(i) => json!({ "proxyBase": format!("http://127.0.0.1:{}/proxy", i.port), "token": i.secret, "shared": shared, "mcpUrl": mcp_url() }),
+        None => json!({ "proxyBase": null, "token": null, "shared": shared, "mcpUrl": null }),
     })
 }
 

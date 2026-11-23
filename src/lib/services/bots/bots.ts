@@ -31,6 +31,8 @@ export type BotSchedule = 'manual' | Schedule;
 export type BotAccess = 'research' | 'folder' | 'full';
 /** `'local'` is this PC; anything else is a remote connection id. */
 export const LOCAL_HOST = 'local';
+/** The box's own MCP server (`remote/box_mcp.rs`): agents on the box, virtual desktop. */
+export const BOX_TOOLS_KEY = 'spacron-box';
 const ACCESS_RANK: Record<BotAccess, number> = { research: 0, folder: 1, full: 2 };
 
 export interface Bot {
@@ -59,6 +61,11 @@ export interface Bot {
   browser: boolean;
   /** May create other bots (the Bot Builder). */
   canCreateBots: boolean;
+  /**
+   * May use the computer: this PC's screen through Spacron's own tools
+   * (Windows; you allow each window), or the box's virtual desktop.
+   */
+  computerUse: boolean;
   /** A built-in avatar id, or an uploaded image as a data URL. */
   avatar: string;
   createdAt: number;
@@ -149,6 +156,7 @@ function upgrade(b: Bot): Bot {
     mcpKeys: Array.isArray(b.mcpKeys) ? b.mcpKeys.filter((k) => typeof k === 'string') : undefined,
     browser: b.browser === true,
     canCreateBots: b.canCreateBots === true,
+    computerUse: b.computerUse === true,
     avatar: validAvatar(b.avatar) ? b.avatar : DEFAULT_AVATAR,
   };
 }
@@ -274,8 +282,10 @@ export function connectorChoices(host: string): ConnectorChoice[] {
       ...(usable ? {} : { reason: 'Signed in on this computer only. Share it with the box in Settings > Bots.' }),
     };
   });
-  if (host === LOCAL_HOST && get(botSettings).spacronTools) {
-    out.unshift({ key: SPACRON_OWN_KEY, name: 'Spacron tools', usable: true });
+  if (get(botSettings).spacronTools) {
+    out.unshift(host === LOCAL_HOST
+      ? { key: SPACRON_OWN_KEY, name: 'Spacron tools', usable: true }
+      : { key: BOX_TOOLS_KEY, name: 'Spacron tools', usable: true });
   }
   return out;
 }
@@ -299,7 +309,7 @@ export function botConnectorNames(bot: Pick<Bot, 'boxId' | 'mcpKeys' | 'connecto
  *   app, so a box never gets them.
  * - The browser (Playwright) when any bot on the host wants one.
  */
-export async function botMcpConfig(host: string, withBrowser = false): Promise<string | null> {
+export async function botMcpConfig(host: string, withBrowser = false, withComputer = false): Promise<string | null> {
   const servers = (get(mcpServers) ?? []) as McpServer[];
   const entries: Record<string, unknown> = {};
   if (host === LOCAL_HOST) {
@@ -309,7 +319,8 @@ export async function botMcpConfig(host: string, withBrowser = false): Promise<s
       usable = withSignInProxy(servers, await getMcpHttpUrl());
     } catch { /* No sign-in proxy: keep the connectors that need none. */ }
     for (const { key, server } of enabledServers(usable)) entries[key] = standardEntry(server);
-    if (get(botSettings).spacronTools) {
+    // Computer use on this PC is Spacron's own desktop tools, served by spacron-mcp.
+    if (get(botSettings).spacronTools || withComputer) {
       try {
         const { getMcpUrl } = await import('$lib/stores/mcpBridge');
         const url = await getMcpUrl();
@@ -323,6 +334,8 @@ export async function botMcpConfig(host: string, withBrowser = false): Promise<s
       if (!server.oauth) entries[key] = standardEntry(server);
       else if (shared.has(key)) entries[key] = { type: 'http', url: `spacron-box-proxy://${key}` };
     }
+    // The box's own tools, resolved by the runner to its live address.
+    if (get(botSettings).spacronTools || withComputer) entries[BOX_TOOLS_KEY] = { type: 'http', url: 'spacron-box-mcp://' };
   }
   if (withBrowser) {
     try {
@@ -336,7 +349,8 @@ export async function botMcpConfig(host: string, withBrowser = false): Promise<s
 /** The MCP keys one bot gets: its picks plus the browser. */
 function keysFor(b: Bot): string[] | null {
   if (b.mcpKeys === undefined) return null;
-  return [...b.mcpKeys, ...(b.browser ? [SPACRON_BROWSER_KEY] : [])];
+  const computer = b.computerUse ? [b.boxId === LOCAL_HOST ? SPACRON_OWN_KEY : BOX_TOOLS_KEY] : [];
+  return [...new Set([...b.mcpKeys, ...(b.browser ? [SPACRON_BROWSER_KEY] : []), ...computer])];
 }
 
 // ── saving ──────────────────────────────────────────────────────────────────
@@ -468,11 +482,12 @@ async function sendHost(host: string): Promise<void> {
   const payload = mine.map((b) => ({
     id: b.id, name: b.name, instructions: b.instructions, agent: b.agent, model: b.model ?? null,
     enabled: b.enabled, occurrences: upcomingBotRuns(b, now), access: b.access,
-    connectors: b.connectors || b.browser, mcpKeys: keysFor(b), canCreateBots: b.canCreateBots,
+    connectors: b.connectors || b.browser || b.computerUse, mcpKeys: keysFor(b), canCreateBots: b.canCreateBots,
+    computerUse: b.computerUse,
     extraContext: b.canCreateBots ? builderContext(host) : null,
   }));
   const wantsMcp = payload.some((b) => b.connectors);
-  const mcpConfig = wantsMcp ? await botMcpConfig(host, mine.some((b) => b.browser)) : null;
+  const mcpConfig = wantsMcp ? await botMcpConfig(host, mine.some((b) => b.browser), mine.some((b) => b.computerUse)) : null;
   await call(host, 'sync', {
     bots: payload, enabled: settings.enabled, catchUpMinutes: settings.catchUpMinutes,
     maxRunMinutes: settings.maxRunMinutes, mcpConfig,
@@ -569,6 +584,7 @@ export function botFromProposal(host: string, p: BotProposal): BotInput | string
   return {
     boxId: host, name, instructions, agent, model: null, schedule, time, day, enabled: false, access,
     connectors: mcpKeys.length > 0, mcpKeys, browser: spec.browser === true, canCreateBots: false, avatar,
+    computerUse: spec.computerUse === true && creator?.computerUse === true,
     createdBy: p.createdByName || p.createdBy,
   };
 }

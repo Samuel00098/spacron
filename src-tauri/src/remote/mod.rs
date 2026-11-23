@@ -45,6 +45,7 @@ mod acp_bridge;
 mod receive;
 mod automations;
 pub(crate) mod bots;
+mod box_mcp;
 mod box_proxy;
 mod tunnel;
 
@@ -170,6 +171,7 @@ pub async fn serve(cfg: ServerConfig) -> anyhow::Result<()> {
     // Automations that run here, so they fire while the laptop is closed.
     tokio::spawn(automations::run_loop(state.workspace.clone()));
     // Signed-in connectors the desktop shared with this box, served on loopback.
+    box_mcp::init(state.clone());
     if let Err(e) = box_proxy::start(&state.workspace).await {
         eprintln!("sign-in proxy unavailable: {e}");
     }
