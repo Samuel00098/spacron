@@ -605,7 +605,7 @@
 .tcr-request-editor-footer button:disabled { opacity: .5; cursor: default; }
 
 .tcr-msg { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.tcr-msg.user { align-items: stretch; }
+.tcr-msg.user { align-items: stretch; margin-block-end: 8px; }
 
 /* ── Selection quote ───────────────────────────────────────────────────── */
 

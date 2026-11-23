@@ -76,6 +76,7 @@ html,body{margin:0;background:var(--background,light-dark(#efefef,#101010));colo
 /* Keep scroll gestures inside the iframe, including nested visual scrollers. */
 :where(html,body,body *){overscroll-behavior:none!important}
 body{font-family:var(--font-sans,system-ui,sans-serif);font-size:14px;line-height:1.55;padding:16px}
+html[data-spacron-layout=inline] body{padding:10px 4px}
 button,input,select,textarea{box-sizing:border-box;max-width:100%;font:inherit;color:var(--foreground,light-dark(#171717,#e5e7eb));accent-color:var(--accent,light-dark(#5345c7,#a49aff));background:var(--card,light-dark(#f8f8f8,#191919));border:1px solid var(--border,light-dark(#d2d2d2,#3a3a3a));border-radius:var(--radius,10px)}
 button,select{padding:.4em .7em}
 button{cursor:pointer}
@@ -86,7 +87,9 @@ input::placeholder,textarea::placeholder{color:var(--muted-foreground,light-dark
 a{color:var(--accent,light-dark(#5345c7,#a49aff))}
 </style>
 <script>(function(){
-var channel=new URLSearchParams(location.search).get('c')||'';
+var params=new URLSearchParams(location.search);
+var channel=params.get('c')||'';
+if(params.get('layout')==='inline')document.documentElement.dataset.spacronLayout='inline';
 var currentTheme={}, lastTheme='';
 function applyTheme(t){
   if(!t||typeof t!=='object')return;

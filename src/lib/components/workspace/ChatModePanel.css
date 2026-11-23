@@ -364,6 +364,7 @@
 
 .app-shell .chat-mode-message.user {
   margin-left: auto;
+  margin-bottom: 24px;
   max-width: min(620px, 72%);
   padding: 9px 12px;
   border-radius: 18px 18px 5px 18px;

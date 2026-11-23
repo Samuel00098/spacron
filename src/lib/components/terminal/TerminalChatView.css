@@ -1383,7 +1383,6 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 .chat-visual,
 .chat-visual-modal {
   --visual-surface: var(--app-surface);
-  --visual-toolbar: color-mix(in srgb, var(--chat-surface-ink) 4%, var(--visual-surface));
   --visual-control: color-mix(in srgb, var(--chat-surface-ink) 8%, var(--visual-surface));
   --visual-line: color-mix(in srgb, var(--chat-surface-ink) 14%, transparent);
   color-scheme: dark;
@@ -1400,41 +1399,26 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 :root.light-theme :is(.chat-visual, .chat-visual-modal) { color-scheme: light; }
 
 .chat-visual {
-  border: 1px solid var(--visual-line);
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
 }
 
 .chat-visual-bar {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 42px;
-  padding: 5px 10px;
+  min-height: 34px;
+  padding: 2px 0 6px;
   border-bottom: 1px solid var(--visual-line);
-  background: var(--visual-toolbar);
 }
+
+.chat-visual-modal > .chat-visual-bar { padding: 7px 12px; }
 
 .chat-visual-title {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.chat-visual-title strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-visual-mark {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-md, 8px);
-  background: var(--visual-control);
+  overflow-wrap: anywhere;
 }
 
 .chat-visual-bar .chat-visual-btn {
@@ -1453,9 +1437,8 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   cursor: pointer;
 }
 
-.chat-visual-bar .chat-visual-btn.expand { gap: 6px; padding-inline: 9px; background: var(--visual-control); }
+.chat-visual-bar .chat-visual-btn.expand { gap: 6px; padding-inline: 8px; }
 .chat-visual-bar .chat-visual-btn:hover { background: var(--visual-control); }
-.chat-visual-bar .chat-visual-btn.expand:hover { background: color-mix(in srgb, var(--chat-surface-ink) 13%, var(--visual-surface)); }
 .chat-visual-bar .chat-visual-btn:focus-visible {
   outline: 2px solid var(--chat-surface-ink);
   outline-offset: 1px;
@@ -1476,7 +1459,7 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   outline-offset: -2px;
 }
 
-.chat-visual .chat-visual-status { margin: 0; padding: 14px; color: var(--chat-surface-muted); overflow-wrap: anywhere; }
+.chat-visual .chat-visual-status { margin: 0; padding: 10px 0; color: var(--chat-surface-muted); overflow-wrap: anywhere; }
 
 .chat-visual-overlay {
   position: fixed;

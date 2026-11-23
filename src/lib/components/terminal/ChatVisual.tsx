@@ -86,6 +86,7 @@ function themeTokens(): Record<string, string> {
   const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
   const light = document.documentElement.classList.contains('light-theme');
   const background = v('--app-surface', light ? '#efefef' : '#101010');
+  const menu = v('--surface-menu', background);
   const foreground = v('--chat-surface-ink', light ? '#171717' : '#f4f4f5');
   const themeAccent = v('--accent', '#7c6af7');
   const onAccent = v('--on-accent', light ? '#ffffff' : '#101010');
@@ -94,9 +95,9 @@ function themeTokens(): Record<string, string> {
     'color-scheme': light ? 'light' : 'dark',
     '--background': background,
     '--foreground': foreground,
-    '--card': tint(5),
+    '--card': background,
     '--card-foreground': foreground,
-    '--popover': tint(8),
+    '--popover': menu,
     '--popover-foreground': foreground,
     '--primary': themeAccent,
     '--primary-foreground': onAccent,
@@ -111,7 +112,7 @@ function themeTokens(): Record<string, string> {
     '--border': tint(16),
     '--input': tint(16),
     '--ring': themeAccent,
-    '--radius': v('--radius-lg', '12px'),
+    '--radius': v('--bento-radius', '16px'),
     '--font-sans': v('--font-sans', 'system-ui, sans-serif'),
     '--font-mono': v('--terminal-font-family', 'ui-monospace, monospace'),
     '--chart-1': isColourful(themeAccent) ? themeAccent : light ? '#5345c7' : '#a49aff',
@@ -190,9 +191,9 @@ function VisualFrame({ src, title, height, onHeight, onCompose, onEscape, classN
     <iframe
       ref={frameRef}
       className={className}
-      title={title}
+      aria-label={title}
       tabIndex={0}
-      src={`${src}?c=${channel}#${initialTheme}`}
+      src={`${src}?c=${channel}${onHeight ? '&layout=inline' : ''}#${initialTheme}`}
       onLoad={() => sendTheme(true)}
       // Scripts run so the page can be interactive; no allow-same-origin, so it
       // cannot reach the app, its storage or the chat around it.
@@ -203,21 +204,10 @@ function VisualFrame({ src, title, height, onHeight, onCompose, onEscape, classN
   );
 }
 
-function VisualTitle({ title }: { title: string }) {
-  return (
-    <div className="chat-visual-title">
-      <span className="chat-visual-mark" aria-hidden="true">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M7 15v-3m5 3V8m5 7v-5" /></svg>
-      </span>
-      <strong title={title}>{title}</strong>
-    </div>
-  );
-}
-
 export function ChatVisualStatus({ title, text }: { title: string; text: string }) {
   return (
     <div className="chat-visual missing" role="status">
-      <div className="chat-visual-bar"><VisualTitle title={title} /></div>
+      <div className="chat-visual-bar"><strong className="chat-visual-title">{title}</strong></div>
       <p className="chat-visual-status">{text}</p>
     </div>
   );
@@ -241,11 +231,10 @@ export function ChatVisual({ visual, spot, onCompose }: {
   return (
     <div className="chat-visual">
       <div className="chat-visual-bar">
-        <VisualTitle title={title} />
+        <strong className="chat-visual-title">{title}</strong>
         <button
           type="button"
           className="chat-visual-btn"
-          title="Open in app browser"
           aria-label="Open in app browser"
           onClick={() => void openUrlInPreviewPanel(`${src}#${encodeURIComponent(JSON.stringify(themeTokens()))}`)}
         >
@@ -268,8 +257,8 @@ export function ChatVisual({ visual, spot, onCompose }: {
         <div className="chat-visual-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
           <div className="chat-visual-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-label={title}>
             <div className="chat-visual-bar">
-              <VisualTitle title={title} />
-              <button type="button" className="chat-visual-btn" title="Close (Esc)" aria-label="Close visual" onClick={close}>
+              <strong className="chat-visual-title">{title}</strong>
+              <button type="button" className="chat-visual-btn" aria-label="Close visual" onClick={close}>
                 <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2 2 10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
               </button>
             </div>
