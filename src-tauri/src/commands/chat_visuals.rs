@@ -80,7 +80,7 @@ html[data-spacron-layout=inline] body{padding:10px 4px}
 button,input,select,textarea{box-sizing:border-box;max-width:100%;font:inherit;color:var(--foreground,light-dark(#171717,#e5e7eb));accent-color:var(--accent,light-dark(#5345c7,#a49aff));background:var(--card,light-dark(#f8f8f8,#191919));border:1px solid var(--border,light-dark(#d2d2d2,#3a3a3a));border-radius:var(--radius,10px)}
 button,select{padding:.4em .7em}
 button{cursor:pointer}
-button:hover:not(:disabled){background:var(--muted,light-dark(#e4e4e7,#29292d))}
+:where(button:hover:not(:disabled)){background:var(--muted,light-dark(#e4e4e7,#29292d))}
 button:disabled{cursor:default;opacity:.55}
 :where(button,input,textarea,select,a):focus-visible{outline:2px solid var(--ring,light-dark(#5345c7,#a49aff));outline-offset:2px}
 input::placeholder,textarea::placeholder{color:var(--muted-foreground,light-dark(#495467,#b0bac9))}
@@ -110,16 +110,18 @@ var last=0;function report(){var b=document.body;if(!b)return;var h=Math.ceil(b.
 var ro=new ResizeObserver(report);ro.observe(document.documentElement);document.addEventListener('DOMContentLoaded',function(){ro.observe(document.body);report()});window.addEventListener('load',report);setInterval(report,1000);
 })();</script>"#;
 
+const CONTRAST_SCRIPT: &str = include_str!("chat_visual_contrast.js");
+
 /// Put the shell right after `<head>` (or first, for a fragment) so it applies before the page's own markup.
 fn wrap_page(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
     if let Some(head) = lower.find("<head") {
         if let Some(close) = lower[head..].find('>') {
             let at = head + close + 1;
-            return format!("{}{}{}", &html[..at], SHELL_HEAD, &html[at..]);
+            return format!("{}{SHELL_HEAD}<script>{CONTRAST_SCRIPT}</script>{}", &html[..at], &html[at..]);
         }
     }
-    format!("<!doctype html><html><head>{SHELL_HEAD}</head><body>{html}</body></html>")
+    format!("<!doctype html><html><head>{SHELL_HEAD}<script>{CONTRAST_SCRIPT}</script></head><body>{html}</body></html>")
 }
 
 async fn serve_visual(AxumPath((secret, key, file)): AxumPath<(String, String, String)>) -> Response {
@@ -236,6 +238,7 @@ mod tests {
         assert!(csp.contains("connect-src 'none'"));
         let body = page.text().await.unwrap();
         assert!(body.contains("<div id=x>hello</div>") && body.contains("spacronVisual"));
+        assert!(body.contains("data-spacron-readable-ink"));
 
         let missing = reqwest::get(format!("{}nope.html", spot.base_url)).await.unwrap();
         assert_eq!(missing.status(), 404);

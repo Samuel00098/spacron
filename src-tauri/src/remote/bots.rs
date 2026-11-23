@@ -262,7 +262,8 @@ name, never a path; at most 8 per answer). Put your data, styles and scripts inl
 cdn.jsdelivr.net, unpkg.com, cdnjs.cloudflare.com or esm.sh, and the page cannot make network requests. Make it \
 interactive where it helps (controls, sliders, toggles) and style it with the CSS variables --background, --foreground, \
 --card, --muted, --muted-foreground, --accent, --accent-foreground, --border, --radius, --font-sans and --chart-1 through --chart-5, each with a fallback value. \
-Use these variables for every surface, label and control, and leave the host's root variables intact. For canvas and JS charts, \
+Use these variables for every surface, label and control, and leave the host's root variables intact. Pair accent fills with \
+--accent-foreground, and use --foreground for headings rather than fixed white or black. Check readability in both themes. For canvas and JS charts, \
 read the computed CSS variables at startup and redraw on the window's spacron:theme event while preserving user input. To let the \
 user send something back to you, add a button that calls window.spacron.compose(\"a plain-language request\"): it puts that \
 text in their message box for them to review and send. Always also write the key result in plain text.";
