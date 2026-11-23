@@ -576,15 +576,14 @@
   padding: 0;
   border: 0;
   border-radius: 6px;
-  background: transparent;
-  color: var(--chat-surface-ink, var(--text-primary));
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--chat-surface-ink, var(--text-primary)) !important;
   cursor: pointer;
 }
-.app-shell .chat-mode-message-actions button:hover,
-.app-shell .chat-mode-message-actions button:focus-visible,
-.app-shell .chat-mode-message-actions button.active {
-  background: color-mix(in srgb, var(--chat-surface-ink) 10%, transparent);
-  color: var(--chat-surface-ink, var(--text-primary));
+.app-shell .chat-mode-message-actions button:focus-visible {
+  outline: 2px solid var(--chat-surface-ink, var(--text-primary));
+  outline-offset: 2px;
 }
 .app-shell .chat-mode-message-actions svg {
   width: 13px;
