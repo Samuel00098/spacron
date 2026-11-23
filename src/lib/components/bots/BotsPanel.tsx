@@ -336,6 +336,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   const [access, setAccess] = useState<BotAccess>(start?.access ?? settings.defaultAccess);
   const [keys, setKeys] = useState<string[]>(() => bot ? (bot.mcpKeys ?? (bot.connectors ? connectorChoices(bot.boxId).filter((c) => c.usable).map((c) => c.key) : [])) : templateKeys(template, host));
   const [browser, setBrowser] = useState(bot?.browser ?? template?.browser ?? false);
+  const [browserVisible, setBrowserVisible] = useState(bot?.browserVisible ?? false);
   const [builder, setBuilder] = useState(bot?.canCreateBots ?? template?.canCreateBots ?? false);
   const [computer, setComputer] = useState(bot?.computerUse ?? template?.computerUse ?? false);
   const pcComputer = useComputerUseOnThisPc();
@@ -373,7 +374,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
     try {
       const saved = saveBot({
         id: bot?.id, boxId: host, name, instructions, starterPrompts, agent, model: model.trim() || null, schedule, time, day, access,
-        connectors: keys.length > 0, mcpKeys: keys, browser, canCreateBots: builder, computerUse: computer, avatar, enabled: bot?.enabled ?? true,
+        connectors: keys.length > 0, mcpKeys: keys, browser, browserVisible: browser && host === LOCAL_HOST && browserVisible, canCreateBots: builder, computerUse: computer, avatar, enabled: bot?.enabled ?? true,
         ...(bot?.createdBy ? { createdBy: bot.createdBy } : {}),
       });
       showToast(bot ? `Saved "${saved.name}".` : `"${saved.name}" is ready. Say hi to it.`, 'success');
@@ -428,6 +429,13 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
                 <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
                 <span>Use a web browser</span>
               </label>
+              {browser && host === LOCAL_HOST && <>
+                <label className="bots-check">
+                  <input type="checkbox" checked={browserVisible} onChange={(e) => setBrowserVisible(e.target.checked)} />
+                  <span>Show the browser while it works</span>
+                </label>
+                <p className="bots-helper">Opens a real browser window on this PC so you can watch the bot click and type. Leave it off to run hidden in the background.</p>
+              </>}
               <p className="bots-helper">{host === LOCAL_HOST
                 ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
                 : `Opens and uses real pages in a hidden browser on the box. The box needs Node, and a browser installed once with "${boxOs === 'linux' ? 'npx playwright install --with-deps chromium' : 'npx playwright install chromium'}".`}</p>

@@ -940,10 +940,11 @@ function rawUserServers(): McpServer[] {
  * uses the copy Spacron installs; on a box it runs through npx, which needs
  * Node there (and a Chromium: `npx playwright install --with-deps chromium`).
  */
-export async function botBrowserEntry(onThisPc: boolean): Promise<{ command: string; args: string[] }> {
+export async function botBrowserEntry(onThisPc: boolean, visible = false): Promise<{ command: string; args: string[] }> {
   if (onThisPc) {
     const { command, args } = await playwrightArgv(null);
-    return { command, args: [...args, '--headless'] };
+    // Visible: no `--headless`, so the browser window opens and you watch the bot work.
+    return { command, args: visible ? args : [...args, '--headless'] };
   }
   return { command: PLAYWRIGHT_COMMAND, args: ['-y', `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`, '--isolated', '--headless', '--browser', 'chromium'] };
 }

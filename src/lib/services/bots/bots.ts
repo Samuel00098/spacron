@@ -22,7 +22,7 @@ import { mcpServers } from '$lib/stores/settings';
 import { backendInvoke } from '$lib/services/backend';
 import { botChatVisuals } from '$lib/stores/botChatSettings';
 import type { ChatVisualsSpot } from '$lib/stores/terminal';
-import { enabledServers, standardEntry, withSignInProxy, SPACRON_OWN_KEY, SPACRON_BROWSER_KEY, type McpServer } from '$lib/services/mcp-servers';
+import { enabledServers, standardEntry, withSignInProxy, SPACRON_OWN_KEY, SPACRON_BROWSER_KEY, SPACRON_BROWSER_VISIBLE_KEY, type McpServer } from '$lib/services/mcp-servers';
 import { nextOccurrence, type Schedule } from '$lib/services/automations/schedule';
 import { sharedWith } from '$lib/services/box-signins';
 import { catalogIconFor } from '$lib/services/mcp-catalog';
@@ -66,6 +66,8 @@ export interface Bot {
   mcpKeys?: string[];
   /** Give the bot a web browser it can open and use (Playwright). */
   browser: boolean;
+  /** Show the browser window while the bot works (this PC only), so you can watch it. */
+  browserVisible?: boolean;
   /** May create other bots (the Bot Builder). */
   canCreateBots: boolean;
   /**
@@ -191,6 +193,7 @@ function upgrade(b: Bot): Bot {
     connectors: b.connectors ?? true,
     mcpKeys: Array.isArray(b.mcpKeys) ? b.mcpKeys.filter((k) => typeof k === 'string') : undefined,
     browser: b.browser === true,
+    browserVisible: b.browserVisible === true && b.boxId === LOCAL_HOST,
     canCreateBots: b.canCreateBots === true,
     computerUse: b.computerUse === true,
     avatar: validAvatar(b.avatar) ? b.avatar : DEFAULT_AVATAR,
@@ -390,7 +393,7 @@ export function botConnectorNames(bot: Pick<Bot, 'boxId' | 'mcpKeys' | 'connecto
  *   app, so a box never gets them.
  * - The browser (Playwright) when any bot on the host wants one.
  */
-export async function botMcpConfig(host: string, withBrowser = false, withComputer = false): Promise<string | null> {
+export async function botMcpConfig(host: string, withBrowser = false, withComputer = false, withVisibleBrowser = false): Promise<string | null> {
   const servers = (get(mcpServers) ?? []) as McpServer[];
   const entries: Record<string, unknown> = {};
   if (host === LOCAL_HOST) {
@@ -422,6 +425,7 @@ export async function botMcpConfig(host: string, withBrowser = false, withComput
     try {
       const { botBrowserEntry } = await import('$lib/stores/mcpBridge');
       entries[SPACRON_BROWSER_KEY] = await botBrowserEntry(host === LOCAL_HOST);
+      if (host === LOCAL_HOST && withVisibleBrowser) entries[SPACRON_BROWSER_VISIBLE_KEY] = await botBrowserEntry(true, true);
     } catch { /* No browser available; the bot runs without one. */ }
   }
   return Object.keys(entries).length ? JSON.stringify({ mcpServers: entries }) : null;
@@ -431,7 +435,7 @@ export async function botMcpConfig(host: string, withBrowser = false, withComput
 function keysFor(b: Bot): string[] | null {
   if (b.mcpKeys === undefined) return null;
   const computer = b.computerUse ? [b.boxId === LOCAL_HOST ? SPACRON_OWN_KEY : BOX_TOOLS_KEY] : [];
-  return [...new Set([...b.mcpKeys, ...(b.browser ? [SPACRON_BROWSER_KEY] : []), ...computer])];
+  return [...new Set([...b.mcpKeys, ...(b.browser ? [b.browserVisible && b.boxId === LOCAL_HOST ? SPACRON_BROWSER_VISIBLE_KEY : SPACRON_BROWSER_KEY] : []), ...computer])];
 }
 
 // ── saving ──────────────────────────────────────────────────────────────────
@@ -602,7 +606,7 @@ async function sendHost(host: string): Promise<void> {
     extraContext: b.canCreateBots ? builderContext(host) : null,
   }));
   const wantsMcp = payload.some((b) => b.connectors);
-  const mcpConfig = wantsMcp ? await botMcpConfig(host, mine.some((b) => b.browser), mine.some((b) => b.computerUse)) : null;
+  const mcpConfig = wantsMcp ? await botMcpConfig(host, mine.some((b) => b.browser), mine.some((b) => b.computerUse), mine.some((b) => b.browser && b.browserVisible)) : null;
   await call(host, 'sync', {
     bots: payload, enabled: settings.enabled, catchUpMinutes: settings.catchUpMinutes,
     maxRunMinutes: settings.maxRunMinutes, mcpConfig,

@@ -61,6 +61,8 @@ export const SPACRON_OWN_KEY = 'spacron-mcp';
 
 /** The browser server's key, still owned by its own setting. */
 export const SPACRON_BROWSER_KEY = 'spacron-playwright';
+/** The same browser with its window shown, for bots set to be watched (this PC only). */
+export const SPACRON_BROWSER_VISIBLE_KEY = 'spacron-playwright-visible';
 
 /**
  * Keys Spacron writes that no user server may claim or prune.
@@ -69,7 +71,7 @@ export const SPACRON_BROWSER_KEY = 'spacron-playwright';
  * overwrite the app's own entry — taking every agent's cross-agent tools with
  * it, and looking like the agents had simply stopped seeing each other.
  */
-export const RESERVED_KEYS: ReadonlySet<string> = new Set([SPACRON_OWN_KEY, SPACRON_BROWSER_KEY]);
+export const RESERVED_KEYS: ReadonlySet<string> = new Set([SPACRON_OWN_KEY, SPACRON_BROWSER_KEY, SPACRON_BROWSER_VISIBLE_KEY]);
 
 /**
  * Config-file key for a server.

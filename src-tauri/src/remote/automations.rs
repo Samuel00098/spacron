@@ -342,6 +342,10 @@ async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result
     spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, &[("SPACRON_AUTOMATION", &a.name)], RUN_TIMEOUT, None).await
 }
 
+/// Windows process flag: run without opening a console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// What `spawn_headless` reports when a run was stopped through its cancel signal.
 pub(crate) const STOPPED_BY_USER: &str = "Stopped by you.";
 
@@ -385,6 +389,11 @@ pub(crate) async fn spawn_headless(
     };
     #[cfg(unix)]
     command.process_group(0);
+    // The app has no console of its own, so a console program (OpenCode,
+    // Antigravity, node) would open a visible terminal window for every run.
+    // A hidden console is still inherited by what the agent starts.
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
     command
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -419,7 +428,7 @@ async fn kill_tree(child: &mut tokio::process::Child) {
         #[cfg(unix)]
         let _ = tokio::process::Command::new("kill").args(["-TERM", "--"]).arg(format!("-{pid}")).status().await;
         #[cfg(windows)]
-        let _ = tokio::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).status().await;
+        let _ = tokio::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).creation_flags(CREATE_NO_WINDOW).status().await;
         // A moment to exit cleanly before the hard kill below.
         if tokio::time::timeout(Duration::from_secs(3), child.wait()).await.is_ok() {
             return;

@@ -4,6 +4,19 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+## [v5.1.11] - 2026-11-23
+
+A follow-up to 5.1.10: bots stop opening terminal windows, and you can now watch a bot's browser work.
+
+### Added
+
+- **Watch a bot's browser** — when a bot uses a web browser on this PC, tick "Show the browser while it works" in its settings to open a real browser window and watch it click and type. Leave it off to keep the browser hidden. Agents already show their browser.
+- **Clearer interactive visuals** — agents are now told not to give page elements names that clash with the browser's own (such as `open` or `close`), which could leave a button silently doing nothing.
+
+### Fixed
+
+- **Terminal windows no longer pop up when bots run** — on Windows, running a bot or automation with OpenCode, Antigravity and other command-line agents opened a visible console window for every run. They now run hidden, as do the stop commands.
+
 ## [v5.1.10] - 2026-11-23
 
 A follow-up to 5.1.9 that stops "browser storage is full" errors and clears out old chats by itself.
