@@ -1,126 +1,173 @@
 # Spacron Mobile Companion App — Plan
 
-Status: **PLAN** — nothing implemented. This is the starting point for the
-"control Spacron from your phone" feature (Orca gap #46 in
-`docs/orca-feature-gap.md`, explicitly deferred from `docs/mobile-emulator-pane.md`).
+Status: **PLAN** — nothing implemented. Updated 2026-11-23 with the product
+owner's requirements and decisions below. This is the "control Spacron from your
+phone" feature (Orca gap #46 in `docs/orca-feature-gap.md`, explicitly deferred
+from `docs/mobile-emulator-pane.md`).
 
 ## The Goal
 
-An iOS/Android app that attaches to the **same headless `spacron-server`** the
-desktop app already connects to, so the workspace on the VPS is reachable from a
-phone: watch terminals live, see agent/task status, get a ping when an agent
-finishes a turn, and send follow-up instructions. Close the laptop, continue on
-the phone — same workspace, mid-state.
+A native iPhone and Android app that works like the Orca and T3 Code companions:
+pair it with Spacron, then **chat with your agents from the phone** — send
+messages, read replies as they stream, get an alert when an agent finishes or
+needs you, see what every agent is doing, and change the settings that matter on
+the go. Step away from the desk; the work keeps going and the phone keeps you in
+the loop.
 
-Deliberately **not** a full Spacron clone on mobile. The desktop app stays the
-primary surface; the phone is for watching and quick follow-ups, with real
-terminal interaction as the stretch goal.
+It must reach **both** places Spacron work runs:
 
-## The good news: the protocol already exists
+1. **The desktop app on your laptop** (local projects) — the main case.
+2. **A remote box** running `spacron-server` (remote workspaces).
 
-The desktop remote-workspace transport (`docs/remote-workspace.md`) is exactly
-what a phone client needs, and it is already shipped:
+Deliberately **not** a full Spacron clone. The desktop stays the primary
+surface; the phone is for conversations, alerts, status and quick control.
 
-- `spacron-server` serves `GET /pty` over a **WebSocket** — JSON control frames,
-  binary terminal data. One connection multiplexes many sessions; sessions
-  **survive a disconnect** for re-attach (the property auto-reconnect depends on).
-- Auth is a **pre-shared token** offered as the `token.<TOKEN>` WebSocket
-  subprotocol, verified in constant time. No query params, so no token in URLs.
-- TLS (`wss://`) is supported via `--cert/--key`; certs verify against the **OS
-  trust store**, so public CAs (Let's Encrypt, Tailscale certs) work with zero
-  client setup.
-- File ops, fs-watch, LSP (`/lsp`), and git/worktree commands ride the same
-  socket through the generic `invoke` seam (`ClientMsg::Invoke`).
-- The desktop relay (`src-tauri/src/commands/remote_relay.rs`) documents the exact
-  connection contract and the CSP/loopback constraints that only apply to the
-  desktop webview — a native phone client has no such constraint and can dial the
-  remote directly.
+## Requirements (from the product owner)
 
-A phone app therefore needs **no new server code** — it speaks the same wire
-protocol the Windows thin client already speaks. Everything below is client-side.
+- **Send messages** to an agent thread, including follow-ups to a running agent.
+- **Receive messages**: see agent replies live, plus the thread history.
+- **Alerts**: a phone notification when an agent finishes a turn, asks a
+  question / needs approval, or fails — also when the app is closed.
+- **Useful information**: which agents are working / done / blocked, task
+  progress (the plan checklist), the project and branch, usage limits, recent
+  automation runs.
+- **Settings**: paired computers and boxes, which alerts to get, default agent
+  and model for new threads, sign out / unpair.
+- **Connect to the local one**: pair with the desktop app on the laptop, not
+  only with a remote box.
 
-## What the app is (first cut)
+## Decisions (made 2026-11-23)
 
-- **Connection screen:** a saved list of remotes (`name`, `wss://` URL, token),
-  QR-import (the desktop StatusBar popover can render a QR of the connection),
-  and a status indicator (`disconnected | connecting | connected | reconnecting`)
-  mirroring the desktop's `RemoteStatus` chip model.
-- **Terminal view:** attach to live PTY sessions on the server; render with
-  **xterm.js** (runs on mobile webviews; the desktop already uses it, and the
-  wire protocol's JSON+binary frames map 1:1 onto it). Scrollback replay on
-  attach, live output, basic keyboard. Sending text is a follow-up-grade action.
-- **Agents/tasks view:** the orchestrator task list + agent status, and turn-end
-  notifications. This is where "phone companion" earns its name — the desktop
-  inbox/completion-card logic (`services/orchestrator/inbox.ts`) is the model.
-- **Follow-ups:** send a text instruction to a running agent's session.
+| Question | Decision | Why |
+|---|---|---|
+| App type | **Native app: Expo / React Native** for iOS and Android | Real alerts even when the app is closed, QR pairing with the camera, keychain storage. Publishing needs an Apple developer account ($99/yr) and Google Play ($25 once); development builds run on a phone before that. |
+| How the phone reaches the laptop | **Same Wi-Fi, plus Tailscale for anywhere** | Works on home/office Wi-Fi with no setup; away from it, the user installs Tailscale (free) on laptop and phone and the same pairing works over the tailnet. No server of ours in the middle. A hosted relay is out of scope for now. |
 
-## Decisions
+## Architecture
 
-- **Native shell, webview terminal.** A React Native / Expo (or Flutter) shell
-  hosting a webview for xterm.js keeps the terminal work identical to the desktop
-  (same xterm, same escape handling) while the app shell stays native (push,
-  offline banner, QR camera).
-- **Direct connection, not through the desktop relay.** The relay exists because
-  the desktop webview's CSP forbids non-loopback sockets. A native app has no
-  CSP, so it dials `wss://host:9000/pty` directly with the `token.<TOKEN>`
-  subprotocol — simpler and one fewer hop.
-- **Reconnect mirrors the desktop:** exponential backoff (500 ms → capped 15 s),
-  re-attach every live session on reconnect, drop the replay on a reconnect
-  re-attach (it was already painted) — port the logic from
-  `services/pty-bridge-remote.ts`.
-- **Notifications need a bridge (later phase).** The server is pull-based: it
-  cannot push to a sleeping phone. Options, in order of preference:
-  1. Keep the socket alive while the app is foregrounded; rely on OS push only
-     for the "agent finished" event.
-  2. A tiny push relay (FCM/APNs) fed by a server-side hook — new server surface,
-     deliberately deferred.
-  3. Start with in-app activity + background polling while the socket is down.
-- **One remote at a time**, matching the desktop's "one active workspace" rule.
+### Why the laptop needs a "Phone link" gateway
+
+Chat threads, tasks, agent status, the inbox and settings all live **in the
+desktop app** (its stores, e.g. `stores/orchestrator.ts`, `services/orchestrator/inbox.ts`),
+not in `spacron-server`. So a phone talking only to `spacron-server` could show
+terminals but not conversations. The desktop app therefore hosts a small
+**Phone link** endpoint the phone connects to:
+
+- Off by default; turned on in Settings → Phone. Listens on the LAN (and on the
+  Tailscale interface when present) on a fixed port.
+- Speaks the same framing as the remote protocol (`docs/remote-workspace.md`):
+  one authenticated WebSocket, JSON control frames, `token.<TOKEN>` subprotocol,
+  constant-time token check.
+- Exposes a **mobile API** over that socket, backed by the desktop's own stores:
+  - `threads.list`, `thread.history`, `thread.send` (message or follow-up),
+    `thread.stop`, `thread.new` (agent + model + project)
+  - `agents.status` (the same done/working/blocked data the MCP `list_agents`
+    returns), `tasks.list` / plan progress
+  - `inbox.list`, `approval.answer` (reply to an agent's question / permission)
+  - `usage.limits`, `automations.runs`
+  - `settings.get` / `settings.set` (a phone-safe subset only)
+  - live `event` frames: new message chunks, status changes, inbox items
+- Works whether the active workspace is local or a remote box: the desktop is the
+  one place that knows both, so the phone always talks to the desktop when it is
+  running.
+
+### When the laptop is off: direct to the box
+
+If the workspace is on a box and the laptop is closed, the phone can connect
+**directly to `spacron-server`** (the existing protocol, no new server code):
+terminals, box automation runs and their logs. Chat threads on the box need the
+thread records the desktop keeps, so a later phase moves the minimum thread
+state onto the server (see Phase 5). Until then, the phone shows "Laptop
+offline — showing the box's terminals and automations".
+
+### Pairing (QR)
+
+Settings → Phone → **Pair a phone** shows a QR code holding: the laptop's LAN
+address(es) and Tailscale name if any, the port, a fresh per-phone token, and the
+fingerprint of the Phone link's TLS certificate. The phone scans it, stores the
+token in the Keychain / Keystore, and pins the certificate. Each paired phone
+gets its own token so it can be revoked alone. Boxes pair the same way from the
+remote connection's menu (URL + token).
+
+### Transport security
+
+- **TLS always.** The Phone link generates a self-signed certificate on first
+  use; the phone pins its fingerprint from the QR code, so LAN connections are
+  encrypted and authenticated without a public CA. Over Tailscale the tailnet
+  adds its own encryption on top.
+- Tokens live only in the OS keychain on the phone and in the desktop's secret
+  store; never in URLs, logs or plain app storage.
+- The gateway only accepts the mobile API, never arbitrary `invoke` commands, and
+  settings writes are limited to a safe list.
+
+### Alerts (push notifications)
+
+- While the app is open, alerts arrive over the live socket.
+- When the app is closed, the **desktop sends the push**: on pairing the phone
+  registers its Expo push token with the desktop; when an agent finishes, asks
+  for input or fails (the same moments the desktop inbox and Spacron's
+  `report_status` already capture), the desktop calls the Expo Push service,
+  which delivers through APNs / FCM. No server of ours; the notification text is
+  kept short and never includes code or secrets.
+- Per-phone alert settings: finished / needs input / failed, quiet hours.
+- A box running automations with the laptop off cannot push yet (it has no
+  phone registry); that comes with Phase 5.
+
+## The app's screens
+
+- **Home:** paired computers and boxes with live status (connected, laptop
+  offline, reconnecting), and a summary — agents working, waiting on you, done.
+- **Threads:** list grouped like the desktop sidebar (working, settled), with
+  unread dots; tap into a thread.
+- **Thread:** messages streaming live, plan checklist at the top, a composer to
+  send a message or follow-up, stop button, approve/answer cards when the agent
+  asks something.
+- **Agents & tasks:** who is doing what, task progress, recent automation runs.
+- **Terminal (later):** read-only scrollback first, typing later (xterm.js in a
+  webview, reusing the desktop's terminal handling).
+- **Settings:** paired devices (add, rename, unpair), alerts, default agent and
+  model, appearance (light/dark follows the system), about/version.
 
 ## Build order (each phase shippable and testable)
 
 | Phase | What | Depends on | Effort |
 |---|---|---|---|
-| **1. Proof of concept** | App connects to `spacron-server` over `wss://` with the token subprotocol; lists sessions (`list_shells`/attach); streams one terminal's output to the screen; sends one line of input. Proves the wire protocol works from mobile. | A running `spacron-server` (dev on the same Wi-Fi, then the VPS) | M |
-| **2. Terminal UX** | xterm.js rendering, resize, scrollback, hardware keyboard, reconnect with backoff, connection status chip | Phase 1 | M |
-| **3. Agents view + notifications** | Task/agent list from the orchestrator data the desktop persists; turn-end "finished" pings; follow-up input | Phase 1; desktop already emits completion cards (`inbox.ts`) | M–L |
-| **4. Push relay (optional)** | FCM/APNs bridge for background notifications | Phase 3 | L |
+| **1. Phone link + pairing spike** | Desktop gateway (off by default, TLS + per-phone token), QR pairing screen, Expo app that scans it and shows "connected" with the agent status list. Proves LAN + Tailscale connectivity and cert pinning. | — | M |
+| **2. Chat** | Threads list, thread view with live streaming replies, send message / follow-up, stop, new thread. | Phase 1 | L |
+| **3. Alerts** | Expo push registration, desktop sends pushes on finished / needs input / failed, approve/answer from the phone, per-phone alert settings. | Phase 2 | M |
+| **4. Info + settings** | Tasks and plan progress, usage limits, automation runs, phone settings screen, unpair/revoke. | Phase 2 | M |
+| **5. Box without the laptop** | Direct-to-box mode (terminals, automation runs); then minimal thread state and a phone registry on `spacron-server` so box chats and box alerts work with the laptop off. | Phases 2–3 | L |
+| **6. Store release** | App icons, privacy text, TestFlight and Play internal testing, then public listing. | Phases 1–4 | M |
 
-Phase 1 is the whole risk: **can a phone reliably attach to `spacron-server`
-and carry terminal traffic over mobile networks?** That is a small, honest spike
-before any product polish.
+Phase 1 carries the main risk — **can the phone reliably reach the laptop over
+Wi-Fi and Tailscale, with pinned TLS, and reconnect cleanly?** — so it ships as a
+small spike before any screen polish.
 
-## Verification (Phase 1)
+## Verification
 
-- Connect to a local dev `spacron-server` from a phone on the same network:
-  `ls` / `htop` render, resize reflows, `exit` reports a clean code.
-- Same against the real VPS over `wss://` (Tailscale cert or public CA), from
-  cellular (not just Wi-Fi): attach, reconnect after the network drops
-  (airplane-mode toggle), confirm live output resumes and replay is not doubled.
-- Wrong/absent token → clean rejection (matches the server's constant-time
-  compare), never a hang.
-
-## Security notes
-
-- The phone holds the pre-shared token; store it in the OS keychain
-  (Keychain / Keystore), never plaintext in app storage.
-- TLS is mandatory on the phone: refuse `ws://` connections except for a clearly
-  marked local-dev mode (same rule the server's startup warning pushes).
-- No new server surface in Phases 1–3: the phone is just another authenticated
-  client, confined to the `--workspace` root like every other connection.
+- **Phase 1:** pair over Wi-Fi by QR; then switch the phone to cellular with
+  Tailscale on and confirm it reconnects; a wrong token or wrong certificate is
+  rejected cleanly (never a hang); unpairing one phone does not affect another.
+- **Phase 2:** send a message from the phone and see it in the desktop thread;
+  a reply typed on the desktop streams to the phone; airplane-mode toggle mid-reply
+  resumes without duplicated text.
+- **Phase 3:** with the app closed, an agent finishing produces one notification;
+  answering an approval from the phone unblocks the agent on the desktop.
 
 ## What this does NOT include (deliberately)
 
-- A full mobile editor or file browser (the `invoke` seam makes them possible,
-  but they are desktop-grade surfaces — later, if at all).
+- A full mobile editor or file browser.
+- A hosted relay for reaching the laptop from anywhere without Tailscale.
 - Camera injection / emulator control (that is the desktop Mobile panel's job,
-  opposite direction).
-- Multi-remote simultaneous connections.
+  the opposite direction).
+- Several workspaces open at once on the phone (one active connection at a time,
+  like the desktop).
 
 ## Relationship to existing docs
 
 - Wire protocol, auth, TLS, reconnect: `docs/remote-workspace.md`.
+- Feature comparison with Orca and T3 Code: `docs/orca-and-t3code-features.md`,
+  `docs/orca-feature-gap.md` (#46).
 - Why the companion was out of scope for the mirror pane:
-  `docs/mobile-emulator-pane.md` ("a whole second product").
-- Where it sits vs. the mirror feature: the mirror pulls a phone *into* the
-  desktop; the companion pushes the desktop *onto* the phone.
+  `docs/mobile-emulator-pane.md` ("a whole second product"). The mirror pulls a
+  phone *into* the desktop; the companion pushes the desktop *onto* the phone.
