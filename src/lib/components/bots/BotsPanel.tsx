@@ -223,12 +223,12 @@ function StatusChip({ bot, run }: { bot: Bot; run?: BotRun }) {
 /** A template picked from the list, applied when the editor opens. */
 let pendingTemplate: BotTemplate | null = null;
 
-function TemplateGrid({ onPick, title = 'Or start from a template' }: { onPick?: (t: BotTemplate) => void; title?: string }) {
+function TemplateGrid({ onPick, title = 'Or start from a template', selectedId }: { onPick?: (t: BotTemplate) => void; title?: string; selectedId?: string }) {
   return (
     <div className="bots-templates">
-      <span>{title}</span>
+      {title && <span>{title}</span>}
       <div className="bots-template-grid">
-        {BOT_TEMPLATES.map((t) => <button key={t.id} type="button" className="bots-template" onClick={() => {
+        {BOT_TEMPLATES.map((t) => <button key={t.id} type="button" className="bots-template" aria-pressed={onPick ? t.id === selectedId : undefined} onClick={() => {
           if (onPick) onPick(t);
           else { pendingTemplate = t; selectedBotId.set(NEW_BOT); }
         }}>
@@ -348,10 +348,14 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
   return (
     <form className="bots-editor" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <div className="bots-editor-heading"><h3>{bot ? `Edit ${bot.name}` : 'New bot'}</h3></div>
-      {!bot && <TemplateGrid onPick={applyTemplate} title="Start from a template" />}
+      {!bot && <details className="bots-template-picker">
+        <summary>{template ? `Template: ${template.name}` : 'Browse templates'}</summary>
+        <TemplateGrid onPick={applyTemplate} title="" selectedId={template?.id} />
+      </details>}
       {error && <p role="alert" className="bots-error">{error}</p>}
       <div className="bots-editor-grid">
-        <div>
+        <div className="bots-editor-main">
+          <h4>Bot details</h4>
           <div className="bots-identity">
             <AvatarPicker value={avatar} onChange={setAvatar} />
             <div>
@@ -361,7 +365,8 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           </div>
           <label htmlFor="bot-job">Job</label>
           <textarea id="bot-job" required rows={8} maxLength={20_000} placeholder="What is this bot for? Say what result you want, and where to save it." value={instructions} onChange={(e) => setInstructions(e.target.value)} />
-          <p className="bots-helper">Every run, and every message you send it, starts a fresh agent in the bot's own folder. Files it saves there are still there next time, and it sees your recent chat.</p>
+          <p className="bots-helper">Each run starts a fresh agent with access to the bot’s saved files and recent chat.</p>
+          <h4 className="bots-editor-section">Tools and connectors</h4>
           <span className="bots-field-label">Connectors</span>
           <ConnectorPicker host={host} value={keys} onChange={setKeys} />
           {missing.length > 0 && <p className="bots-helper bots-warn">This template works best with {missing.join(', ')}. Add it in Settings &gt; MCP &amp; plugins{host === LOCAL_HOST ? '' : ', then share the sign-in with this box in Settings > Bots'}.</p>}
@@ -395,6 +400,7 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           <p className="bots-helper">Bots it creates get no more access than it has, can't create bots themselves, and start with their schedule off until you turn it on.</p>
         </div>
         <aside className="bots-editor-side">
+          <h4>Run settings</h4>
           <span className="bots-field-label">Runs on</span>
           <Dropdown ariaLabel="Where the bot runs" value={host} onChange={(v) => { setHost(v); setKeys(templateKeys(template, v)); }} disabled={Boolean(bot)} options={hosts.length ? hosts : [{ value: host, label: host === LOCAL_HOST ? 'This PC' : 'Box (not connected)' }]} />
           <p className="bots-helper">{host === LOCAL_HOST ? 'Runs while Spacron is open on this PC.' : 'Runs on the box, even while this laptop is closed.'}</p>
@@ -406,10 +412,10 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
           {!agents.length && <p className="bots-error">Install Claude Code, Codex, Gemini CLI or opencode. Bots need an agent that can run unattended.</p>}
           <label htmlFor="bot-model">Model <small>(optional)</small></label>
           <input id="bot-model" placeholder="Agent default" value={model} onChange={(e) => setModel(e.target.value)} />
-          <span className="bots-field-label">It may</span>
+          <span className="bots-field-label">Permissions</span>
           <Dropdown ariaLabel="What the bot may do" value={access} onChange={(v) => setAccess(v as BotAccess)} options={ACCESS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))} />
           <p className={`bots-helper${access === 'full' ? ' bots-warn' : ''}`}>{ACCESS_OPTIONS.find((o) => o.value === access)?.detail}{program === 'opencode' ? ' opencode uses the permissions from its own config.' : ''}</p>
-          <span className="bots-field-label">Also runs on its own</span>
+          <span className="bots-field-label">Schedule</span>
           <Dropdown ariaLabel="Bot schedule" value={schedule} onChange={(v) => setSchedule(v as BotSchedule)} options={SCHEDULES} />
           {schedule !== 'manual' && <div className="bots-time-row">
             <div>
