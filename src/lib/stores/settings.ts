@@ -176,6 +176,7 @@ export const autoStageAgentChanges = persistentWritable('autoStageAgentChanges',
 // the server itself is `npx @playwright/mcp@latest`, which needs Node on PATH and
 // downloads a browser on first run. None of that should happen to a user who
 // never asked for it, so this is opt-in rather than opt-out.
+export const agentPreviewBrowser = persistentWritable('agentPreviewBrowser', false);
 export const agentBrowserTools = persistentWritable('agentBrowserTools', false);
 // Computer use (docs/computer-use.md): agents may ask to see the user's desktop
 // windows. OFF by default, and while off the tools are not even listed to
@@ -1366,6 +1367,7 @@ export function resetSettingsToDefault() {
   agentWorktrees.set(true);
   autoStageAgentChanges.set(false);
   agentBrowserTools.set(false);
+  agentPreviewBrowser.set(false);
   keepSystemAwake.set(false);
   autoSettleEnabled.set(true);
   autoSettleIdleMs.set(5 * 60 * 1000);

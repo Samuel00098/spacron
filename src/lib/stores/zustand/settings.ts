@@ -291,6 +291,7 @@ function createSettingsState() {
     agentWorktrees: persistentValue('agentWorktrees', true),
     autoStageAgentChanges: persistentValue('autoStageAgentChanges', false),
     agentBrowserTools: persistentValue('agentBrowserTools', false),
+    agentPreviewBrowser: persistentValue('agentPreviewBrowser', false),
     // Computer use (stores/settings.ts): same trap as above. Undeclared, the
     // switch and the blocked-apps list reset on every launch.
     computerUse: persistentValue('computerUse', false),
@@ -453,6 +454,7 @@ const defaults: SettingsValues = {
   agentWorktrees: true,
   autoStageAgentChanges: false,
   agentBrowserTools: false,
+  agentPreviewBrowser: false,
   computerUse: false,
   computerUseBlockedApps: [],
   agentWorkspaceTrustOverrides: {},
@@ -552,6 +554,7 @@ export const useSettingsStore = create<SettingsState>((set, getState) => ({
       agentWorktrees: 'agentWorktrees',
       autoStageAgentChanges: 'autoStageAgentChanges',
       agentBrowserTools: 'agentBrowserTools',
+      agentPreviewBrowser: 'agentPreviewBrowser',
       computerUse: 'computerUse',
       computerUseBlockedApps: 'computerUseBlockedApps',
       agentWorkspaceTrustOverrides: 'agentWorkspaceTrustOverrides',

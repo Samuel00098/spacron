@@ -58,6 +58,20 @@ describe('zustand settings boot rehydration', () => {
     expect(s.agentBrowserTools).toBe(false);
   });
 
+  it('persists in-app browser control independently of Playwright', async () => {
+    const storage = stubWebStorage();
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().agentPreviewBrowser).toBe(false);
+
+    useSettingsStore.getState().__set('agentPreviewBrowser', true);
+    expect(storage.get('forge_setting_agentPreviewBrowser')).toBe('true');
+    vi.resetModules();
+
+    const { useSettingsStore: reloaded } = await import('./settings');
+    expect(reloaded.getState().agentPreviewBrowser).toBe(true);
+    expect(reloaded.getState().agentBrowserTools).toBe(false);
+  });
+
   it('round-trips a toggle through __set into persisted storage', async () => {
     stubWebStorage();
 

@@ -490,6 +490,57 @@ const INPUT_SNIPPET: &str = r#"<script data-spacron-input-bridge>
         }
     };
 
+    const runAgentAction = (data) => {
+        const isVisible = (element) => element.getClientRects().length > 0 &&
+            getComputedStyle(element).visibility === 'visible';
+        if (data.action === 'snapshot') {
+            const controls = Array.from(document.querySelectorAll(
+                'a[href],button,input,textarea,select,[role=button],[contenteditable=true]'
+            )).filter(isVisible).slice(0, 100).map((element) => ({
+                tag: element.localName,
+                id: element.id || undefined,
+                name: element.getAttribute('name') || undefined,
+                type: element.getAttribute('type') || undefined,
+                label: (element.getAttribute('aria-label') || element.getAttribute('placeholder') ||
+                    element.innerText || '').trim().slice(0, 150)
+            }));
+            return JSON.stringify({
+                title: document.title,
+                text: (document.body?.innerText || '').slice(0, 8000),
+                controls
+            });
+        }
+        if (data.action !== 'click' && data.action !== 'fill') return 'error: unknown Preview action.';
+        if (typeof data.selector !== 'string' || !data.selector || data.selector.length > 1000) {
+            return 'error: supply a CSS selector.';
+        }
+        const matches = document.querySelectorAll(data.selector);
+        const element = matches[0];
+        if (matches.length !== 1 || !(element instanceof HTMLElement) || !isVisible(element) ||
+            element.matches(':disabled,[aria-disabled=true]')) {
+            return 'error: selector must match one visible, enabled element.';
+        }
+        if (data.action === 'click') {
+            element.click();
+            return 'Clicked the element. Inspect Preview again to confirm the result.';
+        }
+        if (typeof data.text !== 'string' || data.text.length > 16000 ||
+            element.matches('[readonly],input[type=password]')) {
+            return 'error: cannot fill this field or text exceeds the limit.';
+        }
+        if (element instanceof HTMLTextAreaElement ||
+            (element instanceof HTMLInputElement && element.matches(':is(:not([type]),[type=text],[type=search],[type=email],[type=url],[type=tel],[type=number])'))) {
+            const prototype = element instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+            Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, data.text);
+        } else if (element.isContentEditable) {
+            element.textContent = data.text;
+        } else {
+            return 'error: selector must match an editable text field.';
+        }
+        dispatchInput(element, data.text);
+        return 'Filled the field. Inspect Preview again to confirm the result.';
+    };
+
     document.addEventListener('focusin', reportFocus, true);
     document.addEventListener('focusout', () => setTimeout(reportFocus, 0), true);
     document.addEventListener('pointerdown', () => setTimeout(reportFocus, 0), true);
@@ -499,6 +550,13 @@ const INPUT_SNIPPET: &str = r#"<script data-spacron-input-bridge>
         if (!parentOrigin) parentOrigin = event.origin;
         if (event.origin !== parentOrigin) return;
         const data = event.data || {};
+        if (data.type === 'forge-preview:agent') {
+            let output;
+            try { output = runAgentAction(data); }
+            catch { output = 'error: Preview could not perform the action. Check the selector.'; }
+            post({ type: 'forge-preview:agent-result', requestId: data.requestId, output });
+            return;
+        }
         if (data.type !== 'forge-preview:insert-text') return;
         const requestId = typeof data.requestId === 'string' ? data.requestId : '';
         const text = typeof data.text === 'string' ? data.text : '';

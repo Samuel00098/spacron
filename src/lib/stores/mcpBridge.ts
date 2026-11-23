@@ -41,8 +41,8 @@ import {
 import { getAgentRoster } from './runs';
 import { customAgents, removedPresetAgents } from './customAgents';
 import { usageState } from './usage';
-import { agentBrowserTools, mcpServers, mediaGeneration } from './settings';
-import { setBrowserToolsAvailable } from '$lib/services/orchestrator/brain-tools';
+import { agentPreviewBrowser, agentBrowserTools, mcpServers, mediaGeneration } from './settings';
+import { setPreviewBrowserToolsAvailable, setBrowserToolsAvailable } from '$lib/services/orchestrator/brain-tools';
 import { syncChatMcpServers } from '$lib/services/orchestrator/mcp-client';
 import {
   antigravityEntry,
@@ -532,6 +532,7 @@ export function initMcpBridge(): void {
 
   // The chat's browser follows the same switch as the agents' (Settings →
   // Agents → Browser), so turning it off takes the tools away from both.
+  agentPreviewBrowser.subscribe((on) => setPreviewBrowserToolsAvailable(on === true));
   agentBrowserTools.subscribe((on) => setBrowserToolsAvailable(on === true));
 
   // The chat uses the same MCP servers the agents get (Settings > MCP).

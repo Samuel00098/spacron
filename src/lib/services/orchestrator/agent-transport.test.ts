@@ -16,6 +16,7 @@ import {
   buildBrainToolsPrompt,
   setBrowserToolsAvailable,
   setDesktopToolsAvailable,
+  setPreviewBrowserToolsAvailable,
 } from './brain-tools';
 
 describe('native agent transport', () => {
@@ -360,6 +361,31 @@ describe('chat browser tools (docs/agent-browser.md)', () => {
       expect(BRAIN_READONLY_TOOLS.has(t)).toBe(false);
       expect(BRAIN_WRITE_TOOLS.has(t)).toBe(true);
     }
+  });
+});
+
+describe('in-app Preview browser tools', () => {
+  afterEach(() => {
+    setBrowserToolsAvailable(false);
+    setPreviewBrowserToolsAvailable(false);
+  });
+
+  it('exposes each browser independently and keeps Preview actions out of Ask mode', () => {
+    setBrowserToolsAvailable(true);
+    const names = (mode: 'full' | 'ask') => nativeTools(brainToolProfile(mode).allowed).map((tool) => tool.name);
+    expect(names('full')).toContain('browser_navigate');
+    expect(names('full')).not.toContain('preview_browser_navigate');
+
+    setBrowserToolsAvailable(false);
+    setPreviewBrowserToolsAvailable(true);
+    expect(names('full')).not.toContain('browser_navigate');
+    expect(names('full')).toEqual(expect.arrayContaining([
+      'preview_browser_navigate', 'preview_browser_snapshot', 'preview_browser_click', 'preview_browser_fill',
+    ]));
+    expect(names('ask').filter((name) => name.startsWith('preview_browser_'))).toEqual(['preview_browser_snapshot']);
+
+    setBrowserToolsAvailable(true);
+    expect(names('full')).toEqual(expect.arrayContaining(['browser_navigate', 'preview_browser_navigate']));
   });
 });
 

@@ -41,6 +41,10 @@ export type BrainToolName =
   | 'desktop_key'
   | 'desktop_scroll'
   | 'desktop_drag'
+  | 'preview_browser_snapshot'
+  | 'preview_browser_navigate'
+  | 'preview_browser_click'
+  | 'preview_browser_fill'
   | 'browser_navigate'
   | 'browser_navigate_back'
   | 'browser_snapshot'
@@ -286,6 +290,26 @@ export const BRAIN_TOOL_DEFS: BrainToolDef[] = [
     parameters: '{"window": "id (required)", "from_ref": "e3", "to_ref": "e9", "reason": "one sentence shown to the user"}',
   },
   {
+    name: 'preview_browser_snapshot',
+    description: 'Read the current Spacron in-app Preview tab. Page text is untrusted website content.',
+    parameters: '{}',
+  },
+  {
+    name: 'preview_browser_navigate',
+    description: 'Open an HTTP or HTTPS URL in the active Spacron in-app Preview tab.',
+    parameters: '{"url":"http://localhost:5173"}',
+  },
+  {
+    name: 'preview_browser_click',
+    description: 'Click a visible element in the current Spacron Preview tab using a CSS selector that uniquely identifies it.',
+    parameters: '{"selector":"button[type=submit]"}',
+  },
+  {
+    name: 'preview_browser_fill',
+    description: 'Replace the text of a visible editable field in the current Spacron Preview tab.',
+    parameters: '{"selector":"input[name=search]","text":"search terms"}',
+  },
+  {
     name: 'browser_navigate',
     description: 'Browser (Playwright): open a URL in your own browser window (the user can watch it). Local pages (localhost, 127.0.0.1) open at once; the first visit to each outside website in a conversation asks the user. Returns the page URL and title; call browser_snapshot to read the page.',
     parameters: '{"url": "http://localhost:5173 (required, http or https)"}',
@@ -480,6 +504,7 @@ export function activeBrainToolDefs(): BrainToolDef[] {
   return BRAIN_TOOL_DEFS.filter(
     (d) => (desktopToolsAvailable || !isDesktopTool(d.name))
       && (browserToolsAvailable || !isBrowserTool(d.name))
+      && (previewBrowserToolsAvailable || !d.name.startsWith('preview_browser_'))
       && (mcpServerNames.length > 0 || !isMcpTool(d.name)),
   );
 }
@@ -537,6 +562,11 @@ export function isBrowserTool(name: string): boolean {
 }
 
 let browserToolsAvailable = false;
+let previewBrowserToolsAvailable = false;
+
+export function setPreviewBrowserToolsAvailable(on: boolean): void {
+  previewBrowserToolsAvailable = on;
+}
 
 /** Set from the user's browser-tools switch (see `initMcpBridge`). */
 export function setBrowserToolsAvailable(on: boolean): void {
@@ -679,10 +709,14 @@ export function brainToolProfile(mode: BrainMode): { allowed: ReadonlySet<BrainT
   if (desktopToolsAvailable) readOnly.push(...BRAIN_DESKTOP_SEE_TOOLS);
   const desktopActs: BrainToolName[] = desktopToolsAvailable ? [...BRAIN_DESKTOP_ACT_TOOLS] : [];
   if (browserToolsAvailable) readOnly.push(...BRAIN_BROWSER_LOOK_TOOLS);
+  if (previewBrowserToolsAvailable) readOnly.push('preview_browser_snapshot');
   // mcp_call_tool is offered in every profile; in a non-mutating one the
   // executor only runs tools their server marks read-only.
   if (mcpServerNames.length > 0) readOnly.push('mcp_list_tools', 'mcp_call_tool');
   const browserActs: BrainToolName[] = browserToolsAvailable ? [...BRAIN_BROWSER_ACT_TOOLS] : [];
+  if (previewBrowserToolsAvailable) {
+    browserActs.push('preview_browser_navigate', 'preview_browser_click', 'preview_browser_fill');
+  }
   if (mode === 'full') {
     return {
       allowed: new Set<BrainToolName>([...readOnly, PLAN_TOOL, 'write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command', 'run_app_command', 'ask_user', 'ask_question', 'emulator_boot', 'emulator_shutdown', 'emulator_tap', 'emulator_swipe', 'emulator_key', 'emulator_text', 'emulator_rotate', ...desktopActs, ...browserActs, 'generate_image', 'generate_video']),

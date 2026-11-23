@@ -54,6 +54,10 @@ const definitions: Record<string, { required: string[]; properties: Record<strin
   desktop_drag: { required: ['window'], properties: { window: str, from_ref: str, from_x: dec, from_y: dec, to_ref: str, to_x: dec, to_y: dec, reason: str } },
   // Mirrors Playwright MCP 0.0.82's own input schemas exactly: the server
   // rejects what it does not declare, and so does this check.
+  preview_browser_snapshot: { required: [], properties: {} },
+  preview_browser_navigate: { required: ['url'], properties: { url: str } },
+  preview_browser_click: { required: ['selector'], properties: { selector: str } },
+  preview_browser_fill: { required: ['selector', 'text'], properties: { selector: str, text: str } },
   browser_navigate: { required: ['url'], properties: { url: str } },
   browser_navigate_back: { required: [], properties: {} },
   browser_snapshot: { required: [], properties: { target: str, depth: dec } },

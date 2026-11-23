@@ -44,7 +44,8 @@ import { setActiveView, showTerminal, openSettings } from '$lib/stores/layout';
 import { sanitiseActiveView } from '$lib/stores/layout';
 import type { ActiveView } from '$lib/types/layout';
 import { openFile, closeFile, jumpToLine } from '$lib/stores/editor';
-import { navigatePreviewTab, ensureProxyRunning } from '$lib/stores/preview';
+import { activePreviewTabId, previewTabs, navigatePreviewTab, ensureProxyRunning } from '$lib/stores/preview';
+import { controlPreviewBrowser } from '$lib/services/preview-browser-control';
 import { getAppContextSnapshot, NAVIGABLE_VIEWS } from '$lib/services/orchestrator/app-context';
 import { applyAgentSetting } from '$lib/services/orchestrator/app-settings';
 import { loadJson } from '$lib/utils/storage';
@@ -73,6 +74,7 @@ import {
   isLocalProvider,
   getProviderDef,
   getProviderBaseUrl,
+  agentPreviewBrowser,
   announceAgentCompletions,
   speakAgentCompletions,
   type AiProviderId,
@@ -5824,7 +5826,7 @@ function paletteCommandList(): AppCommand[] {
 }
 
 /** What the approval card asks, in words rather than raw tool JSON. */
-function describeApprovalRequest(call: BrainToolCall): string {
+function describeApprovalRequest(call: BrainToolCall, previewUrl?: string): string {
   const path = toolArgStr(call.args, 'path');
   switch (call.name) {
     case 'run_command': return `Run this command in the project?\n\n\`\`\`\n${toolArgStr(call.args, 'command')}\n\`\`\``;
@@ -5843,6 +5845,9 @@ function describeApprovalRequest(call: BrainToolCall): string {
     case 'emulator_key': return `Press **${toolArgStr(call.args, 'key')}** on ${toolArgStr(call.args, 'target')}?`;
     case 'emulator_text': return `Type this on **${toolArgStr(call.args, 'target')}**?\n\n\`\`\`\n${toolArgStr(call.args, 'text').slice(0, 300)}\n\`\`\``;
     case 'emulator_rotate': return `Rotate **${toolArgStr(call.args, 'target')}** to orientation ${toolArgNum(call.args, 'rotation', 1)}?`;
+    case 'preview_browser_navigate': return `Open ${toolArgStr(call.args, 'url')} in the in-app Preview?`;
+    case 'preview_browser_click': return `Click ${toolArgStr(call.args, 'selector')} in Preview at ${previewUrl ?? 'the current page'}?`;
+    case 'preview_browser_fill': return `Fill ${toolArgStr(call.args, 'selector')} in Preview at ${previewUrl ?? 'the current page'}?\n\n${String(call.args.text ?? '').slice(0, 300)}`;
     case 'browser_navigate':
     case 'browser_tabs': {
       const url = toolArgStr(call.args, 'url');
@@ -6859,6 +6864,7 @@ export async function sendChatMessage(
       // Outside websites the user allowed during this turn (by "Approve" or a
       // standing rule), so the after-call check knows where the page may be.
       const turnOrigins = new Set<string>();
+      const previewTurnOrigins = new Set<string>();
       // Capability profile for this turn: chat threads inherit their access
       // mode, and SPOKEN turns stay read-only by default. 'ask' removes
       // every mutating tool from the turn physically. This used to key on
@@ -7243,6 +7249,45 @@ export async function sendChatMessage(
               return { output: `error: ${String(error ?? 'the computer-use tool failed')}` };
             }
           }
+          case 'preview_browser_navigate': {
+            try {
+              const url = new URL(toolArgStr(call.args, 'url'));
+              if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+                return { output: 'error: supply an HTTP or HTTPS URL without credentials.' };
+              }
+              const port = await ensureProxyRunning();
+              checkActive();
+              if (!port) return { output: 'error: could not start the Preview proxy.' };
+              if (!get(agentPreviewBrowser)) return { output: 'error: in-app browser control is off.' };
+              navigatePreviewTab(url.href);
+              setActiveView('preview');
+              requestRoomControl('focus', 'preview');
+              return { output: `Opening ${url.href} in Preview. Use preview_browser_snapshot to verify it loaded.` };
+            } catch {
+              return { output: 'error: could not open that URL in Preview.' };
+            }
+          }
+          case 'preview_browser_snapshot':
+          case 'preview_browser_click':
+          case 'preview_browser_fill': {
+            try {
+              const selector = toolArgStr(call.args, 'selector');
+              const action = call.name === 'preview_browser_snapshot'
+                ? { action: 'snapshot' as const }
+                : call.name === 'preview_browser_click'
+                  ? { action: 'click' as const, selector }
+                  : { action: 'fill' as const, selector, text: typeof call.args.text === 'string' ? call.args.text : '' };
+              const output = await controlPreviewBrowser(action, controller.signal);
+              if (action.action === 'snapshot') {
+                readForeignWindow = true;
+                return { output: `Untrusted Preview page content:
+${output}` };
+              }
+              return { output };
+            } catch (error) {
+              return { output: `error: ${String(error)}` };
+            }
+          }
           case 'browser_navigate':
           case 'browser_navigate_back':
           case 'browser_snapshot':
@@ -7465,7 +7510,15 @@ export async function sendChatMessage(
         // an edit does. The per-tool "Always allow" answer is what keeps a tap
         // loop usable: `approvalRuleKey` returns the bare tool name here, so
         // one click covers every later emulator_tap in the conversation.
-        const mutating = ['write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command',
+        const previewTool = call.name.startsWith('preview_browser_');
+        const previewAction = call.name === 'preview_browser_click' || call.name === 'preview_browser_fill';
+        const previewTab = previewAction
+          ? get(previewTabs).find((tab) => tab.id === get(activePreviewTabId))
+          : undefined;
+        if (previewTool && (!get(agentPreviewBrowser) || !brainToolProfile(turnToolProfile).allowed.has(call.name))) {
+          return { output: 'error: this in-app browser tool is unavailable in the current settings or chat mode.' };
+        }
+        const mutating = previewAction || ['write_file', 'save_document', 'edit_file', 'run_command', 'cancel_command',
           'emulator_boot', 'emulator_shutdown', 'emulator_tap', 'emulator_swipe', 'emulator_key',
           'emulator_text', 'emulator_rotate'].includes(call.name);
         if (call.name === 'update_todos') {
@@ -7520,9 +7573,10 @@ export async function sendChatMessage(
         const riskyAppCommand = !!appCommand && isRiskyAppCommand(appCommand);
         // Opening an outside website asks once per origin (then "Always allow"
         // covers that origin for the conversation), in every access mode.
-        const browserOrigin = call.name === 'browser_navigate' || call.name === 'browser_tabs'
+        const browserOrigin = call.name === 'browser_navigate' || call.name === 'browser_tabs' || call.name === 'preview_browser_navigate'
           ? externalOrigin(toolArgStr(call.args, 'url'))
           : null;
+        const approvedOrigins = previewTool ? previewTurnOrigins : turnOrigins;
         const command = call.name === 'run_command' ? toolArgStr(call.args, 'command') : appCommand?.id ?? browserOrigin ?? mcpCommand ?? undefined;
         const approvalRules = conversationApprovalRules.get(turnKey) ?? new Set<string>();
         const needsApproval = (mutating
@@ -7537,7 +7591,7 @@ export async function sendChatMessage(
           || (readForeignWindow
             && (call.name === 'write_file' || call.name === 'edit_file'
               || (call.name === 'run_command' && classifyCommand(command ?? '') !== 'read-only')))
-          || (!!browserOrigin && !turnOrigins.has(browserOrigin) && !ruleAllows(approvalRules, call.name, command))
+          || (!!browserOrigin && !approvedOrigins.has(browserOrigin) && !ruleAllows(approvalRules, call.name, command))
           // Running code in the page asks every time; no standing rule.
           || call.name === 'browser_evaluate'
           // An MCP tool the server does not mark read-only asks, per tool,
@@ -7570,7 +7624,7 @@ export async function sendChatMessage(
               inlineRequest: {
                 id: approvalId,
                 type: 'approval',
-                prompt: describeApprovalRequest(call),
+                prompt: describeApprovalRequest(call, previewTab?.url),
                 options: [
                   { id: 'approve', label: APPROVE_ONCE_LABEL },
                   ...(call.name === 'browser_evaluate'
@@ -7603,7 +7657,12 @@ export async function sendChatMessage(
             label = `${label} · approved by you`;
           }
         }
-        if (browserOrigin) turnOrigins.add(browserOrigin);
+        if (previewTool && !get(agentPreviewBrowser)) return { output: 'error: in-app browser control is off.' };
+        if (previewAction && (!previewTab || get(activePreviewTabId) !== previewTab.id ||
+            get(previewTabs).find((tab) => tab.id === previewTab.id)?.url !== previewTab.url)) {
+          return { output: 'error: the active Preview page changed. Inspect it again before acting.' };
+        }
+        if (browserOrigin) approvedOrigins.add(browserOrigin);
         const activityId = msgId();
         appendChat(projectId, { id: activityId, role: 'assistant', type: 'activity', text: label, pending: true, ts: Date.now() }, chatThreadId);
         // The live reply bubble stays below the work, like a streaming answer.

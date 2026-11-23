@@ -21,6 +21,7 @@ import {
   aiCompletionProvider,
   aiGhostTextEnabled,
   agentBrowserTools,
+  agentPreviewBrowser,
   computerUse,
   agentWorkspaceTrustOverrides,
   agentStatusHooksEnabled,
@@ -2612,6 +2613,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentPreviewPlacement = useStore(previewPlacement);
   const currentNotifications = useStore(notificationsEnabled);
   const currentAgentBrowserTools = useStore(agentBrowserTools);
+  const currentAgentPreviewBrowser = useStore(agentPreviewBrowser);
   const currentComputerUse = useStore(computerUse);
   const currentAgentWorkspaceTrustOverrides = useStore(agentWorkspaceTrustOverrides);
   const currentAgentStatusHooksEnabled = useStore(agentStatusHooksEnabled);
@@ -4384,24 +4386,27 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                 </Section>}
 
                 <Section title="Browser">
-                  <p className="shell-hint" style={{ marginTop: 0, marginBottom: '14px' }}>
-                    Enables agents to test web pages and inspect UI using an isolated Chromium browser.
-                  </p>
                   <SettingRow
-                    title="Let agents use a browser"
-                    detail="Provides dedicated Playwright browser automation."
+                    title="Playwright browser"
+                    detail="Give agents a separate Chromium browser for automation."
                   >
                     <div className="settings-detail-actions">
                       <SettingsDetailsToggle expanded={browserDetailsOpen} controls="agent-browser-details" onToggle={() => {
                         setBrowserDetailsVisited(true);
                         setBrowserDetailsOpen((open) => !open);
                       }} />
-                      <Toggle label="Toggle agent browser tools" checked={currentAgentBrowserTools} onChange={agentBrowserTools.set} />
+                      <Toggle label="Toggle Playwright browser" checked={currentAgentBrowserTools} onChange={agentBrowserTools.set} />
                     </div>
                   </SettingRow>
                   <div id="agent-browser-details" hidden={!browserDetailsOpen}>
                     {browserDetailsVisited && <BrowserToolsDetails />}
                   </div>
+                  <SettingRow
+                    title="In-app browser"
+                    detail="Let the built-in chat agent control the active Preview tab."
+                  >
+                    <Toggle label="Toggle in-app browser control" checked={currentAgentPreviewBrowser} onChange={agentPreviewBrowser.set} />
+                  </SettingRow>
                 </Section>
 
                 <Section title="Computer use">

@@ -87,6 +87,7 @@ export function approvalRuleKey(tool: string, command?: string): string {
   // One risky app command allowed must not allow every other one.
   if (tool === 'run_app_command') return `app:${(command ?? '').trim()}`;
   // A website allowed once is allowed per origin, whichever browser tool opens it.
+  if (tool === 'preview_browser_navigate') return `preview-origin:${(command ?? '').trim()}`;
   if (tool === 'browser_navigate' || tool === 'browser_tabs') return `origin:${(command ?? '').trim()}`;
   // One MCP tool allowed must not allow the server's other tools.
   if (tool === 'mcp_call_tool') return `mcp:${(command ?? '').trim()}`;
@@ -113,6 +114,7 @@ export function describeRule(tool: string, command?: string): string {
   if (key.startsWith('cmd:')) return `\`${key.slice(4)}\` commands`;
   if (key.startsWith('cmd=')) return `\`${key.slice(4)}\``;
   if (key.startsWith('app:')) return `the \`${key.slice(4)}\` app command`;
+  if (key.startsWith('preview-origin:')) return `opening ${key.slice(15)} in Preview`;
   if (key.startsWith('origin:')) return `opening ${key.slice(7)}`;
   if (key.startsWith('mcp:')) return `\`${key.slice(4)}\``;
   return key.replace(/_/g, ' ');

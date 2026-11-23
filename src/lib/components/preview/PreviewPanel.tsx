@@ -1,3 +1,4 @@
+import { registerPreviewBrowser } from '$lib/services/preview-browser-control';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { get } from '$lib/stores/storeCompat';
 import { invoke } from '@tauri-apps/api/core';
@@ -1122,6 +1123,48 @@ export default function PreviewPanel() {
     },
     [getLocalDevProxyOrigin],
   );
+
+  useEffect(() => registerPreviewBrowser(async (action, signal) => {
+    signal.throwIfAborted();
+    const tab = activeTabRef.current;
+    const frame = tab && iframeElementsRef.current[tab.id]?.contentWindow;
+    const origin = tab && expectedOriginForTab(tab.id);
+    if (!tab || !frame || !origin) throw new Error('Open a page in Preview first.');
+
+    return new Promise<string>((resolve, reject) => {
+      const requestId = crypto.randomUUID();
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        window.removeEventListener('message', receive);
+        signal.removeEventListener('abort', abort);
+      };
+      const abort = () => {
+        cleanup();
+        reject(signal.reason);
+      };
+      const receive = (event: MessageEvent) => {
+        if (event.source !== frame || event.origin !== origin) return;
+        const data = event.data;
+        if (data?.type !== 'forge-preview:agent-result' || data.requestId !== requestId || typeof data.output !== 'string') return;
+        cleanup();
+        const current = activeTabRef.current;
+        if (action.action === 'snapshot' && (current?.id !== tab.id || current.url !== tab.url)) {
+          reject(new Error('The active Preview page changed. Try again.'));
+        } else {
+          resolve(action.action === 'snapshot'
+            ? `URL: ${tab.url}\n${data.output.slice(0, 16_000)}`
+            : data.output.slice(0, 16_000));
+        }
+      };
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error('Preview did not respond. Wait for the page to finish loading and try again.'));
+      }, 4000);
+      window.addEventListener('message', receive);
+      signal.addEventListener('abort', abort, { once: true });
+      frame.postMessage({ ...action, type: 'forge-preview:agent', requestId }, origin);
+    });
+  }), [expectedOriginForTab]);
 
   const handleInspectorMessage = useCallback(
     (event: MessageEvent) => {
