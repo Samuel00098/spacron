@@ -7,7 +7,7 @@ All notable changes to Spacron will be documented here.
 
 ## [v5.1.14] - 2026-11-24
 
-A follow-up to 5.1.13 about knowing when an agent is done: Codex and Antigravity now announce their own finished turns, bots get notification settings of their own, and bots start reliably on Windows. Spawning an agent also takes you straight to it, and a few surfaces got calmer.
+A follow-up to 5.1.13 about knowing when an agent is done, and about knowing you: Codex and Antigravity now announce their own finished turns, bots get notification settings of their own and run under your selected account, and an About you box lets bots, agents and the assistant know who they are working for. Bot chat messages can be deleted, bots start reliably on Windows, spawning an agent takes you straight to it, and scrolling and timestamps in chats behave.
 
 ### Added
 
@@ -15,11 +15,15 @@ A follow-up to 5.1.13 about knowing when an agent is done: Codex and Antigravity
 - **Codex announces its own turn ends** — Spacron now starts Codex with its own "turn finished" hook, so a finished Codex turn is reported by Codex itself instead of being guessed from the screen or left to the agent to report. It is only added for this launch (nothing is written to your Codex config), and skipped if you already set your own `notify`.
 - **Bot notifications you control** — each bot has a Notifications setting (every run, only problems, or never). Notices now show what the bot said, have an Open button that takes you to its chat, and no longer appear for a reply you are already reading.
 - **Bot chat history settings** — editing a bot shows its archived chats with Unarchive, and a setting to archive the old chat whenever you start a new one.
+- **Delete a bot chat message** — each message in a bot chat has a delete button (click once to arm it, again to delete). It removes what you sent and the bot's answer, and the bot no longer sees it in later replies. A message still being worked on has to be stopped first; files the bot saved are kept.
+- **About you** — Settings > Bots has an About you box (with a note saying plainly that agents and the assistant read it too, not only bots) where you write a few lines about yourself (who you are, what you are building, how you like answers). Your bots, the agents Spacron starts (terminal and chat) and Spacron's in-app assistant all read it, so they can work well with you. It stays on this computer: bots get it with each run (to your box too, for bots there), and agents read it from a private file named in `$SPACRON_ABOUT_YOU_FILE`; it is never written into your projects.
 
 ### Changed
 
 - **Snippet cards are flat** — the Snippets panel's cards, code boxes and Copy / Run buttons no longer look raised.
 - **Bot settings look like the rest of the app** — the browser, computer and bot-creation options are now option rows with their explanation underneath, and the New chat button follows the theme's accent colour.
+- **Bot replies leave out dashes** — bots are asked to write in plain sentences without em dashes, en dashes or hyphens used as punctuation, keeping a hyphen only where a word, name or code is written with one.
+- **Scrolling over interactive visuals** — a scroll that starts on a scrollable part of a visual now stops at its edge instead of shooting the chat along mid-flick, and the next scroll moves the chat. A scroll the visual cannot use moves the chat smoothly instead of in jumps.
 
 ### Fixed
 
@@ -27,6 +31,11 @@ A follow-up to 5.1.13 about knowing when an agent is done: Codex and Antigravity
 - **Chat timestamps no longer flicker** — a message's time used to depend on `:hover`, which follows whatever is under a still pointer, so while a reply streamed and the chat scrolled, timestamps switched on and off between messages. They now follow where the pointer was last moved, in agent chats and bot chats alike.
 - **Bots no longer fail to start Claude Code on Windows** — "Could not start claude: batch file arguments are invalid" came from passing a multiline prompt through the `claude.cmd` shim. Claude Code, Codex and Gemini now start their real program directly.
 - **Bot notices no longer always ping the system** — a finished bot used to raise a system notification even with Spacron in front.
+- **Bots use your selected account** — bot runs (and box automations) used the agent's own default login, not the account selected in Spacron, so a Codex bot could hit a usage limit on a different account while the usage meter, which shows the selected one, still had room. They now run under the selected account.
+- **Chat timestamps stay put in agent chats** — in the agent chats (unlike the bot chat) a message was rebuilt from scratch whenever a changed-files row or the "new messages" line appeared or went, which dropped the pointer's hover and blinked its timestamp off until the pointer moved again. Each message now keeps its identity.
+- **Codex bots show their answer, not their whole log** — a Codex bot's chat showed everything Codex printed: its banner, the full prompt Spacron sent, hook lines and the error, and that whole log was also fed back into the next run as "what the bot said". Bot runs now use Codex's JSON output, so the chat shows only the bot's answer, and a failed run says why in Codex's own words (for example "You've hit your usage limit…") instead of "exited with code 1".
+- **Spawning from a dialog keeps the dialog open** — jumping to a newly spawned agent no longer closes the dialog it was started from, so "create more" in New worktree keeps working.
+- **Codex bots start in their own folder** — a bot run with Codex stopped with "Not inside a trusted directory and --skip-git-repo-check was not specified", because a bot's home folder is not a git repository. Bot runs now pass that flag; the bot's sandbox setting is what limits it.
 
 
 ## [v5.1.13] - 2026-11-24
