@@ -144,7 +144,7 @@ function isColourful(value: string): boolean {
 }
 
 /** The app's theme as the token names visuals style against (Orca's set). */
-function themeTokens(): Record<string, string> {
+function themeTokens(glass = false): Record<string, string> {
   const css = getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
   const light = document.documentElement.classList.contains('light-theme');
@@ -156,7 +156,9 @@ function themeTokens(): Record<string, string> {
   const tint = (amount: number) => `color-mix(in srgb, ${foreground} ${amount}%, ${background})`;
   return {
     'color-scheme': light ? 'light' : 'dark',
-    '--background': background,
+    // Over a wallpaper the inline page lets the chat panel's own fill (and so
+    // the Panel opacity setting) show through; cards stay solid via --card.
+    '--background': glass && document.documentElement.classList.contains('has-bg-media') ? 'transparent' : background,
     '--foreground': foreground,
     '--card': background,
     '--card-foreground': foreground,
@@ -205,11 +207,13 @@ function VisualFrame({ src, title, height, onHeight, onCompose, onNavigate, onEs
 }) {
   const channel = useMemo(() => crypto.randomUUID(), []);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
-  const [initialTheme] = useState(() => encodeURIComponent(JSON.stringify(themeTokens())));
+  // Only the inline card is glass; the expanded dialog is a floating panel and stays solid.
+  const glass = Boolean(onHeight);
+  const [initialTheme] = useState(() => encodeURIComponent(JSON.stringify(themeTokens(glass))));
   const lastTheme = useRef('');
 
   function sendTheme(force = false) {
-    const theme = themeTokens();
+    const theme = themeTokens(glass);
     const value = JSON.stringify(theme);
     if (!force && value === lastTheme.current) return;
     lastTheme.current = value;

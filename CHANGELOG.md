@@ -17,6 +17,7 @@ A follow-up to 5.1.11: bots get separate chats you can start fresh and archive, 
 
 - **Bots follow the panel opacity** — with a custom background image, the Bots page is now frosted glass at the Settings > Panel opacity level, like the other panels, instead of a solid sheet.
 - **Issues, pull requests and Actions follow the panel opacity** — the lists and detail pages in the Tasks panel no longer paint a solid sheet over the panel, so they take the Settings > Panel opacity level like the Board tab. The cards on them stay solid.
+- **Interactive visuals follow the panel opacity** — with a custom background image, the inline interactive visuals in agent and bot chats no longer paint a solid sheet behind the page, so they take the Settings > Panel opacity level like the chat around them. Cards and controls inside a visual stay solid, and the full-size view keeps its solid background.
 
 ### Fixed
 

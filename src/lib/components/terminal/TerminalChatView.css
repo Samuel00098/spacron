@@ -1456,6 +1456,10 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   overscroll-behavior: auto;
 }
 
+/* Over a wallpaper the inline frame is see-through, so the panel's fill and its
+   Panel opacity show; the expanded dialog (.full) keeps its solid surface. */
+:root.has-bg-media .chat-visual-frame:not(.full) { background: transparent; }
+
 .chat-visual-frame:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
