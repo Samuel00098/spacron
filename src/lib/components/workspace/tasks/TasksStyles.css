@@ -483,7 +483,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--app-surface) !important;
+  /* Transparent so the panel's own fill (and its Panel opacity) shows; the cards inside stay solid. */
+  background: transparent !important;
   box-shadow: none !important;
 }
 
@@ -657,7 +658,8 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: var(--app-surface) !important;
+  /* Transparent so the panel's own fill (and its Panel opacity) shows; the cards inside stay solid. */
+  background: transparent !important;
   box-shadow: none !important;
 }
 
@@ -700,7 +702,8 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  background: var(--app-surface) !important;
+  /* Transparent so the panel's own fill (and its Panel opacity) shows; the cards inside stay solid. */
+  background: transparent !important;
   box-shadow: none !important;
 }
 
