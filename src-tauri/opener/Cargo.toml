@@ -11,7 +11,7 @@
 # the single source of this binary.
 [package]
 name = "spacron-open"
-version = "5.1.11"
+version = "5.1.12"
 description = "Hands a URL back to the running Spacron app instead of the system browser"
 authors = ["samue"]
 edition = "2021"
