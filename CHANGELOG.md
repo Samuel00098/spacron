@@ -4,18 +4,18 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
-### Changed
-
-- **Bots follow the panel opacity** — with a custom background image, the Bots page is now frosted glass at the Settings > Panel opacity level, like the other panels, instead of a solid sheet.
-
 ## [v5.1.12] - 2026-11-24
 
-A follow-up to 5.1.11: bots get separate chats you can start fresh and archive, scrolling over interactive visuals is smooth even when you scroll fast, GitHub avatars show again, and switching between light and dark is much faster.
+A follow-up to 5.1.11: bots get separate chats you can start fresh and archive, scrolling over interactive visuals is smooth even when you scroll fast, the Bots page follows the panel opacity, GitHub avatars show again, and switching between light and dark is much faster.
 
 ### Added
 
 - **New chat and Archive for bots** — a bar above a bot's chat lets you start a new chat with the same bot, switch between its chats, and archive ones you are done with (Archived shows them again, Unarchive brings one back). A new chat starts clean: the bot is no longer shown what was said before. Only the newest chat takes messages; older and archived chats are for reading. Archiving hides a chat and deletes nothing, and your existing history becomes the first chat.
 - **Visuals only when they help** — bots are now told to answer in plain text for greetings, short answers and simple lists, and to make an interactive visual only when it explains the result clearly better.
+
+### Changed
+
+- **Bots follow the panel opacity** — with a custom background image, the Bots page is now frosted glass at the Settings > Panel opacity level, like the other panels, instead of a solid sheet.
 
 ### Fixed
 
