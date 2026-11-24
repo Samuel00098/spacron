@@ -37,8 +37,11 @@
   padding: 18px 18px 16px;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
-  /* Solid: --bg-secondary is ~20% alpha when transparency is on, which left the dialog see-through. */
-  background: rgba(var(--bg-secondary-rgb, 27, 27, 29), 1);
+  /* Solid, always: --bg-secondary is ~20% alpha when transparency is on, and the
+     global glass rules would otherwise leave the dialog see-through. */
+  background: var(--app-surface, #101010) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   color: var(--text-primary);
   font-size: 13px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);

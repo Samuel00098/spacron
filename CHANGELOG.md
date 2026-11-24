@@ -18,7 +18,8 @@ A follow-up to 5.1.11: bots get separate chats you can start fresh and archive, 
 - **Fast scrolling over interactive visuals no longer bounces** — a quick flick over a visual used to stall and jump when it reached the visual's edge, because the browser was handing the scroll from the visual to the chat late. A visual with nothing left to scroll now passes the wheel straight to the chat. A visual with its own scrollable area still scrolls first, and the full-size view keeps its own scrolling.
 - **Scrolling carries on from interactive visuals** — in agent and bot chats, scrolling past the top or bottom of an interactive visual keeps scrolling the chat instead of getting stuck on the visual.
 - **Switching between light and dark is much faster** — the theme change used to fade every element on screen at once, which made it slow on busy windows. It now switches instantly, and a repaint workaround meant only for Linux no longer runs on Windows and macOS.
-- **Hand-off menu is solid** — the hand-off dialog could look see-through when window transparency was on, which made it hard to read. It now has a solid background.
+- **Hand-off menu is solid** — the hand-off dialog could look see-through when window transparency or a wallpaper was on, which made it hard to read. It now always has a solid background, like the other dialogs.
+- **Fewer load-order crashes in tests** — several modules did work the moment they were imported, which crashed 11 test suites when the terminal store had not finished loading. They now start on first use. The agent-target tests were also updated to match the guard that rejects closed agents.
 - **GitHub avatars show again** — profile pictures next to pull requests, issues and Actions runs were blocked by the app's image policy and showed as empty circles. Pictures from GitHub are now allowed.
 
 ## [v5.1.11] - 2026-11-23
