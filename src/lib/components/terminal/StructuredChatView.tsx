@@ -97,6 +97,8 @@ import {
   JumpToLatest,
   LinkHoverCard,
   MessageActions,
+  markPointerMessage,
+  clearPointerMessage,
   MessageRail,
   NewMessagesLine,
   PullRequestCard,
@@ -1027,6 +1029,8 @@ export default function StructuredChatView({ sessionId, cwd, agentLabel }: { ses
           target.setAttribute('title', target.dataset.chatTooltipTitle ?? '');
           delete target.dataset.chatTooltipTitle;
         }}
+        onPointerMove={markPointerMessage}
+        onPointerLeave={clearPointerMessage}
         data-timestamps={timestamps ? '' : undefined}
         data-match-terminal={appearance.matchTerminal ? '' : undefined}
         data-contrast={appearance.contrast !== 100 ? '' : undefined}

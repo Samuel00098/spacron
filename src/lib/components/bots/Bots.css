@@ -221,6 +221,31 @@
 .bots-editor-main label.bots-check { margin-top: 16px; }
 .bots-editor-main label.bots-check + .bots-helper { margin: 4px 0 0 24px; }
 .bots-panel .bots-check input { width: 16px; height: 16px; margin: 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
+/* Option rows: a checkbox with a title and its explanation kept together. */
+.bots-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.bots-panel label.bots-option {
+  display: flex; align-items: flex-start; gap: 12px; margin: 0; padding: 12px 14px; cursor: pointer;
+  border-radius: 10px; background: var(--bg-tertiary); box-shadow: var(--surface-outline);
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+.bots-panel label.bots-option:hover { background: var(--bg-hover); }
+.bots-panel label.bots-option:has(input:checked) { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+.bots-panel label.bots-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bots-panel label.bots-option.nested { margin-left: 22px; background: transparent; }
+.bots-panel .bots-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 2px 0 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
+.bots-option-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.bots-option-title { color: var(--text-primary); font-weight: 600; }
+.bots-option-desc { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.bots-option-desc.bots-warn { color: var(--warning, #d29922); }
+.bots-editor-main .bots-field-label { margin-top: 20px; }
+.bots-editor-main .bots-identity + label, .bots-editor-main .bots-field-label:first-of-type { margin-top: 0; }
+.bots-editor-main .dropdown, .bots-editor-main .dd-trigger { width: 100%; box-sizing: border-box; }
+.bots-archived-label { margin-top: 16px; }
+.bots-editor-main .bots-archived-empty { margin: 0; }
+.bots-archived-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bots-archived-list li { display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 14px; border-radius: 10px; background: var(--bg-tertiary); box-shadow: var(--surface-outline); }
+.bots-archived-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bots-archived-when { flex-shrink: 0; color: var(--text-muted); font-size: 12px; }
 .bots-facts { margin: 0; }
 .bots-facts > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: baseline; gap: 12px; padding: 9px 0; }
 .bots-facts > div + div { border-top: 1px solid var(--border); }
@@ -402,5 +427,6 @@
 .bots-chat-bar-spacer { flex: 1; }
 .bots-panel .bots-chat-bar-btn { padding: 5px 12px; font-size: 12px; border-radius: 8px; background: var(--bg-tertiary); color: var(--text-muted); }
 .bots-panel .bots-chat-bar-btn:hover:not(:disabled), .bots-panel .bots-chat-bar-btn[aria-pressed="true"] { background: var(--bg-hover); color: var(--text-primary); }
-.bots-panel .bots-chat-bar-btn.primary { background: var(--accent); color: var(--accent-foreground, #fff); }
+.bots-panel .bots-chat-bar-btn.primary { background: var(--accent); color: var(--on-accent, var(--button-text, #000)); font-weight: 600; }
+.bots-panel .bots-chat-bar-btn.primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); color: var(--on-accent, var(--button-text, #000)); }
 .bots-panel .bots-chat-bar-btn:disabled { opacity: 0.45; cursor: default; }

@@ -51,22 +51,62 @@ pub(crate) fn resolve_agent_program(program: &str) -> String {
 }
 
 #[cfg(windows)]
-fn headless_windows_program(resolved: &Path) -> PathBuf {
-    // npm's OpenCode shim forwards its arguments to this native executable.
-    // Rust refuses multiline arguments to batch files because cmd.exe cannot
-    // safely preserve them. Launch the installed binary without a shell.
-    if resolved.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.eq_ignore_ascii_case("opencode.cmd")) {
-        if let Some(prefix) = resolved.parent() {
-            let modules = prefix.join("node_modules");
-            for package in ["@opencode/cli", "opencode-ai"] {
-                let binary = modules.join(package).join("bin").join("opencode.exe");
-                if binary.is_file() {
-                    return binary;
+fn headless_windows_program(resolved: &Path) -> (PathBuf, Vec<String>) {
+    // npm's shims forward their arguments to a native executable. Rust refuses
+    // multiline arguments to batch files because cmd.exe cannot safely preserve
+    // them ("batch file arguments are invalid"), and bot prompts are multiline.
+    // Launch the installed binary without a shell.
+    let shim = resolved.file_name().and_then(|name| name.to_str()).map(str::to_ascii_lowercase);
+    let (packages, binary_name): (&[&str], &str) = match shim.as_deref() {
+        Some("opencode.cmd") => (&["@opencode/cli", "opencode-ai"], "opencode.exe"),
+        Some("claude.cmd") => (&["@anthropic-ai/claude-code"], "claude.exe"),
+        _ => {
+            let is_batch = resolved.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+            if is_batch {
+                if let Some(found) = npm_shim_target(resolved) {
+                    return found;
                 }
+            }
+            return (resolved.to_path_buf(), Vec::new());
+        }
+    };
+    if let Some(prefix) = resolved.parent() {
+        let modules = prefix.join("node_modules");
+        for package in packages {
+            let binary = modules.join(package).join("bin").join(binary_name);
+            if binary.is_file() {
+                return (binary, Vec::new());
             }
         }
     }
-    resolved.to_path_buf()
+    (resolved.to_path_buf(), Vec::new())
+}
+
+/// Any other npm `.cmd` shim (Codex, Gemini, ...) ends with the real target
+/// quoted after `%dp0%`. Read it and start that directly: a native `.exe` as
+/// is, a script through node. Returns None when the file is not that shape.
+#[cfg(windows)]
+fn npm_shim_target(shim: &Path) -> Option<(PathBuf, Vec<String>)> {
+    let text = std::fs::read_to_string(shim).ok()?;
+    let line = text.lines().rev().find(|l| l.contains("%dp0%\\"))?;
+    let start = line.rfind("%dp0%\\")? + "%dp0%\\".len();
+    let rest = &line[start..];
+    let relative = &rest[..rest.find('"')?];
+    let prefix = shim.parent()?;
+    let target = prefix.join(relative);
+    if !target.is_file() {
+        return None;
+    }
+    let ext = target.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("exe") => Some((target, Vec::new())),
+        Some("js" | "cjs" | "mjs") => {
+            let local_node = prefix.join("node.exe");
+            let node = if local_node.is_file() { local_node } else { PathBuf::from(resolve_agent_program("node")) };
+            Some((node, vec![target.to_string_lossy().to_string()]))
+        }
+        _ => None,
+    }
 }
 
 const MAX_RUNS: usize = 200;
@@ -375,8 +415,9 @@ pub(crate) async fn spawn_headless(
     #[cfg(windows)]
     let mut command = {
         let resolved = resolve_agent_program(&argv[0]);
-        let mut c = tokio::process::Command::new(headless_windows_program(Path::new(&resolved)));
-        c.args(&argv[1..]);
+        let (program, lead) = headless_windows_program(Path::new(&resolved));
+        let mut c = tokio::process::Command::new(program);
+        c.args(lead).args(&argv[1..]);
         c
     };
     #[cfg(not(windows))]
@@ -455,16 +496,37 @@ mod tests {
     fn headless_opencode_prefers_its_native_npm_executable() {
         let dir = tempfile::tempdir().unwrap();
         let shim = dir.path().join("opencode.cmd");
-        assert_eq!(headless_windows_program(&shim), shim);
+        assert_eq!(headless_windows_program(&shim), (shim.clone(), vec![]));
         for package in ["opencode-ai", "@opencode/cli"] {
             let binary = dir.path().join("node_modules").join(package).join("bin").join("opencode.exe");
             std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
             std::fs::write(&binary, []).unwrap();
-            assert_eq!(headless_windows_program(&shim), binary);
-            assert_eq!(headless_windows_program(&binary), binary);
+            assert_eq!(headless_windows_program(&shim), (binary.clone(), vec![]));
+            assert_eq!(headless_windows_program(&binary), (binary.clone(), vec![]));
         }
         let other = dir.path().join("other.cmd");
-        assert_eq!(headless_windows_program(&other), other);
+        assert_eq!(headless_windows_program(&other), (other.clone(), vec![]));
+    }
+
+    /// Multiline bot prompts cannot go through a `.cmd` ("batch file arguments
+    /// are invalid"), so Claude and any other npm shim start their real target.
+    #[cfg(windows)]
+    #[test]
+    fn headless_npm_shims_start_their_real_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = dir.path().join("node_modules").join("@anthropic-ai").join("claude-code").join("bin").join("claude.exe");
+        std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
+        std::fs::write(&claude, []).unwrap();
+        let shim = dir.path().join("claude.cmd");
+        assert_eq!(headless_windows_program(&shim), (claude.clone(), vec![]));
+
+        let script = dir.path().join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, []).unwrap();
+        std::fs::write(dir.path().join("node.exe"), []).unwrap();
+        let codex = dir.path().join("codex.cmd");
+        std::fs::write(&codex, "@ECHO off\r\n\"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n").unwrap();
+        assert_eq!(headless_windows_program(&codex), (dir.path().join("node.exe"), vec![script.to_string_lossy().to_string()]));
     }
 
     /// The Windows-box case: an npm-style `.cmd` shim found by bare name, run

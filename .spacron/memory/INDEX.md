@@ -23,6 +23,7 @@ short enough that it says what the note is *about*, never what it says.
 - [agent-turn-detection](agent-turn-detection.md) — how a turn is judged to have ended, and why a guess may not say "finished"
 - [agent-turn-reporting](agent-turn-reporting.md) — who owns a session's watcher, and which turn ends may release the lease
 - [agent-report-status](agent-report-status.md) — the `report_status` tool and per-launch agent tokens; only a declared end may interrupt
+- [agent-native-turn-signals](agent-native-turn-signals.md) — CLIs that announce their own turn end (Codex `notify`): why not a `.cmd`, what is unverified, what is not wired
 - [blocked-reason-is-raw-pty](blocked-reason-is-raw-pty.md) — "needs input" text is raw PTY; strip ANSI before rendering it
 - [agent-inbox-unread](agent-inbox-unread.md) — why "read" and "dismissed" have to stay separate bits
 - [notification-card-design](notification-card-design.md) — colour rules for the agent notification card; never tint a whole surface

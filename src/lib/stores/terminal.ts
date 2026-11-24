@@ -64,7 +64,7 @@ import {
   BROWSER_STARTUP_TIMEOUT_MS,
   BROWSER_TOOL_TIMEOUT_MS,
 } from './mcpBridge';
-import { attachTurnSignals, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
+import { attachTurnSignals, nativeTurnSignalFlags, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
 import { readTerminalScreen } from '$lib/services/terminal-screen';
 import { getActiveWorktreePath } from '$lib/stores/projectWorktrees';
 import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
@@ -2886,7 +2886,10 @@ export async function spawnAgentPreset(
   // `command` (not `launchCommand`) stays the preset key for detection, rules
   // files and display names; only the line written to the PTY carries the
   // resolved command + permission args + MCP flags.
-  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${platformLaunchFlags(command, undefined, get(agentCodexOwnServer))}${mcpFlags}`;
+  // The CLI's own "turn finished" hook, where it has one (Codex's `notify`), so
+  // the end of a turn does not hinge on the agent remembering to report it.
+  const nativeSignalFlags = await nativeTurnSignalFlags(command);
+  const launchLine = `${launchCommand}${launchArgs ? ` ${launchArgs}` : ''}${runtimeArgs ? ` ${runtimeArgs}` : ''}${platformLaunchFlags(command, undefined, get(agentCodexOwnServer))}${mcpFlags}${nativeSignalFlags}`;
 
   if (deepSeek) {
     deepSeek.markDeepSeekWorkerSession(sessionId);

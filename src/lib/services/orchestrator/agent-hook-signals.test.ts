@@ -66,6 +66,28 @@ describe('parseOpenUrlLine', () => {
   });
 });
 
+describe('native CLI notify lines (Codex)', () => {
+  const line = (json: string, nonce = NONCE) => `SPACRON-NOTIFY:${nonce} ${json}`;
+
+  it('a completed turn finishes it, with the last message as the detail', () => {
+    const json = JSON.stringify({ type: 'agent-turn-complete', 'last-assistant-message': 'Added the\n  retry   backoff.' });
+    expect(parseSignalLine(line(json), NONCE)).toEqual({ kind: 'finished', detail: 'Added the retry backoff.' });
+  });
+
+  it('caps a long message and still finishes without one', () => {
+    const long = JSON.stringify({ type: 'agent-turn-complete', 'last-assistant-message': 'x'.repeat(1000) });
+    expect((parseSignalLine(line(long), NONCE) as { detail: string }).detail).toHaveLength(240);
+    expect(parseSignalLine(line(JSON.stringify({ type: 'agent-turn-complete' })), NONCE)).toEqual({ kind: 'finished' });
+  });
+
+  it('ignores other events, broken JSON and another session\'s nonce', () => {
+    expect(parseSignalLine(line(JSON.stringify({ type: 'something-else' })), NONCE)).toBeNull();
+    expect(parseSignalLine(line('not json'), NONCE)).toBeNull();
+    expect(parseSignalLine(line('"agent-turn-complete"'), NONCE)).toBeNull();
+    expect(parseSignalLine(line(JSON.stringify({ type: 'agent-turn-complete' }), 'othernonce'), NONCE)).toBeNull();
+  });
+});
+
 describe('parseSignalLine', () => {
   it('reads the two sentinels', () => {
     expect(parseSignalLine(`SPACRON-TURN-DONE:${NONCE}`, NONCE)).toEqual({ kind: 'finished' });

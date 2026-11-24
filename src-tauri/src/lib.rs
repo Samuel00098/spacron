@@ -583,6 +583,7 @@ pub fn run() {
             commands::keep_awake::keep_awake_status,
             commands::agent_signals::agent_signal_channel_open,
             commands::agent_signals::agent_signal_channel_close,
+            commands::agent_signals::agent_turn_signal_flags,
             commands::agent_history::agent_history_list,
             commands::agent_transcript::agent_transcript_read,
             commands::agent_transcript::chat_image_preview,

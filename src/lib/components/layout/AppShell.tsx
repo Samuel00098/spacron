@@ -721,8 +721,11 @@ export default function AppShell() {
   }, [currentDevActiveSessionId]);
   // Agent CLI update checks: app-wide, a few registry requests every 6 hours.
   useEffect(() => startAgentUpdateChecks(), []);
-  useEffect(() => startBotWatcher((message, tone, spoken) => {
-    showToast(message, tone, 8000, Boolean(spoken));
+  useEffect(() => startBotWatcher((message, tone, spoken, action) => {
+    // No forced system notification: with Spacron in front the toast is enough,
+    // and showToast already mirrors it to the OS whenever the app is hidden or
+    // another window has focus.
+    showToast(message, tone, 8000, false, action);
     if (spoken && get(speakAgentCompletions)) speakText(spoken);
   }), []);
 

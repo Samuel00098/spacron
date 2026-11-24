@@ -189,10 +189,282 @@ pub fn agent_signal_channel_close(channel_id: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── Native turn signals (CLIs that announce turn ends themselves) ──────────
+//
+// Some CLIs run a program of the user's choosing when a turn completes (Codex's
+// `notify`). That is a signal from the CLI itself, so it does not depend on the
+// agent remembering to call `report_status` or echo a sentinel. The program here
+// appends `SPACRON-NOTIFY:<nonce> <the CLI's JSON>` to the channel file named
+// by the environment Spacron already gives every agent it launches, so the
+// tailer, `deliverTurnSignal` and everything downstream are unchanged. Launched
+// without that environment (a CLI started outside Spacron) it does nothing.
+
+#[cfg(windows)]
+const NOTIFY_SCRIPT_NAME: &str = "codex-notify.ps1";
+#[cfg(not(windows))]
+const NOTIFY_SCRIPT_NAME: &str = "codex-notify.sh";
+
+#[cfg(windows)]
+const NOTIFY_SCRIPT: &str = r#"param([string]$Payload)
+$file = $env:SPACRON_TURN_FILE
+$token = $env:SPACRON_TURN_TOKEN
+if (-not $file -or -not $token) { exit 0 }
+$line = ($Payload -replace "[\r\n]+", " ").Trim()
+[System.IO.File]::AppendAllText($file, "SPACRON-NOTIFY:$token $line`n", (New-Object System.Text.UTF8Encoding($false)))
+"#;
+
+#[cfg(not(windows))]
+const NOTIFY_SCRIPT: &str = r#"#!/bin/sh
+[ -n "$SPACRON_TURN_FILE" ] && [ -n "$SPACRON_TURN_TOKEN" ] || exit 0
+payload=$(printf '%s' "$1" | tr '\r\n' '  ')
+printf 'SPACRON-NOTIFY:%s %s\n' "$SPACRON_TURN_TOKEN" "$payload" >> "$SPACRON_TURN_FILE"
+"#;
+
+/// True when the user's own Codex config already sets a top-level `notify`, so
+/// Spacron leaves it alone rather than replacing their notifier for this launch.
+fn codex_config_sets_notify(config: &str) -> bool {
+    for line in config.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            return false; // `notify` is a top-level key: it must precede any table.
+        }
+        if line.starts_with("notify") && line["notify".len()..].trim_start().starts_with('=') {
+            return true;
+        }
+    }
+    false
+}
+
+fn user_codex_config() -> Option<String> {
+    let home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".codex")))?;
+    std::fs::read_to_string(home.join("config.toml")).ok()
+}
+
+/// The `-c notify=[...]` launch override for Codex, with the script it points at.
+/// A TOML literal string cannot hold a quote, so a path with one is refused.
+fn codex_notify_flag(script: &std::path::Path) -> Option<String> {
+    let path = script.to_string_lossy().replace('\\', "/");
+    if path.contains('\'') || path.contains('"') {
+        return None;
+    }
+    #[cfg(windows)]
+    let argv = format!(
+        "'powershell.exe','-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','{path}'"
+    );
+    #[cfg(not(windows))]
+    let argv = format!("'sh','{path}'");
+    Some(format!(" -c \"notify=[{argv}]\""))
+}
+
+// ── Antigravity (`agy`) ────────────────────────────────────────────────────
+//
+// `agy` has no per-launch hooks route (`--settings` rejects a `hooks` key; hooks
+// load only from `.agents/hooks.json` or `~/.gemini/config/hooks.json`). Hooks
+// there are keyed by NAME, so Spacron adds one named entry beside whatever else
+// the user has (another tool's, say) and never edits those. The entry is inert
+// outside a Spacron launch: its script exits at once unless the environment
+// Spacron gives every agent names a channel. Its `Stop` hook receives JSON on
+// stdin; `fullyIdle: false` means the run is continuing, so it is skipped.
+
+const AGY_HOOK_NAME: &str = "spacron-status";
+
+#[cfg(windows)]
+const AGY_SCRIPT_NAME: &str = "agy-stop.ps1";
+#[cfg(not(windows))]
+const AGY_SCRIPT_NAME: &str = "agy-stop.sh";
+
+#[cfg(windows)]
+const AGY_SCRIPT: &str = r#"$file = $env:SPACRON_TURN_FILE
+$token = $env:SPACRON_TURN_TOKEN
+if (-not $file -or -not $token) { exit 0 }
+try { $p = [Console]::In.ReadToEnd() | ConvertFrom-Json } catch { exit 0 }
+if ($p.fullyIdle -eq $false) { exit 0 }
+$reason = [string]$p.terminationReason
+if ($p.error -or $reason -match 'ERROR|MAX_STEPS') {
+  $why = if ($p.error) { [string]$p.error } else { "Stopped: $reason" }
+  $line = "SPACRON-TURN-FAILED:$token " + (($why -replace '\s+', ' ').Trim())
+} else {
+  $line = "SPACRON-TURN-DONE:$token"
+}
+[System.IO.File]::AppendAllText($file, "$line`n", (New-Object System.Text.UTF8Encoding($false)))
+"#;
+
+#[cfg(not(windows))]
+const AGY_SCRIPT: &str = r#"#!/bin/sh
+[ -n "$SPACRON_TURN_FILE" ] && [ -n "$SPACRON_TURN_TOKEN" ] || exit 0
+input=$(cat)
+case "$input" in *'"fullyIdle":false'*) exit 0 ;; esac
+reason=$(printf '%s' "$input" | sed -n 's/.*"terminationReason":"\([^"]*\)".*/\1/p')
+case "$reason" in
+  *ERROR*|*MAX_STEPS*) printf 'SPACRON-TURN-FAILED:%s Stopped: %s\n' "$SPACRON_TURN_TOKEN" "$reason" ;;
+  *) printf 'SPACRON-TURN-DONE:%s\n' "$SPACRON_TURN_TOKEN" ;;
+esac >> "$SPACRON_TURN_FILE"
+"#;
+
+fn antigravity_hooks_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".gemini").join("config").join("hooks.json"))
+}
+
+/// Where the Stop script lives. Not the temp dir: the user's hooks file names
+/// it permanently, so it has to survive a temp clean.
+fn antigravity_script_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("spacron").join("agent-hooks"))
+}
+
+fn antigravity_hook_command(script: &std::path::Path) -> Option<String> {
+    let path = script.to_string_lossy().replace('\\', "/");
+    if path.contains('"') {
+        return None;
+    }
+    #[cfg(windows)]
+    return Some(format!(
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{path}\""
+    ));
+    #[cfg(not(windows))]
+    return Some(format!("sh \"{path}\""));
+}
+
+/// The hooks file's new text with Spacron's entry added (`Some(command)`) or
+/// removed (`None`), or `None` when nothing has to change. Other hooks are kept.
+/// A file that is not a JSON object is left alone (`Err`): it is the user's.
+fn merge_antigravity_hook(existing: Option<&str>, command: Option<&str>) -> Result<Option<String>, ()> {
+    let mut root = match existing.map(str::trim).filter(|t| !t.is_empty()) {
+        None => serde_json::Map::new(),
+        Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return Err(()),
+        },
+    };
+    let wanted = command.map(|c| {
+        serde_json::json!({ "Stop": [{ "type": "command", "command": c, "timeout": 10 }] })
+    });
+    if root.get(AGY_HOOK_NAME) == wanted.as_ref() {
+        return Ok(None);
+    }
+    match wanted {
+        Some(entry) => {
+            root.insert(AGY_HOOK_NAME.to_string(), entry);
+        }
+        None => {
+            root.remove(AGY_HOOK_NAME);
+        }
+    }
+    serde_json::to_string_pretty(&serde_json::Value::Object(root))
+        .map(|text| Some(text + "\n"))
+        .map_err(|_| ())
+}
+
+fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.spacron-tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Add or remove Spacron's Antigravity hook. Best effort: any failure leaves the
+/// user's file as it was and agy on the detection it already had.
+fn sync_antigravity_hook(enabled: bool) -> Option<()> {
+    let hooks_path = antigravity_hooks_path()?;
+    let existing = std::fs::read_to_string(&hooks_path).ok();
+    let command = if enabled {
+        let dir = antigravity_script_dir()?;
+        std::fs::create_dir_all(&dir).ok()?;
+        let script = dir.join(AGY_SCRIPT_NAME);
+        std::fs::write(&script, AGY_SCRIPT).ok()?;
+        Some(antigravity_hook_command(&script)?)
+    } else {
+        // Nothing to remove from a file that is not there.
+        existing.as_ref()?;
+        None
+    };
+    let changed = merge_antigravity_hook(existing.as_deref(), command.as_deref()).ok()??;
+    std::fs::create_dir_all(hooks_path.parent()?).ok()?;
+    write_atomically(&hooks_path, &changed).ok()
+}
+
+/// Launch flags that make a CLI announce its own turn ends, or `None` when this
+/// CLI has no such hook, the user already has one, or the script could not be
+/// written. `None` just means that CLI keeps the fallbacks it already had.
+/// `enabled` mirrors Settings > Agents status hooks; turning it off also takes
+/// Spacron's Antigravity hook back out of the user's file.
+#[tauri::command]
+pub fn agent_turn_signal_flags(agent: String, enabled: Option<bool>) -> Option<String> {
+    let enabled = enabled.unwrap_or(true);
+    if agent == "agy" {
+        sync_antigravity_hook(enabled);
+        return None;
+    }
+    if agent != "codex" || !enabled {
+        return None;
+    }
+    if user_codex_config().is_some_and(|c| codex_config_sets_notify(&c)) {
+        return None;
+    }
+    let dir = channel_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    let script = dir.join(NOTIFY_SCRIPT_NAME);
+    std::fs::write(&script, NOTIFY_SCRIPT).ok()?;
+    codex_notify_flag(&script)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn a_users_own_codex_notify_is_detected_and_tables_end_the_search() {
+        assert!(codex_config_sets_notify("model = \"x\"\nnotify = [\"say\", \"done\"]\n"));
+        assert!(codex_config_sets_notify("notify=[\"a\"]"));
+        // Inside a table it is a different key, and the top level has none.
+        assert!(!codex_config_sets_notify("model = \"x\"\n[tui]\nnotify = true\n"));
+        assert!(!codex_config_sets_notify("notifications = true\n"));
+    }
+
+    #[test]
+    fn the_codex_flag_quotes_for_every_shell_and_refuses_unquotable_paths() {
+        let flag = codex_notify_flag(std::path::Path::new("C:\\Users\\A B\\codex-notify.ps1")).unwrap();
+        assert!(flag.starts_with(" -c \"notify=['"), "{flag}");
+        assert!(flag.contains("C:/Users/A B/codex-notify.ps1"), "{flag}");
+        assert!(flag.ends_with("]\""), "{flag}");
+        assert!(codex_notify_flag(std::path::Path::new("/home/o'brien/x.sh")).is_none());
+    }
+
+    #[test]
+    fn only_codex_gets_native_flags() {
+        assert!(agent_turn_signal_flags("claude".into(), None).is_none());
+        assert!(agent_turn_signal_flags("unknown".into(), None).is_none());
+    }
+
+    #[test]
+    fn the_antigravity_entry_is_added_beside_other_hooks_and_removed_cleanly() {
+        let theirs = r#"{"orca-status":{"Stop":[{"type":"command","command":"x"}]}}"#;
+        let added = merge_antigravity_hook(Some(theirs), Some("run it")).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&added).unwrap();
+        assert_eq!(value["orca-status"]["Stop"][0]["command"], "x");
+        assert_eq!(value[AGY_HOOK_NAME]["Stop"][0]["command"], "run it");
+        // Already there: nothing to write.
+        assert_eq!(merge_antigravity_hook(Some(&added), Some("run it")), Ok(None));
+        // A new script path replaces ours, never theirs.
+        let moved = merge_antigravity_hook(Some(&added), Some("elsewhere")).unwrap().unwrap();
+        assert!(moved.contains("elsewhere") && !moved.contains("run it") && moved.contains("orca-status"));
+        // Removing leaves exactly their content.
+        let removed = merge_antigravity_hook(Some(&added), None).unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&removed).unwrap(),
+            serde_json::from_str::<serde_json::Value>(theirs).unwrap()
+        );
+        assert_eq!(merge_antigravity_hook(Some(theirs), None), Ok(None));
+    }
+
+    #[test]
+    fn an_antigravity_hooks_file_that_is_not_an_object_is_left_alone() {
+        assert_eq!(merge_antigravity_hook(Some("not json"), Some("c")), Err(()));
+        assert_eq!(merge_antigravity_hook(Some("[1,2]"), Some("c")), Err(()));
+        assert!(merge_antigravity_hook(None, Some("c")).unwrap().unwrap().contains(AGY_HOOK_NAME));
+        assert!(merge_antigravity_hook(Some("  "), Some("c")).unwrap().is_some());
+    }
 
     fn temp_file(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("spacron-signal-test-{name}"));

@@ -29,6 +29,7 @@ import { catalogIconFor } from '$lib/services/mcp-catalog';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { BOT_AVATARS, DEFAULT_AVATAR, isBuiltInAvatar } from './avatars';
 import { BOT_TEMPLATES } from './templates';
+import { botNotifyModes, replyPreview, shouldAnnounce } from './botNotify';
 
 export type BotSchedule = 'manual' | Schedule;
 /** What a bot may do unattended. Turned into each CLI's own flags on the host. */
@@ -735,7 +736,8 @@ export function latestRun(state: Record<string, BotHostState>, bot: Pick<Bot, 'i
 // ── Bot Builder ─────────────────────────────────────────────────────────────
 
 type NoticeTone = 'info' | 'success' | 'warning' | 'error';
-type Notice = (message: string, tone: NoticeTone, spoken?: string) => void;
+type NoticeAction = { label: string; onClick: () => void };
+type Notice = (message: string, tone: NoticeTone, spoken?: string, action?: NoticeAction) => void;
 let notice: Notice | null = null;
 const adopting = new Set<string>();
 
@@ -800,21 +802,60 @@ const seen = new Map<string, BotRun['status']>();
  * Announce status changes and runs that finish between polls. The first
  * snapshot seeds older runs without replaying them.
  */
-export function noticesFor(state: Record<string, BotHostState>, watchingSince: number): { message: string; tone: NoticeTone; spoken: string }[] {
-  const out: { message: string; tone: NoticeTone; spoken: string }[] = [];
-  for (const host of Object.values(state)) {
-    for (const run of host.runs) {
+export interface BotNotice {
+  message: string;
+  tone: NoticeTone;
+  spoken: string;
+  host: string;
+  run: BotRun;
+}
+
+export function noticesFor(state: Record<string, BotHostState>, watchingSince: number): BotNotice[] {
+  const out: BotNotice[] = [];
+  for (const [host, hostState] of Object.entries(state)) {
+    for (const run of hostState.runs) {
       const before = seen.get(run.id);
       seen.set(run.id, run.status);
       if (before === run.status || run.status === 'running') continue;
       if (before === undefined && (run.finishedAt ?? run.startedAt) < watchingSince) continue;
       const name = `Bot "${run.name}"`;
-      if (run.status === 'completed') out.push({ message: `${name} finished. Open Bots to read the result.`, tone: 'success', spoken: `${name} finished.` });
-      else if (run.status === 'failed') out.push({ message: `${name} failed${run.detail ? `: ${run.detail}` : '.'}`, tone: 'error', spoken: `${name} could not finish.` });
-      else if (run.status === 'missed') out.push({ message: `${name} missed its scheduled run.`, tone: 'warning', spoken: `${name} missed its scheduled run.` });
+      if (run.status === 'completed') out.push({ message: `${name} finished.`, tone: 'success', spoken: `${name} finished.`, host, run });
+      else if (run.status === 'failed') out.push({ message: `${name} failed${run.detail ? `: ${run.detail}` : '.'}`, tone: 'error', spoken: `${name} could not finish.`, host, run });
+      else if (run.status === 'missed') out.push({ message: `${name} missed its scheduled run.`, tone: 'warning', spoken: `${name} missed its scheduled run.`, host, run });
     }
   }
   return out;
+}
+
+/** True while the user is reading this bot's chat with the app in front of them. */
+function watchingBot(botId: string): boolean {
+  if (!get(botsOpen) || get(selectedBotId) !== botId) return false;
+  return typeof document === 'undefined' || (document.visibilityState === 'visible' && document.hasFocus());
+}
+
+/** What the bot said, so the notice reads as the result rather than "something finished". */
+async function resultPreview(host: string, run: BotRun): Promise<string> {
+  try {
+    const log = await Promise.race([
+      fetchBotLog({ boxId: host }, run.id),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('slow')), 2500)),
+    ]);
+    return replyPreview(log.reply);
+  } catch {
+    return '';
+  }
+}
+
+/** Announce what each bot's own notice setting allows, with a way straight to the bot. */
+async function announce(notices: BotNotice[], onNotice: Notice): Promise<void> {
+  const modes = get(botNotifyModes);
+  for (const n of notices) {
+    const botId = n.run.botId;
+    if (!shouldAnnounce(modes[botId] ?? 'all', n.run, watchingBot(botId))) continue;
+    const preview = n.run.status === 'completed' ? await resultPreview(n.host, n.run) : '';
+    const message = preview ? `${n.message} ${preview}` : n.message;
+    onNotice(message, n.tone, n.spoken, { label: 'Open', onClick: () => openBots(botId) });
+  }
 }
 
 /** Keep run state fresh, adopt Bot Builder creations and announce finished runs. */
@@ -826,7 +867,7 @@ export function startBotWatcher(onNotice: Notice): () => void {
     try {
       const state = await refreshBotState();
       const notices = noticesFor(state, watchingSince);
-      if (get(botSettings).notify) notices.forEach((n) => onNotice(n.message, n.tone, n.spoken));
+      if (get(botSettings).notify) await announce(notices, onNotice);
     } catch { /* A host is unreachable; try again next tick. */ }
   };
   // Refresh this PC's schedule window on launch, then start watching.

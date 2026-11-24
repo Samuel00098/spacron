@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
+import { get } from '$lib/stores/storeCompat';
 import { isModalOpen } from '$lib/react/useModalFocus';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
 import { customAgents, removedPresetAgents } from '$lib/stores/customAgents';
@@ -22,10 +23,11 @@ import {
   botDraftQueue, saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
-import { botChats, newBotChat, setBotChatArchived, splitChats, type BotChat as ChatThread } from '$lib/services/bots/botChats';
+import { BOT_NOTIFY_MODES, botNotifyModes, setBotNotifyMode, type BotNotifyMode } from '$lib/services/bots/botNotify';
+import { botAutoArchive, botChats, newBotChat, setBotAutoArchive, setBotChatArchived, splitChats, type BotChat as ChatThread } from '$lib/services/bots/botChats';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
 import { Dots, Markdown, UserTurn, contrastVars } from '$lib/components/terminal/TerminalChatView';
-import { MessageActions } from '$lib/components/terminal/TerminalChatRich';
+import { MessageActions, markPointerMessage, clearPointerMessage } from '$lib/components/terminal/TerminalChatRich';
 import { CHAT_WIDTH_COLUMN } from '$lib/stores/chatViewSettings';
 import {
   botChatAppearance,
@@ -313,7 +315,46 @@ function templateKeys(t: BotTemplate | null, host: string): string[] {
   return connectorChoices(host).filter((c) => c.usable && c.catalogId && t.connectors!.includes(c.catalogId)).map((c) => c.key);
 }
 
-function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => void }) {
+/** Saved at once (not with "Save changes"): when this bot may notify you, how its chats are kept, and the ones put away. */
+function ChatHistorySettings({ bot, runs }: { bot: Bot; runs: BotRun[] }) {
+  const auto = Boolean(useStore(botAutoArchive)[bot.id]);
+  const notifyMode: BotNotifyMode = useStore(botNotifyModes)[bot.id] ?? 'all';
+  const chatState = useStore(botChats)[bot.id];
+  const archived = useMemo(() => splitChats(chatState, runs).filter((c) => c.archived), [chatState, runs]);
+  return (
+    <>
+      <h4 className="bots-editor-section">Notifications</h4>
+      <span className="bots-field-label">When a run ends</span>
+      <Dropdown ariaLabel="When to notify about this bot" value={notifyMode} onChange={(v) => setBotNotifyMode(bot.id, v as BotNotifyMode)}
+        options={BOT_NOTIFY_MODES.map((m) => ({ value: m.value, label: m.label }))} />
+      <p className="bots-helper">{BOT_NOTIFY_MODES.find((m) => m.value === notifyMode)?.detail} Notices show what the bot said and take you to its chat. You won't get one for a reply you are already reading.</p>
+      <h4 className="bots-editor-section">Chat history</h4>
+      <div className="bots-options">
+        <label className="bots-option">
+          <input type="checkbox" checked={auto} onChange={(e) => setBotAutoArchive(bot.id, e.target.checked)} />
+          <span className="bots-option-text">
+            <span className="bots-option-title">Archive the old chat when I start a new one</span>
+            <span className="bots-option-desc">Keeps the chat list short. Archived chats are only hidden, never deleted, and you can bring them back here or from the chat picker.</span>
+          </span>
+        </label>
+      </div>
+      <span className="bots-field-label bots-archived-label">Archived chats{archived.length > 0 ? ` (${archived.length})` : ''}</span>
+      {archived.length === 0
+        ? <p className="bots-helper bots-archived-empty">Nothing archived yet. Use Archive above a chat to put it away.</p>
+        : <ul className="bots-archived-list">
+          {archived.map((c) => (
+            <li key={c.id}>
+              <span className="bots-archived-title" title={c.title}>{c.title}</span>
+              <span className="bots-archived-when">{c.runs[0] ? when(c.runs[0].startedAt) : ''}</span>
+              <button type="button" className="bots-chat-bar-btn" onClick={() => setBotChatArchived(bot.id, c.id, false)}>Unarchive</button>
+            </li>
+          ))}
+        </ul>}
+    </>
+  );
+}
+
+function BotEditor({ bot, runs = [], onDone }: { bot?: Bot; runs?: BotRun[]; onDone: (id: string | null) => void }) {
   useStore(customAgents);
   useStore(removedPresetAgents);
   useStore(usageState);
@@ -426,25 +467,29 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
               <ConnectorPicker host={host} value={keys} onChange={setKeys} />
               {missing.length > 0 && <p className="bots-helper bots-warn">This template works best with {missing.join(', ')}. Add it in Settings &gt; MCP &amp; plugins{host === LOCAL_HOST ? '' : ', then share the sign-in with this box in Settings > Bots'}.</p>}
               {keys.length > 0 && GLOBAL_MCP_ONLY.has(program) && <p className="bots-helper">This agent only reads its own global MCP config, so it gets every connector from Settings &gt; MCP &amp; plugins, not just these.</p>}
-              <label className="bots-check">
-                <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
-                <span>Use a web browser</span>
-              </label>
-              {browser && host === LOCAL_HOST && <>
-                <label className="bots-check">
-                  <input type="checkbox" checked={browserVisible} onChange={(e) => setBrowserVisible(e.target.checked)} />
-                  <span>Show the browser while it works</span>
+              <span className="bots-field-label">Abilities</span>
+              <div className="bots-options">
+                <label className="bots-option">
+                  <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+                  <span className="bots-option-text">
+                    <span className="bots-option-title">Use a web browser</span>
+                    <span className="bots-option-desc">{host === LOCAL_HOST
+                      ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
+                      : `Opens and uses real pages in a hidden browser on the box. The box needs Node, and a browser installed once with "${boxOs === 'linux' ? 'npx playwright install --with-deps chromium' : 'npx playwright install chromium'}".`}</span>
+                  </span>
                 </label>
-                <p className="bots-helper">Opens a real browser window on this PC so you can watch the bot click and type. Leave it off to run hidden in the background.</p>
-              </>}
-              <p className="bots-helper">{host === LOCAL_HOST
-                ? 'Opens and uses real pages (sign-ups, forms, sites without an API) in a hidden browser on this PC. Web search works without it.'
-                : `Opens and uses real pages in a hidden browser on the box. The box needs Node, and a browser installed once with "${boxOs === 'linux' ? 'npx playwright install --with-deps chromium' : 'npx playwright install chromium'}".`}</p>
-              <label className="bots-check">
-                <input type="checkbox" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
-                <span>Use the computer</span>
-              </label>
-              <p className={`bots-helper${computer && host === LOCAL_HOST && pcComputer !== 'ready' ? ' bots-warn' : ''}`}>{host === LOCAL_HOST
+                {browser && host === LOCAL_HOST && <label className="bots-option nested">
+                  <input type="checkbox" checked={browserVisible} onChange={(e) => setBrowserVisible(e.target.checked)} />
+                  <span className="bots-option-text">
+                    <span className="bots-option-title">Show the browser while it works</span>
+                    <span className="bots-option-desc">Opens a real browser window on this PC so you can watch the bot click and type. Leave it off to run hidden in the background.</span>
+                  </span>
+                </label>}
+                <label className="bots-option">
+                  <input type="checkbox" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
+                  <span className="bots-option-text">
+                    <span className="bots-option-title">Use the computer</span>
+                    <span className={`bots-option-desc${computer && host === LOCAL_HOST && pcComputer !== 'ready' ? ' bots-warn' : ''}`}>{host === LOCAL_HOST
                 ? pcComputer === 'unsupported'
                   ? 'Sees and operates apps on this PC\'s screen, but this session does not allow it. On Linux, sign in with an X11 (Xorg) session instead of Wayland.'
                   : pcComputer === 'off'
@@ -454,12 +499,18 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
                   ? `Operates this Mac box's own screen: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} Allow spacron-server under Screen Recording and Accessibility in System Settings once, and keep a user logged in.`
                   : boxOs === 'windows'
                     ? `Operates this Windows box's own desktop: screenshots, clicks, typing. ${access === 'full' ? 'It can start programs.' : 'It can start programs only with Full access.'} spacron-server must run in a logged-in desktop session (started at sign-in), not as a service.`
-                    : `Gets its own virtual desktop on the box to open and operate apps, with no one watching. ${access === 'full' ? 'It can start programs there.' : 'It can start programs there only with Full access.'} The box needs this once: "sudo apt-get install -y xvfb xdotool imagemagick".`}</p>
-              <label className="bots-check">
-                <input type="checkbox" checked={builder} onChange={(e) => setBuilder(e.target.checked)} />
-                <span>Can create other bots</span>
-              </label>
-              <p className="bots-helper">Bots it creates get no more access than it has, can't create bots themselves, and start with their schedule off until you turn it on.</p>
+                    : `Gets its own virtual desktop on the box to open and operate apps, with no one watching. ${access === 'full' ? 'It can start programs there.' : 'It can start programs there only with Full access.'} The box needs this once: "sudo apt-get install -y xvfb xdotool imagemagick".`}</span>
+                  </span>
+                </label>
+                <label className="bots-option">
+                  <input type="checkbox" checked={builder} onChange={(e) => setBuilder(e.target.checked)} />
+                  <span className="bots-option-text">
+                    <span className="bots-option-title">Can create other bots</span>
+                    <span className="bots-option-desc">Bots it creates get no more access than it has, can't create bots themselves, and start with their schedule off until you turn it on.</span>
+                  </span>
+                </label>
+              </div>
+              {bot && <ChatHistorySettings bot={bot} runs={runs} />}
             </div>
             <aside className="bots-editor-side">
               <h4>Run settings</h4>
@@ -543,6 +594,9 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
   };
   const chat = chats.find((c) => c.id === picked) ?? chats.find((c) => c.current)!;
   function startChat() {
+    // With "Archive the old chat" on in the bot's settings, the chat being left goes to the archive.
+    const leaving = chats.find((c) => c.current);
+    if (get(botAutoArchive)[bot.id] && leaving?.runs.length) setBotChatArchived(bot.id, leaving.id, true);
     setPicked(newBotChat(bot.id, runs));
     setTab('chat');
   }
@@ -551,7 +605,7 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
     if (archived && target.current) setPicked(newBotChat(bot.id, runs));
     else if (archived) setPicked(null);
   }
-  if (editing) return <BotEditor bot={bot} onDone={() => setEditing(false)} />;
+  if (editing) return <BotEditor bot={bot} runs={runs} onDone={() => setEditing(false)} />;
   return (
     <div className="bots-view">
       <header className="bots-view-header">
@@ -708,6 +762,8 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
       onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
       data-chat-font={appearance.font === 'app' ? undefined : appearance.font === 'system' || appearance.font === 'terminal' ? appearance.font : 'custom'}
       data-chat-font-size={appearance.fontSize == null ? undefined : 'set'}
+      onPointerMove={markPointerMessage}
+      onPointerLeave={clearPointerMessage}
       data-timestamps={showTimes ? '' : undefined}
       data-contrast={appearance.contrast !== 100 ? '' : undefined}
       style={{

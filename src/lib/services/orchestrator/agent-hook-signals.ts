@@ -85,6 +85,13 @@ const DONE_PREFIX = 'SPACRON-TURN-DONE:';
 const INPUT_PREFIX = 'SPACRON-NEEDS-INPUT:';
 const FAILED_PREFIX = 'SPACRON-TURN-FAILED:';
 /**
+ * A CLI announcing its own turn end through a program it runs for us (Codex's
+ * `notify`). The line carries the CLI's raw JSON after the nonce; we read it
+ * here rather than in the helper script so the script stays a dumb append.
+ */
+const NOTIFY_PREFIX = 'SPACRON-NOTIFY:';
+const NOTIFY_DETAIL_MAX = 240;
+/**
  * Not a turn state — a URL an agent asked to open.
  *
  * It rides the same channel because the shim that writes it (`spacron-open`,
@@ -184,7 +191,50 @@ export function parseSignalLine(line: string, nonce: string): HookSignal | null 
     const detail = detailAfter(FAILED_PREFIX);
     return { kind: 'failed', reason: detail || 'The agent reported that it could not finish.' };
   }
+  if (trimmed.startsWith(`${NOTIFY_PREFIX}${nonce}`)) return parseNativeNotify(detailAfter(NOTIFY_PREFIX));
   return null;
+}
+
+/**
+ * Read a CLI's own turn-complete payload. Only a completed turn counts; any
+ * other event type, or text that is not JSON, ends nothing. The agent's last
+ * message becomes the inbox detail, flattened and capped.
+ */
+function parseNativeNotify(json: string): HookSignal | null {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  if (record.type !== 'agent-turn-complete') return null;
+  const last = record['last-assistant-message'];
+  const detail = typeof last === 'string' ? last.replace(/\s+/g, ' ').trim().slice(0, NOTIFY_DETAIL_MAX) : '';
+  return detail ? { kind: 'finished', detail } : { kind: 'finished' };
+}
+
+/**
+ * Launch flags that make this CLI announce its own turn ends (leading space),
+ * or '' when it has no such hook, the user already configured one, or the agent
+ * is on a remote box (the channel file would be on the laptop).
+ *
+ * Nothing here is written into the user's config: the flag overrides for this
+ * launch only, and the script it names does nothing outside a Spacron launch.
+ */
+export async function nativeTurnSignalFlags(command: string): Promise<string> {
+  if (!signalChannelsReachAgent()) return '';
+  const first = command.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  const executable = first.split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat)$/, '') ?? '';
+  try {
+    // Asked even when the setting is off, so an Antigravity hook installed
+    // earlier is taken back out of the user's hooks file.
+    return (await invoke<string | null>('agent_turn_signal_flags', { agent: executable, enabled: get(agentStatusHooksEnabled) })) ?? '';
+  } catch (err) {
+    console.warn('Could not set up native turn signals; falling back to the usual detection:', err);
+    return '';
+  }
 }
 
 /**

@@ -18,6 +18,7 @@ import { structuredAccessFor } from '$lib/services/structured-chat/defaults';
 import { getAgentProviderLaunchOptions } from '$lib/services/chat-provider-adapters';
 import { createChatThread, setChatThreadWorktree, setThreadDraft, sharedWorktreeAt } from '$lib/stores/chatThreads';
 import { showProjectChat } from '$lib/stores/chatNavigation';
+import { revealAgentView } from '$lib/services/reveal-agent-chat';
 import { setInteractionMode } from '$lib/stores/interactionMode';
 import type { ChatReasoningEffort } from '$lib/types/chat';
 import { isAgentUpdating } from '$lib/stores/agentUpdates';
@@ -124,6 +125,8 @@ export async function quickSpawnAgent(command: string, options: QuickLaunchOptio
     manualPromptTargetId.set(id);
     setActiveSession(id);
     useLayoutStore.getState().showTerminal();
+    // Straight to the new agent, even from the Bots page or another project.
+    void revealAgentView(id, project.id);
     showToast(`Spawned ${name}`, 'success', undefined, true);
     const enriched = enrichPromptWithProjectInstructions(options.prompt, project.id, project.root_path);
     const prompt = enriched?.trim();
@@ -179,6 +182,7 @@ async function openStructuredChat(
   if (previous) {
     setActiveSession(id);
     useLayoutStore.getState().showTerminal();
+    void revealAgentView(id, projectId);
     await restoreStructuredInChat(id, previous);
     return id;
   }
@@ -208,6 +212,7 @@ async function openStructuredChat(
   }
   setActiveSession(id);
   useLayoutStore.getState().showTerminal();
+  void revealAgentView(id, projectId);
   await startStructuredChat(agent, id, cwd, {
     access: structuredAccessFor(command),
     resumeId: options.resumeId ?? null,

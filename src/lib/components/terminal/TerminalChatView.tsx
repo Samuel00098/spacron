@@ -139,6 +139,8 @@ import {
   JumpToLatest,
   LinkHoverCard,
   MessageActions,
+  markPointerMessage,
+  clearPointerMessage,
   MessageRail,
   NewMessagesLine,
   PullRequestCard,
@@ -1739,6 +1741,8 @@ export default function TerminalChatView({
         target.setAttribute('title', target.dataset.chatTooltipTitle ?? '');
         delete target.dataset.chatTooltipTitle;
       }}
+      onPointerMove={markPointerMessage}
+      onPointerLeave={clearPointerMessage}
       data-timestamps={showTimestamps ? '' : undefined}
       data-match-terminal={appearance.matchTerminal ? '' : undefined}
       data-contrast={appearance.contrast !== 100 ? '' : undefined}

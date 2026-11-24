@@ -384,3 +384,55 @@
   color: var(--button-text, #fff);
   border-color: var(--accent);
 }
+
+/* ── Flat look ───────────────────────────────────────────────────────────────
+   global.css puts bevel, lift and well shadows on anything named *-card and on
+   every button, which made these cards and their Copy / Run buttons look raised.
+   A class-level `!important` beats those zero-specificity rules. A drawn border
+   would be cleared there too, so the outline is a ring (see global-css-overrides). */
+.snippets-panel .snippet-card,
+.snippets-panel .creator-form {
+  background: var(--bg-tertiary) !important;
+  background-image: none !important;
+  box-shadow: var(--surface-outline) !important;
+}
+
+.snippets-panel .snippet-card:hover {
+  background: var(--bg-hover) !important;
+}
+
+.snippets-panel .card-body,
+.snippets-panel .input-box,
+.snippets-panel .search-input,
+.snippets-panel .scope-toggle-group {
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.snippets-panel .action-btn,
+.snippets-panel .icon-btn,
+.snippets-panel .btn-cancel,
+.snippets-panel .btn-save,
+.snippets-panel .add-btn {
+  background-image: none !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.snippets-panel .copy-btn {
+  background: transparent !important;
+}
+
+.snippets-panel .copy-btn:hover {
+  background: var(--bg-hover) !important;
+}
+
+.snippets-panel .run-btn {
+  background: color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+
+.snippets-panel .run-btn:hover {
+  background: var(--accent) !important;
+  color: var(--on-accent, var(--button-text, #000));
+}

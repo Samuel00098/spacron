@@ -541,7 +541,8 @@
   color: var(--chat-surface-muted, var(--text-muted));
 }
 .tcr-actions.end { justify-content: flex-end; }
-.terminal-chat-view:not([data-timestamps]) .tcr-msg:not(:hover):not(:focus-within) .tcr-time { visibility: hidden; }
+/* `[data-hot]` is set from pointer movement (markPointerMessage), not `:hover`: see there. */
+.terminal-chat-view:not([data-timestamps]) .tcr-msg:not([data-hot]):not(:focus-within) .tcr-time { visibility: hidden; }
 .tcr-time { padding: 0 6px; font-variant-numeric: tabular-nums; }
 .terminal-chat-view .tcr-actions button {
   width: 28px;

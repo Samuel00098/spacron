@@ -851,6 +851,32 @@ export function UsageLimitRow({
 // Message actions, timestamps, selection quote, suggestions
 // ---------------------------------------------------------------------------
 
+/**
+ * Which message the pointer is on, tracked from pointer MOVEMENT rather than CSS
+ * `:hover`. `:hover` follows whatever is under a still pointer, so while a reply
+ * streams and the chat scrolls to the newest text, the "hovered" message kept
+ * changing and each message's timestamp flickered on and off. Here the mark only
+ * changes when the pointer actually moves (or leaves), so scrolling cannot
+ * change it. CSS reads `[data-hot]` on the `.tcr-msg`.
+ */
+const hotMessage = new WeakMap<HTMLElement, HTMLElement | null>();
+
+export function markPointerMessage(event: React.PointerEvent<HTMLElement>): void {
+  const root = event.currentTarget;
+  const next = event.target instanceof Element ? event.target.closest<HTMLElement>('.tcr-msg') : null;
+  const previous = hotMessage.get(root) ?? null;
+  if (previous === next) return;
+  previous?.removeAttribute('data-hot');
+  next?.setAttribute('data-hot', '');
+  hotMessage.set(root, next);
+}
+
+export function clearPointerMessage(event: React.PointerEvent<HTMLElement>): void {
+  const root = event.currentTarget;
+  hotMessage.get(root)?.removeAttribute('data-hot');
+  hotMessage.set(root, null);
+}
+
 export function MessageActions({
   text,
   time,

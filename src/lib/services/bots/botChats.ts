@@ -64,6 +64,21 @@ export function newBotChat(botId: string, runs: BotRun[], now = Date.now()): num
   return id;
 }
 
+/** Bots whose previous chat is archived automatically when a new chat starts. Off unless chosen in the bot's settings. */
+export const botAutoArchive = persisted<Record<string, boolean>>('spacron_bot_auto_archive_v1', {}, (raw) => {
+  const out: Record<string, boolean> = {};
+  if (raw && typeof raw === 'object') for (const [id, on] of Object.entries(raw)) if (on === true) out[id] = true;
+  return out;
+});
+
+export function setBotAutoArchive(botId: string, on: boolean) {
+  botAutoArchive.update((all) => {
+    const next = { ...all };
+    if (on) next[botId] = true; else delete next[botId];
+    return next;
+  });
+}
+
 export function setBotChatArchived(botId: string, chatId: number, archived: boolean) {
   update(botId, (s) => ({ ...s, archived: archived ? [...new Set([...s.archived, chatId])] : s.archived.filter((id) => id !== chatId) }));
 }

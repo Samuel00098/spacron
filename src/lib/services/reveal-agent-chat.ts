@@ -1,4 +1,5 @@
 import { closeSettings } from '$lib/stores/layout';
+import { closeBots } from '$lib/services/bots/bots';
 import { requestRoomControl } from '$lib/stores/layoutControl';
 import { allProjectSessions, setActiveSession } from '$lib/stores/terminal';
 import { setTerminalChatView } from '$lib/services/terminal-chat';
@@ -12,14 +13,27 @@ export async function revealAgentChat(paneId: number): Promise<void> {
   await revealAgentView(paneId);
 }
 
-/** Reveal the agent's current Chat or Terminal view without changing modes. */
-export async function revealAgentView(paneId: number): Promise<void> {
+/**
+ * Reveal the agent's current Chat or Terminal view without changing modes.
+ *
+ * Takes the user straight to the agent from wherever they are: it closes what
+ * covers the workspace (Settings, the Bots page), switches to the agent's
+ * project when it is a different one, and focuses the agent's own room. Pass
+ * `ownerProjectId` when the caller already knows it, as a launch does, since a
+ * session that was only just created may not be in the lookups yet.
+ */
+export async function revealAgentView(paneId: number, ownerProjectId?: string | null): Promise<void> {
   window.dispatchEvent(new Event('spacron:reveal-agent-chat'));
   closeSettings();
-  const projectId = recordForPane(paneId)?.projectId
+  closeBots();
+  const projectId = ownerProjectId
+    ?? recordForPane(paneId)?.projectId
     ?? get(allProjectSessions).find((session) => session.id === paneId)?.projectId;
   if (projectId && get(activeProjectId) !== projectId) await switchToProject(projectId);
   setActiveSession(paneId);
   // Let dialog cleanup restore its old focus before revealing the agent room.
   requestAnimationFrame(() => requestRoomControl('focus', `agent:${paneId}`));
+  // A room for an agent launched a moment ago may not exist on the first frame;
+  // asking again once the shell has built it is harmless when it already did.
+  setTimeout(() => requestRoomControl('focus', `agent:${paneId}`), 350);
 }
