@@ -4,6 +4,10 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Bots follow the panel opacity** — with a custom background image, the Bots page is now frosted glass at the Settings > Panel opacity level, like the other panels, instead of a solid sheet.
+
 ## [v5.1.12] - 2026-11-24
 
 A follow-up to 5.1.11: bots get separate chats you can start fresh and archive, scrolling over interactive visuals is smooth even when you scroll fast, GitHub avatars show again, and switching between light and dark is much faster.
