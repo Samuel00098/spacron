@@ -130,6 +130,10 @@ if(window.MutationObserver)new MutationObserver(fillBotIcons).observe(document.d
 applyFragment();window.addEventListener('hashchange',applyFragment);
 window.addEventListener('message',function(e){var d=e.data;if(!(channel&&e.source===parent&&d&&d.spacronVisual===channel))return;if(d.action==='theme')applyTheme(d.theme);else if(d.action==='bots'){applyAvatars(d.avatars);applyBots(d.bots)}});
 window.addEventListener('keydown',function(e){if(channel&&e.key==='Escape'&&!e.defaultPrevented)parent.postMessage({spacronVisual:channel,action:'escape'},'*')});
+/* Inline: a wheel the page cannot use goes to the chat itself. Letting the browser chain it
+   from the frame is what made a fast flick stall and jump at the page's edge. */
+function usable(t,dy){for(var el=t&&t.nodeType===1?t:document.body;el;el=el.parentElement){var root=el===document.documentElement||el===document.body;var sc=root?document.scrollingElement:el;if(!sc)continue;if(!root){var o=getComputedStyle(el).overflowY;if(o!=='auto'&&o!=='scroll')continue}if(sc.scrollHeight<=sc.clientHeight+1)continue;if(dy<0?sc.scrollTop>0:sc.scrollTop+sc.clientHeight<sc.scrollHeight-1)return true}return false}
+if(channel&&params.get('layout')==='inline')window.addEventListener('wheel',function(e){if(e.ctrlKey||e.defaultPrevented||Math.abs(e.deltaY)<Math.abs(e.deltaX))return;var dy=e.deltaMode===1?e.deltaY*16:e.deltaMode===2?e.deltaY*innerHeight:e.deltaY;if(!dy||usable(e.target,dy))return;e.preventDefault();parent.postMessage({spacronVisual:channel,action:'wheel',dy:dy},'*')},{passive:false});
 var last=0;function report(){var b=document.body;if(!b)return;var h=Math.ceil(b.getBoundingClientRect().height+parseFloat(getComputedStyle(b).marginTop||0)+parseFloat(getComputedStyle(b).marginBottom||0));if(Math.abs(h-last)>1){last=h;parent.postMessage({spacronVisual:channel,height:h},'*')}}
 var ro=new ResizeObserver(report);ro.observe(document.documentElement);document.addEventListener('DOMContentLoaded',function(){ro.observe(document.body);report()});window.addEventListener('load',report);setInterval(report,1000);
 })();</script>"#;

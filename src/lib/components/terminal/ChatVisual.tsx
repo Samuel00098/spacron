@@ -269,6 +269,15 @@ function VisualFrame({ src, title, height, onHeight, onCompose, onNavigate, onEs
         if (typeof data.text === 'string' && data.text.trim()) onCompose?.(data.text.slice(0, 4000));
         return;
       }
+      if (data.action === 'wheel') {
+        // The page had nothing to scroll that way: the chat around it takes the wheel.
+        const dy = (data as { dy?: unknown }).dy;
+        if (typeof dy !== 'number' || !Number.isFinite(dy)) return;
+        let el = frameRef.current?.parentElement ?? null;
+        while (el && !(el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY))) el = el.parentElement;
+        if (el) el.scrollTop += Math.max(-2000, Math.min(2000, dy));
+        return;
+      }
       if (data.action === 'escape') {
         onEscape?.();
         return;
