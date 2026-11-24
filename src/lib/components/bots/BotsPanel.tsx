@@ -523,6 +523,9 @@ function BotEditor({ bot, onDone }: { bot?: Bot; onDone: (id: string | null) => 
 
 // ── a bot: chat and details ─────────────────────────────────────────────────
 
+/** The chat each bot was last showing, kept while the app runs so a visit to another page does not reset it. */
+const pickedChats = new Map<string, number>();
+
 function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: string }) {
   const hostName = useHostName();
   const [tab, setTab] = useState<'chat' | 'about'>('chat');
@@ -531,7 +534,13 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
   const next = nextBotRun(bot);
   const chatState = useStore(botChats)[bot.id];
   const chats = useMemo(() => splitChats(chatState, runs), [chatState, runs]);
-  const [picked, setPicked] = useState<number | null>(null);
+  // Which chat is open is remembered per bot, so leaving the Bots page and coming back
+  // shows the chat you were reading, not the newest one.
+  const [picked, setPickedState] = useState<number | null>(() => pickedChats.get(bot.id) ?? null);
+  const setPicked = (id: number | null) => {
+    if (id === null) pickedChats.delete(bot.id); else pickedChats.set(bot.id, id);
+    setPickedState(id);
+  };
   const chat = chats.find((c) => c.id === picked) ?? chats.find((c) => c.current)!;
   function startChat() {
     setPicked(newBotChat(bot.id, runs));

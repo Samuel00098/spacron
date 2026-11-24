@@ -4,6 +4,10 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bots remember which chat you had open** — leaving the Bots page and coming back used to jump to the newest chat; it now reopens the chat you were reading, for each bot.
+
 ## [v5.1.13] - 2026-11-24
 
 A small follow-up to 5.1.12: interactive visuals follow the panel opacity.
