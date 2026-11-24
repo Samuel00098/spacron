@@ -216,6 +216,7 @@ export async function spawnMcpSubagent(
   // Store in active subagent list
   const existing = subagentStore.get(parentSessionId) ?? [];
   subagentStore.set(parentSessionId, [...existing, subagent]);
+  watchSessions();
   void persistChildren(parentSessionId);
   notify(parentSessionId);
 
@@ -328,6 +329,7 @@ export function restoreMcpSubagents(parentSessionId: number, recordId: string, c
   const restored = children.map((child) => reconcileRestoredChild(child, parentSessionId, recordId, live));
   if (restored.length) {
     subagentStore.set(parentSessionId, restored);
+    watchSessions();
     void persistChildren(parentSessionId);
   } else {
     subagentStore.delete(parentSessionId);
@@ -367,7 +369,15 @@ function reconcileRestoredChild(
 
 // Watch the sessions store: a child that stops running without a report ended,
 // but it did not necessarily succeed. Only a `done` report means completed.
-sessions.subscribe((sessionList) => {
+// Started on the first child, not at import: this module sits in an import
+// cycle with the terminal store, which may not have finished loading yet.
+let watchingSessions = false;
+function watchSessions(): void {
+  if (watchingSessions) return;
+  watchingSessions = true;
+  sessions.subscribe(onSessionsChanged);
+}
+function onSessionsChanged(sessionList: typeof sessions extends { subscribe(run: (v: infer T) => void): unknown } ? T : never): void {
   for (const [parentSessionId, list] of subagentStore.entries()) {
     let changed = false;
     for (const sub of list) {
@@ -395,4 +405,4 @@ sessions.subscribe((sessionList) => {
       notify(parentSessionId);
     }
   }
-});
+}

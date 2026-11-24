@@ -50,6 +50,7 @@ export function useStructuredChatUnread(sessionId: number): boolean {
 }
 
 export function markStructuredChatPane(sessionId: number, agent: StructuredChatAgent, preset?: string, origin?: 'chat'): void {
+  watchSessionExits();
   if (origin === 'chat') newChatPanes.add(sessionId);
   if (preset) panePresets.set(sessionId, preset);
   structuredChatPanes.update((panes) => ({ ...panes, [sessionId]: agent }));
@@ -88,12 +89,19 @@ export function useStructuredChatPane(sessionId: number): StructuredChatAgent | 
   return useStore(structuredChatPanes)[sessionId] ?? null;
 }
 
-// Closing the pane ends its agent process too.
-onSessionExit(({ sessionId }) => {
-  const agent = getStructuredChatAgent(sessionId);
-  forgetStructuredChatPane(sessionId);
-  if (agent) void closeStructuredChat(agent, sessionId);
-});
+// Closing the pane ends its agent process too. Registered with the first
+// structured pane, not at import: this module is inside an import cycle with
+// the terminal store, which may not have finished loading yet.
+let watchingExits = false;
+function watchSessionExits(): void {
+  if (watchingExits) return;
+  watchingExits = true;
+  onSessionExit(({ sessionId }) => {
+    const agent = getStructuredChatAgent(sessionId);
+    forgetStructuredChatPane(sessionId);
+    if (agent) void closeStructuredChat(agent, sessionId);
+  });
+}
 
 function getStructuredChatAgent(sessionId: number): StructuredChatAgent | null {
   let found: StructuredChatAgent | null = null;

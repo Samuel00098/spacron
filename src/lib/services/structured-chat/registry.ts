@@ -17,7 +17,13 @@ import {
   subscribeMcpSubagents,
 } from './mcp-subagents';
 
-const providers = new Map<string, StructuredChatProvider>([
+// Built on first use, not at import: this module is inside an import cycle with
+// the terminal store, so the provider modules may not have finished loading yet.
+let providerMap: Map<string, StructuredChatProvider> | null = null;
+function providers(): Map<string, StructuredChatProvider> {
+  return providerMap ??= buildProviders();
+}
+const buildProviders = () => new Map<string, StructuredChatProvider>([
   [codexProvider.agent, codexProvider],
   [claudeProvider.agent, claudeProvider],
   ...['opencode', 'grok', 'antigravity', 'cursor', 'copilot', 'kimi', 'hermes', 'omp'].map((agent) => [agent, createAcpProvider(agent)] as const),
@@ -25,7 +31,7 @@ const providers = new Map<string, StructuredChatProvider>([
 ]);
 
 export function structuredChatProvider(agent: string | null | undefined): StructuredChatProvider | null {
-  return agent ? providers.get(agent) ?? null : null;
+  return agent ? providers().get(agent) ?? null : null;
 }
 
 export function providerCapabilities(agent: string | null | undefined): StructuredProviderCapabilities | null {
@@ -33,7 +39,7 @@ export function providerCapabilities(agent: string | null | undefined): Structur
 }
 
 export function registerStructuredChatProvider(provider: StructuredChatProvider): void {
-  providers.set(provider.agent, provider);
+  providers().set(provider.agent, provider);
 }
 
 export function getStructuredChat(agent: string | null | undefined, sessionId: number): StructuredChatState | null {

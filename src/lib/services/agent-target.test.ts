@@ -180,6 +180,8 @@ describe('agent-target service', () => {
         lastActivatedAt: 100,
       };
 
+      // The destination must still be a running agent session.
+      sessions.set([{ id: 10, agentPreset: 'claude', agentName: 'Claude Code', isRunning: true, projectId: 'p1' } as TerminalSessionInfo]);
       await dispatchPromptToAgent(chatTarget, 'Please fix the header styling', {
         imageDataUrl: 'data:image/png;base64,aGVsbG8=',
         imageName: 'header-element.png',
@@ -206,6 +208,7 @@ describe('agent-target service', () => {
         lastActivatedAt: 200,
       };
 
+      sessions.set([{ id: 20, agentPreset: 'codex', agentName: 'Codex', isRunning: true, projectId: 'p1' } as TerminalSessionInfo]);
       await dispatchPromptToAgent(termTarget, 'Refactor this button', {
         imageDataUrl: 'data:image/png;base64,aGVsbG8=',
         imageName: 'btn.png',
