@@ -4,6 +4,14 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+## [v5.1.13] - 2026-11-24
+
+A small follow-up to 5.1.12: interactive visuals follow the panel opacity.
+
+### Changed
+
+- **Interactive visuals follow the panel opacity** — with a custom background image, the inline interactive visuals in agent and bot chats no longer paint a solid sheet behind the page, so they take the Settings > Panel opacity level like the chat around them. Cards and controls inside a visual stay solid, and the full-size view keeps its solid background.
+
 ## [v5.1.12] - 2026-11-24
 
 A follow-up to 5.1.11: bots get separate chats you can start fresh and archive, scrolling over interactive visuals is smooth even when you scroll fast, the Bots page and the Tasks tabs follow the panel opacity, GitHub avatars show again, and switching between light and dark is much faster.
@@ -17,7 +25,6 @@ A follow-up to 5.1.11: bots get separate chats you can start fresh and archive, 
 
 - **Bots follow the panel opacity** — with a custom background image, the Bots page is now frosted glass at the Settings > Panel opacity level, like the other panels, instead of a solid sheet.
 - **Issues, pull requests and Actions follow the panel opacity** — the lists and detail pages in the Tasks panel no longer paint a solid sheet over the panel, so they take the Settings > Panel opacity level like the Board tab. The cards on them stay solid.
-- **Interactive visuals follow the panel opacity** — with a custom background image, the inline interactive visuals in agent and bot chats no longer paint a solid sheet behind the page, so they take the Settings > Panel opacity level like the chat around them. Cards and controls inside a visual stay solid, and the full-size view keeps its solid background.
 
 ### Fixed
 
