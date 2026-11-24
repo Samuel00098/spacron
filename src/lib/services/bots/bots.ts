@@ -619,7 +619,7 @@ export async function syncBots(): Promise<void> {
 }
 
 /** Start a run now; with `message`, it is a chat message the bot answers. */
-export async function runBotNow(id: string, message?: string, attachments: string[] = []): Promise<string> {
+export async function runBotNow(id: string, message?: string, attachments: string[] = [], since = 0): Promise<string> {
   const bot = get(bots).find((b) => b.id === id);
   if (!bot) throw new Error('This bot no longer exists.');
   if (!isReachable(bot.boxId)) throw new Error('Connect to this bot’s box to run it.');
@@ -627,13 +627,15 @@ export async function runBotNow(id: string, message?: string, attachments: strin
   await syncHost(bot.boxId);
   const { runId } = await call<{ runId: string }>(bot.boxId, 'run_now', {
     id, ...(message?.trim() ? { message: message.trim() } : {}), ...(attachments.length ? { attachments } : {}),
+    // A new chat starts here: the bot is not shown what was said before.
+    ...(since > 0 ? { since } : {}),
   });
   return runId;
 }
 
-export function sendBotMessage(id: string, message: string, attachments: string[] = []): Promise<string> {
+export function sendBotMessage(id: string, message: string, attachments: string[] = [], since = 0): Promise<string> {
   if (!message.trim() && !attachments.length) return Promise.reject(new Error('Type a message first.'));
-  return runBotNow(id, message, attachments);
+  return runBotNow(id, message, attachments, since);
 }
 
 /** Largest file a bot chat takes, and how many per message (the runner checks too). */

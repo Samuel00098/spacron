@@ -22,6 +22,7 @@ import {
   botDraftQueue, saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
+import { botChats, newBotChat, setBotChatArchived, splitChats, type BotChat as ChatThread } from '$lib/services/bots/botChats';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
 import { Dots, Markdown, UserTurn, contrastVars } from '$lib/components/terminal/TerminalChatView';
 import { MessageActions } from '$lib/components/terminal/TerminalChatRich';
@@ -528,6 +529,19 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
   const [editing, setEditing] = useState(false);
   const active = runs.find((r) => r.status === 'running');
   const next = nextBotRun(bot);
+  const chatState = useStore(botChats)[bot.id];
+  const chats = useMemo(() => splitChats(chatState, runs), [chatState, runs]);
+  const [picked, setPicked] = useState<number | null>(null);
+  const chat = chats.find((c) => c.id === picked) ?? chats.find((c) => c.current)!;
+  function startChat() {
+    setPicked(newBotChat(bot.id, runs));
+    setTab('chat');
+  }
+  function archive(target: ChatThread, archived: boolean) {
+    setBotChatArchived(bot.id, target.id, archived);
+    if (archived && target.current) setPicked(newBotChat(bot.id, runs));
+    else if (archived) setPicked(null);
+  }
   if (editing) return <BotEditor bot={bot} onDone={() => setEditing(false)} />;
   return (
     <div className="bots-view">
@@ -545,7 +559,7 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
         <CloseButton />
       </header>
       {tab === 'chat'
-        ? <BotChat bot={bot} runs={runs} active={active} />
+        ? <BotChat key={chat.id} bot={bot} runs={chat.runs} active={active} chat={chat} chats={chats} onPick={setPicked} onNewChat={startChat} onArchive={archive} />
         : <BotAbout bot={bot} runs={runs} homeRoot={homeRoot} active={active} onEdit={() => setEditing(true)} />}
     </div>
   );
@@ -564,7 +578,16 @@ function botChatReply(log: Awaited<ReturnType<typeof fetchBotLog>>): string {
     : log.text;
 }
 
-function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: BotRun }) {
+function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive }: {
+  bot: Bot; runs: BotRun[]; active?: BotRun;
+  chat: ChatThread; chats: ChatThread[];
+  onPick: (id: number) => void; onNewChat: () => void; onArchive: (chat: ChatThread, archived: boolean) => void;
+}) {
+  const [showArchived, setShowArchived] = useState(false);
+  // Only the newest chat takes messages; an older or archived one is for reading.
+  const readOnly = !chat.current || chat.archived;
+  const listed = chats.filter((c) => c.id === chat.id || showArchived === c.archived);
+  const archivedCount = chats.filter((c) => c.archived).length;
   const appearance = useStore(botChatAppearance);
   const visualsOn = useStore(botChatVisuals);
   const showTimes = useStore(botChatTimestamps);
@@ -628,13 +651,13 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
 
   async function send(revision?: { text: string; paths: string[] }) {
     const text = revision?.text ?? draft.trim();
-    if ((!text && !pending.length) || active || busy !== null) return false;
+    if ((!text && !pending.length) || active || busy !== null || readOnly) return false;
     setBusy('send'); setError('');
     try {
       // Upload first: the bot is told where each file landed in its folder.
       const paths = revision?.paths ?? [];
       if (!revision) for (const p of pending) paths.push(await attachToBot(bot, p.file));
-      await sendBotMessage(bot.id, text, paths);
+      await sendBotMessage(bot.id, text, paths, chat.id);
       if (!revision) {
         setDraft('');
         pending.forEach((p) => p.preview && URL.revokeObjectURL(p.preview));
@@ -686,6 +709,22 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
         ...(appearance.fontSize == null ? {} : { '--tc-font-size': `${appearance.fontSize}px` }),
       } as React.CSSProperties}
     >
+      <div className="bots-chat-bar">
+        <Dropdown
+          ariaLabel="Chats with this bot"
+          value={String(chat.id)}
+          onChange={(v) => onPick(Number(v))}
+          options={listed.map((c) => ({ value: String(c.id), label: c.title, sublabel: c.runs[0] ? `${c.archived ? 'Archived · ' : ''}${when(c.runs[0].startedAt)}` : undefined }))}
+        />
+        {archivedCount > 0 && <button type="button" className="bots-chat-bar-btn" aria-pressed={showArchived} onClick={() => setShowArchived((v) => !v)}>
+          {showArchived ? 'Hide archived' : `Archived (${archivedCount})`}
+        </button>}
+        <span className="bots-chat-bar-spacer" />
+        <button type="button" className="bots-chat-bar-btn" disabled={chat.archived ? false : !chat.runs.length && chat.current} onClick={() => onArchive(chat, !chat.archived)}>
+          {chat.archived ? 'Unarchive' : 'Archive'}
+        </button>
+        <button type="button" className="bots-chat-bar-btn primary" disabled={Boolean(active)} title="Start a new conversation with this bot" onClick={onNewChat}>New chat</button>
+      </div>
       <div className="terminal-chat-transcript">
         <div className="terminal-chat-scroll" ref={scroller}>
           <div className="terminal-chat-thread">
@@ -768,8 +807,8 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
             onPaste={(e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); addFiles(files); } }}
             rows={1}
             value={draft}
-            placeholder={active ? `${bot.name} is working… (Stop to send something new)` : `Message ${bot.name}`}
-            disabled={Boolean(active)}
+            placeholder={readOnly ? (chat.archived ? 'This chat is archived. Unarchive it to read along, or start a new chat.' : 'This chat has ended. Start a new chat to message this bot.') : active ? `${bot.name} is working… (Stop to send something new)` : `Message ${bot.name}`}
+            disabled={Boolean(active) || readOnly}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
@@ -795,7 +834,7 @@ function BotChat({ bot, runs, active }: { bot: Bot; runs: BotRun[]; active?: Bot
                 <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2.2" fill="currentColor" /></svg>
               </button>
             ) : (
-              <button type="button" className="terminal-chat-send bots-composer-send" title="Send (Enter)" disabled={busy !== null || (!draft.trim() && !pending.length)} onClick={() => void send()}>
+              <button type="button" className="terminal-chat-send bots-composer-send" title="Send (Enter)" disabled={readOnly || busy !== null || (!draft.trim() && !pending.length)} onClick={() => void send()}>
                 <span>{busy === 'send' && pending.length ? 'Uploading…' : busy === 'send' ? 'Sending…' : 'Send'}</span>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
               </button>

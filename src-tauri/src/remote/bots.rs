@@ -308,10 +308,12 @@ fn reply_tail(root: &Path, run: &BotRun) -> String {
 
 /// The recent conversation with this bot, oldest first: each finished run's
 /// message (if the user sent one) and the end of what the bot answered.
-fn conversation(root: &Path, bot_id: &str, skip_run: &str) -> String {
+/// Runs started before `since` belong to an earlier chat and are left out
+/// (a "New chat" starts fresh; 0 keeps everything).
+fn conversation(root: &Path, bot_id: &str, skip_run: &str, since: u64) -> String {
     let runs: Vec<BotRun> = read_json(&dir(root).join("runs.json"));
     let mut recent: Vec<&BotRun> = runs.iter()
-        .filter(|r| r.bot_id == bot_id && r.id != skip_run && r.status == "completed")
+        .filter(|r| r.bot_id == bot_id && r.id != skip_run && r.status == "completed" && r.started_at >= since)
         .take(CONTEXT_RUNS)
         .collect();
     recent.reverse();
@@ -606,7 +608,9 @@ pub(crate) fn run_now(args: Value, root: &Path) -> Result<Value, String> {
     let attachments = checked_attachments(root, id, &args)?;
     let message = message.or_else(|| (!attachments.is_empty()).then(|| "(sent files)".to_string()));
     let trigger = if message.is_some() { "chat" } else { "manual" };
-    let run_id = start_run(root.to_path_buf(), bot, trigger, max_run(&config), message, attachments);
+    // A new chat in the app passes when it began, so the bot does not see the old one.
+    let since = args.get("since").and_then(|v| v.as_u64()).unwrap_or(0);
+    let run_id = start_run(root.to_path_buf(), bot, trigger, max_run(&config), message, attachments, since);
     Ok(json!({ "runId": run_id }))
 }
 
@@ -797,7 +801,7 @@ fn tick(root: &Path) {
                 detail: Some("The scheduled time passed while this computer could not run it.".into()), log: None, message: None, attachments: Vec::new(),
             }));
         } else if !is_running(root, &b.id) {
-            start_run(root.to_path_buf(), b, "schedule", limit, None, Vec::new());
+            start_run(root.to_path_buf(), b, "schedule", limit, None, Vec::new(), 0);
         }
     }
     if changed {
@@ -808,11 +812,11 @@ fn tick(root: &Path) {
 
 // ── running ─────────────────────────────────────────────────────────────────
 
-fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration, message: Option<String>, attachments: Vec<String>) -> String {
+fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration, message: Option<String>, attachments: Vec<String>, since: u64) -> String {
     let run_id = uuid::Uuid::new_v4().to_string();
     let log_rel = format!(".spacron/bots/logs/{run_id}.log");
     // The conversation is read before this run is recorded, so it never sees itself.
-    let history = conversation(&root, &bot.id, &run_id);
+    let history = conversation(&root, &bot.id, &run_id, since);
     let prompt = run_prompt_with(&bot, &history, message.as_deref(), &attachments);
     let run = BotRun {
         id: run_id.clone(), bot_id: bot.id.clone(), name: bot.name.clone(), started_at: now_ms(), finished_at: None,
