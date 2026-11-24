@@ -1,3 +1,4 @@
+pub mod about_you;
 pub mod activity_stats;
 pub mod acp;
 pub mod agent_accounts;

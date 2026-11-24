@@ -1,7 +1,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { dropPositionToCss, isTauriRuntime } from '$lib/utils/tauri';
 import { revealAgentChat } from '$lib/services/reveal-agent-chat';
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -1872,7 +1872,11 @@ export default function TerminalChatView({
                 </div>
               );
             }
-            return marker || changes ? [marker, body, changes] : body;
+            // One keyed Fragment whether or not a marker or changes row is present. Switching
+            // between a bare element and a nested array made React remount the message each
+            // time a changes row appeared or went, which dropped the pointer's hover and
+            // made its timestamp blink off until the pointer moved again.
+            return <Fragment key={key}>{marker}{body}{changes}</Fragment>;
           })}
           {pending.map((p) => <UserTurn key={`pending-${p.id}`} text={p.text} images={p.images} onOpenImage={openViewer} pending />)}
           {structuredState?.approvals.map((approval) => (

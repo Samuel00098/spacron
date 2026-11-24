@@ -241,12 +241,19 @@ so put the full result in your final answer.",
         "You are \"{name}\", a Spacron bot running unattended. \
 Your current folder is your own home folder and it persists between runs: anything kept there (for example a \
 NOTES.md file) is still there next time. {access} Nobody is watching this run, so do not wait for input or ask \
-questions; do the work and finish with a short summary of what you did.{visuals}\n\nYour job:\n{instructions}",
+questions; do the work and finish with a short summary of what you did.{writing}{visuals}\n\nYour job:\n{instructions}",
         name = bot.name.trim(),
         instructions = bot.instructions.trim(),
+        writing = WRITING_PROMPT,
         visuals = if wants_visuals(bot) { VISUALS_PROMPT } else { "" },
     )
 }
+
+/// How a bot's answers read. Dashes used as punctuation make replies feel
+/// machine-written, so they are kept out unless a word itself needs one.
+const WRITING_PROMPT: &str = "\n\nWrite your answer in plain, natural sentences. Do not use dashes as punctuation: \
+no em dashes or en dashes, and no hyphen standing between two parts of a sentence. Use a comma, a colon, brackets or a \
+new sentence instead. Keep a hyphen only where the word, name, number range or code itself is written with one.";
 
 /// Whether this bot's run is told it can answer with interactive visuals.
 fn wants_visuals(bot: &BoxBot) -> bool {
@@ -294,11 +301,73 @@ fn opencode_reply(log: &str) -> Option<String> {
     structured.then(|| parts.join("\n\n"))
 }
 
+/// The usage-account provider for an agent program, as the desktop names it
+/// (`accountProviderFor`): `agy` is Antigravity, `cursor-agent` is Cursor.
+fn account_provider(program: &str) -> String {
+    let base = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let name = Path::new(base).file_stem().and_then(|s| s.to_str()).unwrap_or(base).to_ascii_lowercase();
+    match name.as_str() {
+        "agy" => "antigravity".into(),
+        "cursor-agent" => "cursor".into(),
+        _ => name,
+    }
+}
+
+/// Codex's `exec --json` events: the agent's messages, and the error a failed
+/// turn ended with. `None` when the log is not Codex JSON (an older run, or
+/// another agent). Without `--json` Codex prints its banner, the whole prompt and
+/// any hook lines into the log, and all of that used to show as the bot's reply.
+fn codex_events(log: &str) -> Option<(String, Option<String>)> {
+    let mut structured = false;
+    let mut parts = Vec::new();
+    let mut error = None;
+    for line in log.lines().filter(|line| line.trim_start().starts_with('{')) {
+        let Ok(event) = serde_json::from_str::<Value>(line) else { continue };
+        let Some(kind) = event["type"].as_str() else { continue };
+        match kind {
+            "item.completed" => {
+                structured = true;
+                if event["item"]["type"] == "agent_message" {
+                    if let Some(text) = event["item"]["text"].as_str() {
+                        parts.push(text.to_owned());
+                    }
+                }
+            }
+            "turn.failed" => {
+                structured = true;
+                if let Some(message) = event["error"]["message"].as_str() {
+                    error = Some(message.to_owned());
+                }
+            }
+            "error" => {
+                structured = true;
+                if let Some(message) = event["message"].as_str() {
+                    error.get_or_insert_with(|| message.to_owned());
+                }
+            }
+            "thread.started" | "turn.started" | "turn.completed" | "item.started" | "item.updated" => structured = true,
+            _ => {}
+        }
+    }
+    structured.then(|| (parts.join("\n\n"), error))
+}
+
+/// The agent's own answer from a run log, when the agent writes structured
+/// output Spacron can read; `None` means show the log as it is.
+fn agent_reply(log: &str) -> Option<String> {
+    opencode_reply(log).or_else(|| codex_events(log).map(|(reply, _)| reply))
+}
+
+/// Why a run failed, in the agent's words, when its log says so.
+fn agent_error(log: &str) -> Option<String> {
+    codex_events(log).and_then(|(_, error)| error)
+}
+
 /// The end of a run's output, for the conversation the next run sees.
 fn reply_tail(root: &Path, run: &BotRun) -> String {
     let text = run.log.as_deref().and_then(|l| std::fs::read(root.join(l)).ok())
         .map(|b| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default();
-    let text = opencode_reply(&text).unwrap_or(text);
+    let text = agent_reply(&text).unwrap_or(text);
     if text.chars().count() <= CONTEXT_REPLY_CHARS {
         return text;
     }
@@ -519,6 +588,12 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
                 Access::Folder => vec!["--sandbox".into(), "workspace-write".into()],
                 Access::Full => vec!["--dangerously-bypass-approvals-and-sandbox".into()],
             });
+            // A bot runs in its own home folder, which is not a git repository, and
+            // `codex exec` refuses an untrusted folder with "Not inside a trusted
+            // directory". The sandbox above is what limits the bot, not that check.
+            flags.push("--skip-git-repo-check".into());
+            // Events on stdout, so the chat shows the answer (see `codex_events`).
+            flags.push("--json".into());
             if let Some((path, _)) = mcp {
                 flags.extend(codex_mcp_flags(path));
             }
@@ -626,6 +701,34 @@ pub(crate) fn stop(args: Value, root: &Path) -> Result<Value, String> {
     Ok(json!({ "ok": true }))
 }
 
+/// Delete one chat message: the run record (the user's message) and its log (the
+/// bot's answer). The bot also stops seeing it in later runs' conversation, since
+/// that is read from the same records. A run still working has to be stopped
+/// first. Files the run saved in the bot's folder are its work, and are kept.
+pub(crate) fn delete_run(args: Value, root: &Path) -> Result<Value, String> {
+    let run_id = args.get("runId").and_then(|v| v.as_str()).ok_or("Missing run id.")?.to_string();
+    if running().lock().map_err(|e| e.to_string())?.contains_key(&run_id) {
+        return Err("Stop this run before deleting it.".into());
+    }
+    let mut log_rel: Option<String> = None;
+    let mut found = false;
+    update_runs(root, |runs| {
+        if let Some(at) = runs.iter().position(|r| r.id == run_id) {
+            found = true;
+            log_rel = runs[at].log.clone();
+            runs.remove(at);
+        }
+    });
+    if !found {
+        return Err("No such run.".into());
+    }
+    // Only a log this runner wrote, under its own logs folder.
+    if let Some(rel) = log_rel.filter(|rel| rel.starts_with(".spacron/bots/logs/") && !rel.contains("..")) {
+        let _ = std::fs::remove_file(root.join(rel));
+    }
+    Ok(json!({ "ok": true }))
+}
+
 /// The tail of one run's log. Looked up by run id rather than by path, so
 /// the desktop can only read logs this runner wrote.
 pub(crate) fn log(args: Value, root: &Path) -> Result<Value, String> {
@@ -638,7 +741,7 @@ pub(crate) fn log(args: Value, root: &Path) -> Result<Value, String> {
     let tail = if truncated { &bytes[bytes.len() - MAX_LOG_BYTES..] } else { &bytes[..] };
     let text = String::from_utf8_lossy(tail);
     let mut output = json!({ "text": text, "truncated": truncated });
-    if let Some(reply) = opencode_reply(&String::from_utf8_lossy(&bytes)) {
+    if let Some(reply) = agent_reply(&String::from_utf8_lossy(&bytes)) {
         output["reply"] = json!(reply);
     }
     Ok(output)
@@ -831,7 +934,11 @@ fn start_run(root: PathBuf, bot: BoxBot, trigger: &str, limit: Duration, message
     tokio::spawn(async move {
         let (status, detail) = match execute(&root, &bot, &id, &prompt, &root.join(&log_rel), limit, signal).await {
             Ok(0) => ("completed", None),
-            Ok(code) => ("failed", Some(format!("The agent exited with code {code}. See the output."))),
+            Ok(code) => {
+                // The agent's own reason (Codex: "You've hit your usage limit…") beats an exit code.
+                let log = std::fs::read(root.join(&log_rel)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+                ("failed", Some(agent_error(&log).unwrap_or_else(|| format!("The agent exited with code {code}. See the output."))))
+            }
             Err(e) if e == STOPPED_BY_USER => ("stopped", Some(e)),
             Err(e) => ("failed", Some(e)),
         };
@@ -872,7 +979,13 @@ async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path
     });
     // A browser server (Playwright via npx) can take far longer to start than
     // Claude Code's default MCP wait; the app gives its own agents the same budget.
-    let env = [("SPACRON_BOT", bot.name.as_str()), ("MCP_TIMEOUT", "120000")];
+    // Run under the account selected for this agent in Spacron (Settings > usage
+    // accounts), like every other launch. Without it a bot always used the CLI's
+    // own default login, which can be a different account that is out of credit
+    // while the usage meter, which shows the selected account, still has room.
+    let account_env = crate::commands::agent_accounts::usage_account_env(account_provider(&argv[0]), None).await;
+    let mut env: Vec<(&str, &str)> = vec![("SPACRON_BOT", bot.name.as_str()), ("MCP_TIMEOUT", "120000")];
+    env.extend(account_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     let result = spawn_headless(&argv, &cwd, log_path, &env, limit, Some(signal)).await;
     if let Some(guard) = config_guard {
         guard.restore();
@@ -1109,6 +1222,8 @@ mod tests {
         b.access = Access::Folder;
         let codex = bot_command(&b, "Summarise the news.", None).unwrap();
         assert_eq!(&codex[..4], ["codex", "exec", "--sandbox", "workspace-write"]);
+        assert!(codex.contains(&"--skip-git-repo-check".to_string()), "a bot's home is not a git repo");
+        assert_eq!(codex.last().unwrap(), "Summarise the news.", "the prompt stays last");
         b.agent = "gemini".into();
         b.access = Access::Full;
         let gemini = bot_command(&b, "Summarise the news.", None).unwrap();
@@ -1144,6 +1259,7 @@ mod tests {
     fn the_prompt_names_the_bot_and_says_what_it_may_do() {
         let mut b = parsed(bot("a", vec![]));
         assert!(bot_prompt(&b).contains("cannot create or change files"));
+        assert!(bot_prompt(&b).contains("Do not use dashes as punctuation"), "replies are asked to leave dashes out");
         b.access = Access::Folder;
         let p = bot_prompt(&b);
         assert!(p.contains("\"Digest\"") && p.contains("save results there"));
@@ -1174,6 +1290,30 @@ mod tests {
         tick(dir.path());
         let runs: Vec<BotRun> = read_json(&super::dir(dir.path()).join("runs.json"));
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn codex_json_runs_show_the_answer_or_the_real_error() {
+        let ok = concat!(
+            "Reading additional input from stdin...\n",
+            "{\"type\":\"thread.started\",\"thread_id\":\"t\"}\n",
+            "hook: SessionStart\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"i0\",\"type\":\"reasoning\",\"text\":\"thinking\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"i1\",\"type\":\"agent_message\",\"text\":\"Hello there.\"}}\n",
+            "{\"type\":\"turn.completed\"}\n",
+        );
+        assert_eq!(agent_reply(ok).as_deref(), Some("Hello there."));
+        assert_eq!(agent_error(ok), None);
+        // The shape a usage limit produced on Codex 0.172 (captured live).
+        let failed = concat!(
+            "{\"type\":\"thread.started\",\"thread_id\":\"t\"}\n{\"type\":\"turn.started\"}\n",
+            "{\"type\":\"error\",\"message\":\"You have hit your usage limit.\"}\n",
+            "{\"type\":\"turn.failed\",\"error\":{\"message\":\"You have hit your usage limit.\"}}\n",
+        );
+        assert_eq!(agent_reply(failed).as_deref(), Some(""));
+        assert_eq!(agent_error(failed).as_deref(), Some("You have hit your usage limit."));
+        // Plain text (older runs, other agents) is not Codex JSON.
+        assert_eq!(agent_reply("OpenAI Codex v0.172.0\nuser\nhi"), None);
     }
 
     #[test]
@@ -1315,6 +1455,38 @@ printf '%s\n' "$last" | tail -n 1"#);
         let text = log(json!({ "runId": second }), dir.path()).unwrap()["text"].as_str().unwrap().to_string();
         assert!(text.contains("SAW-HISTORY"), "{text}");
         assert!(run_now(json!({ "id": "chat", "message": "x".repeat(MAX_MESSAGE + 1) }), dir.path()).is_err());
+
+        // Deleting a message removes the record and its log, and the bot stops seeing it.
+        let log_rel = read_json::<Vec<BotRun>>(&dir(dir.path()).join("runs.json")).into_iter()
+            .find(|r| r.id == first).and_then(|r| r.log).unwrap();
+        assert!(dir.path().join(&log_rel).exists());
+        delete_run(json!({ "runId": first }), dir.path()).unwrap();
+        assert!(!dir.path().join(&log_rel).exists(), "the reply's log is gone");
+        assert!(read_json::<Vec<BotRun>>(&dir(dir.path()).join("runs.json")).iter().all(|r| r.id != first));
+        assert!(!conversation(dir.path(), "chat", "", 0).contains("hello"), "later runs no longer see it");
+        assert!(delete_run(json!({ "runId": first }), dir.path()).is_err(), "a second delete says there is no such run");
+    }
+
+    #[test]
+    fn deleting_a_message_removes_it_and_its_reply_everywhere() {
+        let root = tempfile::tempdir().unwrap();
+        let log_rel = ".spacron/bots/logs/r1.log".to_string();
+        std::fs::create_dir_all(root.path().join(".spacron/bots/logs")).unwrap();
+        std::fs::write(root.path().join(&log_rel), "Hi Sam, here is your digest.").unwrap();
+        let run = BotRun {
+            id: "r1".into(), bot_id: "b".into(), name: "Digest".into(), started_at: 1, finished_at: Some(2),
+            status: "completed".into(), trigger: "chat".into(), detail: None, log: Some(log_rel.clone()),
+            message: Some("hello".into()), attachments: vec![],
+        };
+        update_runs(root.path(), |runs| runs.insert(0, run));
+        assert!(conversation(root.path(), "b", "", 0).contains("User: hello"));
+
+        delete_run(json!({ "runId": "r1" }), root.path()).unwrap();
+        assert!(!root.path().join(&log_rel).exists(), "the reply's log is gone");
+        assert!(read_json::<Vec<BotRun>>(&dir(root.path()).join("runs.json")).is_empty());
+        assert!(!conversation(root.path(), "b", "", 0).contains("hello"), "later runs no longer see it");
+        assert!(delete_run(json!({ "runId": "r1" }), root.path()).is_err(), "a second delete says there is no such run");
+        assert!(delete_run(json!({}), root.path()).is_err());
     }
 
     #[test]

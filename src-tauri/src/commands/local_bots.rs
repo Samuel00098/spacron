@@ -52,6 +52,11 @@ pub fn local_bot_stop(args: Value, state: State<AppState>) -> Result<Value, Stri
 }
 
 #[tauri::command]
+pub fn local_bot_delete(args: Value, state: State<AppState>) -> Result<Value, String> {
+    bots::delete_run(args, &local_root(&state.config_dir))
+}
+
+#[tauri::command]
 pub fn local_bot_proposals_ack(args: Value, state: State<AppState>) -> Result<Value, String> {
     bots::proposals_ack(args, &local_root(&state.config_dir))
 }

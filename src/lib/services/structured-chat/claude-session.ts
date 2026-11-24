@@ -17,6 +17,7 @@ import { openAgentSession, stderrTail, withTimeout, type AcpNotification, type A
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { imageDataUrlsFor, parseImageDataUrl } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
+import { aboutYouEnv } from '$lib/stores/aboutYou';
 import { get } from '$lib/stores/storeCompat';
 import { chatAutoAnswerInline } from '$lib/stores/settings';
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
@@ -236,7 +237,7 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
   let runtime: Runtime | null = null;
   try {
     const accountEnv = await accountEnvFor('claude', options.accountId ?? null);
-    const session = await openAgentSession('claude', claudeArgs({ effort: targetEffort, resumeId: options.resumeId ?? null, access }), cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
+    const session = await openAgentSession('claude', claudeArgs({ effort: targetEffort, resumeId: options.resumeId ?? null, access }), cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
     runtime = {
       session,
       cwd,

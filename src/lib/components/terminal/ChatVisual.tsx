@@ -188,6 +188,42 @@ function themeTokens(glass = false): Record<string, string> {
   };
 }
 
+/**
+ * Scroll a chat by a wheel delta the visual handed over, eased over a few frames.
+ * Adding the raw delta at once made the chat jump in steps while the native wheel
+ * around it glides, which read as a stall and a lurch at the visual's edge.
+ * Deltas that arrive mid-glide add to the same target, so a fast flick stays one
+ * smooth movement.
+ */
+const glides = new WeakMap<HTMLElement, { target: number; frame: number | null }>();
+
+function glideScroll(el: HTMLElement, dy: number): void {
+  let state = glides.get(el);
+  if (!state || state.frame === null) state = { target: el.scrollTop, frame: null };
+  const max = Math.max(0, el.scrollHeight - el.clientHeight);
+  state.target = Math.max(0, Math.min(max, state.target + dy));
+  glides.set(el, state);
+  if (state.frame !== null) return;
+  const glide = state;
+  const step = () => {
+    const remaining = glide.target - el.scrollTop;
+    if (Math.abs(remaining) < 1) {
+      el.scrollTop = glide.target;
+      glide.frame = null;
+      return;
+    }
+    const before = el.scrollTop;
+    el.scrollTop += Math.sign(remaining) * Math.max(1, Math.abs(remaining) * 0.25);
+    // Blocked (the content shrank, or something else holds the scroll): stop rather than spin.
+    if (el.scrollTop === before) {
+      glide.frame = null;
+      return;
+    }
+    glide.frame = requestAnimationFrame(step);
+  };
+  glide.frame = requestAnimationFrame(step);
+}
+
 const MIN_HEIGHT = 60;
 const MAX_INLINE_HEIGHT = 900;
 
@@ -279,7 +315,7 @@ function VisualFrame({ src, title, height, onHeight, onCompose, onNavigate, onEs
         if (typeof dy !== 'number' || !Number.isFinite(dy)) return;
         let el = frameRef.current?.parentElement ?? null;
         while (el && !(el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY))) el = el.parentElement;
-        if (el) el.scrollTop += Math.max(-2000, Math.min(2000, dy));
+        if (el) glideScroll(el, Math.max(-2000, Math.min(2000, dy)));
         return;
       }
       if (data.action === 'escape') {

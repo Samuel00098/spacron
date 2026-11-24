@@ -23,6 +23,7 @@ import type { StructuredAccess, StructuredApproval, StructuredApprovalOption, St
 import { acpAskAnswer, acpAskSkip, askKindFor, parseAcpQuestions, type AcpAskKind, type AcpAskQuestion } from './acp-questions';
 import { acpImageBlocks, imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
+import { aboutYouEnv } from '$lib/stores/aboutYou';
 import type { StructuredChatProvider } from './provider';
 import { initialStructuredState, StructuredStateStore } from './state';
 
@@ -345,7 +346,7 @@ function makeProvider(agent: string): StructuredChatProvider {
     let exited = false;
     try {
       const accountEnv = await accountEnvFor(agent, options.accountId);
-      const session = await openAgentSession(launch.command, launch.args, cwd, { ...(launch.env ?? {}), ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
+      const session = await openAgentSession(launch.command, launch.args, cwd, { ...(launch.env ?? {}), ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
       stderr = stderrTail(session);
       const tail = stderr;
       sessions.set(sessionId, { session, sessionId: '', cwd });

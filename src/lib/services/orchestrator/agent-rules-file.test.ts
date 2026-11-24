@@ -682,6 +682,12 @@ describe('the standing brief tells agents how to be heard', () => {
     const numbers = [...buildStandingBriefBody().matchAll(/^(\d+)\. \*\*/gm)].map((m) =>
       Number(m[1]),
     );
-    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it('points agents at the About you file without ever carrying its text', () => {
+    const body = buildStandingBriefBody();
+    expect(body).toContain('`$SPACRON_ABOUT_YOU_FILE`');
+    expect(body).toContain('never copy it into project files');
   });
 });

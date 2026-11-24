@@ -10,6 +10,7 @@ import { openAgentSession, stderrTail, withTimeout, type AcpSession } from '$lib
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { acpImageBlocks, imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
+import { aboutYouEnv } from '$lib/stores/aboutYou';
 import { get } from '$lib/stores/storeCompat';
 import { chatAutoAnswerInline } from '$lib/stores/settings';
 import type { StructuredChatProvider } from './provider';
@@ -120,7 +121,7 @@ export const piProvider: StructuredChatProvider = {
     try {
       const accountEnv = await accountEnvFor('pi', options.accountId);
       const args = ['--mode', 'rpc', ...(options.resumeId ? ['--session', options.resumeId] : [])];
-      const session = await openAgentSession('pi', args, cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
+      const session = await openAgentSession('pi', args, cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
       tail = stderrTail(session);
       const stderr = tail;
       const runtime = { session, requestId: 0, responses: new Map<string, (frame: Json) => void>() };

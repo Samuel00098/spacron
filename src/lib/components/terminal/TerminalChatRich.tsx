@@ -885,6 +885,7 @@ export function MessageActions({
   canResend = true,
   onFork,
   onRewind,
+  onDelete,
   align = 'start',
 }: {
   text: string;
@@ -894,9 +895,17 @@ export function MessageActions({
   canResend?: boolean;
   onFork?: () => void;
   onRewind?: () => void;
+  /** Delete this message. The first click arms it; a second click within 3 s deletes. */
+  onDelete?: () => void;
   align?: 'start' | 'end';
 }) {
   const [copied, setCopied] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => {
+    if (!confirmDelete) return undefined;
+    const timer = setTimeout(() => setConfirmDelete(false), 3000);
+    return () => clearTimeout(timer);
+  }, [confirmDelete]);
   const [copyError, setCopyError] = useState(false);
   const [edit, setEdit] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -954,6 +963,18 @@ export function MessageActions({
         {onRewind && (
           <button type="button" title="Go back to here (opens the agent's rewind in the terminal)" aria-label="Rewind to here" onClick={onRewind}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+          </button>
+        )}
+        {onDelete && (
+          <button
+            type="button"
+            className={confirmDelete ? 'tcr-delete armed' : 'tcr-delete'}
+            title={confirmDelete ? 'Click again to delete' : 'Delete message'}
+            aria-label={confirmDelete ? 'Confirm delete message' : 'Delete message'}
+            onClick={() => { if (confirmDelete) { setConfirmDelete(false); onDelete(); } else setConfirmDelete(true); }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>
+            {confirmDelete && <span className="tcr-delete-label">Delete?</span>}
           </button>
         )}
         {onFork && (

@@ -24,6 +24,7 @@ import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type { StructuredChatProvider, StructuredSubagentSession } from './provider';
 import { imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
+import { aboutYouEnv } from '$lib/stores/aboutYou';
 
 export type StructuredAccess = 'ask' | 'auto' | 'full-access';
 
@@ -274,7 +275,7 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
       ? { command: 'codex', args: ['app-server'], env: {} as Record<string, string> }
       : await invoke<{ command: string; args: string[]; env: Record<string, string> }>('codex_app_server_launch');
     const accountEnv = await accountEnvFor('codex', opts.accountId ?? null);
-    const session = await openAcpSession(launch.command, launch.args, cwd, { ...launch.env, ...accountEnv, ...await prepareStructuredVisuals(sessionId) });
+    const session = await openAcpSession(launch.command, launch.args, cwd, { ...launch.env, ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
     runtime.session = session;
     const tail = stderrTail(session);
     runtime.unlisten.push(

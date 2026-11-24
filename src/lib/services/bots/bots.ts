@@ -30,6 +30,7 @@ import { isTauriRuntime } from '$lib/utils/tauri';
 import { BOT_AVATARS, DEFAULT_AVATAR, isBuiltInAvatar } from './avatars';
 import { BOT_TEMPLATES } from './templates';
 import { botNotifyModes, replyPreview, shouldAnnounce } from './botNotify';
+import { aboutYou, aboutYouContext } from '$lib/stores/aboutYou';
 
 export type BotSchedule = 'manual' | Schedule;
 /** What a bot may do unattended. Turned into each CLI's own flags on the host. */
@@ -527,14 +528,14 @@ export function updateBotSettings(patch: Partial<BotSettings>) {
 
 // ── talking to a host ───────────────────────────────────────────────────────
 
-type HostCommand = 'sync' | 'state' | 'run_now' | 'log' | 'stop' | 'ack' | 'attach' | 'file';
+type HostCommand = 'sync' | 'state' | 'run_now' | 'log' | 'stop' | 'ack' | 'attach' | 'file' | 'delete';
 const LOCAL_COMMANDS: Record<HostCommand, string> = {
   sync: 'local_bots_sync', state: 'local_bots_state', run_now: 'local_bot_run_now', log: 'local_bot_log', stop: 'local_bot_stop', ack: 'local_bot_proposals_ack',
-  attach: 'local_bot_attach', file: 'local_bot_file',
+  attach: 'local_bot_attach', file: 'local_bot_file', delete: 'local_bot_delete',
 };
 const BOX_COMMANDS: Record<HostCommand, string> = {
   sync: 'box_bots_sync', state: 'box_bots_state', run_now: 'box_bot_run_now', log: 'box_bot_log', stop: 'box_bot_stop', ack: 'box_bot_proposals_ack',
-  attach: 'box_bot_attach', file: 'box_bot_file',
+  attach: 'box_bot_attach', file: 'box_bot_file', delete: 'box_bot_delete',
 };
 
 /** How long a call to a runner may take before the UI gives up waiting. */
@@ -604,7 +605,8 @@ async function sendHost(host: string): Promise<void> {
     connectors: b.connectors || b.browser || b.computerUse, mcpKeys: keysFor(b), canCreateBots: b.canCreateBots,
     computerUse: b.computerUse,
     chatVisuals: get(botChatVisuals),
-    extraContext: b.canCreateBots ? builderContext(host) : null,
+    // What the user wrote about themselves (Settings > Bots), then the Bot Builder's lists.
+    extraContext: [aboutYouContext(get(aboutYou)), b.canCreateBots ? builderContext(host) : ''].filter(Boolean).join('\n\n') || null,
   }));
   const wantsMcp = payload.some((b) => b.connectors);
   const mcpConfig = wantsMcp ? await botMcpConfig(host, mine.some((b) => b.browser), mine.some((b) => b.computerUse), mine.some((b) => b.browser && b.browserVisible)) : null;
@@ -700,6 +702,24 @@ export function attachmentPreview(bot: Pick<Bot, 'id' | 'boxId'>, path: string):
 
 export async function stopBotRun(bot: Pick<Bot, 'boxId'>, runId: string): Promise<void> {
   await call(bot.boxId, 'stop', { runId });
+}
+
+/**
+ * Delete one chat message: what the user sent and the bot's answer. The bot no
+ * longer sees it in later runs. A box running an older Spacron server does not
+ * know this command yet, which is said plainly rather than as a raw error.
+ */
+export async function deleteBotRun(bot: Pick<Bot, 'boxId'>, runId: string): Promise<void> {
+  try {
+    await call(bot.boxId, 'delete', { runId });
+  } catch (e) {
+    const text = e instanceof Error ? e.message : String(e);
+    if (bot.boxId !== LOCAL_HOST && /unknown|not found|unsupported/i.test(text)) {
+      throw new Error('Update Spacron on your box to delete messages there.');
+    }
+    throw e instanceof Error ? e : new Error(text);
+  }
+  await refreshBotState().catch(() => {});
 }
 
 export async function fetchBotLog(bot: Pick<Bot, 'boxId'>, runId: string): Promise<{ text: string; truncated: boolean; reply?: string }> {

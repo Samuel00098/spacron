@@ -379,7 +379,13 @@ fn start_run(workspace: PathBuf, automation: BoxAutomation) -> String {
 
 async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result<i32, String> {
     let argv = agent_command(&a.agent, &a.prompt, a.model.as_deref())?;
-    spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, &[("SPACRON_AUTOMATION", &a.name)], RUN_TIMEOUT, None).await
+    // The account selected for this agent in Spacron, as bots and the desktop use.
+    let program = Path::new(&argv[0]).file_stem().and_then(|s| s.to_str()).unwrap_or(&argv[0]).to_ascii_lowercase();
+    let provider = match program.as_str() { "agy" => "antigravity".to_string(), "cursor-agent" => "cursor".to_string(), _ => program };
+    let account_env = crate::commands::agent_accounts::usage_account_env(provider, None).await;
+    let mut env: Vec<(&str, &str)> = vec![("SPACRON_AUTOMATION", a.name.as_str())];
+    env.extend(account_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, &env, RUN_TIMEOUT, None).await
 }
 
 /// Windows process flag: run without opening a console window.

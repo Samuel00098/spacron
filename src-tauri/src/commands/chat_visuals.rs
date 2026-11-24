@@ -80,10 +80,11 @@ html,body{margin:0;background:var(--background,light-dark(#efefef,#101010));colo
 }
 ::-webkit-scrollbar{width:6px;height:6px;background:transparent}
 ::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--foreground,light-dark(#171717,#f4f4f5)) 22%,transparent);border-radius:999px}
-/* Inline in the chat: scrolling past the top or bottom of the visual carries on
-   scrolling the chat. The full-size view keeps its scrolling to itself. */
-html[data-spacron-layout=inline],html[data-spacron-layout=inline] body,html[data-spacron-layout=inline] body *{overscroll-behavior:auto!important}
-html:not([data-spacron-layout=inline]),html:not([data-spacron-layout=inline]) body,html:not([data-spacron-layout=inline]) body *{overscroll-behavior:none!important}
+/* The browser never chains a scroll out of a visual. Inline in the chat, the wheel
+   script below decides instead: a gesture that started on a scrollable part of the
+   visual stops at its edge, and the next one moves the chat. Native chaining let one
+   fast flick finish the visual and then shoot the chat along mid-gesture. */
+html,body,body *{overscroll-behavior:none!important}
 body{font-family:var(--font-sans,system-ui,sans-serif);font-size:14px;line-height:1.55;padding:16px}
 html[data-spacron-layout=inline] body{padding:10px 4px}
 button,input,select,textarea{box-sizing:border-box;max-width:100%;font:inherit;color:var(--foreground,light-dark(#171717,#e5e7eb));accent-color:var(--accent,light-dark(#5345c7,#a49aff));background:var(--card,light-dark(#f8f8f8,#191919));border:1px solid var(--border,light-dark(#d2d2d2,#3a3a3a));border-radius:var(--radius,10px)}
@@ -133,7 +134,12 @@ window.addEventListener('keydown',function(e){if(channel&&e.key==='Escape'&&!e.d
 /* Inline: a wheel the page cannot use goes to the chat itself. Letting the browser chain it
    from the frame is what made a fast flick stall and jump at the page's edge. */
 function usable(t,dy){for(var el=t&&t.nodeType===1?t:document.body;el;el=el.parentElement){var root=el===document.documentElement||el===document.body;var sc=root?document.scrollingElement:el;if(!sc)continue;if(!root){var o=getComputedStyle(el).overflowY;if(o!=='auto'&&o!=='scroll')continue}if(sc.scrollHeight<=sc.clientHeight+1)continue;if(dy<0?sc.scrollTop>0:sc.scrollTop+sc.clientHeight<sc.scrollHeight-1)return true}return false}
-if(channel&&params.get('layout')==='inline')window.addEventListener('wheel',function(e){if(e.ctrlKey||e.defaultPrevented||Math.abs(e.deltaY)<Math.abs(e.deltaX))return;var dy=e.deltaMode===1?e.deltaY*16:e.deltaMode===2?e.deltaY*innerHeight:e.deltaY;if(!dy||usable(e.target,dy))return;e.preventDefault();parent.postMessage({spacronVisual:channel,action:'wheel',dy:dy},'*')},{passive:false});
+/* Latched per gesture, like a native scroller (a pause of 250 ms ends one). A gesture that starts
+   where the page can scroll stays on the page and stops at its edge instead of spilling into the
+   chat mid-flick; the next gesture then moves the chat. One that starts where the page cannot
+   scroll goes to the chat for its whole length, and the chat glides it (see ChatVisual). */
+var latch=null,latchAt=0;
+if(channel&&params.get('layout')==='inline')window.addEventListener('wheel',function(e){if(e.ctrlKey||e.defaultPrevented||Math.abs(e.deltaY)<Math.abs(e.deltaX))return;var dy=e.deltaMode===1?e.deltaY*16:e.deltaMode===2?e.deltaY*innerHeight:e.deltaY;if(!dy)return;var now=Date.now();if(!latch||now-latchAt>250)latch=usable(e.target,dy)?'page':'chat';latchAt=now;if(latch==='page'){if(!usable(e.target,dy))e.preventDefault();return}e.preventDefault();parent.postMessage({spacronVisual:channel,action:'wheel',dy:dy},'*')},{passive:false});
 var last=0;function report(){var b=document.body;if(!b)return;var h=Math.ceil(b.getBoundingClientRect().height+parseFloat(getComputedStyle(b).marginTop||0)+parseFloat(getComputedStyle(b).marginBottom||0));if(Math.abs(h-last)>1){last=h;parent.postMessage({spacronVisual:channel,height:h},'*')}}
 var ro=new ResizeObserver(report);ro.observe(document.documentElement);document.addEventListener('DOMContentLoaded',function(){ro.observe(document.body);report()});window.addEventListener('load',report);setInterval(report,1000);
 })();</script>"#;

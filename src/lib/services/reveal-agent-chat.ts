@@ -22,8 +22,14 @@ export async function revealAgentChat(paneId: number): Promise<void> {
  * `ownerProjectId` when the caller already knows it, as a launch does, since a
  * session that was only just created may not be in the lookups yet.
  */
-export async function revealAgentView(paneId: number, ownerProjectId?: string | null): Promise<void> {
-  window.dispatchEvent(new Event('spacron:reveal-agent-chat'));
+export async function revealAgentView(
+  paneId: number,
+  ownerProjectId?: string | null,
+  opts: { keepDialogs?: boolean } = {},
+): Promise<void> {
+  // A launch from inside a dialog (New worktree with "create more") must not close
+  // that dialog; a notification click should, so the conversation is in view.
+  if (!opts.keepDialogs) window.dispatchEvent(new Event('spacron:reveal-agent-chat'));
   closeSettings();
   closeBots();
   const projectId = ownerProjectId

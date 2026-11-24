@@ -170,6 +170,17 @@ export function getProfileLines(projectId: string): string[] {
     .map((e) => `[${e.label}] ${e.text}`);
 }
 
+/**
+ * The profile lines the assistant reads, led by what the user wrote about
+ * themselves (Settings > Bots > About you). Their own words come first and are
+ * never dropped by the cap on learned lines.
+ */
+export function getProfileLinesWithAboutYou(projectId: string, about: string): string[] {
+  const own = about.replace(/\s+/g, ' ').trim();
+  const learned = getProfileLines(projectId);
+  return own ? [`[you, in their own words] ${own}`, ...learned] : learned;
+}
+
 // ─── Reflection (the evolving step) ─────────────────────────────────────────
 
 function parseInsights(raw: string): Array<{ scope: ProfileScope; text: string }> {

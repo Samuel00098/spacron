@@ -65,6 +65,7 @@ import {
   BROWSER_TOOL_TIMEOUT_MS,
 } from './mcpBridge';
 import { attachTurnSignals, nativeTurnSignalFlags, prepareStatusChannel } from '$lib/services/orchestrator/agent-hook-signals';
+import { aboutYouEnv } from '$lib/stores/aboutYou';
 import { readTerminalScreen } from '$lib/services/terminal-screen';
 import { getActiveWorktreePath } from '$lib/stores/projectWorktrees';
 import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
@@ -2847,7 +2848,8 @@ export async function spawnAgentPreset(
     }
   }
   const visualsEnv: Record<string, string> = visuals ? { SPACRON_CHAT_VISUALS_DIR: visuals.dir } : {};
-  const effectiveEnv = { ...accountEnv, ...launchEnv, ...deepSeekEnv, ...visualsEnv };
+  // What the user wrote about themselves, as a file the brief tells the agent to read.
+  const effectiveEnv = { ...accountEnv, ...launchEnv, ...deepSeekEnv, ...visualsEnv, ...aboutYouEnv() };
 
   const sessionId = await createTerminalSession(cwd, undefined, opts?.projectId, {
     assignPane: false,

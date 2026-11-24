@@ -18,7 +18,7 @@ import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
 import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
   BOT_TEMPLATES, LOCAL_HOST, MAX_BOT_STARTER_LENGTH, MAX_BOT_STARTER_PROMPTS, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, botStarterPrompts, bots, canRunHeadless, closeBots,
-  connectorChoices, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
+  connectorChoices, deleteBotRun, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
   attachToBot, attachmentPreview, botVisualSpot, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
   botDraftQueue, saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
@@ -752,6 +752,11 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
     setBusy('stop'); setError('');
     try { await stopBotRun(bot, active.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
+  /** Delete one message and the bot's answer to it; the bot no longer sees it either. */
+  async function removeRun(run: BotRun) {
+    setError('');
+    try { await deleteBotRun(bot, run.id); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }
   const suggestions = botStarterPrompts(bot);
   const agentName = getAgentRoster().find((agent) => agent.command === bot.agent)?.name ?? agentProgram(bot.agent);
   return (
@@ -823,6 +828,7 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
                       time={showTimes ? run.startedAt : null}
                       canResend={!active && busy === null}
                       onResend={(text) => send({ text, paths: run.attachments ?? [] })}
+                      onDelete={run.status === 'running' ? undefined : () => void removeRun(run)}
                     />}
                   </div>
                   : <div className="terminal-chat-notice">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
@@ -833,7 +839,9 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
                       : visualsOn && <BotVisual key={`v${i}-${segment.visual.file}`} bot={bot} visual={segment.visual} status={run.status} onCompose={composeFromVisual} />)}
                   </div>
                   {replyText
-                    ? <MessageActions text={replyText} time={replyTime} replyId={`bot:${bot.id}:${run.id}`} />
+                    ? <MessageActions text={replyText} time={replyTime} replyId={`bot:${bot.id}:${run.id}`}
+                      // A run whose message has no actions of its own (scheduled, or files only) is deleted from its reply.
+                      onDelete={(run.message && run.message !== FILES_ONLY_MESSAGE) || run.status === 'running' ? undefined : () => void removeRun(run)} />
                     : replyTime !== null && <div className="bots-reply-time">{clock(replyTime)}</div>}
                 </div>}
                 {run.status === 'running' && <div className="terminal-chat-working"><Dots /><span>{bot.name} is working · {Math.max(0, Math.round((now - run.startedAt) / 1000))}s</span></div>}

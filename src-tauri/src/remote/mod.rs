@@ -630,6 +630,7 @@ fn handle_control(
                 "box_bot_run_now" => bots::run_now(args, &state.workspace),
                 "box_bot_log" => bots::log(args, &state.workspace),
                 "box_bot_stop" => bots::stop(args, &state.workspace),
+                "box_bot_delete" => bots::delete_run(args, &state.workspace),
                 "box_bot_proposals_ack" => bots::proposals_ack(args, &state.workspace),
                 "box_bot_attach" => bots::attach(args, &state.workspace),
                 "box_bot_file" => bots::file(args, &state.workspace),

@@ -15,6 +15,7 @@ import {
 } from '$lib/stores/botChatSettings';
 import { ChatAppearanceRows } from './ChatSettingsPane';
 import Dropdown from './Dropdown';
+import { ABOUT_YOU_MAX, aboutYou } from '$lib/stores/aboutYou';
 import './ChatSettingsPane.css';
 import './AutomationSettingsSection.css';
 
@@ -50,6 +51,8 @@ export default function BotSettingsSection({ onOpenBots }: { onOpenBots?: () => 
   const timestamps = useStore(botChatTimestamps);
   const starters = useStore(botChatSuggestedPrompts);
   return <div className="automation-settings">
+    <AboutYouSection />
+
     <Section title="Scheduling">
       <Row title="Run bots on schedule" detail="When off, no bot starts on its own, on this PC or on a box. Run now still works.">
         <Toggle label="Run bots on schedule" checked={settings.enabled} onChange={(enabled) => updateBotSettings({ enabled })} />
@@ -104,6 +107,55 @@ export default function BotSettingsSection({ onOpenBots }: { onOpenBots?: () => 
       </Row>
     </Section>
   </div>;
+}
+
+/**
+ * Settings > Bots > About you: a few lines the user writes about themselves, read
+ * by every bot run, the agents Spacron starts and the in-app assistant (see stores/aboutYou.ts).
+ */
+function AboutYouSection() {
+  const saved = useStore(aboutYou);
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => setDraft(saved), [saved]);
+  const changed = draft !== saved;
+  function save() {
+    const next = draft.slice(0, ABOUT_YOU_MAX);
+    aboutYou.set(next);
+    // Scheduled runs read it from the runner, so it has to reach every host now.
+    void syncBots().catch(() => {});
+    showToast(next.trim()
+      ? 'About you saved. Your bots, the agents Spacron starts and its assistant will use it. Agents already running get it next time they start.'
+      : 'About you cleared. Bots, agents and the assistant no longer get it.', 'success', 6000);
+  }
+  return <Section title="About you">
+    <p className="shell-hint" style={{ marginTop: 0, marginBottom: '10px' }}>
+      Tell Spacron who you are, so it can work well with you: your name, what you do, what you are building and how you like answers.
+    </p>
+    <div className="about-you-shared" role="note">
+      <strong>Not only for bots.</strong> Whatever you write here is read by:
+      <ul>
+        <li><b>Your bots</b>, with every run (bots on your box too)</li>
+        <li><b>The agents Spacron starts</b>, terminal and chat, from a private file on this computer. Agents already running get it the next time they start.</li>
+        <li><b>Spacron's assistant</b>, on every message</li>
+      </ul>
+      It stays on this computer and is never written into your projects.
+    </div>
+    <textarea
+      className="agent-input"
+      aria-label="About you"
+      placeholder={'For example:\nI am Alex, I run a small online shop and I am learning to code.\nKeep answers short and practical, and explain jargon.\nI work in Central European Time.'}
+      value={draft}
+      maxLength={ABOUT_YOU_MAX}
+      rows={6}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => { if (changed) save(); }}
+      style={{ width: '100%', minHeight: '120px', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, boxSizing: 'border-box' }}
+    />
+    <div className="settings-action-row">
+      <button type="button" className="settings-primary" disabled={!changed} onClick={save}>Save</button>
+      <small className="shell-hint">{draft.length} / {ABOUT_YOU_MAX}</small>
+    </div>
+  </Section>;
 }
 
 /**

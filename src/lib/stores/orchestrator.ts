@@ -1,4 +1,5 @@
 import { loadAgentCheckpoint, saveAgentCheckpoint, deleteAgentCheckpoint } from '$lib/services/orchestrator/agent-checkpoints';
+import { aboutYou } from '$lib/stores/aboutYou';
 import { filePage, contextCharBudget, type AgentBudgets } from '$lib/services/orchestrator/agent-transport';
 import { applyTextEdit, unifiedDiff } from '$lib/services/orchestrator/edit-match';
 import { saveTurnEdits, loadTurnEdits, clearTurnEdits, resetTurnEditsForTests, type TurnEditRecord } from '$lib/services/orchestrator/turn-edit-undo';
@@ -284,6 +285,7 @@ import {
 import {
   findRepeatedInstruction,
   getProfileLines,
+  getProfileLinesWithAboutYou,
   loadProjectProfile,
   reflectAndEvolve,
 } from '$lib/services/orchestrator/evolve';
@@ -7759,7 +7761,7 @@ ${output}` };
           reviewingAgents: getReviewableAgentRefs(projectId),
           taskOutputs: getAgentOutputRefs(projectId),
           readAgentTranscript: (request) => readAgentTranscriptFor(projectId, request),
-          profile: getProfileLines(projectId),
+          profile: getProfileLinesWithAboutYou(projectId, get(aboutYou)),
           appState: getAppContextSnapshot(projectId, rootPath, !chatThread?.standalone),
           llmConfig,
           conversational: conversationalMode,
