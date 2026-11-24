@@ -5,6 +5,30 @@ All notable changes to Spacron will be documented here.
 ## [Unreleased]
 
 
+## [v5.1.14] - 2026-11-24
+
+A follow-up to 5.1.13 about knowing when an agent is done: Codex and Antigravity now announce their own finished turns, bots get notification settings of their own, and bots start reliably on Windows. Spawning an agent also takes you straight to it, and a few surfaces got calmer.
+
+### Added
+
+- **Antigravity announces its own turn ends** — Spacron adds one hook named `spacron-status` to `~/.gemini/config/hooks.json` (beside any hooks you or other tools have, which it never edits) so Antigravity reports a finished or failed run itself. The hook does nothing outside a Spacron launch, and turning off status hooks in settings removes it.
+- **Codex announces its own turn ends** — Spacron now starts Codex with its own "turn finished" hook, so a finished Codex turn is reported by Codex itself instead of being guessed from the screen or left to the agent to report. It is only added for this launch (nothing is written to your Codex config), and skipped if you already set your own `notify`.
+- **Bot notifications you control** — each bot has a Notifications setting (every run, only problems, or never). Notices now show what the bot said, have an Open button that takes you to its chat, and no longer appear for a reply you are already reading.
+- **Bot chat history settings** — editing a bot shows its archived chats with Unarchive, and a setting to archive the old chat whenever you start a new one.
+
+### Changed
+
+- **Snippet cards are flat** — the Snippets panel's cards, code boxes and Copy / Run buttons no longer look raised.
+- **Bot settings look like the rest of the app** — the browser, computer and bot-creation options are now option rows with their explanation underneath, and the New chat button follows the theme's accent colour.
+
+### Fixed
+
+- **Spawning an agent takes you straight to it** — starting an agent from the Bots page, from another project, or from the sidebar now closes what covers the workspace, switches to the agent's project if needed, and focuses the new agent, instead of leaving you on another panel. Coming back to a project later still restores where you last were in it.
+- **Chat timestamps no longer flicker** — a message's time used to depend on `:hover`, which follows whatever is under a still pointer, so while a reply streamed and the chat scrolled, timestamps switched on and off between messages. They now follow where the pointer was last moved, in agent chats and bot chats alike.
+- **Bots no longer fail to start Claude Code on Windows** — "Could not start claude: batch file arguments are invalid" came from passing a multiline prompt through the `claude.cmd` shim. Claude Code, Codex and Gemini now start their real program directly.
+- **Bot notices no longer always ping the system** — a finished bot used to raise a system notification even with Spacron in front.
+
+
 ## [v5.1.13] - 2026-11-24
 
 A small follow-up to 5.1.12: interactive visuals follow the panel opacity, and bots remember which chat you had open.
