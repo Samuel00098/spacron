@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '$lib/react/useStore';
+import { projects } from '$lib/stores/workspace';
 import { get } from '$lib/stores/storeCompat';
 import { isModalOpen } from '$lib/react/useModalFocus';
 import { activeConnection, activeRemoteId, connectRemote, connectionStatus, remoteConnections, remoteTarget } from '$lib/stores/remoteWorkspace';
@@ -73,6 +74,9 @@ export function botScheduleLabel(b: Pick<Bot, 'schedule' | 'time' | 'day'>): str
   const when = b.schedule === 'weekly' ? WEEKDAYS[b.day] : b.schedule === 'weekdays' ? 'Mon to Fri' : 'Every day';
   return `${when} at ${b.time}`;
 }
+
+/** The project-folder dropdown's "Choose a folder…" entry. */
+const CHOOSE_FOLDER = '__choose__';
 
 function when(ms?: number | null): string {
   return ms ? new Date(ms).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
@@ -399,6 +403,8 @@ function BotEditor({ bot, runs = [], onDone }: { bot?: Bot; runs?: BotRun[]; onD
   const [browserVisible, setBrowserVisible] = useState(bot?.browserVisible ?? false);
   const [builder, setBuilder] = useState(bot?.canCreateBots ?? template?.canCreateBots ?? false);
   const [computer, setComputer] = useState(bot?.computerUse ?? template?.computerUse ?? false);
+  const [projectDir, setProjectDir] = useState(bot?.projectDir ?? '');
+  const openProjects = useStore(projects);
   const pcComputer = useComputerUseOnThisPc();
   const boxInfo = useStore(boxMcpInfo);
   const boxOs = host === LOCAL_HOST ? null : boxInfo?.os ?? 'linux';
@@ -424,6 +430,13 @@ function BotEditor({ bot, runs = [], onDone }: { bot?: Bot; runs?: BotRun[]; onD
   let next = '';
   try { next = when(nextBotRun({ schedule, time, day, enabled: true })); } catch { /* incomplete time input */ }
   const missing = template?.connectors?.filter((id) => !connectorChoices(host).some((c) => c.usable && c.catalogId === id)) ?? [];
+  async function chooseProjectDir() {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({ directory: true, multiple: false, title: 'Choose a folder the bot may work in' });
+      if (typeof picked === 'string') setProjectDir(picked);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }
   function applyTemplate(t: BotTemplate) {
     setTemplate(t); setName(t.name); setInstructions(t.instructions); setSchedule(t.schedule); setTime(t.time); setDay(t.day);
     setStarterPrompts(t.starterPrompts);
@@ -434,7 +447,7 @@ function BotEditor({ bot, runs = [], onDone }: { bot?: Bot; runs?: BotRun[]; onD
     try {
       const saved = saveBot({
         id: bot?.id, boxId: host, name, instructions, starterPrompts, agent, model: model.trim() || null, schedule, time, day, access,
-        connectors: keys.length > 0, mcpKeys: keys, browser, browserVisible: browser && host === LOCAL_HOST && browserVisible, canCreateBots: builder, computerUse: computer, avatar, enabled: bot?.enabled ?? true,
+        connectors: keys.length > 0, mcpKeys: keys, browser, browserVisible: browser && host === LOCAL_HOST && browserVisible, canCreateBots: builder, computerUse: computer, projectDir: projectDir.trim() || null, avatar, enabled: bot?.enabled ?? true,
         ...(bot?.createdBy ? { createdBy: bot.createdBy } : {}),
       });
       showToast(bot ? `Saved "${saved.name}".` : `"${saved.name}" is ready. Say hi to it.`, 'success');
@@ -535,6 +548,24 @@ function BotEditor({ bot, runs = [], onDone }: { bot?: Bot; runs?: BotRun[]; onD
               <span className="bots-field-label">Runs on</span>
               <Dropdown ariaLabel="Where the bot runs" value={host} onChange={(v) => { setHost(v); setModel(''); setKeys(templateKeys(template, v)); }} disabled={Boolean(bot)} options={hosts.length ? hosts : [{ value: host, label: host === LOCAL_HOST ? 'This PC' : 'Box (not connected)' }]} />
               <p className="bots-helper">{host === LOCAL_HOST ? 'Runs while Spacron is open on this PC.' : 'Runs on the box, even while this laptop is closed.'}</p>
+              <span className="bots-field-label">Project folder</span>
+              {host === LOCAL_HOST
+                ? <Dropdown ariaLabel="Project folder the bot may work in" value={projectDir}
+                  onChange={(v) => { if (v === CHOOSE_FOLDER) void chooseProjectDir(); else setProjectDir(v); }}
+                  options={[
+                    { value: '', label: 'None' },
+                    ...[...openProjects.values()].map((p) => ({ value: p.root_path, label: p.name, tooltip: p.root_path })),
+                    ...(projectDir && ![...openProjects.values()].some((p) => p.root_path === projectDir) ? [{ value: projectDir, label: projectDir, tooltip: projectDir }] : []),
+                    { value: CHOOSE_FOLDER, label: 'Choose a folder…' },
+                  ]} />
+                : <input aria-label="Project folder on the box" placeholder="Full path on the box, or leave empty" value={projectDir} onChange={(e) => setProjectDir(e.target.value)} />}
+              <p className="bots-helper">{projectDir.trim()
+                ? access === 'research'
+                  ? 'The bot can read this folder. Choose "Work in its folder" under Permissions to let it save results there too.'
+                  : access === 'folder'
+                    ? 'The bot can also save files here, besides its own folder, without full access. It is told to change only what you ask for.'
+                    : 'With full access the bot can already write anywhere; this tells it where your project is.'
+                : 'Optional. A project the bot may also work in, so it can save results straight into it.'}</p>
               <span className="bots-field-label">Run with</span>
               <Dropdown ariaLabel="Bot agent" value={agent} onChange={(value) => { setAgent(value); setModel(''); }} placeholder="Choose an agent"
                 options={[...agents.map((a) => ({ value: a.command, label: a.name, icon: <AgentBrandMark command={a.command} name={a.name} className="bots-agent-mark" /> })),

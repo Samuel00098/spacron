@@ -130,6 +130,18 @@ pub(crate) struct BoxBot {
     /// connectors, agents and avatars it may choose from).
     #[serde(default)]
     pub extra_context: Option<String>,
+    /// One project folder (a path on the machine the bot runs on) the bot may
+    /// also work in, beside its own home. With "Work in its folder" it can write
+    /// there too, so a result can land in a project without full access.
+    #[serde(default)]
+    pub project_dir: Option<String>,
+}
+
+impl BoxBot {
+    /// The project folder, when one is set and still exists here.
+    fn project(&self) -> Option<&str> {
+        self.project_dir.as_deref().map(str::trim).filter(|p| !p.is_empty() && Path::new(p).is_dir())
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -246,7 +258,20 @@ questions; do the work and finish with a short summary of what you did.{writing}
         instructions = bot.instructions.trim(),
         writing = WRITING_PROMPT,
         visuals = if wants_visuals(bot) { VISUALS_PROMPT } else { "" },
-    )
+    ) + &project_prompt(bot)
+}
+
+/// What the bot is told about its project folder, if it has one.
+fn project_prompt(bot: &BoxBot) -> String {
+    let Some(dir) = bot.project() else { return String::new() };
+    match bot.access {
+        Access::Research => format!("
+
+The user's project folder is {dir}. You may read it, but not change it."),
+        _ => format!("
+
+You may also work in the user's project folder: {dir}. When the user wants a result in their project, save it there (use full paths inside that folder). It is their project, so change only what the job or the user asks for, and never delete, move or reorganise anything else in it. Everything else still goes in your own home folder."),
+    }
 }
 
 /// How a bot's answers read. Dashes used as punctuation make replies feel
@@ -562,6 +587,10 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
                     }
                 }
             }
+            // `--add-dir` takes a list too: the options after it end that list.
+            if let Some(dir) = bot.project() {
+                flags.extend(["--add-dir".into(), dir.to_string()]);
+            }
             if !denied.is_empty() {
                 flags.push("--disallowedTools".into());
                 flags.extend(denied);
@@ -592,23 +621,40 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
             // `codex exec` refuses an untrusted folder with "Not inside a trusted
             // directory". The sandbox above is what limits the bot, not that check.
             flags.push("--skip-git-repo-check".into());
+            // Writable beside the bot's home under the workspace-write sandbox.
+            if bot.access == Access::Folder {
+                if let Some(dir) = bot.project() {
+                    flags.extend(["--add-dir".into(), dir.to_string()]);
+                }
+            }
             // Events on stdout, so the chat shows the answer (see `codex_events`).
             flags.push("--json".into());
             if let Some((path, _)) = mcp {
                 flags.extend(codex_mcp_flags(path));
             }
         }
-        "gemini" => flags.extend(match bot.access {
-            Access::Research => vec![],
-            Access::Folder => vec!["--approval-mode".into(), "auto_edit".into()],
-            Access::Full => vec!["--yolo".into()],
-        }),
+        "gemini" => {
+            flags.extend(match bot.access {
+                Access::Research => vec![],
+                Access::Folder => vec!["--approval-mode".into(), "auto_edit".into()],
+                Access::Full => vec!["--yolo".into()],
+            });
+            if let Some(dir) = bot.project() {
+                flags.extend(["--include-directories".into(), dir.to_string()]);
+            }
+        }
+        "agy" => {
+            if let Some(dir) = bot.project() {
+                flags.extend(["--add-dir".into(), dir.to_string()]);
+            }
+        }
         // Other agents use their own permission settings.
         _ => {}
     }
-    // The prompt is the last argument; Gemini's `-p` takes it as its value, so
-    // flags go before `-p` there and before the prompt everywhere else.
-    let at = if name == "gemini" { argv.len() - 2 } else { argv.len() - 1 };
+    // The prompt is the last argument; Gemini's `-p` and Antigravity's `--print`
+    // take it as their value, so flags go before that flag there and before the
+    // prompt everywhere else.
+    let at = if name == "gemini" || name == "agy" { argv.len() - 2 } else { argv.len() - 1 };
     argv.splice(at..at, flags);
     Ok(argv)
 }
@@ -1107,6 +1153,45 @@ mod tests {
     }
 
     fn parsed(v: Value) -> BoxBot { serde_json::from_value(v).unwrap() }
+
+    #[test]
+    fn a_project_folder_reaches_each_agent_and_the_prompt() {
+        let project = tempfile::tempdir().unwrap();
+        let dir = project.path().to_string_lossy().to_string();
+        let mut b = parsed(bot("a", vec![]));
+        b.project_dir = Some(dir.clone());
+        b.access = Access::Folder;
+
+        // Claude: --add-dir, followed by another option so it never swallows the prompt.
+        let claude = bot_command(&b, "Write the report.", None).unwrap();
+        let at = claude.iter().position(|a| a == "--add-dir").unwrap();
+        assert_eq!(claude[at + 1], dir);
+        assert!(claude[at + 2].starts_with("--"), "{claude:?}");
+        assert_eq!(claude.last().unwrap(), "Write the report.");
+
+        b.agent = "codex".into();
+        let codex = bot_command(&b, "p", None).unwrap();
+        assert!(codex.windows(2).any(|w| w[0] == "--add-dir" && w[1] == dir), "{codex:?}");
+        assert_eq!(codex.last().unwrap(), "p");
+
+        b.agent = "agy".into();
+        let agy = bot_command(&b, "p", None).unwrap();
+        let n = agy.len();
+        assert_eq!((agy[n - 2].as_str(), agy[n - 1].as_str()), ("--print", "p"), "--print keeps its prompt: {agy:?}");
+        assert!(agy.windows(2).any(|w| w[0] == "--add-dir" && w[1] == dir));
+
+        let prompt = bot_prompt(&b);
+        assert!(prompt.contains(&dir) && prompt.contains("never delete, move or reorganise"));
+        b.access = Access::Research;
+        assert!(bot_prompt(&b).contains("You may read it, but not change it."));
+
+        // A folder that no longer exists is left out entirely.
+        b.project_dir = Some(project.path().join("gone").to_string_lossy().to_string());
+        b.access = Access::Folder;
+        b.agent = "claude".into();
+        assert!(!bot_command(&b, "p", None).unwrap().contains(&"--add-dir".to_string()));
+        assert!(!bot_prompt(&b).contains("project folder"));
+    }
 
     #[test]
     fn ids_that_could_escape_the_home_folder_are_rejected() {

@@ -78,6 +78,12 @@ export interface Bot {
    * (Windows; you allow each window), or the box's virtual desktop.
    */
   computerUse: boolean;
+  /**
+   * One project folder the bot may also work in (a path on the machine it runs
+   * on). With "Work in its folder" it can write there too, so results can land
+   * in a project without full access. Null for none.
+   */
+  projectDir?: string | null;
   /** A built-in avatar id, or an uploaded image as a data URL. */
   avatar: string;
   createdAt: number;
@@ -500,6 +506,7 @@ export function saveBot(input: BotInput): Bot {
     instructions,
     starterPrompts: normalizeStarterPrompts(input.starterPrompts),
     model: input.model || null,
+    projectDir: input.projectDir?.trim() || null,
     mcpKeys,
     connectors: mcpKeys === undefined ? input.connectors : mcpKeys.length > 0,
     id: existing?.id ?? crypto.randomUUID(),
@@ -605,6 +612,7 @@ async function sendHost(host: string): Promise<void> {
     enabled: b.enabled, occurrences: upcomingBotRuns(b, now), access: b.access,
     connectors: b.connectors || b.browser || b.computerUse, mcpKeys: keysFor(b), canCreateBots: b.canCreateBots,
     computerUse: b.computerUse,
+    projectDir: b.projectDir ?? null,
     chatVisuals: get(botChatVisuals),
     // What the user wrote about themselves (Settings > Bots), then the Bot Builder's lists.
     extraContext: [aboutYouContext(get(aboutYou)), b.canCreateBots ? builderContext(host) : ''].filter(Boolean).join('\n\n') || null,

@@ -385,3 +385,12 @@ it('refuses oversized attachments before uploading, and previews images only', a
   expect(await api.attachmentPreview(bot, 'attachments/aaaa1111-shot.png')).toBe('data:image/png;base64,AAAA');
   mock.local.mockImplementation(async () => ({ runId: 'local-run' }));
 });
+
+it('sends a bot its project folder, trimmed, and none when left empty', async () => {
+  const { api } = await setup();
+  const withFolder = api.saveBot({ ...input, projectDir: '  C:\work\shop  ' });
+  expect(withFolder.projectDir).toBe('C:\work\shop');
+  await vi.waitFor(() => expect(lastSync(mock.local, 'local_bots_sync')).toBeTruthy());
+  expect((lastSync(mock.local, 'local_bots_sync').args!.bots as { projectDir: unknown }[])[0].projectDir).toBe('C:\work\shop');
+  expect(api.saveBot({ ...input, id: withFolder.id, projectDir: '   ' }).projectDir).toBeNull();
+});
