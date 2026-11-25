@@ -5,6 +5,18 @@ All notable changes to Spacron will be documented here.
 ## [Unreleased]
 
 
+## [v5.1.15] - 2026-11-25
+
+A small follow-up to 5.1.14 about cleaning up bot chats: you can now delete a whole chat thread, and deleting happens a chat at a time instead of a message at a time.
+
+### Added
+
+- **Delete a bot chat** — the bar above a bot's chat has a Delete button (click once to arm it, again to delete), and so does each chat in a bot's archived list. It removes the whole thread: every message and answer in it, and its place in the chat list, and the bot no longer sees any of it. Deleting the newest chat leaves it empty and ready for a new message; files the bot saved are kept.
+
+### Changed
+
+- **Delete is for whole chats, not single messages** — the per-message delete button added in 5.1.14 is gone; deleting now happens a chat at a time, from the chat bar or the archived list.
+
 ## [v5.1.14] - 2026-11-24
 
 A follow-up to 5.1.13 about knowing when an agent is done, and about knowing you: Codex and Antigravity now announce their own finished turns, bots get notification settings of their own and run under your selected account, and an About you box lets bots, agents and the assistant know who they are working for. Bot chat messages can be deleted, bots start reliably on Windows, spawning an agent takes you straight to it, and scrolling and timestamps in chats behave.
