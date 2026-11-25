@@ -82,3 +82,12 @@ export function setBotAutoArchive(botId: string, on: boolean) {
 export function setBotChatArchived(botId: string, chatId: number, archived: boolean) {
   update(botId, (s) => ({ ...s, archived: archived ? [...new Set([...s.archived, chatId])] : s.archived.filter((id) => id !== chatId) }));
 }
+
+/**
+ * Forget a chat thread's place in the list (its start time and archived mark).
+ * The runs themselves are deleted by the runner (`deleteBotChat`). The first
+ * chat starts at 0 and has no entry, so it simply empties.
+ */
+export function removeBotChat(botId: string, chatId: number) {
+  update(botId, (s) => ({ starts: s.starts.filter((id) => id !== chatId), archived: s.archived.filter((id) => id !== chatId) }));
+}

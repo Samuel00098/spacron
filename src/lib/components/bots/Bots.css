@@ -430,3 +430,5 @@
 .bots-panel .bots-chat-bar-btn.primary { background: var(--accent); color: var(--on-accent, var(--button-text, #000)); font-weight: 600; }
 .bots-panel .bots-chat-bar-btn.primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); color: var(--on-accent, var(--button-text, #000)); }
 .bots-panel .bots-chat-bar-btn:disabled { opacity: 0.45; cursor: default; }
+.bots-panel .bots-chat-bar-btn.danger:hover:not(:disabled) { color: var(--error, #f85149); }
+.bots-panel .bots-chat-bar-btn.danger.armed { color: var(--error, #f85149); background: color-mix(in srgb, var(--error, #f85149) 14%, transparent); }

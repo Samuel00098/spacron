@@ -705,25 +705,41 @@ pub(crate) fn stop(args: Value, root: &Path) -> Result<Value, String> {
 /// bot's answer). The bot also stops seeing it in later runs' conversation, since
 /// that is read from the same records. A run still working has to be stopped
 /// first. Files the run saved in the bot's folder are its work, and are kept.
+///
+/// Takes `runId` for one message, or `runIds` for a whole chat thread at once.
 pub(crate) fn delete_run(args: Value, root: &Path) -> Result<Value, String> {
-    let run_id = args.get("runId").and_then(|v| v.as_str()).ok_or("Missing run id.")?.to_string();
-    if running().lock().map_err(|e| e.to_string())?.contains_key(&run_id) {
-        return Err("Stop this run before deleting it.".into());
+    let ids: Vec<String> = match args.get("runIds").and_then(|v| v.as_array()) {
+        Some(list) => list.iter().filter_map(|v| v.as_str()).map(str::to_string).collect(),
+        None => vec![args.get("runId").and_then(|v| v.as_str()).ok_or("Missing run id.")?.to_string()],
+    };
+    if ids.is_empty() {
+        return Err("Missing run id.".into());
     }
-    let mut log_rel: Option<String> = None;
-    let mut found = false;
-    update_runs(root, |runs| {
-        if let Some(at) = runs.iter().position(|r| r.id == run_id) {
-            found = true;
-            log_rel = runs[at].log.clone();
-            runs.remove(at);
+    {
+        let running = running().lock().map_err(|e| e.to_string())?;
+        if ids.iter().any(|id| running.contains_key(id)) {
+            return Err(if ids.len() == 1 { "Stop this run before deleting it." } else { "Stop the run in progress before deleting this chat." }.into());
         }
+    }
+    let mut logs: Vec<String> = Vec::new();
+    let mut removed = 0usize;
+    update_runs(root, |runs| {
+        runs.retain(|r| {
+            if !ids.contains(&r.id) {
+                return true;
+            }
+            removed += 1;
+            logs.extend(r.log.clone());
+            false
+        });
     });
-    if !found {
+    // One message that is not there is an error; a chat whose runs are partly
+    // gone already (or empty) is simply cleared.
+    if removed == 0 && ids.len() == 1 {
         return Err("No such run.".into());
     }
-    // Only a log this runner wrote, under its own logs folder.
-    if let Some(rel) = log_rel.filter(|rel| rel.starts_with(".spacron/bots/logs/") && !rel.contains("..")) {
+    // Only logs this runner wrote, under its own logs folder.
+    for rel in logs.into_iter().filter(|rel| rel.starts_with(".spacron/bots/logs/") && !rel.contains("..")) {
         let _ = std::fs::remove_file(root.join(rel));
     }
     Ok(json!({ "ok": true }))
@@ -1487,6 +1503,21 @@ printf '%s\n' "$last" | tail -n 1"#);
         assert!(!conversation(root.path(), "b", "", 0).contains("hello"), "later runs no longer see it");
         assert!(delete_run(json!({ "runId": "r1" }), root.path()).is_err(), "a second delete says there is no such run");
         assert!(delete_run(json!({}), root.path()).is_err());
+
+        // A whole chat thread goes in one call.
+        for (id, message) in [("a", "first"), ("b", "second"), ("keep", "other chat")] {
+            let log = format!(".spacron/bots/logs/{id}.log");
+            std::fs::write(root.path().join(&log), "answer").unwrap();
+            update_runs(root.path(), |runs| runs.insert(0, BotRun {
+                id: id.into(), bot_id: "b".into(), name: "Digest".into(), started_at: 1, finished_at: Some(2),
+                status: "completed".into(), trigger: "chat".into(), detail: None, log: Some(log),
+                message: Some(message.into()), attachments: vec![],
+            }));
+        }
+        delete_run(json!({ "runIds": ["a", "b", "gone-already"] }), root.path()).unwrap();
+        let left: Vec<String> = read_json::<Vec<BotRun>>(&dir(root.path()).join("runs.json")).into_iter().map(|r| r.id).collect();
+        assert_eq!(left, ["keep"]);
+        assert!(!root.path().join(".spacron/bots/logs/a.log").exists() && root.path().join(".spacron/bots/logs/keep.log").exists());
     }
 
     #[test]

@@ -560,15 +560,6 @@
   outline-offset: 2px;
 }
 .terminal-chat-view .tcr-actions button svg { color: inherit !important; }
-/* Delete arms on the first click: it widens to say so, in the error colour. */
-.terminal-chat-view .tcr-actions button.tcr-delete.armed {
-  width: auto;
-  gap: 4px;
-  padding: 0 8px;
-  color: var(--error, #f85149) !important;
-  background: color-mix(in srgb, var(--error, #f85149) 12%, transparent) !important;
-}
-.tcr-delete-label { font-size: 12px; }
 
 .tcr-request-editor {
   display: grid;

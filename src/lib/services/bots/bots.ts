@@ -31,6 +31,7 @@ import { BOT_AVATARS, DEFAULT_AVATAR, isBuiltInAvatar } from './avatars';
 import { BOT_TEMPLATES } from './templates';
 import { botNotifyModes, replyPreview, shouldAnnounce } from './botNotify';
 import { aboutYou, aboutYouContext } from '$lib/stores/aboutYou';
+import { removeBotChat, setBotChatArchived } from './botChats';
 
 export type BotSchedule = 'manual' | Schedule;
 /** What a bot may do unattended. Turned into each CLI's own flags on the host. */
@@ -705,20 +706,27 @@ export async function stopBotRun(bot: Pick<Bot, 'boxId'>, runId: string): Promis
 }
 
 /**
- * Delete one chat message: what the user sent and the bot's answer. The bot no
- * longer sees it in later runs. A box running an older Spacron server does not
- * know this command yet, which is said plainly rather than as a raw error.
+ * Delete a whole chat thread with a bot: every message and answer in it, and
+ * its place in the chat list. The bot no longer sees any of it. Files the bot
+ * saved are kept.
  */
-export async function deleteBotRun(bot: Pick<Bot, 'boxId'>, runId: string): Promise<void> {
-  try {
-    await call(bot.boxId, 'delete', { runId });
-  } catch (e) {
-    const text = e instanceof Error ? e.message : String(e);
-    if (bot.boxId !== LOCAL_HOST && /unknown|not found|unsupported/i.test(text)) {
-      throw new Error('Update Spacron on your box to delete messages there.');
+export async function deleteBotChat(bot: Pick<Bot, 'id' | 'boxId'>, chat: { id: number; runs: { id: string }[]; current?: boolean }): Promise<void> {
+  if (chat.runs.length) {
+    try {
+      await call(bot.boxId, 'delete', { runIds: chat.runs.map((r) => r.id) });
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      // An older runner reads only `runId` and answers "Missing run id."
+      if (bot.boxId !== LOCAL_HOST && /unknown|not found|unsupported|missing run id/i.test(text)) {
+        throw new Error('Update Spacron on your box to delete chats there.');
+      }
+      throw e instanceof Error ? e : new Error(text);
     }
-    throw e instanceof Error ? e : new Error(text);
   }
+  // The newest chat keeps its place and is left empty, ready for a message;
+  // dropping its start would turn the chat before it back into the open one.
+  if (chat.current) setBotChatArchived(bot.id, chat.id, false);
+  else removeBotChat(bot.id, chat.id);
   await refreshBotState().catch(() => {});
 }
 

@@ -18,7 +18,7 @@ import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
 import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
   BOT_TEMPLATES, LOCAL_HOST, MAX_BOT_STARTER_LENGTH, MAX_BOT_STARTER_PROMPTS, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, botStarterPrompts, bots, canRunHeadless, closeBots,
-  connectorChoices, deleteBotRun, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
+  connectorChoices, deleteBotChat, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
   attachToBot, attachmentPreview, botVisualSpot, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
   botDraftQueue, saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
@@ -321,6 +321,19 @@ function ChatHistorySettings({ bot, runs }: { bot: Bot; runs: BotRun[] }) {
   const notifyMode: BotNotifyMode = useStore(botNotifyModes)[bot.id] ?? 'all';
   const chatState = useStore(botChats)[bot.id];
   const archived = useMemo(() => splitChats(chatState, runs).filter((c) => c.archived), [chatState, runs]);
+  // Delete arms on the first click and deletes on a second within 3 seconds.
+  const [armed, setArmed] = useState<number | null>(null);
+  const [problem, setProblem] = useState('');
+  useEffect(() => {
+    if (armed === null) return undefined;
+    const timer = setTimeout(() => setArmed(null), 3000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+  async function remove(chat: ChatThread) {
+    if (armed !== chat.id) { setArmed(chat.id); return; }
+    setArmed(null); setProblem('');
+    try { await deleteBotChat(bot, chat); } catch (e) { setProblem(e instanceof Error ? e.message : String(e)); }
+  }
   return (
     <>
       <h4 className="bots-editor-section">Notifications</h4>
@@ -340,16 +353,21 @@ function ChatHistorySettings({ bot, runs }: { bot: Bot; runs: BotRun[] }) {
       </div>
       <span className="bots-field-label bots-archived-label">Archived chats{archived.length > 0 ? ` (${archived.length})` : ''}</span>
       {archived.length === 0
-        ? <p className="bots-helper bots-archived-empty">Nothing archived yet. Use Archive above a chat to put it away.</p>
+        ? <p className="bots-helper bots-archived-empty">Nothing archived yet. Use Archive above a chat to put it away, or Delete to remove it for good.</p>
         : <ul className="bots-archived-list">
           {archived.map((c) => (
             <li key={c.id}>
               <span className="bots-archived-title" title={c.title}>{c.title}</span>
               <span className="bots-archived-when">{c.runs[0] ? when(c.runs[0].startedAt) : ''}</span>
               <button type="button" className="bots-chat-bar-btn" onClick={() => setBotChatArchived(bot.id, c.id, false)}>Unarchive</button>
+              <button type="button" className={`bots-chat-bar-btn danger${armed === c.id ? ' armed' : ''}`}
+                disabled={c.runs.some((r) => r.status === 'running')}
+                title={armed === c.id ? 'Click again to delete this chat for good' : 'Delete this chat and everything in it'}
+                onClick={() => void remove(c)}>{armed === c.id ? 'Delete chat?' : 'Delete'}</button>
             </li>
           ))}
         </ul>}
+      {problem && <p role="alert" className="bots-error">{problem}</p>}
     </>
   );
 }
@@ -605,6 +623,11 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
     if (archived && target.current) setPicked(newBotChat(bot.id, runs));
     else if (archived) setPicked(null);
   }
+  /** Delete a whole chat thread; the open chat moves to the newest one. Throws with a message for the bar to show. */
+  async function removeChat(target: ChatThread) {
+    await deleteBotChat(bot, target);
+    if (!target.current) setPicked(null);
+  }
   if (editing) return <BotEditor bot={bot} runs={runs} onDone={() => setEditing(false)} />;
   return (
     <div className="bots-view">
@@ -622,7 +645,7 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
         <CloseButton />
       </header>
       {tab === 'chat'
-        ? <BotChat key={chat.id} bot={bot} runs={chat.runs} active={active} chat={chat} chats={chats} onPick={setPicked} onNewChat={startChat} onArchive={archive} />
+        ? <BotChat key={chat.id} bot={bot} runs={chat.runs} active={active} chat={chat} chats={chats} onPick={setPicked} onNewChat={startChat} onArchive={archive} onDelete={removeChat} />
         : <BotAbout bot={bot} runs={runs} homeRoot={homeRoot} active={active} onEdit={() => setEditing(true)} />}
     </div>
   );
@@ -641,12 +664,22 @@ function botChatReply(log: Awaited<ReturnType<typeof fetchBotLog>>): string {
     : log.text;
 }
 
-function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive }: {
+function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive, onDelete }: {
   bot: Bot; runs: BotRun[]; active?: BotRun;
   chat: ChatThread; chats: ChatThread[];
   onPick: (id: number) => void; onNewChat: () => void; onArchive: (chat: ChatThread, archived: boolean) => void;
+  onDelete: (chat: ChatThread) => Promise<void>;
 }) {
   const [showArchived, setShowArchived] = useState(false);
+  // Delete arms on the first click and deletes on a second within 3 seconds.
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => {
+    if (!deleteArmed) return undefined;
+    const timer = setTimeout(() => setDeleteArmed(false), 3000);
+    return () => clearTimeout(timer);
+  }, [deleteArmed]);
+  const chatWorking = chat.runs.some((r) => r.status === 'running');
   // Only the newest chat takes messages; an older or archived one is for reading.
   const readOnly = !chat.current || chat.archived;
   const listed = chats.filter((c) => c.id === chat.id || showArchived === c.archived);
@@ -752,11 +785,6 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
     setBusy('stop'); setError('');
     try { await stopBotRun(bot, active.id); await refreshBotState(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(null); }
   }
-  /** Delete one message and the bot's answer to it; the bot no longer sees it either. */
-  async function removeRun(run: BotRun) {
-    setError('');
-    try { await deleteBotRun(bot, run.id); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-  }
   const suggestions = botStarterPrompts(bot);
   const agentName = getAgentRoster().find((agent) => agent.command === bot.agent)?.name ?? agentProgram(bot.agent);
   return (
@@ -793,6 +821,19 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
         <button type="button" className="bots-chat-bar-btn" disabled={chat.archived ? false : !chat.runs.length && chat.current} onClick={() => onArchive(chat, !chat.archived)}>
           {chat.archived ? 'Unarchive' : 'Archive'}
         </button>
+        <button
+          type="button"
+          className={`bots-chat-bar-btn danger${deleteArmed ? ' armed' : ''}`}
+          disabled={deleting || chatWorking || (!chat.runs.length && chat.current)}
+          title={chatWorking ? 'Stop the run first' : deleteArmed ? 'Click again to delete this chat for good' : 'Delete this chat and everything in it'}
+          onClick={async () => {
+            if (!deleteArmed) { setDeleteArmed(true); return; }
+            setDeleteArmed(false); setDeleting(true); setError('');
+            try { await onDelete(chat); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setDeleting(false); }
+          }}
+        >
+          {deleting ? 'Deleting…' : deleteArmed ? 'Delete chat?' : 'Delete'}
+        </button>
         <button type="button" className="bots-chat-bar-btn primary" disabled={Boolean(active)} title="Start a new conversation with this bot" onClick={onNewChat}>New chat</button>
       </div>
       <div className="terminal-chat-transcript">
@@ -828,7 +869,6 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
                       time={showTimes ? run.startedAt : null}
                       canResend={!active && busy === null}
                       onResend={(text) => send({ text, paths: run.attachments ?? [] })}
-                      onDelete={run.status === 'running' ? undefined : () => void removeRun(run)}
                     />}
                   </div>
                   : <div className="terminal-chat-notice">{run.trigger === 'schedule' ? 'Scheduled run' : 'Run started'} · {clock(run.startedAt)}</div>}
@@ -839,9 +879,7 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive 
                       : visualsOn && <BotVisual key={`v${i}-${segment.visual.file}`} bot={bot} visual={segment.visual} status={run.status} onCompose={composeFromVisual} />)}
                   </div>
                   {replyText
-                    ? <MessageActions text={replyText} time={replyTime} replyId={`bot:${bot.id}:${run.id}`}
-                      // A run whose message has no actions of its own (scheduled, or files only) is deleted from its reply.
-                      onDelete={(run.message && run.message !== FILES_ONLY_MESSAGE) || run.status === 'running' ? undefined : () => void removeRun(run)} />
+                    ? <MessageActions text={replyText} time={replyTime} replyId={`bot:${bot.id}:${run.id}`} />
                     : replyTime !== null && <div className="bots-reply-time">{clock(replyTime)}</div>}
                 </div>}
                 {run.status === 'running' && <div className="terminal-chat-working"><Dots /><span>{bot.name} is working · {Math.max(0, Math.round((now - run.startedAt) / 1000))}s</span></div>}
