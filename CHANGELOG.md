@@ -7,10 +7,11 @@ All notable changes to Spacron will be documented here.
 
 ## [v5.1.15] - 2026-11-25
 
-A small follow-up to 5.1.14 about cleaning up bot chats: you can now delete a whole chat thread, and deleting happens a chat at a time instead of a message at a time.
+A small follow-up to 5.1.14 about bots and your projects: each bot can have a project folder it may save results into without full access, you can delete a whole bot chat thread, and deleting happens a chat at a time instead of a message at a time.
 
 ### Added
 
+- **A project folder for each bot** — the bot editor's Run settings has a Project folder: pick one of your projects or any folder (on a box, type its path there). With "Work in its folder" the bot can then save results straight into that project as well as its own folder, without needing full access, and it is told to change only what you ask for there. Claude Code, Codex, Gemini CLI and Antigravity are given access to the folder directly; other agents follow their own permission settings. With "Read and research" the bot can read the folder but not change it.
 - **Delete a bot chat** — the bar above a bot's chat has a Delete button (click once to arm it, again to delete), and so does each chat in a bot's archived list. It removes the whole thread: every message and answer in it, and its place in the chat list, and the bot no longer sees any of it. Deleting the newest chat leaves it empty and ready for a new message; files the bot saved are kept.
 
 ### Changed
