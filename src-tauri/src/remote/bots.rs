@@ -550,6 +550,154 @@ fn codex_mcp_flags(path: &Path) -> Vec<String> {
     flags
 }
 
+/// Which of the run's connector tools a bot may call, as `(server, tool)`
+/// pairs; no tool means every tool of that server. `deny` is the desktop tools
+/// of a bot without computer use.
+struct ConnectorRules<'a> {
+    allow: Vec<(&'a str, Option<&'static str>)>,
+    deny: Vec<(&'a str, &'static str)>,
+}
+
+fn connector_rules<'a>(bot: &BoxBot, keys: &'a [String]) -> ConnectorRules<'a> {
+    let mut rules = ConnectorRules { allow: Vec::new(), deny: Vec::new() };
+    for key in keys.iter().map(String::as_str) {
+        let desktop: &[&'static str] = match key {
+            BOX_TOOLS_KEY => &BOX_DESKTOP_TOOLS,
+            SPACRON_TOOLS_KEY => &PC_DESKTOP_TOOLS,
+            _ => &[],
+        };
+        if !bot.computer_use {
+            rules.deny.extend(desktop.iter().map(|&t| (key, t)));
+        }
+        // Starting programs and agents is for full access only.
+        if key == BOX_TOOLS_KEY && bot.access != Access::Full {
+            rules.allow.extend(BOX_TOOLS.iter()
+                .filter(|t| bot.computer_use || !t.starts_with("desktop_"))
+                .filter(|t| !FULL_ONLY_TOOLS.contains(t))
+                .map(|&t| (key, Some(t))));
+        } else {
+            rules.allow.push((key, None));
+        }
+    }
+    rules
+}
+
+/// Antigravity's flags for the bot's access level. Headless `agy` cannot ask,
+/// so whatever is not allowed up front is auto-denied and the run ends with no
+/// output. `--settings` holds for this run only and leaves the user's own
+/// settings.json alone. Rules are `mcp(<server>/<tool>)`, `*` for every tool.
+fn agy_permission_flags(bot: &BoxBot, keys: &[String]) -> Vec<String> {
+    let rules = connector_rules(bot, keys);
+    let mut flags: Vec<String> = Vec::new();
+    let mut permissions = serde_json::Map::new();
+    match bot.access {
+        Access::Full => flags.push("--dangerously-skip-permissions".into()),
+        Access::Research | Access::Folder => {
+            if bot.access == Access::Folder {
+                flags.extend(["--mode".into(), "accept-edits".into()]);
+            }
+            let mut allow: Vec<String> = rules.allow.iter()
+                .map(|(key, tool)| format!("mcp({key}/{})", tool.unwrap_or("*")))
+                .collect();
+            // Every limited bot may read the web, as a Claude bot may.
+            allow.push("read_url(*)".into());
+            permissions.insert("allow".into(), json!(allow));
+        }
+    }
+    if !rules.deny.is_empty() {
+        let deny: Vec<String> = rules.deny.iter().map(|(key, tool)| format!("mcp({key}/{tool})")).collect();
+        permissions.insert("deny".into(), json!(deny));
+    }
+    if !permissions.is_empty() {
+        flags.extend(["--settings".into(), json!({ "permissions": permissions }).to_string()]);
+    }
+    flags
+}
+
+/// Grok Build's flags. Limited bots run under `dontAsk`: only what is listed
+/// runs (plus Grok's own read-only commands). `--deny` beats everything.
+fn grok_permission_flags(bot: &BoxBot, keys: &[String]) -> Vec<String> {
+    let rules = connector_rules(bot, keys);
+    let mut flags: Vec<String> = vec!["--permission-mode".into()];
+    if bot.access == Access::Full {
+        flags.push("bypassPermissions".into());
+    } else {
+        flags.push("dontAsk".into());
+        let mut allow: Vec<String> = ["Read", "Grep", "WebFetch", "WebSearch"].map(String::from).to_vec();
+        if bot.access == Access::Folder {
+            allow.push("Edit".into());
+        }
+        allow.extend(rules.allow.iter().map(|(key, tool)| format!("MCPTool({key}__{})", tool.unwrap_or("*"))));
+        flags.extend(allow.into_iter().flat_map(|rule| ["--allow".to_string(), rule]));
+    }
+    flags.extend(rules.deny.iter().flat_map(|(key, tool)| ["--deny".to_string(), format!("MCPTool({key}__{tool})")]));
+    flags
+}
+
+/// pi has no approvals: a tool that is on simply runs. So a limited bot is
+/// given a shorter tool list, with no shell. MCP tools stay, and `edit` cannot
+/// be confined to a folder.
+fn pi_permission_flags(bot: &BoxBot) -> Vec<String> {
+    let (tools, off) = match bot.access {
+        Access::Full => return Vec::new(),
+        Access::Research => ("read,grep,find,ls,codemode,tool_search", "bash,powershell,edit,write"),
+        Access::Folder => ("read,grep,find,ls,edit,write,codemode,tool_search", "bash,powershell"),
+    };
+    vec!["--tools".into(), tools.into(), "--exclude-tools".into(), off.into()]
+}
+
+/// The OpenCode / Kilo agent a bot runs as, defined only for its own run.
+const BOT_AGENT: &str = "spacron-bot";
+
+/// That agent's permissions, or `None` when the bot needs no limits. The last
+/// matching rule wins, so `*` is first and the denials last.
+fn opencode_permission(bot: &BoxBot, keys: &[String]) -> Option<Value> {
+    let rules = connector_rules(bot, keys);
+    let mut permission = serde_json::Map::new();
+    if bot.access != Access::Full {
+        permission.insert("*".into(), json!("deny"));
+        for tool in ["read", "glob", "grep", "list", "webfetch", "websearch"] {
+            permission.insert(tool.into(), json!("allow"));
+        }
+        if bot.access == Access::Folder {
+            permission.insert("edit".into(), json!("allow"));
+        }
+        if let Some(dir) = bot.project() {
+            let dir = dir.trim_end_matches(['/', '\\']);
+            let mut outside = serde_json::Map::new();
+            outside.insert(format!("{dir}/*"), json!("allow"));
+            outside.insert(format!("{dir}\\*"), json!("allow"));
+            permission.insert("external_directory".into(), Value::Object(outside));
+        }
+        for (key, tool) in &rules.allow {
+            permission.insert(format!("{key}_{}", tool.unwrap_or("*")), json!("allow"));
+        }
+    }
+    for (key, tool) in &rules.deny {
+        permission.insert(format!("{key}_{tool}"), json!("deny"));
+    }
+    (!permission.is_empty()).then_some(Value::Object(permission))
+}
+
+/// Environment for one run: how OpenCode and Kilo are handed the bot's agent.
+fn bot_env(bot: &BoxBot, program: &str, keys: &[String]) -> Option<(&'static str, String)> {
+    let var = match program {
+        "opencode" => "OPENCODE_CONFIG_CONTENT",
+        "kilo" => "KILO_CONFIG_CONTENT",
+        _ => return None,
+    };
+    let permission = opencode_permission(bot, keys)?;
+    let mut agent = serde_json::Map::new();
+    agent.insert(BOT_AGENT.into(), json!({ "mode": "primary", "permission": permission }));
+    Some((var, json!({ "agent": agent }).to_string()))
+}
+
+/// A program's name without folder or extension, lower case.
+fn program_name(exe: &str) -> String {
+    let base = exe.rsplit(['/', '\\']).next().unwrap_or(exe);
+    Path::new(base).file_stem().and_then(|s| s.to_str()).unwrap_or(base).to_ascii_lowercase()
+}
+
 /// The full headless command for one run: the agent's own headless form plus
 /// the flags for the bot's access level and connectors.
 pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[String])>) -> Result<Vec<String>, String> {
@@ -559,7 +707,18 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
     let name = Path::new(basename).file_stem().and_then(|s| s.to_str()).unwrap_or(basename).to_ascii_lowercase();
     let mut flags: Vec<String> = Vec::new();
     match name.as_str() {
-        "opencode" => flags.extend(["--format".into(), "json".into()]),
+        "opencode" | "kilo" => {
+            if name == "opencode" {
+                flags.extend(["--format".into(), "json".into()]);
+            }
+            let keys = mcp.map(|(_, keys)| keys).unwrap_or_default();
+            if opencode_permission(bot, keys).is_some() {
+                flags.extend(["--agent".into(), BOT_AGENT.into()]);
+            }
+            if bot.access == Access::Full {
+                flags.push("--auto".into());
+            }
+        }
         "claude" => {
             // `--mcp-config`, `--allowedTools` and `--disallowedTools` each take
             // a list, so each is followed by another option, never the prompt.
@@ -647,14 +806,39 @@ pub(crate) fn bot_command(bot: &BoxBot, prompt: &str, mcp: Option<(&Path, &[Stri
             if let Some(dir) = bot.project() {
                 flags.extend(["--add-dir".into(), dir.to_string()]);
             }
+            flags.extend(agy_permission_flags(bot, mcp.map(|(_, keys)| keys).unwrap_or_default()));
+        }
+        "grok" => flags.extend(grok_permission_flags(bot, mcp.map(|(_, keys)| keys).unwrap_or_default())),
+        "pi" => flags.extend(pi_permission_flags(bot)),
+        "dsh" => {
+            let preset = match bot.access {
+                Access::Research => "read-only",
+                Access::Folder => "workspace-write",
+                Access::Full => "danger-full-access",
+            };
+            flags.extend(["--permission-mode".into(), preset.into()]);
+            if bot.access == Access::Folder {
+                if let Some(dir) = bot.project() {
+                    flags.extend(["--add-dir".into(), dir.to_string()]);
+                }
+            }
+        }
+        // Without `--force` Cursor only proposes changes in print mode.
+        "cursor-agent" => {
+            if bot.access == Access::Full {
+                flags.push("--force".into());
+            }
+            if mcp.is_some() {
+                flags.push("--approve-mcps".into());
+            }
         }
         // Other agents use their own permission settings.
         _ => {}
     }
-    // The prompt is the last argument; Gemini's `-p` and Antigravity's `--print`
-    // take it as their value, so flags go before that flag there and before the
-    // prompt everywhere else.
-    let at = if name == "gemini" || name == "agy" { argv.len() - 2 } else { argv.len() - 1 };
+    // The prompt is the last argument; Gemini's `-p`, Antigravity's `--print`
+    // and Grok's `--single` take it as their value, so flags go before that
+    // flag there and before the prompt everywhere else.
+    let at = if matches!(name.as_str(), "gemini" | "agy" | "grok") { argv.len() - 2 } else { argv.len() - 1 };
     argv.splice(at..at, flags);
     Ok(argv)
 }
@@ -1048,6 +1232,18 @@ async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path
     let account_env = crate::commands::agent_accounts::usage_account_env(account_provider(&argv[0]), None).await;
     let mut env: Vec<(&str, &str)> = vec![("SPACRON_BOT", bot.name.as_str()), ("MCP_TIMEOUT", "120000")];
     env.extend(account_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    let program = program_name(&argv[0]);
+    let permission_env = bot_env(bot, &program, mcp.map(|(_, keys)| keys).unwrap_or_default());
+    if let Some((name, value)) = &permission_env {
+        env.push((*name, value.as_str()));
+        // OpenCode 2 runs in a shared background service that never sees this
+        // run's environment; `--standalone` gives the run its own. OpenCode 1
+        // has no such flag, and reads the environment itself.
+        if program == "opencode" && has_standalone(&argv[0], &cwd, &log_path.with_extension("help")).await {
+            let at = argv.len() - 1;
+            argv.insert(at, "--standalone".into());
+        }
+    }
     let result = spawn_headless(&argv, &cwd, log_path, &env, limit, Some(signal)).await;
     if let Some(guard) = config_guard {
         guard.restore();
@@ -1056,6 +1252,15 @@ async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path
         let _ = std::fs::remove_file(path);
     }
     result
+}
+
+/// Whether this `opencode run` knows `--standalone`.
+async fn has_standalone(exe: &str, cwd: &Path, out: &Path) -> bool {
+    let argv = [exe.to_string(), "run".into(), "--help".into()];
+    let ran = spawn_headless(&argv, cwd, out, &[], std::time::Duration::from_secs(30), None).await;
+    let found = ran.is_ok() && std::fs::read_to_string(out).is_ok_and(|t| t.contains("--standalone"));
+    let _ = std::fs::remove_file(out);
+    found
 }
 
 /// The MCP servers this bot gets for one run: the synced set narrowed to the
@@ -1317,6 +1522,90 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_bots_pre_approve_what_their_access_allows() {
+        let mut b = parsed(bot("a", vec![]));
+        b.agent = "agy".into();
+        let keys = vec!["spacron-linear".to_string(), "spacron-mcp".to_string(), "spacron-box".to_string()];
+        let run = |b: &BoxBot| bot_command(b, "p", Some((Path::new("/m.json"), &keys))).unwrap();
+        let rules = |argv: &[String], list: &str| -> Vec<String> {
+            let at = argv.iter().position(|a| a == "--settings").unwrap();
+            let settings: Value = serde_json::from_str(&argv[at + 1]).unwrap();
+            settings["permissions"][list].as_array().into_iter().flatten()
+                .filter_map(|v| v.as_str().map(str::to_owned)).collect()
+        };
+
+        let research = run(&b);
+        let allow = rules(&research, "allow");
+        assert!(allow.contains(&"mcp(spacron-linear/*)".to_string()) && allow.contains(&"mcp(spacron-box/list_agents)".to_string()));
+        assert!(!allow.iter().any(|r| r == "mcp(spacron-box/*)" || r.ends_with("/spawn_agent)")), "limited bots cannot start agents");
+        assert!(rules(&research, "deny").contains(&"mcp(spacron-mcp/desktop_click)".to_string()));
+        assert!(!research.iter().any(|a| a == "--mode" || a == "--dangerously-skip-permissions"));
+        assert_eq!(research[research.len() - 2..], ["--print".to_string(), "p".to_string()]);
+
+        b.access = Access::Folder;
+        assert!(run(&b).windows(2).any(|w| w == ["--mode", "accept-edits"]));
+
+        b.access = Access::Full;
+        b.computer_use = true;
+        let full = run(&b);
+        assert!(full.contains(&"--dangerously-skip-permissions".to_string()) && !full.contains(&"--settings".to_string()));
+    }
+
+    #[test]
+    fn every_agent_with_permission_flags_follows_the_access_level() {
+        let mut b = parsed(bot("a", vec![]));
+        let keys = vec!["spacron-mcp".to_string()];
+        let run = |b: &BoxBot, agent: &str| {
+            let mut b = b.clone();
+            b.agent = agent.into();
+            bot_command(&b, "p", Some((Path::new("/m.json"), &keys))).unwrap()
+        };
+        let pair = |argv: &[String], flag: &str, value: &str| argv.windows(2).any(|w| w[0] == flag && w[1] == value);
+        let permission = |b: &BoxBot| {
+            let (var, text) = bot_env(b, "kilo", &keys).unwrap();
+            assert_eq!(var, "KILO_CONFIG_CONTENT");
+            serde_json::from_str::<Value>(&text).unwrap()["agent"][BOT_AGENT]["permission"].clone()
+        };
+
+        // Research.
+        let grok = run(&b, "grok");
+        assert!(pair(&grok, "--permission-mode", "dontAsk") && pair(&grok, "--allow", "MCPTool(spacron-mcp__*)"));
+        assert!(!pair(&grok, "--allow", "Edit") && pair(&grok, "--deny", "MCPTool(spacron-mcp__desktop_click)"));
+        assert_eq!(grok[grok.len() - 2..], ["--single".to_string(), "p".to_string()], "--single keeps its prompt");
+        assert!(pair(&run(&b, "pi"), "--exclude-tools", "bash,powershell,edit,write"));
+        assert!(pair(&run(&b, "dsh"), "--permission-mode", "read-only"));
+        for agent in ["opencode", "kilo"] {
+            let argv = run(&b, agent);
+            assert!(pair(&argv, "--agent", BOT_AGENT) && !argv.contains(&"--auto".to_string()), "{argv:?}");
+            assert_eq!(argv.last().unwrap(), "p");
+        }
+        let limits = permission(&b);
+        assert_eq!((limits["*"].as_str(), limits["spacron-mcp_*"].as_str()), (Some("deny"), Some("allow")));
+        assert_eq!(limits["spacron-mcp_desktop_click"], "deny");
+        assert!(limits.get("edit").is_none() && limits.get("bash").is_none());
+        let cursor = run(&b, "cursor-agent");
+        assert!(!cursor.contains(&"--force".to_string()) && cursor.contains(&"--approve-mcps".to_string()));
+
+        // Work in its folder.
+        b.access = Access::Folder;
+        assert!(pair(&run(&b, "grok"), "--allow", "Edit"));
+        assert!(pair(&run(&b, "pi"), "--exclude-tools", "bash,powershell"));
+        assert!(pair(&run(&b, "dsh"), "--permission-mode", "workspace-write"));
+        assert_eq!(permission(&b)["edit"], "allow");
+
+        // Full access, with computer use.
+        b.access = Access::Full;
+        b.computer_use = true;
+        assert!(pair(&run(&b, "grok"), "--permission-mode", "bypassPermissions"));
+        assert!(!run(&b, "pi").contains(&"--tools".to_string()));
+        assert!(pair(&run(&b, "dsh"), "--permission-mode", "danger-full-access"));
+        let open = run(&b, "opencode");
+        assert!(open.contains(&"--auto".to_string()) && !open.contains(&"--agent".to_string()));
+        assert!(bot_env(&b, "opencode", &keys).is_none());
+        assert!(run(&b, "cursor-agent").contains(&"--force".to_string()));
+    }
+
+    #[test]
     fn other_agents_get_their_own_flags_in_the_right_place() {
         let mut b = parsed(bot("a", vec![]));
         b.agent = "codex".into();
@@ -1432,7 +1721,7 @@ mod tests {
         assert_eq!(opencode_reply(r#"{"type":"step_start","sessionID":"ses_1","timestamp":1}"#).as_deref(), Some(""));
         let mut bot = parsed(bot("a", vec![]));
         bot.agent = "opencode".into();
-        assert_eq!(bot_command(&bot, "hello", None).unwrap(), ["opencode", "run", "--format", "json", "hello"]);
+        assert_eq!(bot_command(&bot, "hello", None).unwrap(), ["opencode", "run", "--format", "json", "--agent", "spacron-bot", "hello"]);
     }
 
     #[test]

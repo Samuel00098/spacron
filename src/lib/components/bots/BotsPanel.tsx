@@ -425,7 +425,9 @@ function BotEditor({ bot, runs = [], onDone }: { bot?: Bot; runs?: BotRun[]; onD
     void freshLiveAgentProviderModels(program, false, modelHost).then(update, () => update([]));
     return () => { current = false; };
   }, [modelHost, program]);
-  const usesAgentPermissions = program && !['claude', 'codex', 'gemini'].includes(program);
+  // Where `bot_command` (remote/bots.rs) cannot hold the agent to this level:
+  // Cursor takes its own rules, and pi cannot confine edits to a folder.
+  const usesAgentPermissions = program === 'cursor-agent' || (program === 'pi' && access === 'folder');
   const interactiveAgents = getAgentRoster().filter((entry) => !canRunHeadless(entry.command));
   let next = '';
   try { next = when(nextBotRun({ schedule, time, day, enabled: true })); } catch { /* incomplete time input */ }

@@ -4,6 +4,10 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Antigravity bots can use their connectors** — an Antigravity bot run no longer ends with "no output produced — a tool required the mcp permission". Each run now pre-approves the bot's picked connectors for that run only (your Antigravity settings are not changed), "Work in its folder" also accepts edits, and "Full access" approves every tool, like other agents.
+- **Bot access levels apply to more agents** — OpenCode, Kilo, Grok, pi and DeepSeek Harness bots now run with the access you picked instead of that CLI's own defaults, so "Read and research" no longer lets them write files or run commands, and "Work in its folder" lets them edit files without a shell (DeepSeek Harness uses its workspace sandbox). Cursor bots can now apply changes on "Full access".
 
 ## [v5.1.15] - 2026-11-25
 

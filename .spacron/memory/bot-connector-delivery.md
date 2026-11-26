@@ -17,3 +17,15 @@ project config file into the bot's home for the run and restores it after.
 - droid and agy read only a global file (the desktop syncs those), so a bot's
   picks do not apply to them; `GLOBAL_ONLY` in `bot_mcp.rs`, `GLOBAL_MCP_ONLY` in
   `BotsPanel.tsx`. Gemini/Cursor loading their file headless is unverified.
+- Headless agy auto-denies anything not pre-approved (`agy_permission_flags` in
+  `bots.rs`). Checked on agy 1.5.18 (2026-11-26): `--settings` with
+  `mcp(server/*)` lets the call through. Deny rules, `read_url(*)` and
+  `accept-edits` were not run live. Automations do not get these flags.
+- Access levels per agent live in `bot_command` (`bots.rs`). Seen live
+  (2026-11-26): opencode 2.4.1 and kilo 7.8.32 honour the env-defined agent
+  (v1 `agent.permission` shape works on both); grok 1.0.92 `dontAsk` refuses
+  writes. dsh and pi flags are from their help only (no key / no credit).
+- Grok ignores a bot home's `.grok/config.toml` servers headless while the
+  folder is untrusted. `--trust` would also run hooks found there, which a
+  bot with folder access could write; not added.
+- Gemini gets no connector pre-approval yet (not installed to verify).
