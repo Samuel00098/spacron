@@ -48,8 +48,10 @@ import ReviewPanel from '$lib/components/review/ReviewPanelLazy.tsx';
 import ToolboxPanel from '$lib/components/toolbox/ToolboxPanelLazy.tsx';
 import TasksPanel from '$lib/components/workspace/TasksPanelLazy.tsx';
 import ChatModePanel from '$lib/components/workspace/ChatModePanel.tsx';
+import StandaloneChatPanel from '$lib/components/workspace/StandaloneChatPanel.tsx';
 import BotsPanel from '$lib/components/bots/BotsPanel';
 import { botsOpen, closeBots, startBotWatcher } from '$lib/services/bots/bots';
+import { closeStandaloneChat, standaloneChatOpen } from '$lib/stores/chatNavigation';
 import { speakText } from '$lib/services/read-aloud';
 import PreviewPanel from '$lib/components/preview/PreviewPanelLazy.tsx';
 import MobilePanel, { MobilePanelFloatingHostLazy } from '$lib/components/mobile/MobilePanelLazy.tsx';
@@ -129,6 +131,7 @@ import type { TerminalSessionInfo } from '$lib/stores/terminal';
 import { toggleActiveTerminalChatView } from '$lib/services/terminal-chat';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import SideChatPane from '$lib/components/terminal/SideChatPane';
+import { isVirtualStructuredPane } from '$lib/services/structured-chat/session-store';
 import { removeSideChat, sideChats } from '$lib/services/structured-chat/side-chats';
 import { useSideChatSource } from '$lib/services/structured-chat/side-chat-source';
 import { runStructuredCommand } from '$lib/services/structured-chat/commands';
@@ -629,6 +632,13 @@ export default function AppShell() {
   );
   const currentInteractionMode = useStore(interactionMode);
   const botsLayerOpen = useStore(botsOpen);
+  const standaloneLayerOpen = useStore(standaloneChatOpen);
+  useEffect(() => {
+    if (botsLayerOpen && get(standaloneChatOpen)) closeStandaloneChat();
+  }, [botsLayerOpen]);
+  useEffect(() => {
+    if (standaloneLayerOpen && get(botsOpen)) closeBots();
+  }, [standaloneLayerOpen]);
   const workspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   // Home is an overlay on top of the still-mounted workspace (see
   // `homeScreenOpen`). With no workspace open at all there is nothing behind it,
@@ -1478,6 +1488,7 @@ export default function AppShell() {
         return true;
       case 'goToTerminal': {
         closeBots();
+        closeStandaloneChat();
         setActiveView('terminal');
         setTerminalRoomOpen(true);
         focusRoom('terminal');
@@ -1489,6 +1500,7 @@ export default function AppShell() {
       }
       case 'goToEditor':
         closeBots();
+        closeStandaloneChat();
         // setActiveView already asks the room system to focus the editor —
         // a bare setFocusedRoom on top of it would skip claimSplitSlot.
         setActiveView('editor');
@@ -1537,6 +1549,7 @@ export default function AppShell() {
         return true;
       case 'newTerminal': {
         closeBots();
+        closeStandaloneChat();
         const isDev = ambientLayout === 'development';
         if (isDev) {
           setDevTerminalRoomOpen(true);
@@ -1928,6 +1941,7 @@ export default function AppShell() {
   function toggleRightTool(tool: RightTool) {
     const leavingBots = get(botsOpen);
     if (leavingBots) closeBots();
+    closeStandaloneChat();
     if (!leavingBots && rightSidebarOpen && rightActiveTool === tool) {
       if (activeRightTab && activeRightTab.surface === tool) {
         closeRightTab(activeRightTab);
@@ -1992,6 +2006,7 @@ export default function AppShell() {
 
   function activateRightTab(tab: RightSidebarTabItem) {
     closeBots();
+    if (tab.surface !== 'sidechat') closeStandaloneChat();
     setActiveRightTabId(tab.id);
     applyRightTab(tab);
   }
@@ -2081,10 +2096,12 @@ export default function AppShell() {
   }
 
   useEffect(() => {
+    const activeVirtualPanes = get(structuredChatPanes);
     for (const chat of sideChatState.list) {
-      if (!crossProjectSessions.some((session) => session.id === chat.paneId)) removeSideChat(chat.paneId);
+      const virtualAlive = isVirtualStructuredPane(chat.paneId) && Boolean(activeVirtualPanes[chat.paneId]);
+      if (!virtualAlive && !crossProjectSessions.some((session) => session.id === chat.paneId)) removeSideChat(chat.paneId);
     }
-  }, [crossProjectSessions]);
+  }, [crossProjectSessions, sideChatState.list]);
 
   useEffect(() => {
     const mine = sideChatState.list.filter((chat) => chat.projectId == null || chat.projectId === activeProjectIdValue);
@@ -2406,7 +2423,10 @@ export default function AppShell() {
   }
 
   function setPanelRoomOpen(id: AuxPanelId, open: boolean) {
-    if (open) closeBots();
+    if (open) {
+      closeBots();
+      closeStandaloneChat();
+    }
     // Same rule as `focusRoom`: opening a panel that takes a new Split slot
     // re-tiles the stage, so it must not go through a view transition.
     // Opening a panel while a pane is zoomed carries the zoom onto it, as
@@ -2459,6 +2479,7 @@ export default function AppShell() {
     // The first click on the room under Bots should reveal it.
     const leavingBots = get(botsOpen);
     if (leavingBots) closeBots();
+    closeStandaloneChat();
     if (currentInteractionMode === 'chat' && (id === 'tasks' || id === 'sketch' || id === 'library')) {
       if (leavingBots && activeChatPanel === id) return;
       if (layoutState[PANEL_VISIBILITY_KEYS[id]] && activeChatPanel !== id) {
@@ -2523,6 +2544,7 @@ export default function AppShell() {
 
   function focusRoom(id: RoomId) {
     closeBots();
+    closeStandaloneChat();
     // In Split, never a view transition — for either of the two things this can
     // do there:
     //
@@ -3099,6 +3121,7 @@ export default function AppShell() {
     active: !rightDrawerOpen && rightNavigatorTool === tool,
     onClick: () => {
       closeBots();
+      closeStandaloneChat();
       selectRightNavigatorTool(tool);
     },
     icon: LEFT_TOOL_META[tool].icon,
@@ -4131,17 +4154,18 @@ export default function AppShell() {
                     ? ` ${ambientLayout}-solo`
                     : ''
                 }`} aria-label="Spacron ambient layout">
-                  <div className="cli-mode-layer" inert={botsLayerOpen || (currentInteractionMode === 'chat' && !activeChatPanel)} aria-hidden={botsLayerOpen || (currentInteractionMode === 'chat' && !activeChatPanel) || undefined}>
+                  <div className="cli-mode-layer" inert={botsLayerOpen || standaloneLayerOpen || (currentInteractionMode === 'chat' && !activeChatPanel)} aria-hidden={botsLayerOpen || standaloneLayerOpen || (currentInteractionMode === 'chat' && !activeChatPanel) || undefined}>
                     {renderAmbientLayout()}
                   </div>
                   {currentInteractionMode === 'chat' && (
-                    <div className="chat-mode-layer" inert={botsLayerOpen || Boolean(activeChatPanel)} aria-hidden={botsLayerOpen || Boolean(activeChatPanel) || undefined}>
+                    <div className="chat-mode-layer" inert={botsLayerOpen || standaloneLayerOpen || Boolean(activeChatPanel)} aria-hidden={botsLayerOpen || standaloneLayerOpen || Boolean(activeChatPanel) || undefined}>
                       <ChatModePanel />
                     </div>
                   )}
                   {/* Bots live outside every project, so they cover the
                       workspace rather than a room; rooms stay mounted. */}
                   {botsLayerOpen && <div className="bots-layer"><BotsPanel /></div>}
+                  {standaloneLayerOpen && <div className="standalone-chat-layer"><StandaloneChatPanel /></div>}
                 </main>
 
                 {renderRightUtilityPanel()}

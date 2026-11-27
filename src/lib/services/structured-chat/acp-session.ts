@@ -65,9 +65,11 @@ function modelFrom(raw: unknown): StructuredModel | null {
   if (!row) return null;
   const id = str(row.id) ?? str(row.modelId) ?? str(row.value) ?? str(row.name);
   if (!id) return null;
-  const effortRows = row.efforts ?? row.reasoningEfforts ?? rec(row.options)?.effort;
+  // Grok lists a model's reasoning levels under `_meta`.
+  const effortRows = row.efforts ?? row.reasoningEfforts ?? rec(row._meta)?.reasoningEfforts ?? rec(row.options)?.effort;
+  const marked = Array.isArray(effortRows) ? rec(effortRows.find((effort) => rec(effort)?.default === true)) : null;
   const efforts = Array.isArray(effortRows) ? effortRows.map((effort) => str(rec(effort)?.id) ?? str(rec(effort)?.value) ?? str(effort)).filter((effort): effort is string => !!effort) : [];
-  return { id, label: str(row.name) ?? str(row.displayName) ?? id, description: str(row.description), efforts, defaultEffort: str(row.defaultEffort), isDefault: row.isDefault === true };
+  return { id, label: str(row.name) ?? str(row.displayName) ?? id, description: str(row.description), efforts, defaultEffort: str(row.defaultEffort) ?? str(marked?.id), isDefault: row.isDefault === true };
 }
 
 function configOptionId(option: Json): string | null {
@@ -87,6 +89,14 @@ function configOptionsFrom(value: Json): Json[] {
 function currentConfigValue(value: Json, id: string): string | null {
   const option = configOptionsFrom(value).find((candidate) => configOptionId(candidate)?.toLowerCase() === id);
   return option ? configOptionValue(option) : null;
+}
+
+/** The reasoning-level select: `effort`, or whatever the agent files under `thought_level` (Grok: `reasoning_effort`). */
+function effortOption(value: Json): Json | null {
+  const options = configOptionsFrom(value);
+  return options.find((option) => configOptionId(option)?.toLowerCase() === 'effort')
+    ?? options.find((option) => option.category === 'thought_level')
+    ?? null;
 }
 
 /** Parse both legacy ACP model lists and the v2 `configOptions` model select. */
@@ -307,6 +317,16 @@ function makeProvider(agent: string): StructuredChatProvider {
   const activeAssistantIds = new Map<number, string>();
   const activeReasoningIds = new Map<number, string>();
   let segmentSequence = 0;
+  /** The id each session's agent gave its reasoning-level option. */
+  const effortIds = new Map<number, string>();
+  const effortId = (sessionId: number) => effortIds.get(sessionId) ?? 'effort';
+  function rememberEffortId(sessionId: number, record: Json): string | null {
+    const option = effortOption(record);
+    if (!option) return null;
+    const id = configOptionId(option);
+    if (id) effortIds.set(sessionId, id);
+    return configOptionValue(option);
+  }
   /** The options each pending permission request offered. */
   const permissionOptions = new Map<string, Json[]>();
   /** Extension questions (Grok, Cursor) waiting for the user. */
@@ -326,9 +346,11 @@ function makeProvider(agent: string): StructuredChatProvider {
   function applyConfigOptions(sessionId: number, value: unknown): void {
     const record = rec(value);
     if (!record || !Array.isArray(record.configOptions)) return;
-    const models = modelsFrom(record);
+    // A config update names the models only; keep what the full list said of each.
+    const known = new Map((stores.get(sessionId)?.models ?? []).map((model) => [model.id, model]));
+    const models = modelsFrom(record).map((model) => model.efforts.length ? model : { ...known.get(model.id), ...model, efforts: known.get(model.id)?.efforts ?? [], description: model.description ?? known.get(model.id)?.description ?? null, defaultEffort: model.defaultEffort ?? known.get(model.id)?.defaultEffort ?? null });
     const selected = currentConfigValue(record, 'model');
-    const effort = currentConfigValue(record, 'effort');
+    const effort = rememberEffortId(sessionId, record);
     const mode = currentConfigValue(record, 'mode');
     stores.update(sessionId, (state) => ({
       // ACP config_option_update replaces the complete list, so an empty
@@ -409,12 +431,13 @@ function makeProvider(agent: string): StructuredChatProvider {
         ?? models.find((model) => model.isDefault)?.id
         ?? models[0]?.id
         ?? null;
-      stores.update(sessionId, { status: 'ready', error: null, models, model: selected, mode: currentConfigValue(createdRecord, 'mode') ?? stores.get(sessionId)?.mode ?? null, threadId: nativeId, effort: options.effort ?? null });
+      const currentEffort = rememberEffortId(sessionId, createdRecord);
+      stores.update(sessionId, { status: 'ready', error: null, models, model: selected, mode: currentConfigValue(createdRecord, 'mode') ?? stores.get(sessionId)?.mode ?? null, threadId: nativeId, effort: options.effort ?? currentEffort });
       if (options.model && selected === options.model && runtime) {
         void setAcpSessionModel(runtime.session, runtime.sessionId, options.model);
       }
       if (options.effort && runtime) {
-        void runtime.session.request<Json>('session/set_config_option', { sessionId: runtime.sessionId, configId: 'effort', value: options.effort }).catch(() => undefined);
+        void runtime.session.request<Json>('session/set_config_option', { sessionId: runtime.sessionId, configId: effortId(sessionId), value: options.effort }).catch(() => undefined);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -482,7 +505,7 @@ function makeProvider(agent: string): StructuredChatProvider {
   function setEffort(sessionId: number, effort: string): void {
     stores.update(sessionId, { effort });
     const runtime = sessions.get(sessionId);
-    if (runtime) void runtime.session.request<Json>('session/set_config_option', { sessionId: runtime.sessionId, configId: 'effort', value: effort })
+    if (runtime) void runtime.session.request<Json>('session/set_config_option', { sessionId: runtime.sessionId, configId: effortId(sessionId), value: effort })
       .then((result) => applyConfigOptions(sessionId, result)).catch(() => undefined);
   }
 
@@ -554,6 +577,7 @@ function makeProvider(agent: string): StructuredChatProvider {
     activeAssistantIds.delete(sessionId);
     activeReasoningIds.delete(sessionId);
     textAsks.delete(sessionId);
+    effortIds.delete(sessionId);
     stores.delete(sessionId);
     await runtime?.session.close().catch(() => undefined);
   }

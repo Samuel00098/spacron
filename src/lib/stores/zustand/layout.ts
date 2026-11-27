@@ -35,11 +35,11 @@ export const PREVIEW_DRAWER_DEFAULT_WIDTH = 560;
 // The left Navigator's width, on the same terms: one definition for the
 // default, the setter and the load-time sanitiser in `workspace.ts`.
 //
-// The rail always opens at its narrowest. Dragging can widen it for as long as
-// it stays open; reopening it or restarting the app returns it to this width.
+// The rail always opens at its default width. Dragging can change it for as long
+// as it stays open; reopening it or restarting the app returns it to the default.
 export const LEFT_PANEL_MIN_WIDTH = 255;
 export const LEFT_PANEL_MAX_WIDTH = 600;
-export const LEFT_PANEL_DEFAULT_WIDTH = LEFT_PANEL_MIN_WIDTH;
+export const LEFT_PANEL_DEFAULT_WIDTH = 340;
 
 /** Narrow anything (a persisted value, a drag result) to a usable rail width. */
 export function clampLeftPanelWidth(v: unknown): number {

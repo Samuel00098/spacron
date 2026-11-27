@@ -16,13 +16,13 @@ const fake = vi.hoisted(() => {
   type Listener = () => void;
   const states = new Map<number, any>();
   const listeners = new Set<Listener>();
-  const provider = {
-    agent: 'codex',
-    label: 'Codex',
+  const providerFor = (agent: string, label: string) => ({
+    agent,
+    label,
     get: (id: number) => states.get(id) ?? null,
     subscribe: (listener: Listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     start: vi.fn(async (id: number) => {
-      states.set(id, { status: 'ready', error: null, items: [], models: [], model: null, effort: null, access: 'ask', threadId: 'thread-9', approvals: [], contextUsed: null, contextWindow: null });
+      states.set(id, { status: 'ready', error: null, items: [], models: [], model: null, effort: null, access: 'ask', threadId: agent === 'codex' ? 'thread-9' : `${agent}-thread-9`, approvals: [], contextUsed: null, contextWindow: null });
       listeners.forEach((l) => l());
     }),
     close: vi.fn(async (id: number) => { states.delete(id); listeners.forEach((l) => l()); }),
@@ -34,12 +34,14 @@ const fake = vi.hoisted(() => {
       listeners.forEach((l) => l());
     }),
     conversationId: (id: number) => states.get(id)?.threadId ?? null,
-  };
+  });
+  const provider = providerFor('codex', 'Codex');
+  const claudeProvider = providerFor('claude', 'Claude Code');
   const set = (id: number, patch: Record<string, unknown>) => {
     states.set(id, { ...(states.get(id) ?? {}), ...patch });
     listeners.forEach((l) => l());
   };
-  return { provider, states, set };
+  return { provider, claudeProvider, states, set };
 });
 
 const terminal = vi.hoisted(() => ({ sessions: [] as { id: number; isRunning: boolean; agentPreset?: string | null; title?: string }[], nextPane: 50 }));
@@ -81,13 +83,19 @@ vi.mock('./panes', async () => {
     forgetStructuredChatPane: (id: number) => structuredChatPanes.update((p) => { const n = { ...p }; delete n[id]; return n; }),
     setStructuredChatHistory: (id: number, items: unknown[]) => structuredChatHistory.update((h) => ({ ...h, [id]: items })),
     structuredChatPreset: () => 'codex',
+    commandForStructuredAgent: (agent: string) => (agent === 'antigravity' ? 'agy' : agent === 'cursor' ? 'cursor-agent' : agent),
     markStructuredChatUnread: vi.fn(),
   };
 });
-vi.mock('./registry', () => ({ structuredChatProvider: (agent: string) => (agent === 'codex' ? fake.provider : null) }));
+vi.mock('./registry', () => ({
+  structuredChatProvider: (agent: string) => (agent === 'codex' ? fake.provider : agent === 'claude' ? fake.claudeProvider : null),
+}));
 // The store rebuilds a pane's subagent panel from the record; its engine pulls
 // in the terminal and MCP bridges, which this test does not stand up.
 vi.mock('./mcp-subagents', () => ({ restoreMcpSubagents: vi.fn() }));
+const titles = vi.hoisted(() => ({ provider: vi.fn(async () => 'From provider'), agent: vi.fn(async (_command: string, _args?: unknown) => '') }));
+vi.mock('$lib/stores/chatThreads', () => ({ generateAiThreadTitle: titles.provider, cleanGeneratedTitle: (raw: string) => raw.trim() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: titles.agent }));
 
 import { get } from '$lib/stores/storeCompat';
 import * as panes from './panes';
@@ -120,6 +128,14 @@ import {
   startSessionStore,
   structuredSessionHistory,
   structuredSessions,
+  attachStandaloneRecordToPane,
+  createStandaloneStructuredRecord,
+  listStandaloneStructuredRecords,
+  updateStandaloneStructuredRecord,
+  deleteStandaloneStructuredRecord,
+  migrateLegacyStandaloneRecords,
+  recordItemsSnapshot,
+  switchStructuredAgent,
 } from './session-store';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 80));
@@ -410,6 +426,34 @@ describe('structured session store', () => {
     }
   });
 
+  it.each([
+    [-90, 'TITLE: Flaky test repair', 'Flaky test repair'],
+    [-91, 'You have hit your usage limit.', 'Please fix the flaky test in CI'],
+  ])('titles a standalone chat with its own agent (pane %i)', async (pane, reply, expected) => {
+    titles.agent.mockImplementation(async (command: string) => (command === 'agent_cli_generate_commit_message' ? reply : ''));
+    const created = createStandaloneStructuredRecord({ provider: 'codex' });
+    fake.set(pane, ready());
+    await attachStandaloneRecordToPane(pane, created.id, { startProvider: true });
+    await tick();
+    fake.set(pane, ready({ items: [{ id: 'u', kind: 'user', text: 'Please fix the flaky test in CI' }] }));
+    await tick();
+    expect(titles.agent).toHaveBeenCalledWith('agent_cli_generate_commit_message', expect.objectContaining({ agent: 'codex' }));
+    expect(titles.provider).not.toHaveBeenCalled();
+    expect(get(structuredSessions)[created.id].title).toBe(expected);
+  });
+
+  it('does not reload the journal beside a running standalone agent', async () => {
+    const created = createStandaloneStructuredRecord({ provider: 'codex' });
+    fake.set(-92, ready());
+    await attachStandaloneRecordToPane(-92, created.id, { startProvider: true });
+    await tick();
+    fake.set(-92, ready({ items: [{ id: 'u', kind: 'user', text: 'once only' }] }));
+    await tick();
+    await attachStandaloneRecordToPane(-92, created.id, { startProvider: false });
+    await attachStandaloneRecordToPane(-92, created.id, { startProvider: true });
+    expect(get(panes.structuredChatHistory)[-92] ?? []).toEqual([]);
+  });
+
   it('names a chat from its first prompt but never renames a CLI conversation switched into chat', async () => {
     terminal.sessions = [{ id: 11, isRunning: true }];
     fake.set(11, ready());
@@ -474,5 +518,56 @@ describe('structured session store', () => {
     expect(get(structuredSessions)[record.id].archived).toBe(false);
     expect(listStructuredSessions({ projectId: 'proj' }).map((r) => r.id)).toContain(record.id);
     expect(listArchivedSessions({ projectId: 'proj' })).toHaveLength(0);
+  });
+
+  it('switches agents mid-conversation while preserving record ID, adding divider, and seeding history', async () => {
+    terminal.sessions = [{ id: 15, isRunning: true }];
+    const seededItems = [
+      { id: 'u1', kind: 'user', text: 'Plan the feature' },
+      { id: 'a1', kind: 'assistant', text: 'Here is a 3-step plan.' },
+    ];
+    fake.set(15, ready({ items: seededItems }));
+    panes.markStructuredChatPane(15, 'codex', 'codex', 'chat');
+    await tick();
+    const record = recordForPane(15)!;
+
+    // Refuses to switch while a turn is working
+    fake.set(15, ready({ status: 'working', items: seededItems }));
+    expect(await switchStructuredAgent(15, 'claude')).toBe(false);
+
+    fake.set(15, ready({ items: seededItems }));
+    expect(await switchStructuredAgent(15, 'claude', { model: 'sonnet', effort: 'high' })).toBe(true);
+
+    expect(fake.provider.close).toHaveBeenCalledWith(15);
+    expect(fake.claudeProvider.start).toHaveBeenCalled();
+    const updated = recordForPane(15)!;
+    expect(updated.id).toBe(record.id);
+    expect(updated.provider).toBe('claude');
+    expect(updated.nativeSessionId).toBeNull();
+    expect(updated.seedContext).toBe(true);
+    const items = recordItemsSnapshot(record.id);
+    expect(items.some((item) => item.kind === 'notice' && item.text.includes('Switched to Claude Code'))).toBe(true);
+    expect(paneWireText(15, 'Continue from step 2').text).toContain('Plan the feature');
+  });
+
+  it('manages standalone records and migrates legacy standalone threads once idempotently', async () => {
+    env.data.clear();
+    const created = createStandaloneStructuredRecord({ provider: 'codex', title: 'Draft idea' });
+    expect(listStandaloneStructuredRecords().map((r) => r.id)).toContain(created.id);
+    expect(updateStandaloneStructuredRecord(created.id, { pinned: true, model: 'gpt-5' })).toBe(true);
+    expect(listStandaloneStructuredRecords()[0]).toMatchObject({ id: created.id, pinned: true, model: 'gpt-5' });
+
+    const migratedCount = migrateLegacyStandaloneRecords(
+      [{ id: 'legacy-1', title: 'Old standalone chat', pinned: false, standaloneWorkspaceId: 'ws-1', createdAt: 10, lastActivityAt: 20 }],
+      { 'legacy-1': [{ id: 'm1', role: 'user', text: 'Hello', ts: 10 }, { id: 'm2', role: 'assistant', text: 'Hi!', ts: 11 }] },
+      'claude',
+    );
+    expect(migratedCount).toBe(1);
+    expect(migrateLegacyStandaloneRecords([], {}, 'claude')).toBe(0);
+    const items = recordItemsSnapshot('ss_legacy_legacy-1');
+    expect(items.map((i) => i.text)).toEqual(['Hello', 'Hi!']);
+
+    await deleteStandaloneStructuredRecord(created.id);
+    expect(listStandaloneStructuredRecords().map((r) => r.id)).not.toContain(created.id);
   });
 });

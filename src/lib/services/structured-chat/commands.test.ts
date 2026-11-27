@@ -211,10 +211,31 @@ describe('structured slash commands', () => {
     h.provider.get.mockImplementation(((id: number) => (id === 2 ? { ...h.state, status: 'ready' } : h.state)) as () => typeof h.state);
     h.store.resumeStructuredSessionInPane.mockClear();
     expect((await runStructuredCommand('codex', 1, '/side check the logs')).output).toContain('right sidebar');
+    expect((await runStructuredCommand('codex', 1, '/sidebar look here')).output).toContain('right sidebar');
     expect(h.store.openStructuredRecordBeside).toHaveBeenCalledWith(1, 'fork-1');
     expect(h.store.resumeStructuredSessionInPane).not.toHaveBeenCalled();
     expect(h.provider.send).toHaveBeenCalledWith(2, 'check the logs');
+    expect(h.provider.send).toHaveBeenCalledWith(2, 'look here');
     expect(h.beside).toHaveBeenCalledWith({ paneId: 2, parentPaneId: 1, projectId: 'p' });
     h.state.status = 'ready';
+  });
+
+  it('switches agents via /agent only where the host allows it, and rejects /terminal in standalone mode', async () => {
+    const refused = await runStructuredCommand('codex', 1, '/agent claude');
+    expect(refused.error).toContain('This chat stays on');
+
+    const onSwitchAgent = vi.fn(async () => {});
+    const listed = await runStructuredCommand('codex', 1, '/agent', { onSwitchAgent });
+    expect(listed.handled).toBe(true);
+    expect(listed.output).toContain('Claude Code');
+
+    const switched = await runStructuredCommand('codex', 1, '/agent claude', { onSwitchAgent });
+    expect(switched.handled).toBe(true);
+    expect(onSwitchAgent).toHaveBeenCalledWith('claude', null, null);
+
+    h.store.recordForPane.mockReturnValueOnce({ id: 's1', projectId: null as any, standalone: true, provider: 'codex', restoredMode: 'fresh', goal: null } as any);
+    const termRes = await runStructuredCommand('codex', 1, '/terminal');
+    expect(termRes.handled).toBe(true);
+    expect(termRes.error).toContain('Create project from chat');
   });
 });

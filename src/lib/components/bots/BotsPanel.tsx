@@ -18,7 +18,7 @@ import Dropdown from '$lib/components/shared/Dropdown';
 import { ACCESS_OPTIONS } from '$lib/components/shared/BotSettingsSection';
 import { boxMcpInfo, sharedSignIns } from '$lib/services/box-signins';
 import {
-  BOT_TEMPLATES, LOCAL_HOST, MAX_BOT_STARTER_LENGTH, MAX_BOT_STARTER_PROMPTS, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, botStarterPrompts, bots, canRunHeadless, closeBots,
+  BOT_TEMPLATE_CATEGORIES, BOT_TEMPLATES, LOCAL_HOST, MAX_BOT_STARTER_LENGTH, MAX_BOT_STARTER_PROMPTS, agentProgram, botAgents, botConnectorNames, botHostState, botSettings, botStarterPrompts, bots, canRunHeadless, closeBots,
   connectorChoices, deleteBotChat, fetchBotLog, latestRun, localAvailable, nextBotRun, refreshBotState, removeBot, runBotNow, runsFor,
   attachToBot, attachmentPreview, botVisualSpot, FILES_ONLY_MESSAGE, MAX_ATTACHMENTS,
   botDraftQueue, saveBot, selectedBotId, sendBotMessage, stopBotRun, suggestBotAvatar, toggleBot, visibleBots,
@@ -249,15 +249,18 @@ function TemplateGrid({ onPick, title = 'Or start from a template', selectedId }
   return (
     <div className="bots-templates">
       {title && <h4>{title}</h4>}
-      <div className="bots-template-grid">
-        {BOT_TEMPLATES.map((t) => <button key={t.id} type="button" className="bots-template" aria-pressed={onPick ? t.id === selectedId : undefined} onClick={() => {
-          if (onPick) onPick(t);
-          else { pendingTemplate = t; selectedBotId.set(NEW_BOT); }
-        }}>
-          <BotAvatar avatar={t.avatar} size={36} />
-          <span><strong>{t.name}</strong><small>{t.blurb}</small></span>
-        </button>)}
-      </div>
+      {BOT_TEMPLATE_CATEGORIES.map((category) => <section key={category} className="bots-template-category" aria-label={category}>
+        <h5>{category}</h5>
+        <div className="bots-template-grid">
+          {BOT_TEMPLATES.filter((t) => t.category === category).map((t) => <button key={t.id} type="button" className="bots-template" aria-pressed={onPick ? t.id === selectedId : undefined} onClick={() => {
+            if (onPick) onPick(t);
+            else { pendingTemplate = t; selectedBotId.set(NEW_BOT); }
+          }}>
+            <BotAvatar avatar={t.avatar} size={36} />
+            <span><strong>{t.name}</strong><small>{t.blurb}</small></span>
+          </button>)}
+        </div>
+      </section>)}
     </div>
   );
 }

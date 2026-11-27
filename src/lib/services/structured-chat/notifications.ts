@@ -83,8 +83,9 @@ export function handleStructuredNotificationEvent(paneId: number, event: Structu
       if (typeof markStructuredChatUnread === 'function') {
         markStructuredChatUnread(paneId);
       }
+      // A quoted full path would fill the pop-up; its file name says enough.
       const title = typeof event.payload.title === 'string' && event.payload.title
-        ? event.payload.title
+        ? event.payload.title.replace(/`([^`]+)`/g, (_match, quoted: string) => quoted.split(/[\/]/).pop() ?? quoted)
         : 'Permission requested';
       if (isSystemAway && typeof showSystemNotification === 'function') {
         showSystemNotification(`${agentName} needs your approval: ${title}`, 'warning');
@@ -92,7 +93,7 @@ export function handleStructuredNotificationEvent(paneId: number, event: Structu
         showToast(`${agentName} needs your approval: ${title}`, 'warning', 7000, false, {
           label: 'Review',
           onClick: () => { void revealAgentChat(paneId); },
-        });
+        }, { hint: 'Open the chat to allow or decline it.' });
       }
     }
     return;

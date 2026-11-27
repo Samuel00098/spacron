@@ -15,6 +15,8 @@ import { getAgentRoster } from '$lib/stores/runs';
 import { enqueue } from '$lib/services/terminal-chat-queue';
 import { addSideChat } from './side-chats';
 import type { StructuredAccess } from './provider';
+import { getStructuredAgentEntries, resolveStructuredAgentModels } from './agent-catalog';
+import type { StructuredChatAgent } from './panes';
 import { spawnStructuredSubagent, structuredChatProvider } from './registry';
 import {
   archiveStructuredRecord,
@@ -62,6 +64,7 @@ export const STRUCTURED_PASSTHROUGH: SlashCommand[] = [
 
 /** The operations this layer understands, for the composer's command menu. */
 export const STRUCTURED_COMMANDS: SlashCommand[] = [
+  { name: '/agent', description: 'Show or switch the active agent: /agent <name>' },
   { name: '/model', description: 'Show or change the model: /model <id>' },
   { name: '/effort', description: 'Show or change reasoning effort: /effort <level>' },
   { name: '/permissions', description: 'Access mode: /permissions ask | auto | full-access' },
@@ -80,8 +83,9 @@ export const STRUCTURED_COMMANDS: SlashCommand[] = [
   { name: '/archive', description: 'Archive this chat (kept on disk; /unarchive brings it back)' },
   { name: '/archived', description: 'List this agent\'s archived chats' },
   { name: '/unarchive', description: 'Bring an archived chat back: /unarchive <number or id>' },
+  { name: '/sidebar', description: 'Open a side chat in the right sidebar: /sidebar [first message]' },
   { name: '/side', description: 'Open a side chat in the right sidebar: /side [first message]' },
-  { name: '/btw', description: 'Same as /side: ask a side question in the right sidebar' },
+  { name: '/btw', description: 'Same as /sidebar: ask a side question in the right sidebar' },
   { name: '/resume', description: 'Resume an earlier chat here: /resume <number or id>' },
   { name: '/terminal', description: 'Continue this conversation in the terminal' },
   { name: '/handoff', description: 'Hand off this conversation to another agent' },
@@ -109,19 +113,35 @@ function ago(ms: number): string {
 export function resumable(paneId: number) {
   const current = recordForPane(paneId);
   if (!current) return [];
-  return listStructuredSessions({ projectId: current.projectId, provider: current.provider })
+  return listStructuredSessions({
+    projectId: current.projectId,
+    provider: current.provider,
+    standalone: current.standalone,
+  })
     .filter((record) => record.id !== current.id && record.lifecycle !== 'starting' && record.lifecycle !== 'working' && record.lifecycle !== 'ready')
     .filter(recordHasConversation);
 }
 
 /** Commands that change this pane's session, which only Spacron can do. */
-const PANE_COMMANDS = new Set(['/model', '/effort', '/permissions', '/compact', '/clear', '/stop', '/resume', '/terminal', '/handoff']);
+const PANE_COMMANDS = new Set(['/agent', '/switch', '/model', '/effort', '/permissions', '/compact', '/clear', '/stop', '/resume', '/sidebar', '/side', '/btw', '/terminal', '/handoff']);
+
+export interface StructuredCommandContext {
+  lastUserMessage?: string | null;
+  agentCommands?: string[];
+  lazyStart?: boolean;
+  pendingModel?: string | null;
+  pendingEffort?: string | null;
+  pendingAccess?: StructuredAccess | null;
+  onPickAccess?: (access: StructuredAccess) => void;
+  ensureStarted?: () => Promise<number | null>;
+  onSwitchAgent?: (agent: StructuredChatAgent, model: string | null, effort: string | null) => Promise<void>;
+}
 
 export async function runStructuredCommand(
   agent: string,
   paneId: number,
   input: string,
-  context: { lastUserMessage?: string | null; agentCommands?: string[] } = {},
+  context: StructuredCommandContext = {},
 ): Promise<StructuredCommandResult> {
   const provider = structuredChatProvider(agent);
   const text = input.trim();
@@ -133,21 +153,74 @@ export async function runStructuredCommand(
   const state = provider.get(paneId);
 
   switch (name) {
-    case '/model': {
+    case '/agent':
+    case '/switch': {
+      // Only a host that can switch agents (the standalone chat) passes this.
+      if (!context.onSwitchAgent) {
+        return { handled: true, error: `This chat stays on ${provider.label}. Type /model to change its model.` };
+      }
+      const entries = getStructuredAgentEntries();
       if (!arg) {
-        const list = state?.models.map((m) => `${m.id === state.model ? '• ' : '  '}${m.id}${m.label && m.label !== m.id ? ` (${m.label})` : ''}`).join('\n');
+        const installed = entries.filter((entry) => entry.installed);
+        const uninstalledCount = entries.length - installed.length;
+        const lines = installed.map((entry) => `${entry.agent === agent ? '• ' : '  '}${entry.name} (${entry.agent})`);
+        if (uninstalledCount > 0) lines.push(`\n${uninstalledCount} more agent(s) can be installed from the agent picker.`);
+        return { handled: true, output: `Structured agents:\n${lines.join('\n')}` };
+      }
+      if (state?.status === 'working') {
+        return { handled: true, error: 'Wait for the running turn to finish before switching agents.' };
+      }
+      const query = arg.toLowerCase();
+      const target = entries.find((entry) =>
+        entry.agent.toLowerCase() === query
+        || entry.command.toLowerCase() === query
+        || entry.name.toLowerCase() === query
+        || entry.name.toLowerCase().startsWith(query));
+      if (!target) {
+        return { handled: true, error: `Unknown agent "${arg}". Type /agent to list available agents.` };
+      }
+      if (!target.installed) {
+        return { handled: true, error: `${target.name} is not installed yet. Install it from the agent picker first.` };
+      }
+      if (target.agent === agent) {
+        return { handled: true, output: `Already using ${target.name}.` };
+      }
+      await context.onSwitchAgent(target.agent, null, null);
+      return { handled: true, output: `Switched to ${target.name}.` };
+    }
+    case '/model': {
+      const availableModels = state?.models?.length
+        ? state.models.map((m) => ({ id: m.id, label: m.label }))
+        : resolveStructuredAgentModels(agent as StructuredChatAgent, state).map((m) => ({ id: m.id, label: m.label }));
+      const currentModelId = state?.model ?? context.pendingModel ?? null;
+      if (!arg) {
+        const list = availableModels.map((m) => `${m.id === currentModelId ? '• ' : '  '}${m.id}${m.label && m.label !== m.id ? ` (${m.label})` : ''}`).join('\n');
         return { handled: true, output: list ? `Models:\n${list}` : 'No model list from this agent yet.' };
       }
-      const match = state?.models.find((m) => m.id === arg || m.label.toLowerCase() === arg.toLowerCase());
-      if (state?.models.length && !match) return { handled: true, error: `${provider.label} doesn't offer "${arg}". Type /model to see the list.` };
-      provider.setModel(paneId, match?.id ?? arg);
-      return { handled: true, output: `Model set to ${match?.label ?? arg}.` };
+      const match = availableModels.find((m) => m.id === arg || m.label.toLowerCase() === arg.toLowerCase());
+      if (availableModels.length && !match) return { handled: true, error: `${provider.label} doesn't offer "${arg}". Type /model to see the list.` };
+      const chosen = match?.id ?? arg;
+      if (!state && context.lazyStart && context.onSwitchAgent) {
+        await context.onSwitchAgent(agent as StructuredChatAgent, chosen, context.pendingEffort ?? null);
+        return { handled: true, output: `Model set to ${match?.label ?? chosen}.` };
+      }
+      provider.setModel(paneId, chosen);
+      return { handled: true, output: `Model set to ${match?.label ?? chosen}.` };
     }
     case '/effort':
     case '/reasoning': {
-      const model = state?.models.find((m) => m.id === state.model);
-      if (!arg) return { handled: true, output: `Effort: ${state?.effort ?? 'default'}${model?.efforts.length ? ` (available: ${model.efforts.join(', ')})` : ''}` };
+      const availableModels = state?.models?.length
+        ? state.models.map((m) => ({ id: m.id, label: m.label, efforts: m.efforts as string[] }))
+        : resolveStructuredAgentModels(agent as StructuredChatAgent, state).map((m) => ({ id: m.id, label: m.label, efforts: (m.reasoningEfforts ?? []) as string[] }));
+      const currentModelId = state?.model ?? context.pendingModel ?? null;
+      const currentEffortId = state?.effort ?? context.pendingEffort ?? null;
+      const model = availableModels.find((m) => m.id === currentModelId);
+      if (!arg) return { handled: true, output: `Effort: ${currentEffortId ?? 'default'}${model?.efforts.length ? ` (available: ${model.efforts.join(', ')})` : ''}` };
       if (model?.efforts.length && !model.efforts.includes(arg)) return { handled: true, error: `${model.label} supports: ${model.efforts.join(', ')}.` };
+      if (!state && context.lazyStart && context.onSwitchAgent) {
+        await context.onSwitchAgent(agent as StructuredChatAgent, currentModelId, arg);
+        return { handled: true, output: `Reasoning effort set to ${arg}.` };
+      }
       provider.setEffort(paneId, arg);
       return { handled: true, output: `Reasoning effort set to ${arg}.` };
     }
@@ -155,13 +228,14 @@ export async function runStructuredCommand(
     case '/approvals':
     case '/access': {
       const supported = provider.capabilities?.supportedAccessModes ?? ['ask', 'auto', 'full-access'];
-      if (!arg) return { handled: true, output: `Access: ${state?.access ?? 'ask'}. Supported options: ${supported.join(', ')}.` };
+      if (!arg) return { handled: true, output: `Access: ${state?.access ?? context.pendingAccess ?? 'ask'}. Supported options: ${supported.join(', ')}.` };
       const access = ACCESS_ALIASES[arg.toLowerCase()];
       if (!access) return { handled: true, error: `Use ${supported.join(', ')}.` };
       if (!supported.includes(access)) {
         return { handled: true, error: `${provider.label} only supports [${supported.join(', ')}]. Discrete approvals are handled per request.` };
       }
-      provider.setAccess(paneId, access);
+      if (!state && context.lazyStart && context.onPickAccess) context.onPickAccess(access);
+      else provider.setAccess(paneId, access);
       return { handled: true, output: `Access set to ${access}.` };
     }
     case '/compact':
@@ -328,17 +402,26 @@ export async function runStructuredCommand(
         ? { handled: true, output: `Restored “${target.title ?? 'Untitled'}”. It is in the chat tabs again; /resume ${target.id} opens it here.` }
         : { handled: true, error: 'Could not restore that chat.' };
     }
+    case '/sidebar':
     case '/btw':
     case '/side': {
-      const current = recordForPane(paneId);
+      let activePaneId = paneId;
+      let current = recordForPane(activePaneId);
+      if (!current && context.ensureStarted) {
+        const startedPane = await context.ensureStarted();
+        if (startedPane !== null) {
+          activePaneId = startedPane;
+          current = recordForPane(activePaneId);
+        }
+      }
       const title = `Side: ${current?.title ?? provider.label}`.slice(0, 120);
-      const forked = await forkStructuredSession(paneId, { title });
+      const forked = await forkStructuredSession(activePaneId, { title });
       if (!forked) return { handled: true, error: 'Could not open a side chat from this conversation.' };
       // The side chat gets its own tab in the right sidebar: this pane keeps its
       // agent, and any running turn carries on.
-      const sidePane = await openStructuredRecordBeside(paneId, forked.id);
+      const sidePane = await openStructuredRecordBeside(activePaneId, forked.id);
       if (sidePane == null) return { handled: true, error: `Could not open a side chat.${arg ? ` Your message was not sent: ${arg}` : ''}` };
-      addSideChat({ paneId: sidePane, parentPaneId: paneId, projectId: recordForPane(sidePane)?.projectId ?? current?.projectId ?? null });
+      addSideChat({ paneId: sidePane, parentPaneId: activePaneId, projectId: recordForPane(sidePane)?.projectId ?? current?.projectId ?? null });
       const side = provider.get(sidePane);
       if (!side || side.status === 'failed' || side.status === 'closed') {
         return { handled: true, error: `The side chat could not start${side?.error ? `: ${side.error}` : '.'}${arg ? ` Your message was not sent: ${arg}` : ''}` };
@@ -351,8 +434,12 @@ export async function runStructuredCommand(
         output: `Opened a side chat in the right sidebar (“${forked.title}”)${arg ? ' and sent your message there' : ''}. This chat is untouched.`,
       };
     }
-    case '/terminal':
+    case '/terminal': {
+      if (recordForPane(paneId)?.standalone) {
+        return { handled: true, error: 'Standalone chats have no project terminal. Use "Create project from chat" first.' };
+      }
       return { handled: true, action: 'continue-in-terminal' };
+    }
     case '/subagent': {
       if (!arg) {
         return { handled: true, output: 'Usage: /subagent [preset] <task prompt> (e.g. /subagent claude Fix unit tests)' };

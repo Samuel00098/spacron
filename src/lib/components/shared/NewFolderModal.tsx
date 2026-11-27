@@ -2,7 +2,10 @@ import { useModalFocus } from '$lib/react/useModalFocus';
 import { useEffect, useRef, useState } from 'react';
 import { newFolderPromptOpen, createProjectFolder } from '$lib/stores/workspace';
 import { useStore } from '$lib/react/useStore';
+import { get } from '$lib/stores/storeCompat';
 import { createProjectFromChat, projectFromChat } from '$lib/services/standalone-chat';
+import { structuredSessions } from '$lib/services/structured-chat/session-store';
+import { promoteStandaloneStructuredChatToProject } from '$lib/services/structured-chat/standalone-structured';
 import './NewFolderModal.css';
 
 function getFilename(p: string): string {
@@ -77,8 +80,15 @@ export default function NewFolderModal() {
     setBusy(true);
     setError(null);
     try {
-      if (sourceChatId) await createProjectFromChat(sourceChatId, parentDir!, name.trim());
-      else await createProjectFolder(parentDir!, name.trim());
+      if (sourceChatId) {
+        if (get(structuredSessions)[sourceChatId]) {
+          await promoteStandaloneStructuredChatToProject(sourceChatId, parentDir!, name.trim());
+        } else {
+          await createProjectFromChat(sourceChatId, parentDir!, name.trim());
+        }
+      } else {
+        await createProjectFolder(parentDir!, name.trim());
+      }
       close();
     } catch (e) {
       setError(typeof e === 'string' ? e : e instanceof Error ? e.message : 'Failed to create folder.');

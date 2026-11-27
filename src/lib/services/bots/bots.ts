@@ -912,4 +912,4 @@ export function startBotWatcher(onNotice: Notice): () => void {
   return () => { if (watcher) clearInterval(watcher); watcher = null; };
 }
 
-export { BOT_TEMPLATES, type BotTemplate } from './templates';
+export { BOT_TEMPLATES, BOT_TEMPLATE_CATEGORIES, type BotTemplate } from './templates';

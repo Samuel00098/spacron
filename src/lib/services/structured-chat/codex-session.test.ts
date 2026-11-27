@@ -77,6 +77,9 @@ describe('Codex thread items in the chat', () => {
     expect(accessPolicy('ask', 'C:\\w')).toMatchObject({ approvalPolicy: 'on-request', sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['C:\\w'] } });
     expect(accessPolicy('auto', 'C:\\w')).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'workspaceWrite' } });
     expect(accessPolicy('full-access', 'C:\\w')).toEqual({ approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } });
+    // Outside a project, asking also covers writes in the chat's own folder.
+    expect(accessPolicy('ask', 'C:\\w', true)).toEqual({ approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly' } });
+    expect(accessPolicy('auto', 'C:\\w', true)).toMatchObject({ sandboxPolicy: { type: 'workspaceWrite' } });
   });
 });
 

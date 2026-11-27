@@ -118,4 +118,13 @@ export function structuredChatAgentFor(command: string): StructuredChatAgent | n
   return null;
 }
 
+/** The launch command corresponding to a structured chat agent id. */
+export function commandForStructuredAgent(agent: StructuredChatAgent): string {
+  switch (agent) {
+    case 'antigravity': return 'agy';
+    case 'cursor': return 'cursor-agent';
+    default: return agent;
+  }
+}
+
 

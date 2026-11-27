@@ -5,6 +5,7 @@ import { get } from 'svelte/store';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useStore } from '$lib/react/useStore';
 import { closeBots } from '$lib/services/bots/bots';
+import { closeStandaloneChat } from '$lib/stores/chatNavigation';
 import {
   recentWorkspaces,
   renameProject,
@@ -816,6 +817,7 @@ export default function ProjectHUD() {
   // Handle open project
   async function handleOpen(wsId: string, path: string) {
     closeBots();
+    closeStandaloneChat();
     showProjectChat();
     if (wsId !== activeWsId) {
       if (path) {
@@ -1958,7 +1960,7 @@ export default function ProjectHUD() {
         })()}
 
         <BotsSidebar />
-        {currentInteractionMode === 'chat' && <StandaloneChatsSidebar />}
+        <StandaloneChatsSidebar />
 
         {/* Global Empty Search State */}
         {search && filteredProjects.length === 0 && (

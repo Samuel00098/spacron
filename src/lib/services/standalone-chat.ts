@@ -11,10 +11,11 @@ import type { Project } from '$lib/types/workspace';
 import { deleteAgentCheckpoint } from './orchestrator/agent-checkpoints';
 
 const loadedWorkspaces = new Map<string, Promise<Project>>();
-export function openStandaloneWorkspace(workspaceId: string): Promise<Project> {
+/** `name` asks for a findable folder named after it, for a chat that has none yet. */
+export function openStandaloneWorkspace(workspaceId: string, name?: string): Promise<Project> {
   const existing = loadedWorkspaces.get(workspaceId);
   if (existing) return existing;
-  const request = invoke<Project>('chat_workspace_open', { workspaceId }).then(async (project) => {
+  const request = invoke<Project>('chat_workspace_open', { workspaceId, ...(name === undefined ? {} : { name }) }).then(async (project) => {
     await loadProjectOrchestratorTasks(project);
     return project;
   }).catch((error) => { loadedWorkspaces.delete(workspaceId); throw error; });

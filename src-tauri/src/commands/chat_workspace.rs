@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use crate::workspace::project::Project;
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{Manager, State};
 
 fn chat_root(config_dir: &Path, workspace_id: &str) -> Result<PathBuf, String> {
     if workspace_id.is_empty() || workspace_id.len() > 128
@@ -11,6 +11,14 @@ fn chat_root(config_dir: &Path, workspace_id: &str) -> Result<PathBuf, String> {
     let base = config_dir.join("chat-files");
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let base = std::fs::canonicalize(base).map_err(|e| e.to_string())?;
+    // A chat given a named folder remembers where it is. Identifiers cannot
+    // hold a dot, so this file never collides with a chat's own folder.
+    if let Ok(saved) = std::fs::read_to_string(base.join(format!("{workspace_id}.folder"))) {
+        let root = PathBuf::from(saved.trim());
+        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        let root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+        return Ok(crate::commands::clean_path_buf(root));
+    }
     let root = base.join(workspace_id);
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
@@ -18,9 +26,69 @@ fn chat_root(config_dir: &Path, workspace_id: &str) -> Result<PathBuf, String> {
     Ok(crate::commands::clean_path_buf(root))
 }
 
+/// A folder name from free text, safe on every platform.
+fn folder_name(text: &str) -> String {
+    let kept: String = text
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { ' ' })
+        .collect();
+    let mut name = String::new();
+    for word in kept.split_whitespace() {
+        if !name.is_empty() && name.chars().count() + word.chars().count() >= 48 {
+            break;
+        }
+        if !name.is_empty() {
+            name.push(' ');
+        }
+        name.extend(word.chars().take(48));
+    }
+    let upper = name.to_ascii_uppercase();
+    // Windows refuses these as folder names, with or without an extension.
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")));
+    if name.is_empty() || reserved {
+        "Chat".into()
+    } else {
+        name
+    }
+}
+
+/// Where a new chat's files go: a folder under `shelf` named after `name`,
+/// numbered when that name is taken. A chat that already has a folder, named
+/// or hidden, keeps it, so an agent can still resume there.
+fn named_chat_root(config_dir: &Path, shelf: &Path, workspace_id: &str, name: &str) -> Result<PathBuf, String> {
+    let pointer = config_dir.join("chat-files").join(format!("{workspace_id}.folder"));
+    // `chat_root` validates the identifier before it is used as a path below.
+    let known = pointer.exists() || config_dir.join("chat-files").join(workspace_id).exists();
+    let valid = !workspace_id.is_empty() && workspace_id.len() <= 128
+        && workspace_id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_');
+    if known || !valid {
+        return chat_root(config_dir, workspace_id);
+    }
+    std::fs::create_dir_all(shelf).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(config_dir.join("chat-files")).map_err(|e| e.to_string())?;
+    let base = folder_name(name);
+    for n in 1..1000 {
+        let folder = shelf.join(if n == 1 { base.clone() } else { format!("{base} ({n})") });
+        match std::fs::create_dir(&folder) {
+            Ok(()) => {
+                std::fs::write(&pointer, folder.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
+                return chat_root(config_dir, workspace_id);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("Too many chat folders share this name".into())
+}
+
 #[tauri::command(async)]
-pub fn chat_workspace_open(workspace_id: String, state: State<AppState>) -> Result<Project, String> {
-    let root = chat_root(&state.config_dir, &workspace_id)?;
+pub fn chat_workspace_open(workspace_id: String, name: Option<String>, app: tauri::AppHandle, state: State<AppState>) -> Result<Project, String> {
+    let shelf = app.path().document_dir().ok().map(|dir| dir.join("Spacron Chats"));
+    let root = match (name, shelf) {
+        (Some(name), Some(shelf)) => named_chat_root(&state.config_dir, &shelf, &workspace_id, &name)?,
+        _ => chat_root(&state.config_dir, &workspace_id)?,
+    };
     Ok(state.workspace_manager.register_chat_workspace(&workspace_id, root))
 }
 
@@ -89,6 +157,25 @@ mod tests {
         assert_eq!(root, chat_root(&config, "chat-thread-123").unwrap());
         for id in ["../outside", "", "a/b", "C:\\outside"] { assert!(chat_root(&config, id).is_err()); }
         std::fs::remove_dir_all(config).unwrap();
+    }
+    #[test]
+    fn a_new_chat_gets_a_named_folder_and_keeps_it() {
+        let base = temporary();
+        let config = base.join("config");
+        let shelf = base.join("Spacron Chats");
+        let first = named_chat_root(&config, &shelf, "ss_1", "Plan a herb garden: balcony?").unwrap();
+        assert!(first.ends_with("Plan a herb garden balcony"));
+        // Later calls, with or without a name, find the same folder.
+        assert_eq!(first, named_chat_root(&config, &shelf, "ss_1", "something else").unwrap());
+        assert_eq!(first, chat_root(&config, "ss_1").unwrap());
+        assert!(named_chat_root(&config, &shelf, "ss_2", "Plan a herb garden balcony").unwrap().ends_with("Plan a herb garden balcony (2)"));
+        // A chat that already had a hidden folder is left there.
+        let old = chat_root(&config, "ss_old").unwrap();
+        assert_eq!(old, named_chat_root(&config, &shelf, "ss_old", "Renamed").unwrap());
+        assert!(named_chat_root(&config, &shelf, "../outside", "x").is_err());
+        assert_eq!(folder_name("../.."), "Chat");
+        assert_eq!(folder_name("con"), "Chat");
+        std::fs::remove_dir_all(base).unwrap();
     }
     #[test]
     fn registering_chat_files_keeps_the_active_project_and_recents() {

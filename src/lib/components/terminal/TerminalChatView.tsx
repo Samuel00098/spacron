@@ -135,12 +135,14 @@ import {
 import { modelTogglesFor, type ModelToggleId, type ModelToggleSpec } from '$lib/services/model-toggles';
 import { useStructuredChatHistory, type StructuredChatAgent } from '$lib/services/structured-chat/panes';
 import { AskCard } from './AskCard';
+import PermissionCard, { approvalChoices } from './PermissionCard';
 import { answerLabels, type AskAnswer } from '$lib/services/structured-chat/ask';
-import { answerStructuredApproval, hydrateStructuredHistory, reconnectStructuredSession } from '$lib/services/structured-chat/session-store';
+import { answerStructuredApproval, hydrateStructuredHistory, reconnectStructuredSession, recordForPane } from '$lib/services/structured-chat/session-store';
 import { runStructuredCommand, STRUCTURED_COMMANDS } from '$lib/services/structured-chat/commands';
 import { modelCatalogNote, modelCatalogStatus, selectedModelIssue } from '$lib/services/structured-chat/model-catalog';
 import { requestHandoffPicker } from '$lib/services/structured-chat/handoff-coordinator';
 import type { StructuredAccess } from '$lib/services/structured-chat/provider';
+import StructuredAgentModelPicker from './StructuredAgentModelPicker';
 import {
   CommandOutput,
   CommandRow,
@@ -305,6 +307,19 @@ export default function TerminalChatView({
   worktree = null,
   structuredAgent = null,
   onOpenTerminal,
+  cwd = null,
+  standalone = false,
+  lazyStart = false,
+  pendingModel = null,
+  pendingEffort = null,
+  pendingAccess = null,
+  onPickAccess,
+  onRevealFolder,
+  onSwitchAgent,
+  onLazySend,
+  onEnsureStarted,
+  onCreateProjectFromChat,
+  onCloseStandalone,
 }: {
   sessionId: number;
   agentPreset: string;
@@ -313,6 +328,24 @@ export default function TerminalChatView({
   /** When set, the same chat UI is backed by the structured provider, not the PTY. */
   structuredAgent?: StructuredChatAgent | null;
   onOpenTerminal?: () => void;
+  /** Explicit working directory for `@` mentions & skills when there is no PTY (standalone/side chats). */
+  cwd?: string | null;
+  /** True when rendering an outside-of-project standalone structured chat. */
+  standalone?: boolean;
+  /** True when the chosen standalone agent hasn't been booted yet (starts on first send). */
+  lazyStart?: boolean;
+  pendingModel?: string | null;
+  pendingEffort?: string | null;
+  /** The access an unstarted standalone chat will start with, and how to change it. */
+  pendingAccess?: StructuredAccess | null;
+  onPickAccess?: (access: StructuredAccess) => void;
+  /** Show a standalone chat's folder in the file manager. */
+  onRevealFolder?: () => void;
+  onSwitchAgent?: (agent: StructuredChatAgent, model: string | null, effort: string | null) => Promise<void>;
+  onLazySend?: (text: string, images: string[]) => Promise<void>;
+  onEnsureStarted?: () => Promise<number | null>;
+  onCreateProjectFromChat?: () => void;
+  onCloseStandalone?: () => void;
 }) {
   const structuredMode = Boolean(structuredAgent);
   const structuredState = useStructuredRuntime(structuredAgent, sessionId);
@@ -348,7 +381,7 @@ export default function TerminalChatView({
   const agent = transcriptAgentFor(agentPreset) ?? (structuredAgent as NonNullable<ReturnType<typeof transcriptAgentFor>> | null);
   const agentLabel = getAgentDisplayName(agentPreset) ?? agentPreset;
   const isRunning = structuredMode
-    ? structuredState?.status === 'ready' || structuredState?.status === 'working'
+    ? lazyStart || structuredState?.status === 'ready' || structuredState?.status === 'working'
     : terminalRunning;
   const textareaRefEarly = useRef<HTMLTextAreaElement | null>(null);
   const [items, setItems] = useState<TerminalChatItem[]>([]);
@@ -427,7 +460,7 @@ export default function TerminalChatView({
   const dictationOn = useStore(transcriptionActive);
   // Dictation is app-wide; only show it as recording here when it aims at this composer.
   const dictating = dictationOn && document.activeElement === textareaRefEarly.current;
-  const root = getSessionRoot(sessionId);
+  const root = cwd ?? getSessionRoot(sessionId) ?? recordForPane(sessionId)?.cwd ?? null;
   // What the transcript says the session runs on, and what was picked here
   // since (shown until a later turn records it).
   const [reported, setReported] = useState<{
@@ -497,7 +530,7 @@ export default function TerminalChatView({
     if (!structuredMode) return;
     const items = [...structuredHistory, ...(structuredState?.items ?? [])];
     setItems(items);
-    setLoaded(structuredState?.status !== 'starting');
+    setLoaded(lazyStart || structuredState?.status !== 'starting');
     setTranscriptBusy(structuredState?.status === 'working');
     setError(structuredState?.error ?? null);
     if (structuredState?.threadId) {
@@ -817,8 +850,10 @@ export default function TerminalChatView({
     approval: { requestId: string | number },
     decision: 'accept' | 'acceptForSession' | 'decline',
     optionId?: string,
+    optionLabel?: string,
   ) {
-    void answerStructuredApproval(sessionId, approval.requestId, decision, optionId);
+    // The label is what the answered receipt reads, not the agent's option id.
+    void answerStructuredApproval(sessionId, approval.requestId, decision, optionId, optionId ? optionLabel : undefined);
   }
 
   const asking = structuredMode ? structuredState?.approvals.find((approval) => approval.questions?.length) : undefined;
@@ -839,14 +874,13 @@ export default function TerminalChatView({
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
-      const card = structuredState?.approvals.find((approval) => approval.options?.length);
-      if (!card?.options) return;
-      const index = Number(event.key) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= card.options.length) return;
+      const card = structuredState?.approvals.find((approval) => !approval.questions);
+      if (!card) return;
+      const choice = approvalChoices(card)[Number(event.key) - 1];
+      if (!choice) return;
       event.preventDefault();
       event.stopPropagation();
-      const option = card.options[index];
-      answerStructuredCard(card, /reject|cancel|deny|declin/i.test(`${option.kind ?? ''} ${option.id}`) ? 'decline' : 'accept', option.id);
+      answerStructuredCard(card, choice.decision, choice.optionId, choice.label);
     };
     el.addEventListener('keydown', onKey, true);
     return () => el.removeEventListener('keydown', onKey, true);
@@ -867,7 +901,11 @@ export default function TerminalChatView({
         const inflightKey = `spacron_structured_inflight_${sessionId}`;
         try { localStorage.setItem(inflightKey, JSON.stringify({ text, at: Date.now() })); } catch { /* nothing to remember */ }
         try {
-          await sendStructuredChat(structuredAgent, sessionId, text, images.map((image) => image.path));
+          if (lazyStart && onLazySend) {
+            await onLazySend(text, images.map((image) => image.path));
+          } else {
+            await sendStructuredChat(structuredAgent, sessionId, text, images.map((image) => image.path));
+          }
         } finally {
           try { localStorage.removeItem(inflightKey); } catch { /* nothing saved */ }
         }
@@ -916,9 +954,20 @@ export default function TerminalChatView({
         const result = await runStructuredCommand(structuredAgent, sessionId, text, {
           lastUserMessage,
           agentCommands: (root && agent ? get(agentCommands)[agentCommandsKey(agent, root)] ?? [] : []).map((c) => c.name),
+          lazyStart,
+          pendingModel,
+          pendingEffort,
+          pendingAccess,
+          onPickAccess,
+          ensureStarted: onEnsureStarted,
+          onSwitchAgent,
         });
         if (!result.handled) {
-          await sendStructuredChat(structuredAgent, sessionId, text);
+          if (lazyStart && onLazySend) {
+            await onLazySend(text, []);
+          } else {
+            await sendStructuredChat(structuredAgent, sessionId, text);
+          }
           return;
         }
         if (result.action === 'continue-in-terminal') onOpenTerminal?.();
@@ -1177,9 +1226,9 @@ export default function TerminalChatView({
     // name, and rows that only open a TUI screen have no place without one.
     // The agent's own commands come first; Spacron's chat controls (which a
     // chat without a terminal still needs) follow, without repeating a name.
-    const usable = cliRows.filter((c) => !c.opensInTerminal);
+    const usable = cliRows.filter((c) => !c.opensInTerminal && (!standalone || c.name !== '/terminal'));
     const commandRows: SlashCommand[] = structuredMode
-      ? [...usable, ...STRUCTURED_COMMANDS.filter((s) => !usable.some((c) => c.name === s.name))]
+      ? [...usable, ...STRUCTURED_COMMANDS.filter((s) => s.name !== (standalone ? '/terminal' : '/agent') && !usable.some((c) => c.name === s.name))]
       : cliRows;
     const builtins = rankByName(commandRows, slash, (c) => c.name.slice(1))
       .map((command) => ({ kind: 'command' as const, command }));
@@ -1457,7 +1506,7 @@ export default function TerminalChatView({
   const effortApply: SessionOptionApply = structuredMode
     ? { kind: 'command', build: (value) => value }
     : agent ? effortApplyFor(agent) : { kind: 'none' };
-  const currentModelId = structuredMode ? liveModel : picks.model ?? liveModel;
+  const currentModelId = structuredMode ? (liveModel ?? pendingModel ?? null) : picks.model ?? liveModel;
   // Until the CLI answers with its own list (or if it can't), Claude Code still
   // takes its aliases, so a model can be picked before any conversation.
   // A structured chat shows only what its provider reported, never hard-coded aliases.
@@ -1472,7 +1521,7 @@ export default function TerminalChatView({
   const modelLabel = currentModel?.label ?? (currentModelId ? prettyModel(currentModelId) : 'Default model');
   const efforts = (currentModel?.reasoningEfforts ?? (agent === 'claude' && !structuredMode ? CLAUDE_EFFORTS : []))
     .filter((e) => e !== 'default');
-  const currentEffort = structuredMode ? liveEffort : picks.effort ?? liveEffort;
+  const currentEffort = structuredMode ? (liveEffort ?? pendingEffort ?? null) : picks.effort ?? liveEffort;
   const catalogStatus = structuredMode && structuredAgent ? modelCatalogStatus(structuredAgent, structuredState) : null;
   const catalogNote = catalogStatus
     ? modelCatalogNote(agentLabel, catalogStatus, selectedModelIssue(catalogStatus, currentModelId ?? null, currentEffort ?? null))
@@ -1497,7 +1546,10 @@ export default function TerminalChatView({
     efforts.length ? efforts : toggleModel && 'reasoningEfforts' in toggleModel ? toggleModel.reasoningEfforts ?? [] : [],
   )
     .map((spec) => ({ ...spec, on: toggleStates[spec.id] }));
-  const permissionMode: ChatPermissionMode = picks.permission ?? reported.permission ?? sessionPermissionMode(sessionId);
+  // Before the agent starts there is nothing to report: show what it will get.
+  const permissionMode: ChatPermissionMode = lazyStart && pendingAccess
+    ? pendingAccess
+    : picks.permission ?? reported.permission ?? sessionPermissionMode(sessionId);
   const permissionModes = agent ? permissionModesFor(agent, structuredMode) : [];
   const context = structuredMode
     ? structuredState?.contextUsed != null
@@ -1563,6 +1615,11 @@ export default function TerminalChatView({
 
   async function applyPermission(mode: ChatPermissionMode) {
     if (optionsLocked) return;
+    if (lazyStart && onPickAccess) {
+      clearSessionPicks(sessionId, ['permission']);
+      onPickAccess(mode === 'full-access' ? 'full-access' : mode === 'auto' ? 'auto' : 'ask');
+      return;
+    }
     const before = picks.permission;
     setSessionPicks(sessionId, { permission: mode });
     await runSetting(
@@ -1871,10 +1928,38 @@ export default function TerminalChatView({
       onMouseDown={(e) => { if (e.button === 1) e.stopPropagation(); }}
       onMouseUp={(e) => e.stopPropagation()}
     >
-      {/* The agent's mark lives only here, large and faint behind the thread. */}
-      <div className="terminal-chat-watermark" aria-hidden="true">
-        <AgentBrandMark command={agentPreset} name={agentLabel} className="terminal-chat-watermark-mark" />
-      </div>
+      {/* The agent's mark lives only here, large and faint behind the thread.
+          A standalone chat keeps a plain background. */}
+      {!standalone && (
+        <div className="terminal-chat-watermark" aria-hidden="true">
+          <AgentBrandMark command={agentPreset} name={agentLabel} className="terminal-chat-watermark-mark" />
+        </div>
+      )}
+      {standalone && ((userTurns.length > 0 && onCreateProjectFromChat) || onCloseStandalone) && (
+        <div className="standalone-structured-header">
+          {userTurns.length > 0 && onCreateProjectFromChat && (
+            <button
+              type="button"
+              className="standalone-structured-promote-btn"
+              disabled={busy || sending}
+              onClick={onCreateProjectFromChat}
+            >
+              Create project from chat
+            </button>
+          )}
+          {onCloseStandalone && (
+            <button
+              type="button"
+              className="standalone-structured-close-btn"
+              aria-label="Close chat"
+              title="Back to workspace"
+              onClick={onCloseStandalone}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      )}
       {findOpen && <FindBar root={threadEl} revision={items} onClose={() => { setFindOpen(false); textareaRef.current?.focus(); }} />}
       <TerminalChatContextMenu
         point={contextMenu}
@@ -1950,7 +2035,15 @@ export default function TerminalChatView({
                 </div>
               );
             } else if (block.type === 'notice') {
-              body = <div key={key} className="terminal-chat-notice">{block.item.text}</div>;
+              const isSwitchNotice = block.item.text.startsWith('Switched to ');
+              body = (
+                <div
+                  key={key}
+                  className={`terminal-chat-notice${isSwitchNotice ? ' terminal-chat-switch-divider' : ''}`}
+                >
+                  {block.item.text}
+                </div>
+              );
             } else if (block.type === 'assistant') {
               const segments = splitReply(block.item.text);
               body = (
@@ -1988,36 +2081,6 @@ export default function TerminalChatView({
             return <Fragment key={key}>{marker}{body}{changes}</Fragment>;
           })}
           {pending.map((p) => <UserTurn key={`pending-${p.id}`} text={p.text} images={p.images} onOpenImage={openViewer} pending />)}
-          {structuredState?.approvals.filter((approval) => !approval.questions).map((approval) => (
-            <div key={String(approval.requestId)} className="tcr-command-notice structured-chat-approval" role="group" aria-label={approval.title}>
-              <span>
-                <strong>{approval.title}</strong>
-                {approval.detail && <code className="structured-chat-approval-detail">{approval.detail}</code>}
-              </span>
-              {approval.options?.length ? (
-                <div className="structured-chat-approval-options" role="group" aria-label="Answers">
-                  {approval.options.map((option, optionIndex) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      className="tcr-link-btn structured-chat-approval-option"
-                      title={`Answer ${optionIndex + 1} (press ${optionIndex + 1})`}
-                      onClick={() => answerStructuredCard(approval, /reject|cancel|deny|declin/i.test(`${option.kind ?? ''} ${option.id}`) ? 'decline' : 'accept', option.id)}
-                    >
-                      <kbd>{optionIndex + 1}</kbd>
-                      <span>{option.label}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <>
-                  <button type="button" className="tcr-link-btn" onClick={() => answerStructuredCard(approval, 'accept')}>Allow</button>
-                  <button type="button" className="tcr-link-btn" onClick={() => answerStructuredCard(approval, 'acceptForSession')}>Allow for this chat</button>
-                  <button type="button" className="tcr-link-btn" onClick={() => answerStructuredCard(approval, 'decline')}>Decline</button>
-                </>
-              )}
-            </div>
-          ))}
           {structuredMode && <AnswerReceipts sessionId={sessionId} />}
           {liveScreen && (
             <LiveScreenCard
@@ -2041,7 +2104,7 @@ export default function TerminalChatView({
           {busy && !relaunching && !screenPrompt && (
             <div className="terminal-chat-working">
               <Dots />
-              <span>Working</span>
+              <span>{structuredState?.approvals.length ? 'Waiting for your answer' : 'Working'}</span>
             </div>
           )}
         </div>
@@ -2117,6 +2180,17 @@ export default function TerminalChatView({
           </div>
         )}
         {structuredMode && <GoalPanel sessionId={sessionId} onCommand={(command) => void runSlashCommand(command)} />}
+        {/* What the agent is stopped on sits right above the composer, where it
+            stays in view however far the thread is scrolled. */}
+        {structuredState?.approvals.filter((approval) => !approval.questions).map((approval) => (
+          <PermissionCard
+            key={String(approval.requestId)}
+            approval={approval}
+            agentLabel={agentLabel}
+            cwd={root}
+            onAnswer={(choice) => answerStructuredCard(approval, choice.decision, choice.optionId, choice.label)}
+          />
+        ))}
         {asking?.questions && (
           <AskCard
             key={String(asking.requestId)}
@@ -2240,33 +2314,69 @@ export default function TerminalChatView({
             <span className="terminal-chat-bar-spacer" />
             {structuredMode && <AgentModeChip mode={structuredState?.mode ?? null} />}
             {context && <ContextRing usage={context} />}
-            <ModelMenu
-              modelLabel={modelLabel}
-              effortLabel={currentEffort ? shortEffort(currentEffort) : null}
-              title={catalogNote ?? (modelApply.kind === 'none'
-                ? `${agentLabel} can't switch models mid-session`
-                : optionsLocked ? 'Change the model between turns'
-                  : modelApply.kind === 'picker' ? `Choose the model and reasoning in ${agentLabel}'s own picker`
-                    : modelApply.kind === 'relaunch' ? `${agentLabel} restarts on this conversation with the new model`
-                      : 'Model and reasoning')}
-              disabled={modelApply.kind === 'none' || optionsLocked}
-              applying={relaunching}
-              error={settingError}
-              onPicker={modelApply.kind === 'picker' ? () => void applyOption(modelApply, null, 'model') : undefined}
-              models={menuModels.filter((m) => m.supported !== false).map((m) => ({ value: m.id, label: m.label, hint: m.description }))}
-              model={currentModel?.id ?? null}
-              onModel={(value) => void applyOption(modelApply, value, 'model')}
-              // Codex's Ultra has its own button below, so it is left out of this row.
-              efforts={effortApply.kind !== 'none'
-                ? efforts
-                  .filter((e) => String(e) !== 'ultra' || !modelToggles.some((t) => t.id === 'ultra'))
-                  .map((e) => ({ value: e, label: shortEffort(e) }))
-                : []}
-              effort={currentEffort}
-              onEffort={(value) => void applyOption(effortApply, value, 'effort')}
-              toggles={modelToggles}
-              onToggle={(id, on) => void applyToggle(id, on)}
-            />
+            {/* A project chat stays on its own agent; only a standalone chat picks one. */}
+            {standalone && structuredAgent ? (
+              <StructuredAgentModelPicker
+                activeAgent={structuredAgent}
+                activeModel={currentModel?.id ?? currentModelId ?? null}
+                activeLabel={currentModel?.label ?? null}
+                activeEffort={currentEffort ?? null}
+                liveState={structuredState}
+                toggles={modelToggles}
+                disabled={optionsLocked}
+                applying={relaunching}
+                error={settingError}
+                onSelect={(nextAgent, nextModel, nextEffort) => {
+                  if (optionsLocked) return;
+                  if (!lazyStart && nextAgent === structuredAgent && !onSwitchAgent) {
+                    if (nextModel && nextModel !== currentModelId) void applyOption(modelApply, nextModel, 'model');
+                    if (nextEffort && nextEffort !== currentEffort) void applyOption(effortApply, nextEffort, 'effort');
+                    return;
+                  }
+                  if (!lazyStart && nextAgent === structuredAgent) {
+                    void runSetting(async () => {
+                      if (nextModel && nextModel !== currentModelId) setStructuredChatModel(structuredAgent, sessionId, nextModel);
+                      if (nextEffort && nextEffort !== currentEffort) setStructuredChatEffort(structuredAgent, sessionId, nextEffort);
+                      return null;
+                    }, () => {});
+                    return;
+                  }
+                  void runSetting(async () => {
+                    await onSwitchAgent?.(nextAgent, nextModel, nextEffort);
+                    return null;
+                  }, () => {});
+                }}
+                onToggle={(id, on) => void applyToggle(id, on)}
+              />
+            ) : (
+              <ModelMenu
+                modelLabel={modelLabel}
+                effortLabel={currentEffort ? shortEffort(currentEffort) : null}
+                title={catalogNote ?? (modelApply.kind === 'none'
+                  ? `${agentLabel} can't switch models mid-session`
+                  : optionsLocked ? 'Change the model between turns'
+                    : modelApply.kind === 'picker' ? `Choose the model and reasoning in ${agentLabel}'s own picker`
+                      : modelApply.kind === 'relaunch' ? `${agentLabel} restarts on this conversation with the new model`
+                        : 'Model and reasoning')}
+                disabled={modelApply.kind === 'none' || optionsLocked}
+                applying={relaunching}
+                error={settingError}
+                onPicker={modelApply.kind === 'picker' ? () => void applyOption(modelApply, null, 'model') : undefined}
+                models={menuModels.filter((m) => m.supported !== false).map((m) => ({ value: m.id, label: m.label, hint: m.description }))}
+                model={currentModel?.id ?? null}
+                onModel={(value) => void applyOption(modelApply, value, 'model')}
+                // Codex's Ultra has its own button below, so it is left out of this row.
+                efforts={effortApply.kind !== 'none'
+                  ? efforts
+                    .filter((e) => String(e) !== 'ultra' || !modelToggles.some((t) => t.id === 'ultra'))
+                    .map((e) => ({ value: e, label: shortEffort(e) }))
+                  : []}
+                effort={currentEffort}
+                onEffort={(value) => void applyOption(effortApply, value, 'effort')}
+                toggles={modelToggles}
+                onToggle={(id, on) => void applyToggle(id, on)}
+              />
+            )}
             <button
               type="button"
               className={`terminal-chat-icon-btn${dictating ? ' recording' : ''}`}
@@ -2308,7 +2418,16 @@ export default function TerminalChatView({
           <ImageViewer images={viewer.images} startIndex={viewer.index} projectRoot={root} onClose={() => setViewer(null)} />
         )}
         <div className="terminal-chat-context-line">
-          {folderName && (
+          {/* Outside a project there is no checkout: just the folder, to open.
+              An unstarted chat has none yet. */}
+          {standalone && folderName && root !== '.' && (
+            <button type="button" className="terminal-chat-folder-btn" title={`Open ${root}`} onClick={onRevealFolder}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+              {/* Chats made before folders were named have only an id. */}
+              {/^ss[_-]/.test(folderName) ? 'Chat files' : folderName}
+            </button>
+          )}
+          {!standalone && folderName && (
             <span title={root ?? undefined}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
               {folderName}

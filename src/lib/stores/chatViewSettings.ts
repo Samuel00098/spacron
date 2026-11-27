@@ -146,9 +146,10 @@ export const chatSuggestedPrompts = persisted('spacron_chat_suggested_prompts', 
 export const chatCiLines = persisted('spacron_chat_ci_lines', true, bool(true));
 
 /**
- * Let a model rewrite the first-message name into a short title. Off by
- * default: it makes one small request to the configured AI provider per new
- * chat, which spends that provider's credits, so it is only ever opt-in.
+ * Let a model rewrite the first-message name into a short title. It makes one
+ * small request to the configured AI provider per new chat, which spends that
+ * provider's credits, so it is only ever opt-in. It applies to project chats;
+ * standalone chats are titled by their own agent.
  */
 export const chatModelNames = persisted('spacron_chat_model_names', false, bool(false));
 

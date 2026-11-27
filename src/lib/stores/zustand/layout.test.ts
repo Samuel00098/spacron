@@ -5,6 +5,7 @@ import {
   useLayoutStore,
   fitDrawerWidths,
   STAGE_MIN_WIDTH,
+  LEFT_PANEL_DEFAULT_WIDTH,
   LEFT_PANEL_MIN_WIDTH,
   RIGHT_DRAWER_MIN_WIDTH,
 } from './layout';
@@ -147,16 +148,16 @@ describe('docked preview', () => {
 });
 
 describe('left sidebar width', () => {
-  it('opens at its narrowest however wide it was left', () => {
+  it('opens at its default width however wide it was left', () => {
     useLayoutStore.setState({ sidebarVisible: true });
     useLayoutStore.getState().setLeftPanelWidth(480);
     expect(useLayoutStore.getState().leftPanelWidth).toBe(480);
     useLayoutStore.getState().setSidebarVisible(false);
     useLayoutStore.getState().setSidebarVisible(true);
-    expect(useLayoutStore.getState().leftPanelWidth).toBe(LEFT_PANEL_MIN_WIDTH);
+    expect(useLayoutStore.getState().leftPanelWidth).toBe(LEFT_PANEL_DEFAULT_WIDTH);
   });
 
-  it('cannot be made narrower than that', () => {
+  it('cannot be made narrower than its minimum', () => {
     useLayoutStore.getState().setLeftPanelWidth(100);
     expect(useLayoutStore.getState().leftPanelWidth).toBe(LEFT_PANEL_MIN_WIDTH);
   });

@@ -188,6 +188,7 @@ describe('structured chat notifications', () => {
         7000,
         false,
         expect.objectContaining({ label: 'Review' }),
+        { hint: 'Open the chat to allow or decline it.' },
       );
     });
 

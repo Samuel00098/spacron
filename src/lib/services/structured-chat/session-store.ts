@@ -99,6 +99,12 @@ export interface StructuredSessionRecord {
   seedContext?: boolean;
   /** Shown in the right sidebar; never restored or reclaimed as a pane of its own. */
   side?: boolean;
+  /** Outside-of-project standalone chat backed by a scratch workspace instead of a project room. */
+  standalone?: boolean;
+  /** Scratch workspace id opened via `chat_workspace_open` for standalone chats. */
+  standaloneWorkspaceId?: string | null;
+  /** Pinned at the top of the Chats sidebar. */
+  pinned?: boolean;
   restoredMode?: 'native' | 'journal-only' | 'fresh' | null;
   /**
    * Child agents this chat spawned, with their status, reports and timeline.
@@ -193,7 +199,10 @@ export function flushSessionStore(): void {
   const store = storage();
   if (!store) return;
   const all = get(structuredSessions);
-  const kept = Object.values(all).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_RECORDS);
+  // Pinned chats first: pinning is a request to keep one, however old it gets.
+  const kept = Object.values(all)
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt)
+    .slice(0, MAX_RECORDS);
   const keptIds = new Set(kept.map((record) => record.id));
   try {
     store.setItem(RECORDS_KEY, JSON.stringify(Object.fromEntries(kept.map((record) => [record.id, record]))));
@@ -288,7 +297,23 @@ const attachments = new Map<number, Attachment>();
 const pendingLinks = new Map<number, string>();
 /** A pane that went back to its terminal keeps its record for a later Continue in chat. */
 const formerRecords = new Map<number, string>();
+/** Guard against detach closing the record while swapping providers on a pane. */
+const switchingPanes = new Set<number>();
+let nextVirtualPaneId = -1000;
 let shuttingDown = false;
+
+/** Allocate a negative virtual pane id for terminal-less standalone & side chats. */
+export function allocateVirtualStructuredPaneId(): number {
+  return --nextVirtualPaneId;
+}
+
+export function isVirtualStructuredPane(paneId: number): boolean {
+  return paneId < 0;
+}
+
+function commandForAgent(agent: StructuredChatAgent): string {
+  return agent === 'antigravity' ? 'agy' : agent === 'cursor' ? 'cursor-agent' : agent;
+}
 
 function lifecycleOf(state: StructuredChatState | null): StructuredLifecycle {
   if (!state) return 'starting';
@@ -336,14 +361,14 @@ function recordState(paneId: number): void {
     if (named) {
       patch.title = named;
       patch.titleAuto = false;
-      if (get(chatModelNames) && first) void upgradeTitleWithModel(paneId, record.id, named, first.text);
+      if ((record.standalone || get(chatModelNames)) && first) void upgradeTitleWithModel(paneId, record.id, named, first.text);
     }
   }
   const changed = added.length > 0 || (Object.keys(patch) as (keyof StructuredSessionRecord)[]).some((key) => patch[key] !== record[key]);
   if (!changed) return;
   if (added.length) dirtyJournals.add(record.id);
   patchRecord(record.id, patch);
-  if (patch.title) updateSessionTitle(paneId, patch.title);
+  if (patch.title && !isVirtualStructuredPane(paneId)) updateSessionTitle(paneId, patch.title);
   for (const listener of eventListeners) {
     for (const event of added) listener(paneId, event);
   }
@@ -353,17 +378,42 @@ function recordState(paneId: number): void {
 const modelNamed = new Set<string>();
 
 /**
- * Opt-in (`chatModelNames`): replace the first-message name with a short model
- * title. The first-message name is already in place, so a failed or slow request
- * costs nothing, and a rename made meanwhile is respected (the title must still
- * be the one we set).
+ * Ask the chat's own agent CLI for a title, in a separate headless run so nothing
+ * is added to the conversation. The reply must carry `TITLE:`; that keeps a
+ * usage-limit or sign-in message printed on stdout from becoming the name.
+ */
+async function generateAgentTitle(record: StructuredSessionRecord, firstMessage: string): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const { cleanGeneratedTitle } = await import('$lib/stores/chatThreads');
+  const reply = await invoke<string>('agent_cli_generate_commit_message', {
+    projectId: null,
+    worktreePath: record.cwd !== '.' ? record.cwd : null,
+    agent: record.preset ?? commandForAgent(record.provider),
+    model: null,
+    prompt: 'Write a title of 3 to 7 words for a chat that starts with the message below. '
+      + 'Do not answer or act on the message, and do not use any tools. '
+      + `Reply with exactly one line in the form TITLE: <title>\n\nMessage:\n${firstMessage.trim().slice(0, 1000)}`,
+  });
+  const line = /^\W*TITLE:\s*(.+)$/im.exec(reply ?? '')?.[1] ?? '';
+  return cleanGeneratedTitle(line);
+}
+
+/**
+ * Replace the first-message name with a short written title: from the chat's own
+ * agent for a standalone chat, from the AI provider for a project chat that opted
+ * in (`chatModelNames`). The first-message name is already in place, so a failed
+ * or slow request costs nothing, and a rename made meanwhile is respected (the
+ * title must still be the one we set).
  */
 async function upgradeTitleWithModel(paneId: number, recordId: string, placeholder: string, firstMessage: string): Promise<void> {
   if (modelNamed.has(recordId)) return;
   modelNamed.add(recordId);
   try {
-    const { generateAiThreadTitle } = await import('$lib/stores/chatThreads');
-    const title = (await generateAiThreadTitle(firstMessage)).trim();
+    const record = get(structuredSessions)[recordId];
+    if (!record) return;
+    const title = (record.standalone
+      ? await generateAgentTitle(record, firstMessage)
+      : await (await import('$lib/stores/chatThreads')).generateAiThreadTitle(firstMessage)).trim();
     const current = recordForPane(paneId);
     if (!title || !current || current.id !== recordId || current.title !== placeholder) return;
     renameStructuredSession(paneId, title);
@@ -434,6 +484,7 @@ function attach(paneId: number, agent: StructuredChatAgent): void {
 }
 
 function detach(paneId: number): void {
+  if (switchingPanes.has(paneId)) return;
   const attachment = attachments.get(paneId);
   if (!attachment) return;
   if (attachment.timer) clearTimeout(attachment.timer);
@@ -549,10 +600,15 @@ export function linkHandoffLineage(sourcePaneId: number, sourceLabel: string, ta
 // Restore and reconnect
 // ---------------------------------------------------------------------------
 
+/** The access a chat runs with. A standalone chat asks until you say otherwise. */
+function accessFor(record: StructuredSessionRecord): StructuredAccess {
+  return record.access ?? (record.standalone ? 'ask' : structuredAccessFor(record.preset ?? record.provider));
+}
+
 async function openRecordInPane(paneId: number, record: StructuredSessionRecord): Promise<void> {
   const provider = structuredChatProvider(record.provider);
   if (!provider) throw new Error(`No structured chat provider for ${record.provider}`);
-  const access = record.access ?? structuredAccessFor(record.preset ?? record.provider);
+  const access = accessFor(record);
   const history = journalFor(record).snapshot().items;
   setStructuredChatHistory(paneId, history);
   const options = { access, accountId: record.accountId ?? 'default' };
@@ -622,6 +678,7 @@ export function restoreAgentFolder(path: string): string {
 export function openChatRecords(projectId: string): StructuredSessionRecord[] {
   return Object.values(get(structuredSessions)).filter((record) =>
     record.projectId === projectId &&
+    !record.standalone &&
     record.origin === 'chat' &&
     !record.side &&
     !record.archived &&
@@ -877,17 +934,105 @@ export async function clearStructuredConversation(paneId: number): Promise<boole
   clearPaneContext(paneId);
   patchRecord(record.id, { nativeSessionId: null, forkSourceId: null, seedContext: false, lifecycle: 'starting', turnId: null });
   setStructuredChatHistory(paneId, []);
-  await provider.start(paneId, record.cwd, { access: record.access ?? structuredAccessFor(record.preset ?? record.provider) });
+  await provider.start(paneId, record.cwd, { access: accessFor(record) });
   return provider.get(paneId)?.status !== 'failed';
 }
 
 /** Earlier conversations, newest first. */
-export function listStructuredSessions(filter: { projectId?: string | null; provider?: string; includeArchived?: boolean } = {}): StructuredSessionRecord[] {
+export function listStructuredSessions(filter: { projectId?: string | null; provider?: string; includeArchived?: boolean; standalone?: boolean } = {}): StructuredSessionRecord[] {
   return Object.values(get(structuredSessions))
     .filter((record) => (filter.includeArchived || !record.archived)
       && (filter.projectId == null || record.projectId === filter.projectId)
-      && (!filter.provider || record.provider === filter.provider))
+      && (!filter.provider || record.provider === filter.provider)
+      && (filter.standalone === undefined || Boolean(record.standalone) === filter.standalone))
     .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
+ * Switch the active structured-chat agent in-place on an open pane between turns.
+ * Flushes the outgoing provider into the journal, adds an inline switch divider,
+ * closes the outgoing process, and launches the target provider with `seedContext`
+ * populated from the normalized journal so the conversation continues smoothly.
+ */
+export async function switchStructuredAgent(
+  paneId: number,
+  targetAgent: StructuredChatAgent,
+  options: { model?: string | null; effort?: string | null } = {},
+): Promise<boolean> {
+  const record = recordForPane(paneId);
+  const targetProvider = structuredChatProvider(targetAgent);
+  if (!record || !targetProvider) return false;
+  const prevProvider = structuredChatProvider(record.provider);
+  if (prevProvider?.get(paneId)?.status === 'working') return false;
+
+  if (record.provider === targetAgent) {
+    if (options.model) targetProvider.setModel(paneId, options.model);
+    if (options.effort) targetProvider.setEffort(paneId, options.effort);
+    patchRecord(record.id, {
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    });
+    return true;
+  }
+
+  recordState(paneId);
+  const attachment = attachments.get(paneId);
+  if (attachment) {
+    if (attachment.timer) clearTimeout(attachment.timer);
+    attachment.unsubscribe();
+    attachments.delete(paneId);
+  }
+  await prevProvider?.close(paneId).catch(() => {});
+
+  const parts = [targetProvider.label];
+  if (options.model && options.model !== 'default') parts.push(options.model);
+  if (options.effort && options.effort !== 'default') parts.push(`(${options.effort})`);
+  const switchLabel = `Switched to ${parts.join(' · ')}`;
+  const journal = journalFor(record);
+  journal.record([{
+    type: 'notice',
+    payload: {
+      item: {
+        id: `switch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: 'notice',
+        text: switchLabel,
+      },
+    },
+  }]);
+  dirtyJournals.add(record.id);
+
+  const history = journal.snapshot().items;
+  const hasConversation = history.some((item) => item.kind === 'user');
+  const nextPreset = commandForAgent(targetAgent);
+
+  patchRecord(record.id, {
+    provider: targetAgent,
+    preset: nextPreset,
+    accountId: accountFor(nextPreset),
+    accountLabel: activeAccount(get(accountsState), targetAgent)?.label ?? null,
+    nativeSessionId: null,
+    forkSourceId: null,
+    model: options.model ?? null,
+    effort: options.effort ?? null,
+    seedContext: hasConversation,
+    lifecycle: 'starting',
+  });
+
+  switchingPanes.add(paneId);
+  pendingLinks.set(paneId, record.id);
+  try {
+    markStructuredChatPane(paneId, targetAgent, nextPreset, 'chat');
+  } finally {
+    switchingPanes.delete(paneId);
+  }
+
+  try {
+    await openRecordInPane(paneId, get(structuredSessions)[record.id] ?? record);
+    return targetProvider.get(paneId)?.status !== 'failed';
+  } catch {
+    patchRecord(record.id, { lifecycle: 'failed' });
+    return false;
+  }
 }
 
 /**
@@ -931,18 +1076,21 @@ export async function openStructuredRecordBeside(sourcePaneId: number, recordId:
   const source = recordForPane(sourcePaneId);
   const target = get(structuredSessions)[recordId];
   if (!source || !target || !structuredChatProvider(target.provider)) return null;
-  const paneId = await createTerminalSession(target.cwd, undefined, target.projectId ?? undefined, {
-    assignPane: false,
-    // No room, tab or sidebar row on the stage: the right sidebar shows it.
-    hidden: true,
-    agentPreset: target.preset ?? target.provider,
-  });
+  const useVirtual = Boolean(source.standalone || isVirtualStructuredPane(sourcePaneId) || !target.projectId);
+  const paneId = useVirtual
+    ? allocateVirtualStructuredPaneId()
+    : await createTerminalSession(target.cwd, undefined, target.projectId ?? undefined, {
+        assignPane: false,
+        // No room, tab or sidebar row on the stage: the right sidebar shows it.
+        hidden: true,
+        agentPreset: target.preset ?? target.provider,
+      });
   if (paneId === null) return null;
   // The source's child agents, goal and handoffs stay with the source.
-  patchRecord(target.id, { side: true, origin: 'chat', view: 'chat', lifecycle: 'starting', subagents: [], goal: null, handoffFrom: null, handoffTo: [] });
+  patchRecord(target.id, { side: true, standalone: Boolean(source.standalone), origin: 'chat', view: 'chat', lifecycle: 'starting', subagents: [], goal: null, handoffFrom: null, handoffTo: [] });
   pendingLinks.set(paneId, target.id);
   markStructuredChatPane(paneId, target.provider, target.preset ?? undefined, 'chat');
-  if (target.title) updateSessionTitle(paneId, target.title);
+  if (!isVirtualStructuredPane(paneId) && target.title) updateSessionTitle(paneId, target.title);
   try {
     await openRecordInPane(paneId, get(structuredSessions)[target.id] ?? target);
   } catch {
@@ -1066,7 +1214,7 @@ export async function rewindStructuredSession(
         await provider.close(paneId).catch(() => {});
         patchRecord(current.id, { nativeSessionId: null, lifecycle: 'starting', turnId: null });
         await provider.start(paneId, current.cwd, {
-          access: current.access ?? structuredAccessFor(current.preset ?? current.provider),
+          access: accessFor(current),
         }).catch(() => {});
       }
     }
@@ -1166,11 +1314,286 @@ export function __resetSessionStoreForTests(): void {
   paneRecords.clear();
   pendingLinks.clear();
   formerRecords.clear();
+  switchingPanes.clear();
   restoring.clear();
   journals.clear();
   dirtyJournals.clear();
+  nextVirtualPaneId = -1000;
   structuredSessions.set({});
   shuttingDown = false;
+}
+
+// ---------------------------------------------------------------------------
+// Standalone (outside-of-project) structured records & migration
+// ---------------------------------------------------------------------------
+
+export function createStandaloneStructuredRecord(opts: {
+  id?: string;
+  provider?: StructuredChatAgent;
+  model?: string | null;
+  effort?: string | null;
+  cwd?: string;
+  workspaceId?: string | null;
+  title?: string | null;
+  pinned?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+} = {}): StructuredSessionRecord {
+  startSessionStore();
+  const provider = opts.provider ?? 'claude';
+  const preset = commandForAgent(provider);
+  const now = opts.createdAt ?? Date.now();
+  const record: StructuredSessionRecord = {
+    id: opts.id ?? newRecordId(),
+    provider,
+    nativeSessionId: null,
+    preset,
+    accountId: accountFor(preset),
+    accountLabel: activeAccount(get(accountsState), provider)?.label ?? null,
+    cwd: opts.cwd ?? '.',
+    projectId: null,
+    standalone: true,
+    standaloneWorkspaceId: opts.workspaceId ?? null,
+    pinned: Boolean(opts.pinned),
+    origin: 'chat',
+    view: 'chat',
+    lifecycle: 'detached',
+    model: opts.model ?? null,
+    effort: opts.effort ?? null,
+    // Outside a project nothing is set up to be changed, so ask before acting.
+    access: 'ask',
+    turnId: null,
+    lastSeq: 0,
+    title: opts.title ?? null,
+    titleAuto: !opts.title,
+    handoffFrom: null,
+    handoffTo: [],
+    createdAt: now,
+    updatedAt: opts.updatedAt ?? now,
+  };
+  structuredSessions.update((all) => ({ ...all, [record.id]: record }));
+  scheduleSave();
+  return record;
+}
+
+export function listStandaloneStructuredRecords(state?: Record<string, StructuredSessionRecord>): StructuredSessionRecord[] {
+  const all = state ?? get(structuredSessions);
+  return Object.values(all)
+    .filter((record) => record.standalone === true && !record.side && !record.archived)
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
+}
+
+export function updateStandaloneStructuredRecord(
+  recordId: string,
+  patch: Partial<Pick<StructuredSessionRecord, 'title' | 'titleAuto' | 'pinned' | 'provider' | 'preset' | 'model' | 'effort' | 'access' | 'cwd' | 'standaloneWorkspaceId' | 'standalone' | 'projectId' | 'nativeSessionId' | 'forkSourceId' | 'seedContext' | 'lifecycle'>>,
+): boolean {
+  const existing = get(structuredSessions)[recordId];
+  if (!existing) return false;
+  patchRecord(recordId, patch);
+  return true;
+}
+
+/**
+ * Choose the agent and model of a standalone chat that has no running pane. A
+ * different agent cannot resume the old one's conversation or use its account, so
+ * it starts fresh and is handed the history instead.
+ */
+export function retargetStandaloneRecord(
+  recordId: string,
+  agent: StructuredChatAgent,
+  options: { model?: string | null; effort?: string | null } = {},
+): void {
+  const record = get(structuredSessions)[recordId];
+  if (!record) return;
+  const preset = commandForAgent(agent);
+  patchRecord(recordId, {
+    provider: agent,
+    preset,
+    model: options.model ?? null,
+    effort: options.effort ?? null,
+    ...(agent === record.provider ? {} : {
+      accountId: accountFor(preset),
+      accountLabel: activeAccount(get(accountsState), agent)?.label ?? null,
+      nativeSessionId: null,
+      forkSourceId: null,
+      seedContext: journalFor(record).snapshot().items.some((item) => item.kind === 'user'),
+    }),
+  });
+}
+
+export function findPaneForRecord(recordId: string): number | null {
+  for (const [paneId, id] of paneRecords.entries()) {
+    if (id === recordId) return paneId;
+  }
+  return null;
+}
+
+export function recordItemsSnapshot(recordId: string): import('$lib/services/terminal-chat').TerminalChatItem[] {
+  const record = get(structuredSessions)[recordId];
+  if (!record) return [];
+  return journalFor(record).snapshot().items;
+}
+
+export async function attachStandaloneRecordToPane(
+  paneId: number,
+  recordId: string,
+  opts: { startProvider?: boolean } = {},
+): Promise<boolean> {
+  startSessionStore();
+  const record = get(structuredSessions)[recordId];
+  const provider = record ? structuredChatProvider(record.provider) : null;
+  if (!record || !provider) return false;
+
+  const existingState = provider.get(paneId);
+  // An agent already bound to this pane holds its own turns. Reloading the
+  // journal (which has them too) beside it would show the thread twice.
+  const bound = paneRecords.get(paneId) === recordId && existingState !== null;
+  if (bound && (!opts.startProvider || existingState.status === 'ready' || existingState.status === 'working')) {
+    return true;
+  }
+
+  setStructuredChatHistory(paneId, journalFor(record).snapshot().items);
+
+  if (!opts.startProvider) return true;
+
+  pendingLinks.set(paneId, recordId);
+  markStructuredChatPane(paneId, record.provider, record.preset ?? commandForAgent(record.provider), 'chat');
+  try {
+    await openRecordInPane(paneId, get(structuredSessions)[recordId] ?? record);
+    return provider.get(paneId)?.status !== 'failed';
+  } catch {
+    patchRecord(recordId, { lifecycle: 'failed' });
+    return false;
+  }
+}
+
+export async function deleteStandaloneStructuredRecord(recordId: string): Promise<boolean> {
+  const existing = get(structuredSessions)[recordId];
+  if (!existing) return false;
+  const paneId = findPaneForRecord(recordId);
+  if (paneId !== null) {
+    const attachment = attachments.get(paneId);
+    if (attachment) {
+      if (attachment.timer) clearTimeout(attachment.timer);
+      attachment.unsubscribe();
+      attachments.delete(paneId);
+    }
+    paneRecords.delete(paneId);
+    const provider = structuredChatProvider(existing.provider);
+    await provider?.close(paneId).catch(() => {});
+    structuredChatHistory.update((all) => {
+      if (!(paneId in all)) return all;
+      const next = { ...all };
+      delete next[paneId];
+      return next;
+    });
+    structuredChatPanes.update((panes) => {
+      if (!(paneId in panes)) return panes;
+      const next = { ...panes };
+      delete next[paneId];
+      return next;
+    });
+  }
+  const store = storage();
+  try { store?.removeItem(JOURNAL_PREFIX + recordId); } catch { /* ignore */ }
+  idbJournals.delete(recordId);
+  journals.delete(recordId);
+  dirtyJournals.delete(recordId);
+  if (idbUsable) void idbDelete(JOURNAL_PREFIX + recordId).catch(() => {});
+  structuredSessions.update((all) => {
+    const next = { ...all };
+    delete next[recordId];
+    return next;
+  });
+  flushSessionStore();
+  return true;
+}
+
+const LEGACY_MIGRATION_FLAG = 'spacron_standalone_structured_migrated_v1';
+
+export interface LegacyStandaloneThreadInput {
+  id: string;
+  title: string;
+  provider?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  pinned?: boolean;
+  standaloneWorkspaceId?: string | null;
+  createdAt: number;
+  lastActivityAt: number;
+}
+
+export interface LegacyStandaloneMessageInput {
+  id: string;
+  role: string;
+  type?: string;
+  text: string;
+  ts: number;
+  pending?: boolean;
+}
+
+/**
+ * One-time, non-destructive migration from legacy standalone `chatThreads`
+ * records into `StructuredSessionRecord` + `StructuredEventJournal`.
+ */
+export function migrateLegacyStandaloneRecords(
+  threads: readonly LegacyStandaloneThreadInput[],
+  messagesByThread: Record<string, readonly LegacyStandaloneMessageInput[]>,
+  defaultProvider: StructuredChatAgent = 'claude',
+): number {
+  const store = storage();
+  if (store?.getItem(LEGACY_MIGRATION_FLAG) === '1') return 0;
+
+  const existingIds = new Set(Object.keys(get(structuredSessions)));
+  let migrated = 0;
+
+  for (const thread of threads) {
+    const messages = (messagesByThread[thread.id] ?? []).filter(
+      (m) => !m.pending && (m.role === 'user' || m.role === 'assistant') && m.text.trim(),
+    );
+    if (!messages.length) continue;
+    const recordId = `ss_legacy_${thread.id}`;
+    if (existingIds.has(recordId)) continue;
+
+    const provider = defaultProvider;
+    const record = createStandaloneStructuredRecord({
+      id: recordId,
+      provider,
+      model: null,
+      effort: null,
+      cwd: '.',
+      workspaceId: thread.standaloneWorkspaceId ?? thread.id,
+      title: thread.title === 'New thread' ? null : thread.title,
+      pinned: Boolean(thread.pinned),
+      createdAt: thread.createdAt,
+      updatedAt: thread.lastActivityAt,
+    });
+
+    const drafts = messages.map((msg) => ({
+      type: (msg.role === 'user' ? 'user.message' : 'assistant.text') as 'user.message' | 'assistant.text',
+      payload: {
+        item: {
+          id: msg.id,
+          kind: (msg.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+          text: msg.text,
+          time: new Date(msg.ts).toISOString(),
+        },
+      },
+    }));
+
+    journalFor(record).record(drafts);
+    dirtyJournals.add(record.id);
+    patchRecord(record.id, {
+      seedContext: messages.some((m) => m.role === 'user'),
+      lastSeq: journalFor(record).lastSeq,
+      titleAuto: thread.title === 'New thread',
+    });
+    migrated += 1;
+  }
+
+  try { store?.setItem(LEGACY_MIGRATION_FLAG, '1'); } catch { /* ignore */ }
+  if (migrated > 0) flushSessionStore();
+  return migrated;
 }
 
 /**
@@ -1180,7 +1603,7 @@ export function __resetSessionStoreForTests(): void {
 export function pruneStructuredSessions(cutoff: number): number {
   const live = new Set(paneRecords.values());
   const doomed = Object.values(get(structuredSessions)).filter((record) =>
-    record.updatedAt > 0 && record.updatedAt < cutoff && !live.has(record.id)
+    record.updatedAt > 0 && record.updatedAt < cutoff && !live.has(record.id) && !record.pinned
     && record.lifecycle !== 'working' && record.lifecycle !== 'starting');
   if (!doomed.length) return 0;
   const store = storage();

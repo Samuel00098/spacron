@@ -1,39 +1,104 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { showToast } from '$lib/stores/notification';
+import TerminalChatView from '$lib/components/terminal/TerminalChatView';
 import { useStore } from '$lib/react/useStore';
-import { chatThreadState, createChatThread, getStandaloneChats } from '$lib/stores/chatThreads';
-import { selectedStandaloneChatId, showStandaloneChat } from '$lib/stores/chatNavigation';
-import { openStandaloneWorkspace, prepareStandaloneChat } from '$lib/services/standalone-chat';
-import type { Project } from '$lib/types/workspace';
-import { ProjectChatModePanel } from './ChatModePanel';
+import { closeStandaloneChat, selectedStandaloneChatId, showStandaloneStructuredChat } from '$lib/stores/chatNavigation';
+import { commandForStructuredAgent } from '$lib/services/structured-chat/panes';
+import {
+  findPaneForRecord,
+  listStandaloneStructuredRecords,
+  structuredSessions,
+  updateStandaloneStructuredRecord,
+  useStructuredSessionRecord,
+} from '$lib/services/structured-chat/session-store';
+import {
+  beginProjectFromStructuredChat,
+  createDraftStandaloneStructuredChat,
+  ensureStandaloneRecordStarted,
+  hydrateStandaloneVirtualPane,
+  migrateLegacyStandaloneChats,
+  sendStandaloneStructuredMessage,
+  switchStandaloneStructuredAgent,
+  virtualPaneForStandaloneRecord,
+} from '$lib/services/structured-chat/standalone-structured';
 import './StandaloneChats.css';
 
-/** Only supplies conversation scope. The entire composer/transcript is shared. */
+/**
+ * Outside-of-project multi-agent structured chat. Uses the shared `TerminalChatView`
+ * and unified Agent -> Model -> Reasoning picker backed by an isolated scratch
+ * workspace (`chat_workspace_open`) with lazy process startup on first send.
+ */
 export default function StandaloneChatPanel() {
-  const state = useStore(chatThreadState);
+  const allSessions = useStore(structuredSessions);
   const selectedId = useStore(selectedStandaloneChatId);
-  const thread = getStandaloneChats(state).find((entry) => entry.id === selectedId) ?? null;
-  const draftWorkspaceId = useMemo(() => `chat-draft-${crypto.randomUUID()}`, [thread?.id]);
-  const workspaceId = thread?.standaloneWorkspaceId || thread?.id || draftWorkspaceId;
-  const [ready, setReady] = useState<{ key: string; project: Project } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [retry, setRetry] = useState(0);
+
   useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    const request = thread ? prepareStandaloneChat(thread.id) : openStandaloneWorkspace(workspaceId);
-    void request.then((project) => { if (!cancelled) setReady({ key: workspaceId, project }); })
-      .catch((err) => { if (!cancelled) setError(String(err)); });
-    return () => { cancelled = true; };
-  }, [workspaceId, retry]);
-  if (!ready || ready.key !== workspaceId || error) return <section className="chat-mode-panel empty" aria-label="Chat">
-    <div className="chat-mode-empty"><h2 className="chat-mode-empty-heading">What are we working on?</h2>
-      {error ? <><p role="alert">{error}</p><button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></> : <p>Opening chat…</p>}
-    </div>
-  </section>;
-  return <ProjectChatModePanel key={ready.project.id} chatProject={ready.project} standalone
-    onCreateStandaloneThread={(overrides) => {
-      const next = createChatThread(ready.project.id, { ...overrides, standalone: true, standaloneWorkspaceId: workspaceId });
-      showStandaloneChat(next.id);
-      return next;
-    }} />;
+    migrateLegacyStandaloneChats();
+  }, []);
+
+  const standaloneRecords = listStandaloneStructuredRecords(allSessions);
+  const record = (selectedId ? standaloneRecords.find((entry) => entry.id === selectedId) : null)
+    ?? standaloneRecords[0]
+    ?? null;
+
+  useEffect(() => {
+    if (record) {
+      if (selectedId !== record.id) selectedStandaloneChatId.set(record.id);
+      return;
+    }
+    const draft = createDraftStandaloneStructuredChat();
+    showStandaloneStructuredChat(draft.id);
+  }, [record?.id, selectedId]);
+
+  const activeId = record?.id ?? null;
+  const virtualPaneId = activeId ? virtualPaneForStandaloneRecord(activeId) : null;
+  const liveRecord = useStructuredSessionRecord(virtualPaneId ?? 0);
+  useEffect(() => {
+    // The folder is made on the first message, so an unused chat leaves none.
+    if (activeId) void hydrateStandaloneVirtualPane(activeId);
+  }, [activeId]);
+
+  if (!record || virtualPaneId === null) {
+    return (
+      <section className="chat-mode-panel empty" aria-label="Chat">
+        <div className="chat-mode-empty">
+          <h2 className="chat-mode-empty-heading">What are we working on?</h2>
+          <p>Opening chat…</p>
+        </div>
+      </section>
+    );
+  }
+
+  const boundPane = findPaneForRecord(record.id);
+  const isLive = boundPane !== null
+    && (liveRecord?.lifecycle === 'ready' || liveRecord?.lifecycle === 'working' || liveRecord?.lifecycle === 'starting');
+
+  return (
+    <section className="chat-mode-panel standalone-structured-panel" aria-label="Chat">
+      <TerminalChatView
+        key={record.id}
+        sessionId={virtualPaneId}
+        agentPreset={record.preset ?? commandForStructuredAgent(record.provider)}
+        cwd={record.cwd !== '.' ? record.cwd : null}
+        onRevealFolder={() => {
+          const workspaceId = record.standaloneWorkspaceId;
+          if (workspaceId) void invoke('chat_workspace_reveal', { workspaceId }).catch((error) => showToast(String(error), 'error'));
+        }}
+        isRunning={isLive}
+        structuredAgent={record.provider}
+        standalone
+        lazyStart={!isLive}
+        pendingModel={record.model}
+        pendingEffort={record.effort}
+        pendingAccess={record.access ?? 'ask'}
+        onPickAccess={(access) => updateStandaloneStructuredRecord(record.id, { access })}
+        onSwitchAgent={(agent, model, effort) => switchStandaloneStructuredAgent(record.id, agent, { model, effort })}
+        onLazySend={(text, images) => sendStandaloneStructuredMessage(record.id, text, images)}
+        onEnsureStarted={() => ensureStandaloneRecordStarted(record.id)}
+        onCreateProjectFromChat={() => beginProjectFromStructuredChat(record.id)}
+        onCloseStandalone={closeStandaloneChat}
+      />
+    </section>
+  );
 }

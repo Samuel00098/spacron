@@ -209,6 +209,26 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
   background: var(--tc-surface);
 }
 
+.terminal-chat-switch-divider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.terminal-chat-switch-divider::before,
+.terminal-chat-switch-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--tc-line);
+}
+
 .terminal-chat-loading {
   display: flex;
   justify-content: center;

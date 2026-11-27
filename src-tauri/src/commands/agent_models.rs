@@ -2,7 +2,8 @@
 //!
 //! The provider name is matched against a fixed allow-list and never becomes a
 //! shell command. On Windows `cmd.exe` is used only so npm `.cmd` shims resolve
-//! correctly; every program and argument below is compile-time controlled.
+//! correctly; every program and argument below is compile-time controlled. The
+//! one exception is Antigravity's prompt, which never goes through `cmd.exe`.
 
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -94,6 +95,48 @@ fn provider_command(program: &str, args: &[&str]) -> Command {
         command.env("PATH", path);
     }
     command
+}
+
+/// Windows caps a command line at 32,767 characters.
+const AGY_PROMPT_CHARS: usize = 24_000;
+
+/// `agy --print` takes the prompt as the flag's value; one sent on stdin is
+/// rejected as "empty prompt".
+fn agy_print_args(model: Option<&str>, prompt: &str) -> Vec<String> {
+    let mut args = vec!["--sandbox".to_string()];
+    if let Some(model) = model.filter(|m| !m.trim().is_empty() && *m != "default") {
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    let prompt: String = prompt.chars().take(AGY_PROMPT_CHARS).collect();
+    args.push(format!("--print={prompt}"));
+    args
+}
+
+/// Start a native binary with no shell in between, so an argument holding user
+/// text is never parsed by `cmd.exe`.
+fn native_command(program: &str, args: &[String]) -> Result<Command, String> {
+    let path =
+        super::agent_probe::which(program).ok_or_else(|| format!("Could not find {program}"))?;
+    #[cfg(windows)]
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    {
+        return Err(format!("{program} is not a native executable"));
+    }
+    let mut command = Command::new(path);
+    command.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Some(search_path) = super::agent_probe::search_path() {
+        command.env("PATH", search_path);
+    }
+    Ok(command)
 }
 
 fn terminate(child: &mut Child) {
@@ -690,14 +733,7 @@ pub async fn agent_cli_generate_commit_message(
                 }
                 (a, true)
             }
-            "agy" => {
-                let mut a = vec!["--print=".to_string(), "--sandbox".to_string()];
-                if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty() && s.as_str() != "default") {
-                    a.push("--model".to_string());
-                    a.push(m.to_string());
-                }
-                (a, true)
-            }
+            "agy" => (agy_print_args(model.as_deref(), &prompt), false),
             "opencode" => {
                 let mut a = vec!["run".to_string()];
                 if let Some(ref m) = model.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -731,8 +767,12 @@ pub async fn agent_cli_generate_commit_message(
             }
         };
 
-        let arg_slices: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let mut cmd = provider_command(program, &arg_slices);
+        let mut cmd = if program == "agy" {
+            native_command(program, &args)?
+        } else {
+            let arg_slices: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            provider_command(program, &arg_slices)
+        };
         if let Some(ref dir) = root_path {
             cmd.current_dir(dir);
         }
@@ -811,6 +851,12 @@ pub async fn agent_cli_generate_commit_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agy_gets_the_prompt_as_the_print_value() {
+        let args = agy_print_args(Some("default"), "say \"hi\" & exit\nplease");
+        assert_eq!(args, ["--sandbox", "--print=say \"hi\" & exit\nplease"]);
+    }
 
     #[test]
     fn unsupported_providers_fail_without_becoming_commands() {

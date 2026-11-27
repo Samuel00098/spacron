@@ -243,9 +243,15 @@ export function chatItemFor(item: Json): TerminalChatItem | null {
 
 // â”€â”€ Access â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/** The approval policy and sandbox each access level runs a turn under. */
-export function accessPolicy(access: StructuredAccess, cwd: string): { approvalPolicy: string; sandboxPolicy: Json } {
+/**
+ * The approval policy and sandbox each access level runs a turn under.
+ *
+ * Outside a project (`outsideProject`), `ask` is read-only: Codex otherwise
+ * writes inside its working folder without asking, and there it must ask.
+ */
+export function accessPolicy(access: StructuredAccess, cwd: string, outsideProject = false): { approvalPolicy: string; sandboxPolicy: Json } {
   if (access === 'full-access') return { approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } };
+  if (access === 'ask' && outsideProject) return { approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly' } };
   const workspace = { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
   // `auto`: works inside the workspace sandbox without stopping to ask.
   return { approvalPolicy: access === 'auto' ? 'never' : 'on-request', sandboxPolicy: workspace };
@@ -314,14 +320,15 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
     const requestedEffort = states.get(sessionId)?.effort ?? null;
     const effort = opts.effort
       ?? (requestedEffort && current?.efforts.includes(requestedEffort) ? requestedEffort : current?.defaultEffort ?? null);
-    const { approvalPolicy, sandboxPolicy } = accessPolicy(states.get(sessionId)!.access, cwd);
+    // Chats outside a project have no terminal pane, so their ids are negative.
+    const { approvalPolicy, sandboxPolicy } = accessPolicy(states.get(sessionId)!.access, cwd, sessionId < 0);
     // A conversation that ran in the terminal resumes by its thread id.
     const started = await session.request<{ thread?: Json; serviceTier?: string | null }>(opts.resumeId ? 'thread/resume' : 'thread/start', {
       ...(opts.resumeId ? { threadId: opts.resumeId } : {}),
       cwd,
       ...(model ? { model } : {}),
       approvalPolicy,
-      sandbox: sandboxPolicy.type === 'dangerFullAccess' ? 'danger-full-access' : 'workspace-write',
+      sandbox: sandboxPolicy.type === 'dangerFullAccess' ? 'danger-full-access' : sandboxPolicy.type === 'readOnly' ? 'read-only' : 'workspace-write',
     });
     const threadId = str(started.thread?.id);
     if (!threadId) throw new Error('Codex did not start a conversation.');
@@ -360,7 +367,7 @@ export async function sendCodexTurn(sessionId: number, text: string, images: str
   if (wire.text.trim()) input.push({ type: 'text', text: wire.text, text_elements: [] });
   for (const path of images) input.push({ type: 'localImage', path });
   if (!input.length) return;
-  const { approvalPolicy, sandboxPolicy } = accessPolicy(state.access, runtime.cwd);
+  const { approvalPolicy, sandboxPolicy } = accessPolicy(state.access, runtime.cwd, sessionId < 0);
   update(sessionId, { status: 'working', error: null });
   try {
     const reply = await runtime.session.request<{ turn?: Json }>('turn/start', {
@@ -634,9 +641,12 @@ function onServerRequest(sessionId: number, r: AcpServerRequest) {
     return;
   }
   if (r.method === 'item/fileChange/requestApproval' || r.method === 'applyPatchApproval') {
-    update(sessionId, (s) => ({
-      approvals: [...s.approvals, { requestId: r.requestId, kind: 'fileChange', title: 'Apply these file changes?', detail: str(p.reason) }],
-    }));
+    update(sessionId, (s) => {
+      // The request names only the item; its patch says which files.
+      const patch = s.items.find((item) => item.id === str(p.itemId))?.toolInput ?? '';
+      const files = [...patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => match[1].trim());
+      return { approvals: [...s.approvals, { requestId: r.requestId, kind: 'fileChange', title: 'Apply these file changes?', detail: files.join('\n') || str(p.reason) }] };
+    });
     return;
   }
   if (r.method === 'item/tool/requestUserInput') {

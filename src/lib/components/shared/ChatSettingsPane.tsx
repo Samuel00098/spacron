@@ -472,7 +472,7 @@ export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () =>
         <Row title="Chat names" detail="Name each new chat from its first message. Renaming always wins.">
           <Toggle label="Toggle automatic chat names" checked={autoNames} onChange={chatAutoNames.set} />
         </Row>
-        <Row title="Model-written chat names" detail="Ask your AI provider for a short title after the first message. Sends that message to the provider and uses a few credits per chat. Needs Chat names on.">
+        <Row title="Model-written chat names" detail="Ask your AI provider for a short title after the first message. Sends that message to the provider and uses a few credits per chat. Needs Chat names on. Chats outside a project are titled by their own agent instead, while Chat names is on.">
           <Toggle label="Toggle model-written chat names" checked={modelNames} onChange={chatModelNames.set} />
         </Row>
         <Row title="Link previews" detail="Show preview cards when hovering web links.">

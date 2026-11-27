@@ -5,6 +5,11 @@ import { chatItemForAcpUpdate, modelsFrom } from './acp-session';
 import { chatItemForPi } from './pi-session';
 
 describe('structured driver event mappings', () => {
+  it("reads Grok's reasoning levels from the model's _meta", () => {
+    const [model] = modelsFrom({ models: { availableModels: [{ modelId: 'grok-4.7', name: 'Grok 4.7', _meta: { reasoningEfforts: [{ id: 'high', default: true }, { id: 'low', default: false }] } }] } });
+    expect(model).toMatchObject({ efforts: ['high', 'low'], defaultEffort: 'high' });
+  });
+
   it('maps Claude assistant stream-json', () => {
     expect(chatItemForClaude({ type: 'assistant', uuid: 'claude-1', message: { content: [{ type: 'text', text: 'pong' }] } })).toEqual({ id: 'claude-1', kind: 'assistant', text: 'pong' });
   });

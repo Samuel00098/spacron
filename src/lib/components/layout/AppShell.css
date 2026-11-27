@@ -3204,7 +3204,7 @@
   }
 
   .app-shell .left-sidebar-nav-item {
-    height: 23px;
+    height: 28px;
   }
 }
 
@@ -3270,7 +3270,7 @@
 }
 
 .app-shell .left-sidebar-nav-item {
-  height: 30px;
+  height: 36px;
   padding: 0 8px;
   border-radius: 8px;
   gap: 8px;
@@ -3292,7 +3292,29 @@
 
 .app-shell .left-sidebar .projects-panel-body {
   gap: 12px;
-  padding: 11px 10px 14px;
+  /* No right padding: the scrollbar's gutter is the only space on that side. */
+  padding: 11px 0 14px 10px;
+}
+
+/* Only the list inside scrolls. The app-wide stable gutter on its wrapper left a
+   second, empty scrollbar strip down the right edge of every row. */
+.app-shell .left-sidebar .drawer-body {
+  scrollbar-gutter: auto;
+}
+
+/* Roomier rows. */
+.app-shell .left-sidebar .project-thread-row,
+.app-shell .left-sidebar .project-process-row,
+.app-shell .left-sidebar .project-worktree-row {
+  padding-block: 8px;
+}
+
+.app-shell .left-sidebar .bots-sidebar-row {
+  padding-block: 9px;
+}
+
+.app-shell .left-sidebar .standalone-chat-select {
+  padding-block: 11px;
 }
 
 .app-shell .left-sidebar .projects-section-header {
@@ -3300,7 +3322,7 @@
 }
 
 .app-shell .left-sidebar .project-sidebar-card {
-  padding: 9px 9px;
+  padding: 12px 10px;
   border-radius: 10px;
 }
 
