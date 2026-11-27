@@ -4,6 +4,11 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+
+## [v5.1.16] - 2026-11-27
+
+A fix release for bots on agents other than Claude Code, Codex and Gemini CLI: Antigravity bots can now use their connectors, and the access level you pick for a bot now applies to more agents.
+
 ### Fixed
 
 - **Antigravity bots can use their connectors** — an Antigravity bot run no longer ends with "no output produced — a tool required the mcp permission". Each run now pre-approves the bot's picked connectors for that run only (your Antigravity settings are not changed), "Work in its folder" also accepts edits, and "Full access" approves every tool, like other agents.
