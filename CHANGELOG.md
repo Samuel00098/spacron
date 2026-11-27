@@ -5,6 +5,35 @@ All notable changes to Spacron will be documented here.
 ## [Unreleased]
 
 
+## [v5.1.17] - 2026-11-27
+
+A release about room to work. The bottom row is gone and the sidebar is narrower, so panels take the whole window; chats offer each agent's own slash commands and let you mention folders; and a bot's chats now read as one timeline.
+
+### Added
+
+- **The chat's `/` menu lists each agent's own commands** — read from the agent itself (Antigravity, Grok, OpenCode, Pi and other agents that publish a list; Claude Code as before), so they match your skills and version. In a terminal-backed chat, Spacron briefly starts the agent to ask for its list; no prompt is sent.
+- **`@` picks folders as well as files** — browse any folder in the project (Open, or the Right arrow), including hidden and ignored files.
+- **File links in agent replies open the file** — a link to a file in an agent's answer opens it in the editor, at the line it names.
+
+### Changed
+
+- **Voice and layout controls are in the title bar** — the floating mic and the bottom row are gone, so panels run to the bottom of the window. The mic sits beside the bell, and the Split control and a layout menu (split, tile agents, Editor, Terminal, Preview) sit in the middle.
+- **Minimized panels wait in the title bar** — as icons (hover for the name), with a name only where two would look alike. They no longer drop to a strip along the bottom of the window.
+- **A narrower left sidebar** — it now opens at its smallest size every time. You can still drag it wider while it is open.
+- **A dot marks the active project** — it replaces the "Active" tag, leaving room for the project's name.
+- **A bot's chats read as one timeline** — earlier chats stay above the newest one, with a divider where each starts. The bot still starts fresh after a divider.
+- **Delete any bot chat where it starts** — each divider has Archive and its own delete icon (click it twice), replacing the buttons and the chat list in the top bar.
+- **The image viewer floats over the app** — the picture sits on a see-through, blurred backdrop with its controls as small pills, and clicking outside the picture closes it.
+- **A shorter dictation pill** — it shows where the words are going, a word count and Esc to cancel.
+- **Primary buttons follow your theme** — Launch chat, Hand off and the attachment close button use the theme colour with readable text. Bot and agent names in the sidebar and usage popup no longer take the accent colour.
+
+### Fixed
+
+- **Agents save their files in your project** — the standing brief now tells agents to save what they make inside the project, not only in their own storage (Antigravity kept documents under `~/.gemini`), and an agent opened straight into its chat view now gets the brief too.
+- **The usage popup opens in place** — it no longer flashes at the top of the window first, and the usage readout in the sidebar footer fits without being cut off.
+- **The docked browser preview fills the sidebar** — an empty scrollbar strip no longer runs down its right edge.
+- **The device menu button keeps its place** — a stray brace in the mobile panel's styles was dropping the rule after it.
+
 ## [v5.1.16] - 2026-11-27
 
 A fix release for bots on agents other than Claude Code, Codex and Gemini CLI: Antigravity bots can now use their connectors, and the access level you pick for a bot now applies to more agents.
