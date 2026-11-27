@@ -4,24 +4,43 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+## [v5.1.18] - 2026-11-27
+
+A release about chatting. You can now start a chat outside any project, pick the agent and model as you go, and turn it into a project when it grows. Side chats, question cards and a clearer permission card make agent chats easier to follow, and there are many more bot templates.
+
 ### Added
 
+- **Chats outside a project** — start one from Chats in the sidebar, with no folder and no terminal. Switch agent, model and reasoning level in the middle of the conversation and the history goes with you. Rename, pin or delete chats, and use Create project from chat to carry one into a real project.
+- **A real folder for each of those chats** — files are saved to `Documents/Spacron Chats`, in a folder named from your first message, and the line under the message box opens it. Chats started before this keep their old folder.
+- **Chat titles written by the agent** — a chat outside a project is named by the agent you send your first message to, in a separate request, so no AI provider key is needed. The first line of your message stays if the agent cannot answer.
+- **Side chats** — `/side` opens a branch of the conversation in the right sidebar while the original carries on.
+- **Questions from agents appear as cards** — above the message box, answered with a click or a number key.
+- **Jump between your messages** — a tick down the left edge of a chat for each message you sent.
+- **48 more bot templates, grouped by subject** — coding, websites, 3D and games, images and design, inbox and meetings, writing, research, business and personal.
 - **An update icon in the title bar** — a wheel that checks for updates, turning into a download arrow when there is one. A click installs agent updates; hover for what a new Spacron version changes. It replaces the update banner.
 - **Fast and Ultracode switches in the chat's model menu** — Fast mode for Claude Code and Codex models that have it, Ultracode for Claude Code and Ultra for Codex.
 
 ### Changed
 
+- **New chats outside a project ask before acting** — they start on Ask for approval instead of Full access. Codex treats the chat's folder as read-only while asking, so it asks before writing there too. Chats you already started keep their setting.
+- **A clearer permission card** — it sits just above the message box, names the agent and the file or command, and stacks the answers with the one-time yes highlighted.
+- **A wider left sidebar** — it opens at 340px again, with taller rows that reach the scrollbar.
+- **The terminal follows your theme** — its colours match the light or dark surface, and pale text stays readable in light mode.
+- **Keyboard shortcuts reorganised** — grouped in Settings, with retired entries cleared out. Dictation is now `Ctrl+Shift+M` (it was `F9`), and the terminal / chat toggle flips the focused agent pane.
 - **Update notes show before you install** — each release now sends its changelog section with the update.
 
 ### Fixed
 
+- **Grok shows its reasoning levels** — Extra High, High, Medium and Low can now be picked.
+- **A chat no longer shows its thread twice** after you switch away and back while its agent is running.
+- **Antigravity can name chats and write commit messages** — it rejected the way the prompt was sent.
+- **Pinned chats are kept** when more than fifty newer ones exist, and New chat reopens an unused chat instead of adding another.
 - **Open works on Antigravity's changed files** — it no longer reports "Path does not exist".
 - **Open and file links work however an agent writes the path** — including a file named without its folder.
 - **Chat mode can talk to Claude Code again** — Spacron started `claude` without handing it your message, so every turn failed. The reasoning level you pick now reaches it too.
 - **Fast and Ultracode / Ultra in Chat mode** — under the model list for Claude Code and Codex.
 - **Long error messages stay inside their box** — file paths now wrap.
 - **Offline dictation installs ONNX Runtime again** — the old download link had stopped working. It now comes from Microsoft's nuget.org package, on your first dictation if it is missing, with no restart needed.
-
 
 ## [v5.1.17] - 2026-11-27
 
