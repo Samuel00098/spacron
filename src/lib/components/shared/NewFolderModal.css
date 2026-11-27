@@ -324,7 +324,6 @@
 
 .nf-btn.primary:hover:not(:disabled) {
   filter: brightness(1.07);
-  transform: translateY(-1px);
 }
 
 .nf-btn.primary:active:not(:disabled) {

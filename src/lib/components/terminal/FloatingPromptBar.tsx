@@ -14,6 +14,7 @@ import {
   sendTranscriptionNow,
   startBarTranscription,
   toggleChatModeTranscription,
+  toggleTerminalTranscription,
   transcriptionState,
   transcriptionLevel,
   transcriptionWordCount,
@@ -23,8 +24,10 @@ import TranscriptionIndicator from './TranscriptionIndicator.tsx';
 import { createAltTapGesture } from '$lib/services/alt-tap-gesture';
 import { isProviderApiKeyConfiguredLocal } from '$lib/services/ai-keychain';
 import {
+  findShortcutKeys,
   userShortcuts,
 } from '$lib/stores/settings';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { activeProject } from '$lib/stores/workspace';
 import { interactionMode } from '$lib/stores/interactionMode';
@@ -121,19 +124,15 @@ export default function FloatingPromptBar() {
   const $promptBarVoiceModeRequest = useStore(promptBarVoiceModeRequest);
   const $transcriptionLevel = useStore(transcriptionLevel);
   const $transcriptionWordCount = useStore(transcriptionWordCount);
-  // Read the live binding rather than hardcoding "F9" — the hint has to follow
-  // whatever the user rebinds the dictation key to in Settings.
   const $shortcuts = useStore(userShortcuts);
-  const transcribeKey = useMemo(() => {
-    const binding = ($shortcuts || []).find((shortcut) => {
-      if (!shortcut) return false;
-      const actionId = shortcut.id.startsWith('custom_')
-        ? shortcut.action
-        : shortcut.id;
-      return actionId === 'transcribeToTerminal';
-    });
-    return binding?.keys || 'F9';
-  }, [$shortcuts]);
+  const transcribeKey = useMemo(
+    () => findShortcutKeys($shortcuts, 'transcribeToTerminal'),
+    [$shortcuts]
+  );
+  const formattedTranscribeKey = useMemo(
+    () => formatShortcutLabel(transcribeKey),
+    [transcribeKey]
+  );
 
   const lastBarProjectIdRef = useRef<string | null>(null);
 
@@ -758,6 +757,11 @@ export default function FloatingPromptBar() {
    */
   const handleGlobalVoiceShortcut = useCallback(
     (event: KeyboardEvent) => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.getAttribute?.('data-shortcut-recorder') === 'true') {
+        altTapRef.current.reset();
+        return;
+      }
       if (event.type === 'keydown') {
         altTapRef.current.keydown(event);
         return;
@@ -773,12 +777,7 @@ export default function FloatingPromptBar() {
         toggleChatModeTranscription();
         return;
       }
-      if (!startBarTranscription()) {
-        showToast(
-          'A transcription is already running. Finish it or press Escape first.',
-          'warning'
-        );
-      }
+      toggleTerminalTranscription();
     },
     [isRefining]
   );
@@ -892,12 +891,17 @@ export default function FloatingPromptBar() {
     const dragEndHandler = ((event: Event) =>
       handleExplorerDragEndRef.current(event)) as EventListener;
 
+    const handleWindowBlur = () => {
+      altTapRef.current.reset();
+    };
+
     document.addEventListener('mousedown', handleDocumentPointerDown);
     // Observe the companion key before terminals/editors can stop propagation.
     // Otherwise Alt followed by a key that belongs to the focused surface can
     // look like a bare Alt tap when its keyup arrives.
     document.addEventListener('keydown', handleGlobalVoiceShortcut, true);
     document.addEventListener('keyup', handleGlobalVoiceShortcut, true);
+    window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('dragover', handleDocumentDragOver);
     document.addEventListener('drop', handleDocumentDrop);
     window.addEventListener('spacron-explorer-drag-start', dragStartHandler);
@@ -908,6 +912,7 @@ export default function FloatingPromptBar() {
       document.removeEventListener('mousedown', handleDocumentPointerDown);
       document.removeEventListener('keydown', handleGlobalVoiceShortcut, true);
       document.removeEventListener('keyup', handleGlobalVoiceShortcut, true);
+      window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('dragover', handleDocumentDragOver);
       document.removeEventListener('drop', handleDocumentDrop);
       window.removeEventListener(
@@ -1183,7 +1188,7 @@ export default function FloatingPromptBar() {
                             </span>
                           )}
                           <span className="transcribe-pill-hint">
-                            <kbd>{transcribeKey}</kbd> to send · <kbd>Esc</kbd>
+                            <kbd>{formattedTranscribeKey}</kbd> / <kbd>Esc</kbd> finish · <kbd>{formatShortcutLabel('Ctrl+Esc')}</kbd> cancel
                           </span>
                         </div>
                       </div>
@@ -1205,7 +1210,7 @@ export default function FloatingPromptBar() {
                           <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
                         </svg>
                         <span>
-                          <kbd>{transcribeKey}</kbd> toggles dictation. Tap <kbd>Left Alt</kbd> or click the mic to start.
+                          <kbd>{formattedTranscribeKey}</kbd> toggles dictation. Tap <kbd>Left Alt</kbd> or click the mic to start.
                         </span>
                       </div>
                     )}

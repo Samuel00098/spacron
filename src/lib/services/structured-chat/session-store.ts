@@ -16,6 +16,8 @@
  * reopened by `restoreStructuredSessions`, resuming the native conversation and
  * showing the journaled history above it.
  */
+import type { AskAnswer } from './ask';
+import { buildSideChatContext, clearPaneContext, setPaneContext } from '$lib/services/side-chat-context';
 import { get, writable } from '$lib/stores/storeCompat';
 import { useStore } from '$lib/react/useStore';
 import { idbAvailable, idbDelete, idbGet, idbSet } from '$lib/services/idb-kv';
@@ -91,6 +93,12 @@ export interface StructuredSessionRecord {
   handoffTo: string[];
   forkedFrom?: string | null;
   forkMode?: 'native' | 'journal-branch' | null;
+  /** Provider session to fork from on first start, until the fork has its own id. */
+  forkSourceId?: string | null;
+  /** The agent has not seen this chat's history: send it with the next prompt. */
+  seedContext?: boolean;
+  /** Shown in the right sidebar; never restored or reclaimed as a pane of its own. */
+  side?: boolean;
   restoredMode?: 'native' | 'journal-only' | 'fresh' | null;
   /**
    * Child agents this chat spawned, with their status, reports and timeline.
@@ -433,6 +441,7 @@ function detach(paneId: number): void {
   attachment.unsubscribe();
   attachments.delete(paneId);
   paneRecords.delete(paneId);
+  clearPaneContext(paneId);
   // A pane closed by the user ends the record; a pane going back to its
   // terminal keeps it (`view: terminal`); an app shutdown leaves it open.
   if (shuttingDown) return;
@@ -547,9 +556,22 @@ async function openRecordInPane(paneId: number, record: StructuredSessionRecord)
   const history = journalFor(record).snapshot().items;
   setStructuredChatHistory(paneId, history);
   const options = { access, accountId: record.accountId ?? 'default' };
-  let resumeId = record.nativeSessionId;
-  await provider.start(paneId, record.cwd, { ...options, resumeId });
+  clearPaneContext(paneId);
+  const forkSource = record.nativeSessionId ? null : record.forkSourceId ?? null;
+  let resumeId = record.nativeSessionId ?? forkSource;
+  let seed = record.seedContext === true;
+  await provider.start(paneId, record.cwd, { ...options, resumeId, ...(forkSource ? { forkSession: true } : {}) });
   let state = provider.get(paneId);
+
+  // The source cannot be forked (never saved, or gone): send the history instead.
+  if (forkSource && state?.status === 'failed') {
+    await provider.close(paneId);
+    resumeId = null;
+    seed = history.length > 0;
+    patchRecord(record.id, { forkSourceId: null, forkMode: 'journal-branch', seedContext: seed });
+    await provider.start(paneId, record.cwd, { ...options, resumeId });
+    state = provider.get(paneId);
+  }
 
   // Codex allocates an ID before it writes any conversation to disk.
   // A missing rollout is safe to recover only when this chat has no messages.
@@ -565,7 +587,9 @@ async function openRecordInPane(paneId: number, record: StructuredSessionRecord)
     patchRecord(record.id, { lifecycle: 'failed' });
     return;
   }
-  patchRecord(record.id, { restoredMode: resumeId ? 'native' : history.length ? 'journal-only' : 'fresh' });
+  patchRecord(record.id, { restoredMode: resumeId && !seed ? 'native' : history.length ? 'journal-only' : 'fresh' });
+  const block = seed ? buildSideChatContext(history) : null;
+  if (block) setPaneContext(paneId, block, () => patchRecord(record.id, { seedContext: false }));
   if (state?.status === 'ready' || state?.status === 'working') {
     if (record.model && state.model !== record.model) provider.setModel(paneId, record.model);
     if (record.effort && state.effort !== record.effort) provider.setEffort(paneId, record.effort);
@@ -599,6 +623,7 @@ export function openChatRecords(projectId: string): StructuredSessionRecord[] {
   return Object.values(get(structuredSessions)).filter((record) =>
     record.projectId === projectId &&
     record.origin === 'chat' &&
+    !record.side &&
     !record.archived &&
     record.view === 'chat' &&
     record.lifecycle !== 'closed' &&
@@ -688,6 +713,7 @@ export async function answerStructuredApproval(
   decision: 'accept' | 'acceptForSession' | 'decline',
   optionId?: string,
   optionLabel?: string,
+  answers?: AskAnswer[],
 ): Promise<void> {
   const record = recordForPane(paneId);
   const attachment = attachments.get(paneId);
@@ -698,7 +724,8 @@ export async function answerStructuredApproval(
     dirtyJournals.add(record.id);
     scheduleSave();
   }
-  await provider?.answerApproval(paneId, requestId, decision, optionId);
+  if (answers) await provider?.answerApproval(paneId, requestId, decision, optionId, answers);
+  else await provider?.answerApproval(paneId, requestId, decision, optionId);
 }
 
 /**
@@ -847,7 +874,8 @@ export async function clearStructuredConversation(paneId: number): Promise<boole
   attachment.last = null;
   journalFor(record).record([{ type: 'session.cleared', payload: {} }]);
   dirtyJournals.add(record.id);
-  patchRecord(record.id, { nativeSessionId: null, lifecycle: 'starting', turnId: null });
+  clearPaneContext(paneId);
+  patchRecord(record.id, { nativeSessionId: null, forkSourceId: null, seedContext: false, lifecycle: 'starting', turnId: null });
   setStructuredChatHistory(paneId, []);
   await provider.start(paneId, record.cwd, { access: record.access ?? structuredAccessFor(record.preset ?? record.provider) });
   return provider.get(paneId)?.status !== 'failed';
@@ -896,6 +924,34 @@ export async function resumeStructuredSessionInPane(paneId: number, recordId: st
 }
 
 /**
+ * Open a saved chat in its own new pane, leaving the source pane and its agent
+ * running. Returns the new pane, or null when none could be created.
+ */
+export async function openStructuredRecordBeside(sourcePaneId: number, recordId: string): Promise<number | null> {
+  const source = recordForPane(sourcePaneId);
+  const target = get(structuredSessions)[recordId];
+  if (!source || !target || !structuredChatProvider(target.provider)) return null;
+  const paneId = await createTerminalSession(target.cwd, undefined, target.projectId ?? undefined, {
+    assignPane: false,
+    // No room, tab or sidebar row on the stage: the right sidebar shows it.
+    hidden: true,
+    agentPreset: target.preset ?? target.provider,
+  });
+  if (paneId === null) return null;
+  // The source's child agents, goal and handoffs stay with the source.
+  patchRecord(target.id, { side: true, origin: 'chat', view: 'chat', lifecycle: 'starting', subagents: [], goal: null, handoffFrom: null, handoffTo: [] });
+  pendingLinks.set(paneId, target.id);
+  markStructuredChatPane(paneId, target.provider, target.preset ?? undefined, 'chat');
+  if (target.title) updateSessionTitle(paneId, target.title);
+  try {
+    await openRecordInPane(paneId, get(structuredSessions)[target.id] ?? target);
+  } catch {
+    patchRecord(target.id, { lifecycle: 'failed' });
+  }
+  return paneId;
+}
+
+/**
  * Fork the current conversation into a new session record: creates an independent
  * branch. If the provider supports native fork, it creates a native child conversation;
  * otherwise it forks the journal history cleanly.
@@ -911,12 +967,16 @@ export async function forkStructuredSession(
   const newId = `ss_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   let nativeSessionId: string | null = null;
   let forkMode: 'native' | 'journal-branch' = 'journal-branch';
+  let forkSourceId: string | null = null;
 
   if (provider.capabilities?.fork && provider.fork) {
     try {
       const res = await provider.fork(paneId);
       if (typeof res === 'object' && res.nativeSessionId && res.nativeSessionId !== current.nativeSessionId) {
         nativeSessionId = res.nativeSessionId;
+        forkMode = 'native';
+      } else if (typeof res === 'object' && res.forkSourceId && !current.seedContext) {
+        forkSourceId = res.forkSourceId;
         forkMode = 'native';
       }
     } catch {
@@ -938,8 +998,12 @@ export async function forkStructuredSession(
     title,
     titleAuto: false,
     nativeSessionId,
+    side: false,
     forkedFrom: current.id,
     forkMode,
+    forkSourceId,
+    // A source still waiting to be sent its history cannot pass it on natively.
+    seedContext: current.seedContext === true || (!nativeSessionId && !forkSourceId && snap.items.some((item) => item.kind === 'user')),
     lifecycle: 'closed',
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -990,7 +1054,8 @@ export async function rewindStructuredSession(
     journals.set(current.id, rolledJournal);
     dirtyJournals.add(current.id);
     setStructuredChatHistory(paneId, sliced);
-    patchRecord(current.id, { lastSeq: 0, updatedAt: Date.now() });
+    clearPaneContext(paneId);
+    patchRecord(current.id, { lastSeq: 0, forkSourceId: null, seedContext: false, updatedAt: Date.now() });
 
     // If the provider lacks native rollback RPC, restart the process with
     // clean state so its token context window does not retain the undone turn.
@@ -1023,7 +1088,7 @@ export function claimClosedChat(projectId: string, provider: StructuredChatAgent
   const linked = new Set(paneRecords.values());
   const record = Object.values(get(structuredSessions))
     .filter((candidate) =>
-      candidate.lifecycle === 'closed' && candidate.view === 'chat' && !candidate.archived &&
+      candidate.lifecycle === 'closed' && candidate.view === 'chat' && !candidate.archived && !candidate.side &&
       candidate.projectId === projectId && candidate.provider === provider && candidate.preset === preset &&
       (candidate.accountId ?? 'default') === account && normalize(candidate.cwd) === normalize(cwd) &&
       (candidate.nativeSessionId || candidate.lastSeq > 0) &&

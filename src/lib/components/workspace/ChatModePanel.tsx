@@ -18,7 +18,8 @@ import {
   createSubagentChatThread,
   ensureProjectThread,
   editAssistantChatMessage,
-  bringBackSideChat,
+  addSideChatToDraft,
+  sideChatAnswer,
   createSideChatThread,
   forkChatThreadFrom,
   getChatThread,
@@ -64,13 +65,15 @@ import { loadLiveAgentProviderModels } from '$lib/services/live-agent-models';
 import { getAgentRoster } from '$lib/stores/runs';
 import { getCustomAgents } from '$lib/stores/customAgents';
 import { acpCommandOverrides, acpDisabledCommands, acpExplicitCommands, acpRegistryEnabled, isAcpEnabled } from '$lib/stores/acpRegistry';
-import { isChatAgentProvider } from '$lib/services/agent-provider-catalogue';
+import { isChatAgentProvider, isClaudeProvider, isCodexProvider } from '$lib/services/agent-provider-catalogue';
+import { modelTogglesFor } from '$lib/services/model-toggles';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
 import AgentLaunchConfigFields from '$lib/components/shared/AgentLaunchConfigFields';
 import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, ChatMessage, ChatReasoningEffort, ChatThread } from '$lib/types/chat';
 import type { Project } from '$lib/types/workspace';
 import { reasoningLevelsFor } from '$lib/services/orchestrator/reasoning-levels';
 import { CHAT_ACCESS_TIER_HINTS, CHAT_ACCESS_TIER_LABELS, CHAT_ACCESS_TIERS, accessTier } from '$lib/services/orchestrator/access-policy';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import ModelCapabilityBadges, { ModelCapabilityIcons, forgetModelVision } from './ModelCapabilityBadges';
 import { modelCapabilitiesVersion } from '$lib/services/model-capabilities';
 import {
@@ -949,6 +952,16 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
     || liveModelsByAgent[selectedAcpAgent]?.find((entry) => entry.isDefault)?.id
     || liveModelsByAgent[selectedAcpAgent]?.[0]?.id
     || 'default';
+
+  // Fast and Ultracode / Ultra for the agent and model this chat will run.
+  const switchAgent = isClaudeProvider(selectedAcpAgent) ? 'claude' : isCodexProvider(selectedAcpAgent) ? 'codex' : null;
+  const switchModel = liveModelsByAgent[selectedAcpAgent]?.find((entry) => entry.id === selectedAcpModel)
+    ?? (switchAgent === 'claude' && selectedAcpModel === 'default' ? { id: 'default' } : null);
+  const switchEfforts: string[] = switchModel && 'reasoningEfforts' in switchModel && switchModel.reasoningEfforts?.length
+    ? switchModel.reasoningEfforts
+    : switchModel?.id === 'default' && switchAgent === 'claude' ? ['xhigh'] : [];
+  const modelSwitches = modelTogglesFor(switchAgent, switchModel, switchEfforts)
+    .map((spec) => ({ ...spec, on: (spec.id === 'fast' ? thread?.fastMode : thread?.ultraMode) === true }));
 
   const ensureAgentModels = useCallback((command: string, force = false) => {
     if (!command || (!force && Object.prototype.hasOwnProperty.call(liveModelsByAgent, command))) return;
@@ -2034,7 +2047,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
             </div>
           )}
           <div ref={scrollRef} className={`chat-mode-transcript${messages.length === 0 ? ' is-empty' : ''}`} aria-live="polite">
-            {(thread.parentThreadId || thread.forkOfThreadId) && (
+            {(thread?.parentThreadId || thread?.forkOfThreadId) && (
               <div className="chat-mode-lineage" role="note">
                 <span>
                   {thread.parentThreadId ? 'Side chat of ' : 'Forked from '}
@@ -2051,7 +2064,14 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                     Open that thread
                   </button>
                   {thread.parentThreadId && (
-                    <button type="button" onClick={() => { bringBackSideChat(thread.id); }}>Bring back into main</button>
+                    <button
+                      type="button"
+                      disabled={!sideChatAnswer(messages)}
+                      title="Quote the latest answer into the main thread's message box"
+                      onClick={() => { addSideChatToDraft(thread.id); }}
+                    >
+                      Add to chat
+                    </button>
                   )}
                 </div>
               </div>
@@ -2594,7 +2614,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                 )}
                 {transcriptionPhase === 'listening' && (
                   <span className="chat-mode-transcription-hint">
-                    press the square button to finish · <kbd>Esc</kbd> to cancel
+                    press the square button or <kbd>Esc</kbd> to finish · <kbd>{formatShortcutLabel('Ctrl+Esc')}</kbd> to cancel
                   </span>
                 )}
               </div>
@@ -2621,9 +2641,23 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
                     agentPreset: command,
                     agentName: acpAgents.find((agent) => agent.command === command)?.name ?? command,
                     model,
+                    // The new model may not have them: choose again.
+                    ...(command !== selectedAcpAgent || model !== selectedAcpModel ? { fastMode: false, ultraMode: false } : {}),
                     updatedAt: Date.now(),
                   });
                   ensureAgentModels(command);
+                }}
+                toggles={modelSwitches}
+                onToggle={(id, on) => {
+                  const target = ensureConversationThread();
+                  if (!target) return;
+                  updateChatThread(target.id, {
+                    agentPreset: selectedAcpAgent,
+                    agentName: acpAgents.find((agent) => agent.command === selectedAcpAgent)?.name ?? selectedAcpAgent,
+                    model: selectedAcpModel,
+                    ...(id === 'fast' ? { fastMode: on } : { ultraMode: on }),
+                    updatedAt: Date.now(),
+                  });
                 }}
                 disabled={!thread && !standalone}
               />

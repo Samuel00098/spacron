@@ -12,6 +12,9 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '$lib/react/useStore';
+import { findShortcutKeys } from '$lib/stores/settings';
+import { useSettingsStore } from '$lib/stores/zustand/settings';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
 import { AgentBrandMark } from './useAgentBrand';
 import {
@@ -346,7 +349,7 @@ export default function ChatSettingsPane({ onOpenAgents }: { onOpenAgents: () =>
       <Card title="Opening">
         <Row
           title="Open new agents in"
-          detail="Choose default view for new agent sessions (Ctrl+Shift+J to toggle)."
+          detail={`Choose default view for new agent sessions (${formatShortcutLabel(findShortcutKeys(useSettingsStore.getState().userShortcuts, 'toggleInteractionMode'))} to toggle).`}
         >
           <Segmented<AgentLaunchView>
             label="Open new agents in"

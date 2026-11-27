@@ -13,7 +13,7 @@ describe('model toggles', () => {
 
   it("believes the CLI's own answer over the name", () => {
     expect(modelTogglesFor('claude', { id: 'opus', supportsFast: false }, [])).toEqual([]);
-    expect(modelTogglesFor('codex', { id: 'gpt', supportsFast: true }, ['high', 'ultra']).map((t) => t.label)).toEqual(['Fast mode', 'Ultra']);
+    expect(modelTogglesFor('codex', { id: 'gpt', supportsFast: true }, ['high', 'ultra']).map((t) => t.label)).toEqual(['Fast', 'Ultra']);
   });
 
   it('offers Ultracode only where Claude has xhigh, and nothing to other agents', () => {

@@ -241,3 +241,61 @@ describe('browser and Orca design mode settings', () => {
     expect(storage.get('forge_setting_browserThemeMode')).toBe('"light"');
   });
 });
+
+describe('userShortcuts defaults and audit migration', () => {
+  const KEY = 'forge_setting_userShortcuts';
+  const FLAG = 'forge_migration_shortcutsAudit_v1';
+
+  it('seeds fresh installs with canonical defaultShortcuts', async () => {
+    stubWebStorage();
+    const { defaultShortcuts } = await import('../shortcuts');
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().userShortcuts).toEqual(defaultShortcuts);
+  });
+
+  it('migrates legacy F9/AltGr/DB shortcuts and prunes retired ones once', async () => {
+    const storage = stubWebStorage();
+    storage.set(
+      KEY,
+      JSON.stringify([
+        { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
+        { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
+        { id: 'startProxy', label: 'Start Preview Proxy', keys: 'Ctrl+Alt+P' },
+        { id: 'stopProxy', label: 'Stop Preview Proxy', keys: 'Ctrl+Alt+O' },
+        { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'F9' },
+        { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
+        { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
+        { id: 'goToEditor', label: 'Go to Editor', keys: 'Alt+Shift+E' },
+      ]),
+    );
+
+    const { useSettingsStore } = await import('./settings');
+    const shortcuts = useSettingsStore.getState().userShortcuts;
+
+    expect(storage.get(FLAG)).toBe('1');
+    expect(shortcuts.find((s) => s.id === 'transcribeToTerminal')?.keys).toBe('Ctrl+Shift+M');
+    expect(shortcuts.find((s) => s.id === 'cycleAmbientLayout')?.keys).toBe('Alt+Shift+L');
+    expect(shortcuts.find((s) => s.id === 'goToDb')?.keys).toBe('Ctrl+Shift+D');
+    expect(shortcuts.find((s) => s.id === 'toggleRightSidebar')?.keys).toBe('Ctrl+Shift+B');
+    // Custom rebind on goToEditor is preserved
+    expect(shortcuts.find((s) => s.id === 'goToEditor')?.keys).toBe('Alt+Shift+E');
+    // Retired ids are gone
+    expect(shortcuts.some((s) => s.id === 'launchVoiceMode')).toBe(false);
+    expect(shortcuts.some((s) => s.id === 'toggleProjectHUD')).toBe(false);
+    expect(shortcuts.some((s) => s.id === 'startProxy')).toBe(false);
+    expect(shortcuts.some((s) => s.id === 'stopProxy')).toBe(false);
+  });
+
+  it('preserves a user-chosen dictation key if already customized before migration', async () => {
+    const storage = stubWebStorage();
+    storage.set(
+      KEY,
+      JSON.stringify([
+        { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'Alt+Shift+D' },
+      ]),
+    );
+
+    const { useSettingsStore } = await import('./settings');
+    expect(useSettingsStore.getState().userShortcuts.find((s) => s.id === 'transcribeToTerminal')?.keys).toBe('Alt+Shift+D');
+  });
+});

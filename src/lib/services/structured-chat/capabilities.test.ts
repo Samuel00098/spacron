@@ -26,13 +26,13 @@ describe('structured provider capabilities and operations', () => {
     });
 
     const claude = providerCapabilities('claude');
-    // Claude's stream-json protocol has no rollback/fork RPC: both operations
-    // are Spacron-side and must not be described as native.
+    // Claude's stream-json protocol has no rollback RPC, so rewind is
+    // Spacron-side; fork is the CLI's own --fork-session.
     expect(claude).toMatchObject({
       rewind: true,
       fork: true,
       rewindMode: 'conversation-reset',
-      forkMode: 'journal-branch',
+      forkMode: 'native-provider',
       compact: 'native',
       steering: 'inject',
       contextUsage: true,

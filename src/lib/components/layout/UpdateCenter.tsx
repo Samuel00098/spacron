@@ -4,7 +4,7 @@ import { useUpdaterStore } from '$lib/stores/zustand/updater';
 import { agentUpdates, checkAgentUpdates, installAgentUpdate } from '$lib/stores/agentUpdates';
 import { usageState } from '$lib/stores/usage';
 import { openChangelogPage } from '$lib/services/changelog';
-import { changelogSection, releaseHighlights } from '$lib/services/release-notes';
+import { releaseHighlights } from '$lib/services/release-notes';
 import { showToast } from '$lib/stores/notification';
 import './UpdateCenter.css';
 
@@ -13,9 +13,10 @@ const HOVER_OPEN_MS = 150;
 const HOVER_CLOSE_MS = 250;
 
 /**
- * The title bar's update icon: a dot when Spacron or an agent CLI has a newer
- * version, a card on hover with what changed and one-click updates, and a
- * click that checks again.
+ * The title bar's update icon. With nothing newer it is a wheel that checks
+ * again on click. With an update it is a download arrow with a dot: a click
+ * installs the agent updates. Spacron itself restarts to update, so that one
+ * waits for the card's Install button.
  */
 export default function UpdateCenter() {
   const update = useUpdaterStore((s) => s.pendingUpdate);
@@ -29,7 +30,7 @@ export default function UpdateCenter() {
   // A click keeps the card up; hovering alone lets it close on leave.
   const [pinned, setPinned] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
-  const [installed, setInstalled] = useState<{ version: string; notes: string | null } | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -67,22 +68,15 @@ export default function UpdateCenter() {
     };
   }, [open]);
 
-  // What the installed version brought, for when there is nothing newer.
   useEffect(() => {
-    if (!open || installed) return;
+    if (!open || version) return;
     let cancelled = false;
-    void (async () => {
-      try {
-        const { getVersion } = await import('@tauri-apps/api/app');
-        const version = await getVersion();
-        const changelog = (await import('../../../../CHANGELOG.md?raw')).default;
-        if (!cancelled) setInstalled({ version, notes: changelogSection(changelog, version) });
-      } catch (error) {
-        console.warn('[updates] could not read the installed version', error);
-      }
-    })();
+    void import('@tauri-apps/api/app')
+      .then(({ getVersion }) => getVersion())
+      .then((current) => { if (!cancelled) setVersion(current); })
+      .catch((error) => console.warn('[updates] could not read the installed version', error));
     return () => { cancelled = true; };
-  }, [open, installed]);
+  }, [open, version]);
 
   async function checkNow() {
     setCheckFailed(false);
@@ -93,13 +87,14 @@ export default function UpdateCenter() {
   }
 
   async function updateAll() {
+    if (agents.updating.length > 0) return;
     // One at a time: they install into the same npm prefix.
     for (const agent of outdated) await installAgentUpdate(agent.command);
   }
 
   async function viewChangelog() {
     try {
-      await openChangelogPage(update?.version ?? installed?.version);
+      await openChangelogPage(update?.version);
       close();
     } catch (error) {
       console.error('Failed to open changelog:', error);
@@ -107,22 +102,32 @@ export default function UpdateCenter() {
     }
   }
 
-  const highlights = releaseHighlights(update ? update.body : installed?.notes);
+  const updatingAgents = agents.updating.length > 0;
+  const busy = checking || downloading || updatingAgents;
+  // Only an update that is still to come has notes worth reading.
+  const highlights = releaseHighlights(update?.body);
   const title = downloading
     ? 'Downloading update…'
-    : checking
-      ? 'Checking for updates…'
-      : update
-        ? 'Update ready to download'
-        : outdated.length
-          ? outdated.length === 1 ? '1 agent update' : `${outdated.length} agent updates`
-          : checkFailed ? "Couldn't check for updates" : "You're up to date";
+    : updatingAgents
+      ? 'Updating agents…'
+      : checking
+        ? 'Checking for updates…'
+        : update
+          ? 'Update ready to download'
+          : outdated.length
+            ? outdated.length === 1 ? '1 agent update' : `${outdated.length} agent updates`
+            : checkFailed ? "Couldn't check for updates" : "You're up to date";
   const subtitle = update
     ? `Spacron ${update.version}`
-    : installed ? `Spacron ${installed.version}` : 'Spacron';
-  const label = checking
-    ? 'Checking for updates'
-    : available ? 'Updates available. Click to check again' : 'Check for updates';
+    : version ? `Spacron ${version}` : 'Spacron';
+  const label = busy
+    ? title
+    : outdated.length
+      ? 'Update agents'
+      : update ? 'Spacron update ready' : 'Check for updates';
+  const hint = outdated.length
+    ? 'Click the icon to update agents'
+    : update ? '' : 'Click the icon to check again';
 
   return (
     <div
@@ -144,25 +149,34 @@ export default function UpdateCenter() {
           clearHoverTimer();
           setOpen(true);
           setPinned(true);
-          if (!checking && !downloading) void checkNow();
+          if (busy) return;
+          if (outdated.length) void updateAll();
+          else if (!update) void checkNow();
         }}
         aria-label={label}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-busy={checking}
+        aria-busy={busy}
       >
-        {checking || downloading ? (
+        {busy ? (
           <svg className="update-center-spin" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
             <path d="M21 12a9 9 0 1 1-6.2-8.56" />
           </svg>
-        ) : (
+        ) : available ? (
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M12 4v10" />
             <polyline points="7.5 10 12 14.5 16.5 10" />
             <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
           </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M20 11a8 8 0 0 0-14.3-4L4 9" />
+            <path d="M4 4v5h5" />
+            <path d="M4 13a8 8 0 0 0 14.3 4L20 15" />
+            <path d="M20 20v-5h-5" />
+          </svg>
         )}
-        {available && !checking && <span className="update-center-dot" aria-hidden="true" />}
+        {available && !busy && <span className="update-center-dot" aria-hidden="true" />}
       </button>
 
       {open && (
@@ -172,25 +186,25 @@ export default function UpdateCenter() {
             <div className="update-center-sub">{subtitle}</div>
           </div>
 
-          <div className="update-center-scroll">
-            {highlights.items.length > 0 && (
-              <>
-                {!update && <div className="update-center-section">In this version</div>}
-                <ul className="update-center-notes">
-                  {highlights.items.map((item, i) => (
-                    <li key={i}>
-                      {item.title && <span className="update-center-lead">{item.title}. </span>}
-                      <span className="update-center-text">{item.text}</span>
-                    </li>
-                  ))}
-                </ul>
-                {highlights.more > 0 && <div className="update-center-more">Plus {highlights.more} more {highlights.more === 1 ? 'change' : 'changes'}.</div>}
-              </>
-            )}
-            {update && highlights.items.length === 0 && (
-              <div className="update-center-more">No notes came with this release.</div>
-            )}
-          </div>
+          {update && (
+            <div className="update-center-scroll">
+              {highlights.items.length > 0 ? (
+                <>
+                  <ul className="update-center-notes">
+                    {highlights.items.map((item, i) => (
+                      <li key={i}>
+                        {item.title && <span className="update-center-lead">{item.title}. </span>}
+                        <span className="update-center-text">{item.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {highlights.more > 0 && <div className="update-center-more">Plus {highlights.more} more {highlights.more === 1 ? 'change' : 'changes'}.</div>}
+                </>
+              ) : (
+                <div className="update-center-more">No notes came with this release.</div>
+              )}
+            </div>
+          )}
 
           {update && (
             downloading ? (
@@ -241,10 +255,12 @@ export default function UpdateCenter() {
           )}
 
           <div className="update-center-foot">
-            <button type="button" className="update-center-link" onClick={() => void viewChangelog()}>
-              Full changelog
-            </button>
-            <span>{checkFailed && available ? "Couldn't check Spacron just now" : 'Click the icon to check again'}</span>
+            {update && (
+              <button type="button" className="update-center-link" onClick={() => void viewChangelog()}>
+                Full changelog
+              </button>
+            )}
+            <span>{checkFailed && available ? "Couldn't check Spacron just now" : hint}</span>
           </div>
         </div>
       )}

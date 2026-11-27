@@ -91,6 +91,7 @@ vi.mock('./mcp-subagents', () => ({ restoreMcpSubagents: vi.fn() }));
 
 import { get } from '$lib/stores/storeCompat';
 import * as panes from './panes';
+import { clearPaneContext, paneWireText } from '$lib/services/side-chat-context';
 import {
   __resetSessionStoreForTests,
   adoptConvertedPane,
@@ -337,6 +338,40 @@ describe('structured session store', () => {
     expect(forked?.forkedFrom).toBe(current.id);
     expect(forked?.title).toBe('Branch 1');
     expect(get(structuredSessions)[forked!.id]).toBeDefined();
+  });
+
+  it('sends a fork its history, or forks the provider session, on first open', async () => {
+    terminal.sessions = [{ id: 21, isRunning: true }];
+    fake.set(21, ready({ threadId: 'thread-21', items: [{ id: 'u1', kind: 'user', text: 'codeword PELICAN' }] }));
+    panes.markStructuredChatPane(21, 'codex');
+    await tick();
+
+    // No native fork: the history rides on the first prompt.
+    const copy = (await forkStructuredSession(21))!;
+    expect(copy.seedContext).toBe(true);
+    await resumeStructuredSessionInPane(21, copy.id);
+    expect(paneWireText(21, 'which word?').text).toContain('codeword PELICAN');
+    clearPaneContext(21);
+
+    // A provider that forks at start is given the source id and no transcript.
+    terminal.sessions = [{ id: 21, isRunning: true }, { id: 22, isRunning: true }];
+    fake.set(22, ready({ threadId: 'thread-22' }));
+    panes.markStructuredChatPane(22, 'codex');
+    await tick();
+    Object.assign(fake.provider, { capabilities: { fork: true }, fork: async () => ({ nativeSessionId: null, forkSourceId: 'source-21' }) });
+    try {
+      fake.set(22, ready({ items: [{ id: 'u1', kind: 'user', text: 'codeword PELICAN' }] }));
+      await tick();
+      const native = (await forkStructuredSession(22))!;
+      expect(native).toMatchObject({ forkSourceId: 'source-21', seedContext: false });
+      fake.provider.start.mockClear();
+      await resumeStructuredSessionInPane(22, native.id);
+      expect(fake.provider.start).toHaveBeenCalledWith(22, expect.anything(), expect.objectContaining({ resumeId: 'source-21', forkSession: true }));
+      expect(paneWireText(22, 'which word?').text).toBe('which word?');
+    } finally {
+      delete (fake.provider as Record<string, unknown>).capabilities;
+      delete (fake.provider as Record<string, unknown>).fork;
+    }
   });
 
   it('rewinds a session by rolling back journal to previous user turn', async () => {

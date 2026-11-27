@@ -182,6 +182,8 @@ const ACP_CLIENT_INFO = { name: 'spacron', version: '5.1.4' };
 export interface AcpClientCapabilities {
   fs: { readTextFile: boolean; writeTextFile: boolean };
   terminal: boolean;
+  /** The client answers `elicitation/create` forms. */
+  elicitation?: { form: Record<string, never> };
 }
 
 const ACP_CLIENT_CAPABILITIES: AcpClientCapabilities = {

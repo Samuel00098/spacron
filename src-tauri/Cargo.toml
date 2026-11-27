@@ -138,7 +138,7 @@ memchr = "2"
 # `commands/parakeet.rs::ensure_ort_dylib` resolves that variable from the models
 # dir or the executable's directory and returns a clean error (never reaching the
 # panic) when the library is absent, and `commands/onnx_runtime.rs` downloads the
-# library itself — from Microsoft's official release, NOT from pyke's CDN, whose
+# library itself — from Microsoft's nuget.org package, NOT from pyke's CDN, whose
 # archives hold a 305 MB static `onnxruntime.lib` and no loadable DLL at all.
 ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 # Native whisper.cpp bindings for offline Whisper STT. Uses the GGML models the
@@ -147,13 +147,8 @@ ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 # needs `cmake` at build time. Build with `--no-default-features` to drop Whisper
 # (and the cmake requirement) if needed.
 whisper-rs = { version = "0.16", optional = true }
-# Unpacking the ONNX Runtime release `commands/onnx_runtime.rs` downloads.
-# Microsoft ships it as `.zip` for Windows and gzipped tar for macOS/Linux, so
-# all three are needed. `tar` and `flate2` were already in `Cargo.lock`
-# transitively; `zip` is limited to `deflate` because that is the only method
-# these archives use.
-tar = "0.4"
-flate2 = "1.1.9"
+# Unpacking the nuget.org package `commands/onnx_runtime.rs` downloads (a zip;
+# `deflate` is the only method it uses).
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 

@@ -7,6 +7,8 @@ import {
   newFolderPromptOpen,
 } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
+import { useSettingsStore } from '$lib/stores/zustand/settings';
+import { findShortcutKeys } from '$lib/stores/settings';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import type { Workspace } from '$lib/types/workspace';
 import './EmptyWorkbench.css';
@@ -65,6 +67,8 @@ export default function EmptyWorkbench() {
   const [iconError, setIconError] = useState(false);
   const recentList = useWorkspaceStore((s) => s.recentWorkspaces) || [];
   const topRecents = recentList.slice(0, 5);
+  const shortcuts = useSettingsStore((s) => s.userShortcuts);
+  const keyFor = (actionId: string) => formatShortcutLabel(findShortcutKeys(shortcuts, actionId));
 
   return (
     <div className="empty-workbench">
@@ -96,7 +100,7 @@ export default function EmptyWorkbench() {
               <span className="empty-wb-btn-icon"><FolderIcon /></span>
               <span>Open Project</span>
             </div>
-            <kbd>{formatShortcutLabel('Ctrl+O')}</kbd>
+            <kbd>{keyFor('openFolder')}</kbd>
           </button>
 
           <button
@@ -108,7 +112,7 @@ export default function EmptyWorkbench() {
               <span className="empty-wb-btn-icon"><PlusIcon /></span>
               <span>Create Project</span>
             </div>
-            <kbd>{formatShortcutLabel('Ctrl+N')}</kbd>
+            <kbd>{keyFor('newWorkspace')}</kbd>
           </button>
 
           <button
@@ -160,13 +164,13 @@ export default function EmptyWorkbench() {
         {/* Footer shortcuts */}
         <div className="empty-wb-footer">
           <div className="empty-wb-hint">
-            <span>Quick switch</span>
-            <kbd>{formatShortcutLabel('Ctrl+K')}</kbd>
+            <span>Settings</span>
+            <kbd>{keyFor('openSettings')}</kbd>
           </div>
           <span>•</span>
           <div className="empty-wb-hint">
             <span>Commands</span>
-            <kbd>{formatShortcutLabel('Ctrl+Shift+P')}</kbd>
+            <kbd>{keyFor('commandPalette')}</kbd>
           </div>
         </div>
       </div>

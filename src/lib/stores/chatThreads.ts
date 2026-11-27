@@ -495,6 +495,8 @@ function normalizeThread(raw: unknown, projectId: string, index: number, now: nu
     accessMode: asAccessMode(raw.accessMode),
     workMode: raw.workMode === 'plan' ? 'plan' : 'build',
     reasoningEffort: asReasoningEffort(raw.reasoningEffort),
+    fastMode: raw.fastMode === true,
+    ultraMode: raw.ultraMode === true,
     taskId: asString(raw.taskId),
     sessionId: asNumber(raw.sessionId),
     // A standalone response has no resumable project execution checkpoint.
@@ -1752,7 +1754,7 @@ export function createSideChatThread(parentThreadId: string): ChatThread | null 
           role: 'system',
           type: 'system',
           ts: Date.now(),
-          text: `Side chat of “${parent.title}”. The main thread keeps working; nothing said here reaches it unless you choose Bring back.`,
+          text: `Side chat of “${parent.title}”. The main thread keeps working; nothing said here reaches it unless you add it to that chat and send it.`,
         },
         ...recent.map((message) => ({
           ...message,
@@ -1767,20 +1769,34 @@ export function createSideChatThread(parentThreadId: string): ChatThread | null 
   return getChatThread(side.id);
 }
 
-/** Fold a side chat's own turns into its parent, then remove the side thread. */
-export function bringBackSideChat(sideThreadId: string): boolean {
-  const side = getChatThread(sideThreadId);
-  if (!side?.parentThreadId) return false;
-  const parentId = side.parentThreadId;
-  const messages = get(chatThreadState).messagesByThread[sideThreadId] ?? [];
-  // The intro and the copied parent turns are not new information; only what
-  // was actually said in this side chat belongs in the parent.
-  const copied = messages.filter((message) => message.id.includes('-sidecopy-') || message.id.startsWith('side-intro-'));
-  const own = messages.filter((message) => !copied.includes(message));
-  for (const message of own) {
-    appendThreadMessage({ ...message, id: `${message.id}-back`, threadId: parentId });
+/** The newest finished reply the side chat's own turns hold, with its question. */
+export function sideChatAnswer(messages: readonly ChatMessage[]): { question: string | null; answer: string } | null {
+  const own = messages.filter((message) => !message.id.includes('-sidecopy-') && !message.id.startsWith('side-intro-'));
+  for (let i = own.length - 1; i >= 0; i -= 1) {
+    const reply = own[i];
+    if (reply.role !== 'assistant' || reply.pending || reply.type === 'failure' || !reply.text.trim()) continue;
+    const question = own.slice(0, i).reverse().find((message) => message.role === 'user')?.text.trim() || null;
+    return { question, answer: reply.text.trim() };
   }
-  deleteChatThread(sideThreadId);
+  return null;
+}
+
+/**
+ * Quote a side chat's latest answer into its parent's composer. Nothing enters
+ * the parent's transcript until the user sends it, so a busy parent is not
+ * touched and its agent really receives the text. The side chat stays.
+ */
+export function addSideChatToDraft(sideThreadId: string): boolean {
+  const side = getChatThread(sideThreadId);
+  const parent = side?.parentThreadId ? getChatThread(side.parentThreadId) : null;
+  if (!parent) return false;
+  const found = sideChatAnswer(getThreadMessageSnapshot(sideThreadId));
+  if (!found) return false;
+  const asked = found.question ? ` to “${found.question.replace(/\s+/g, ' ').slice(0, 200)}”` : '';
+  const quote = found.answer.split('\n').map((line) => `> ${line}`.trimEnd()).join('\n');
+  const draft = parent.draft.trimEnd();
+  setThreadDraft(parent.id, `${draft ? `${draft}\n\n` : ''}Side chat answer${asked}:\n${quote}\n\n`);
+  selectChatThread(parent.projectId, parent.id);
   return true;
 }
 

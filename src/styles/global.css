@@ -461,7 +461,7 @@ html.bg-palette-light:not(.has-bg-media) {
   --frost-surface:     0.55;
 
   /* ── Terminal surface ───────────────────── */
-  /* Dark mode: the same --app-surface as the rooms around it. */
+  /* Both dark and light modes mirror --app-surface of the rooms around them. */
   --terminal-surface:     var(--app-surface);
   --terminal-surface-rgb: var(--app-surface-rgb);
 
@@ -1329,7 +1329,6 @@ input:where(:not([type='range'])):focus {
     inset 0 1px 0 0 rgba(255, 255, 255, 0.35),
     inset 0 -1px 0 0 rgba(0, 0, 0, 0.22),
     0 28px 60px -10px rgba(0, 0, 0, 0.55);
-  transform: translateY(-1px);
 }
 
 :root.light-theme .bento-card:hover {
@@ -1560,11 +1559,8 @@ pre,
 
 /* ── Apple-Inspired Liquid Glass Spring Micro-Animations & Sliders ── */
 
-/* 1. Tactile spring scale-up on hover and scale-down on active press.
-   Deliberately excludes list rows (.file-node etc.): the lift is for primary
-   controls, and a cursor swept down a file tree making every row breathe
-   reads as jitter, not feedback. Row hover highlight still comes from their
-   own background rules. */
+/* 1. Brighten on hover, scale down on active press. Nothing grows or rises on
+   hover. List rows (.file-node etc.) are left to their own backgrounds. */
 button:hover:not(:disabled),
 a:hover,
 .room-card:hover,
@@ -1578,7 +1574,6 @@ a:hover,
 .yt-go:hover:not(:disabled),
 .yt-icon-btn:hover,
 .settings-toggle:hover {
-  transform: scale(1.025) translateY(-0.5px);
   filter: brightness(1.04);
 }
 
@@ -1667,7 +1662,7 @@ button:hover svg[class*="chevron-up"],
 button:hover svg[class*="arrow-up"],
 .icon-btn:hover svg[class*="chevron-up"],
 .icon-btn:hover svg[class*="arrow-up"] {
-  transform: translateY(-2px) scale(1.08);
+  transform: scale(1.08);
 }
 button:hover svg[class*="chevron-down"],
 button:hover svg[class*="arrow-down"],
@@ -1903,8 +1898,6 @@ input[type='range']::-webkit-slider-thumb:active {
   --major-panel-surface: var(--app-surface);
   /* Tiles and cards sitting ON a panel: a hair lighter, still off-white. */
   --major-panel-raised: #fbfbfa;
-  --terminal-surface: #000000;
-  --terminal-surface-rgb: 0, 0, 0;
 }
 
 :root .app-shell .room-panel,
@@ -1946,9 +1939,8 @@ input[type='range']::-webkit-slider-thumb:active {
   -webkit-backdrop-filter: none !important;
 }
 
-/* Agent terminals share the grey panel field in dark mode. Light mode keeps
-   the terminal's existing fill over the off-white room surface. */
-:root:not(.light-theme) .terminal-pane.agent-pane {
+/* Agent terminals share the room panel field in both dark and light modes. */
+:root .terminal-pane.agent-pane {
   background: var(--major-panel-surface);
 }
 
@@ -2109,15 +2101,6 @@ html:root.has-bg-media .settings-modal.settings-page :is(.settings-sidebar, .set
   background: var(--wallpaper-glass-surface) !important;
   backdrop-filter: var(--wallpaper-glass-filter) !important;
   -webkit-backdrop-filter: var(--wallpaper-glass-filter) !important;
-}
-
-/* The terminal's ANSI palette is light ink (see buildTerminalTheme). In dark
-   mode the glass panel is already a dark field, so the terminal takes no scrim
-   of its own and the pane stays one colour (TerminalPane.css). Light mode needs
-   a real dark well because the panel around it is pale. WebGL terminals paint
-   opaque regardless. */
-html:root.has-bg-media.light-theme .terminal-pane .xterm-container {
-  background: rgba(0, 0, 0, 0.82) !important;
 }
 
 /* The empty stage has no panel behind its prompt, so on an image its text would

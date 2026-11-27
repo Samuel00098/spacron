@@ -1234,21 +1234,76 @@ details.settings-github-note pre {
 
 .shortcut-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(140px, 200px);
+  grid-template-columns: minmax(120px, 1fr) auto;
   gap: 12px;
   align-items: center;
 }
 
-.shortcut-row span {
+.shortcut-row-label {
   color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.25;
 }
 
-.shortcut-row input {
+.shortcut-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-recorder-input {
+  width: 150px;
   height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   font-family: inherit;
-  text-align: right;
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.shortcut-recorder-input.recording {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  cursor: default;
+}
+
+.shortcut-reset-btn {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.shortcut-reset-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.settings-delete-btn {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 6px;
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--error);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.shortcut-custom-action {
+  padding-left: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .custom-shortcut-form {
@@ -1557,7 +1612,6 @@ details.settings-github-note pre {
 }
 
 .theme-card:hover {
-  transform: translateY(-2px);
   background: var(--bg-hover);
   border-color: var(--border-focus);
   box-shadow: var(--shadow-md);

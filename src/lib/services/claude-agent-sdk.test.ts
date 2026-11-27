@@ -86,13 +86,15 @@ describe('runClaudeAgentSdkTurn', () => {
     expect(mockInvoke).toHaveBeenCalledWith('claude_chat_complete', {
       cwd: '/tmp',
       model: null,
-      system_prompt: '',
-      user_text: 'Hello',
+      systemPrompt: '',
+      userText: 'Hello',
       images: [],
       effort: null,
-      access_mode: null,
-      session_id: null,
-      fork_session: false,
+      accessMode: null,
+      sessionId: null,
+      forkSession: false,
+      fast: false,
+      ultracode: false,
     });
     expect(onSessionId).toHaveBeenCalledWith('sess_123');
     expect(baseOpts.onText).toHaveBeenCalledWith('Hello back');
@@ -104,13 +106,15 @@ describe('runClaudeAgentSdkTurn', () => {
     expect(mockInvoke).toHaveBeenCalledWith('claude_chat_complete', {
       cwd: '/tmp',
       model: null,
-      system_prompt: '',
-      user_text: 'Hello',
+      systemPrompt: '',
+      userText: 'Hello',
       images: [],
       effort: null,
-      access_mode: null,
-      session_id: 'sess_abc',
-      fork_session: true,
+      accessMode: null,
+      sessionId: 'sess_abc',
+      forkSession: true,
+      fast: false,
+      ultracode: false,
     });
   });
 

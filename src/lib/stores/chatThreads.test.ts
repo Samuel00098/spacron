@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
-import { autoSettleStaleThreads, AUTO_SETTLE_IDLE_MS, forkChatThreadFrom, getChatThread, resetChatThreadsForTests, chatThreadState } from './chatThreads';
+import { addSideChatToDraft, autoSettleStaleThreads, AUTO_SETTLE_IDLE_MS, forkChatThreadFrom, getChatThread, resetChatThreadsForTests, chatThreadState } from './chatThreads';
 import type { ChatThread } from './chatThreads';
+import type { ChatMessage } from '$lib/types/chat';
 
 vi.mock('$lib/services/claude-agent-sdk', () => ({
   forkClaudeSession: vi.fn().mockResolvedValue({ sessionId: 'forked_sdk_session' }),
@@ -151,5 +152,31 @@ describe('forkChatThreadFrom', () => {
     expect(fork).not.toBeNull();
     expect(get(chatThreadState).messagesByThread[fork!.id].map((message) => message.text)).toEqual(['first', 'second']);
     expect(get(chatThreadState).activeThreadByProject.p1).toBe(fork!.id);
+  });
+});
+
+describe('addSideChatToDraft', () => {
+  it('quotes the latest answer into the parent composer and leaves both transcripts alone', () => {
+    const message = (id: string, role: 'user' | 'assistant', text: string) => ({ id, threadId: 'side', role, type: role, text, ts: 1 }) as ChatMessage;
+    chatThreadState.set({
+      version: 1,
+      threadsByProject: { p1: [
+        baseThread({ id: 'main', status: 'working', draft: 'Also:' }),
+        baseThread({ id: 'side', parentThreadId: 'main' }),
+      ] },
+      messagesByThread: { main: [], side: [message('m1-sidecopy-x', 'assistant', 'from the parent')] },
+      activeThreadByProject: { p1: 'side' },
+    });
+    expect(addSideChatToDraft('side')).toBe(false);
+
+    chatThreadState.update((state) => ({
+      ...state,
+      messagesByThread: { ...state.messagesByThread, side: [...state.messagesByThread.side, message('q', 'user', 'which port?'), message('a', 'assistant', 'Port 1420.\nSee vite.')] },
+    }));
+    expect(addSideChatToDraft('side')).toBe(true);
+    expect(getChatThread('main')).toMatchObject({ status: 'working', draft: 'Also:\n\nSide chat answer to “which port?”:\n> Port 1420.\n> See vite.\n\n' });
+    expect(get(chatThreadState).messagesByThread.main).toEqual([]);
+    expect(getChatThread('side')).toBeTruthy();
+    expect(get(chatThreadState).activeThreadByProject.p1).toBe('main');
   });
 });

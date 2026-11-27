@@ -110,7 +110,19 @@ export function parseChatFileLink(href: string): ParsedChatFileLink | null {
  * treated as repo-root-relative rather than drive-root-absolute.
  */
 export function resolveChatFilePath(root: string | null, path: string): string {
+  // Agents spell paths several ways: normalise them to what Windows opens.
+  // A file URI (ACP agents).
+  if (/^file:/i.test(path)) path = parseChatFileLink(path)?.path ?? path;
+  // `/C:/…`, the path half of a file URI (Antigravity).
+  if (/^\/[a-zA-Z]:[\\/]/.test(path)) return path.slice(1);
   if (!root) return path;
+  if (/^[a-zA-Z]:[\\/]/.test(root)) {
+    // WSL and Cygwin (`/mnt/c/…`, `/cygdrive/c/…`), and Git Bash (`/c/Users/…`).
+    const unix = /^\/(?:mnt|cygdrive)\/([a-zA-Z])\/(.*)$/.exec(path) ?? /^\/([a-zA-Z])\/(Users\/.*)$/.exec(path);
+    if (unix) return `${unix[1].toUpperCase()}:/${unix[2]}`;
+  }
+  // Home-relative paths are expanded by the backend.
+  if (/^~[\\/]/.test(path)) return path;
   if (/^[a-zA-Z]:[\\/]/.test(path) || /^(\/\/|\\\\)/.test(path)) return path;
   if (path.startsWith('/')) {
     if (/^[a-zA-Z]:[\\/]/.test(root)) {

@@ -13,6 +13,7 @@ import { get } from '$lib/stores/storeCompat';
 import { accountsState, activeAccount } from '$lib/stores/agentAccounts';
 import { getAgentRoster } from '$lib/stores/runs';
 import { enqueue } from '$lib/services/terminal-chat-queue';
+import { addSideChat } from './side-chats';
 import type { StructuredAccess } from './provider';
 import { spawnStructuredSubagent, structuredChatProvider } from './registry';
 import {
@@ -24,6 +25,7 @@ import {
   compactStructuredSession,
   listArchivedSessions,
   forkStructuredSession,
+  openStructuredRecordBeside,
   listStructuredSessions,
   recordForPane,
   recordHasConversation,
@@ -78,8 +80,8 @@ export const STRUCTURED_COMMANDS: SlashCommand[] = [
   { name: '/archive', description: 'Archive this chat (kept on disk; /unarchive brings it back)' },
   { name: '/archived', description: 'List this agent\'s archived chats' },
   { name: '/unarchive', description: 'Bring an archived chat back: /unarchive <number or id>' },
-  { name: '/side', description: 'Open a side chat branched from this conversation: /side [first message]' },
-  { name: '/btw', description: 'Same as /side: ask a side question in a branch beside this chat' },
+  { name: '/side', description: 'Open a side chat in the right sidebar: /side [first message]' },
+  { name: '/btw', description: 'Same as /side: ask a side question in the right sidebar' },
   { name: '/resume', description: 'Resume an earlier chat here: /resume <number or id>' },
   { name: '/terminal', description: 'Continue this conversation in the terminal' },
   { name: '/handoff', description: 'Hand off this conversation to another agent' },
@@ -214,7 +216,7 @@ export async function runStructuredCommand(
       if (!forked) return { handled: true, error: 'Could not fork conversation.' };
       const modeDesc = forked.forkMode === 'native'
         ? `a separate native ${provider.label} conversation`
-        : `a separate Spacron history, not a native ${provider.label} fork: the new chat starts a fresh ${provider.label} conversation when resumed`;
+        : `a separate Spacron history, not a native ${provider.label} fork: the new chat starts a fresh ${provider.label} conversation and sends it the history with your first message`;
       return {
         handled: true,
         output: `Forked conversation to "${forked.title}" (${modeDesc}). Resume with /resume ${forked.id}.`,
@@ -328,22 +330,25 @@ export async function runStructuredCommand(
     }
     case '/btw':
     case '/side': {
-      if (state?.status === 'working') return { handled: true, error: 'Stop the running turn before opening a side chat.' };
       const current = recordForPane(paneId);
       const title = `Side: ${current?.title ?? provider.label}`.slice(0, 120);
       const forked = await forkStructuredSession(paneId, { title });
       if (!forked) return { handled: true, error: 'Could not open a side chat from this conversation.' };
-      // A side chat is a branch in its own tab: the conversation here is left
-      // exactly as it was, and switching back is a tab click (or /resume).
-      const opened = await resumeStructuredSessionInPane(paneId, forked.id);
-      if (!opened) return { handled: true, error: 'Could not open the side chat in this pane.' };
-      if (arg) {
-        if (provider.capabilities?.steering === 'inject' && provider.steer) await provider.steer(paneId, arg);
-        else await provider.send(paneId, arg);
+      // The side chat gets its own tab in the right sidebar: this pane keeps its
+      // agent, and any running turn carries on.
+      const sidePane = await openStructuredRecordBeside(paneId, forked.id);
+      if (sidePane == null) return { handled: true, error: `Could not open a side chat.${arg ? ` Your message was not sent: ${arg}` : ''}` };
+      addSideChat({ paneId: sidePane, parentPaneId: paneId, projectId: recordForPane(sidePane)?.projectId ?? current?.projectId ?? null });
+      const side = provider.get(sidePane);
+      if (!side || side.status === 'failed' || side.status === 'closed') {
+        return { handled: true, error: `The side chat could not start${side?.error ? `: ${side.error}` : '.'}${arg ? ` Your message was not sent: ${arg}` : ''}` };
       }
+      // Not awaited: some agents answer only when the turn ends, and this chat
+      // must stay usable. Failures show in the side chat itself.
+      if (arg) void provider.send(sidePane, arg).catch((error) => console.warn('Side chat message failed', error));
       return {
         handled: true,
-        output: `Opened a side chat from this conversation (“${forked.title}”)${arg ? ' and sent your message there' : ''}. It runs independently in its own tab; the chat you came from is untouched.`,
+        output: `Opened a side chat in the right sidebar (“${forked.title}”)${arg ? ' and sent your message there' : ''}. This chat is untouched.`,
       };
     }
     case '/terminal':

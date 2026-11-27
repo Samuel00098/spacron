@@ -766,8 +766,18 @@ export function createVoiceInputSession(
         .join(', ')
         .trim() || undefined;
       if (provider === 'local') {
-        callbacks.onProcessingStart?.('Transcribing locally…');
         const model = get(currentVoiceInputModel) || getDefaultVoiceInputModel(provider);
+        // Parakeet runs on ONNX Runtime, which no build ships: fetch it once.
+        if (model.startsWith('parakeet')) {
+          const runtime = await invoke<{ installed: boolean; supported: boolean } | null>('onnx_runtime_status');
+          if (runtime && !runtime.installed && runtime.supported) {
+            callbacks.onProcessingStart?.('Downloading ONNX Runtime…');
+            const { showToast } = await import('$lib/stores/notification');
+            showToast('Downloading ONNX Runtime (about 160 MB, once). Your words will be typed when it finishes.', 'info', 10000);
+            await invoke('onnx_runtime_download');
+          }
+        }
+        callbacks.onProcessingStart?.('Transcribing locally…');
         transcript = await invoke<string>('local_stt_transcribe', {
           audioBytes: Array.from(bytes),
           modelId: model,

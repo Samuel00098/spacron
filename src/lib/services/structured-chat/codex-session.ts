@@ -15,6 +15,8 @@
  * State is kept per pane in this module, not in the view: the view unmounts
  * when its room is hidden, and the conversation must be there on return.
  */
+import { paneWireText, stripSideChatContext } from '$lib/services/side-chat-context';
+import { allAnswered, answerLabels, askTitle, type AskAnswer, type AskQuestion } from './ask';
 import { parseCodexQuestions, codexAnswers, type CodexQuestion } from './codex-questions';
 import { invoke } from '@tauri-apps/api/core';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -57,6 +59,8 @@ export interface StructuredApproval {
    * Claude do not, and the view then shows the three access answers instead.
    */
   options?: StructuredApprovalOption[];
+  /** Set when the agent is asking the user something: shown as the question card. */
+  questions?: AskQuestion[];
 }
 
 export interface StructuredChatState {
@@ -175,7 +179,7 @@ export function chatItemFor(item: Json): TerminalChatItem | null {
   switch (item.type) {
     case 'userMessage': {
       const parts = Array.isArray(item.content) ? item.content : [];
-      const text = parts.map((p) => str(rec(p)?.text) ?? '').filter(Boolean).join('\n');
+      const text = stripSideChatContext(parts.map((p) => str(rec(p)?.text) ?? '').filter(Boolean).join('\n'));
       const images = parts.flatMap((part) => {
         const input = rec(part);
         const source = input?.type === 'localImage' ? str(input.path)
@@ -281,7 +285,10 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
       ? { command: 'codex', args: ['app-server'], env: {} as Record<string, string> }
       : await invoke<{ command: string; args: string[]; env: Record<string, string> }>('codex_app_server_launch');
     const accountEnv = await accountEnvFor('codex', opts.accountId ?? null);
-    const session = await openAcpSession(launch.command, launch.args, cwd, { ...launch.env, ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
+    // Without this Codex offers its question tool only in Plan mode. A `-c` key,
+    // not `--enable`, so a Codex that doesn't know the feature still starts.
+    const args = [...launch.args, '-c', 'features.default_mode_request_user_input=true'];
+    const session = await openAcpSession(launch.command, args, cwd, { ...launch.env, ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
     runtime.session = session;
     const tail = stderrTail(session);
     runtime.unlisten.push(
@@ -349,7 +356,8 @@ export async function sendCodexTurn(sessionId: number, text: string, images: str
   const runtime = runtimes.get(sessionId);
   if (!state || !runtime?.session || !state.threadId) return;
   const input: Json[] = [];
-  if (text.trim()) input.push({ type: 'text', text, text_elements: [] });
+  const wire = paneWireText(sessionId, text);
+  if (wire.text.trim()) input.push({ type: 'text', text: wire.text, text_elements: [] });
   for (const path of images) input.push({ type: 'localImage', path });
   if (!input.length) return;
   const { approvalPolicy, sandboxPolicy } = accessPolicy(state.access, runtime.cwd);
@@ -366,6 +374,7 @@ export async function sendCodexTurn(sessionId: number, text: string, images: str
       sandboxPolicy,
     });
     runtime.turnId = str(reply.turn?.id);
+    wire.sent();
   } catch (error) {
     update(sessionId, { status: 'ready', error: error instanceof Error ? error.message : String(error) });
   }
@@ -404,44 +413,31 @@ export function setStructuredAccess(sessionId: number, access: StructuredAccess)
   update(sessionId, { access });
 }
 
-const pendingQuestions = new Map<string, { questions: CodexQuestion[]; index: number; answers: Record<string, string> }>();
+const pendingQuestions = new Map<string, { questions: CodexQuestion[]; asked: AskQuestion[] }>();
 const questionKey = (sessionId: number, requestId: string | number) => `${sessionId}:${requestId}`;
 
-/** One `request_user_input` question as an approval card whose options are the answers. */
-function codexQuestionApproval(requestId: string | number, questions: CodexQuestion[], index: number): StructuredApproval {
-  const q = questions[index];
-  const progress = questions.length > 1 ? ` (${index + 1} of ${questions.length})` : '';
-  return {
-    requestId,
-    kind: 'other',
-    title: `${q.header ? `${q.header}: ` : ''}${q.question}${progress}`,
-    detail: q.options.filter((option) => option.description).map((option) => `${option.label}: ${option.description}`).join('\n') || null,
-    options: q.options.map((option, i) => ({ id: String(i), label: option.label, kind: 'allow_once' })),
-  };
+function codexAsk(questions: CodexQuestion[]): AskQuestion[] {
+  return questions.map((q) => ({
+    header: q.header || null,
+    text: q.question,
+    options: q.options.map((o, i) => ({ id: String(i), label: o.label, description: o.description })),
+    multiple: false,
+    allowOther: q.allowOther,
+  }));
 }
 
-export async function answerStructuredApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string): Promise<void> {
+export async function answerStructuredApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string, answers?: AskAnswer[]): Promise<void> {
   const runtime = runtimes.get(sessionId);
   const key = questionKey(sessionId, requestId);
   const asking = pendingQuestions.get(key);
   if (asking) {
-    const q = asking.questions[asking.index];
-    const chosen = decision === 'decline' ? undefined : q.options[Number(optionId)];
-    if (chosen) {
-      asking.answers[q.id] = chosen.label;
-      asking.index += 1;
-      if (asking.index < asking.questions.length) {
-        update(sessionId, (s) => ({ approvals: s.approvals.map((a) => a.requestId === requestId ? codexQuestionApproval(requestId, asking.questions, asking.index) : a) }));
-        return;
-      }
-      pendingQuestions.delete(key);
-      update(sessionId, (s) => ({ approvals: s.approvals.filter((a) => a.requestId !== requestId) }));
-      await runtime?.session?.respond(requestId, codexAnswers(asking.answers));
-      return;
-    }
-    // Declined (or no usable option): tell Codex no answer is coming.
     pendingQuestions.delete(key);
     update(sessionId, (s) => ({ approvals: s.approvals.filter((a) => a.requestId !== requestId) }));
+    if (decision !== 'decline' && allAnswered(asking.asked, answers)) {
+      await runtime?.session?.respond(requestId, codexAnswers(Object.fromEntries(asking.questions.map((q, i) => [q.id, answerLabels(asking.asked[i], answers[i])]))));
+      return;
+    }
+    // Skipped: tell Codex no answer is coming.
     await runtime?.session?.respond(requestId, {}, { code: -32000, message: 'The user declined to answer.' });
     return;
   }
@@ -646,8 +642,9 @@ function onServerRequest(sessionId: number, r: AcpServerRequest) {
   if (r.method === 'item/tool/requestUserInput') {
     const questions = parseCodexQuestions(p);
     if (questions) {
-      pendingQuestions.set(questionKey(sessionId, r.requestId), { questions, index: 0, answers: {} });
-      update(sessionId, (s) => ({ approvals: [...s.approvals, codexQuestionApproval(r.requestId, questions, 0)] }));
+      const asked = codexAsk(questions);
+      pendingQuestions.set(questionKey(sessionId, r.requestId), { questions, asked });
+      update(sessionId, (s) => ({ approvals: [...s.approvals, { requestId: r.requestId, kind: 'other', title: askTitle(asked), detail: null, questions: asked }] }));
       return;
     }
   }

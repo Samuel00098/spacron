@@ -25,7 +25,7 @@
 @keyframes emptyWbFadeIn {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.99);
+    transform: translateY(0) scale(0.99);
   }
   to {
     opacity: 1;
@@ -112,7 +112,6 @@
 
 .empty-wb-btn.primary:hover {
   background: var(--accent-hover, #2563eb);
-  transform: translateY(-1px);
   box-shadow: 0 3px 10px rgba(59, 130, 246, 0.35);
 }
 
@@ -126,7 +125,6 @@
   background: #1c1c20;
   color: #ffffff;
   border-color: rgba(255, 255, 255, 0.16);
-  transform: translateY(-1px);
 }
 
 .empty-wb-btn:active {

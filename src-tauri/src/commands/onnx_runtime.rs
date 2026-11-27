@@ -17,34 +17,33 @@
 //! the models directory, which is exactly where
 //! `commands/parakeet.rs::ensure_ort_dylib` looks.
 //!
-//! ## Where the URLs and hashes come from — and why not from pyke
+//! ## Where the library comes from
 //!
-//! From **Microsoft's official ONNX Runtime GitHub release**, with the SHA-256
-//! digests GitHub's own release API publishes for each asset. Nothing here was
-//! invented, and nothing is hashed on first use.
+//! From Microsoft's own `Microsoft.ML.OnnxRuntime` package on nuget.org, with
+//! the SHA-512 nuget.org's catalog publishes for that exact version. It used to
+//! be Microsoft's GitHub release assets; `github.com/microsoft/onnxruntime`
+//! answered 404 on 2026-11-27, which left users with the speech model and no
+//! runtime. Third-party mirrors are not used: what is downloaded here is loaded
+//! into this process.
 //!
-//! The obvious-looking source is the CDN `ort-sys` itself downloads from
-//! (`build/download/dist.txt`), and it is the wrong one. Those archives are
-//! built for **static linking**: the `x86_64-pc-windows-msvc` one was fetched
-//! and unpacked while writing this, and it contains exactly two files — a 305 MB
-//! `onnxruntime.lib` and `DirectML.dll`. There is no loadable `onnxruntime.dll`
-//! in it, so it cannot satisfy `load-dynamic` no matter how it is unpacked.
-//! Microsoft's release archives carry the real shared library under `lib/`.
+//! The package carries every platform's library under
+//! `runtimes/<rid>/native/`, so one URL and one digest serve all of them.
+//!
+//! The obvious-looking source is the CDN `ort-sys` itself downloads from, and
+//! it is the wrong one: those archives are built for static linking and hold no
+//! loadable library.
 //!
 //! ## Version
 //!
 //! `ort` rc.12 requests API version 24 (its default `api-24` feature). ONNX
-//! Runtime keeps its C API backward compatible — `GetApi(24)` is honoured by any
-//! later runtime — so [`DIST_VERSION`] tracks a current release rather than
-//! pinning 1.24 exactly. That claim is not taken on trust: the ignored
-//! `installs_a_working_runtime` test loads the downloaded library through `ort`,
-//! which is the only thing that actually proves the pairing works.
+//! Runtime keeps its C API backward compatible, so [`DIST_VERSION`] tracks a
+//! current release rather than pinning 1.24 exactly. That claim is not taken on
+//! trust: the ignored `installs_a_working_runtime` test loads the downloaded
+//! library through `ort`.
 //!
-//! The download is verified against the pinned SHA-256 **before** anything is
-//! written into the models directory. That matters more here than for the model
-//! weights: this is a native shared library the app then loads into its own
-//! process, so an unverified one is arbitrary code execution. A hash mismatch
-//! discards the download and reports an error.
+//! The download is verified against the pinned SHA-512 **before** anything is
+//! written into the models directory: an unverified native library would be
+//! arbitrary code execution.
 
 use std::fs;
 use std::io::{Cursor, Read};
@@ -52,47 +51,25 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-/// The upstream release [`DIST`] points at. Bump the URLs and digests together
-/// with this, and re-run the ignored `installs_a_working_runtime` test.
-pub const DIST_VERSION: &str = "ONNX Runtime 1.29.0";
+/// The upstream release [`PACKAGE_URL`] points at. Bump the URL and digest
+/// together with this, and re-run the ignored `installs_a_working_runtime` test.
+pub const DIST_VERSION: &str = "ONNX Runtime 1.31.1";
 
-/// `(rust target triple, url, sha256)` for the plain CPU build of ONNX Runtime.
+const PACKAGE_URL: &str = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.31.1/microsoft.ml.onnxruntime.1.31.1.nupkg";
+
+/// nuget.org's published `packageHash` for [`PACKAGE_URL`], as hex.
+const PACKAGE_SHA512: &str = "42f13cf89ca111c71f38bececf59be7125d919877840aeff06db1da026a7d1e685daaaa039254357f1fb84de43e492467ac279bc83420cb0d57472e73b4c6327";
+
+/// `(rust target triple, path of the library inside the package)`.
 ///
-/// URLs and digests are Microsoft's published release assets; the digests come
-/// from the GitHub release API's `digest` field for each asset, not from hashing
-/// a download here.
-///
-/// `x86_64-apple-darwin` is deliberately absent: **Microsoft publishes no
-/// Intel-Mac build** at this version — the macOS asset list is `osx-arm64` only.
-/// An Intel Mac therefore gets an honest "unsupported" message rather than a
-/// download that 404s. GPU variants (CUDA/DirectML) are omitted on purpose; this
-/// is CPU inference in a desktop app, and they are 4-40× the size.
-const DIST: &[(&str, &str, &str)] = &[
-    (
-        "x86_64-pc-windows-msvc",
-        "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip",
-        "c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2",
-    ),
-    (
-        "aarch64-pc-windows-msvc",
-        "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-arm64-1.29.0.zip",
-        "a094a49c3ced0f9fca554647cc7566ae99d93a63a8ce6bf47975561c2de7608e",
-    ),
-    (
-        "x86_64-unknown-linux-gnu",
-        "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-x64-1.29.0.tgz",
-        "c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba",
-    ),
-    (
-        "aarch64-unknown-linux-gnu",
-        "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-aarch64-1.29.0.tgz",
-        "e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f",
-    ),
-    (
-        "aarch64-apple-darwin",
-        "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz",
-        "d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92",
-    ),
+/// `x86_64-apple-darwin` is deliberately absent: Microsoft publishes no
+/// Intel-Mac build, so an Intel Mac gets an honest "unsupported" message.
+const DIST: &[(&str, &str)] = &[
+    ("x86_64-pc-windows-msvc", "runtimes/win-x64/native/onnxruntime.dll"),
+    ("aarch64-pc-windows-msvc", "runtimes/win-arm64/native/onnxruntime.dll"),
+    ("x86_64-unknown-linux-gnu", "runtimes/linux-x64/native/libonnxruntime.so"),
+    ("aarch64-unknown-linux-gnu", "runtimes/linux-arm64/native/libonnxruntime.so"),
+    ("aarch64-apple-darwin", "runtimes/osx-arm64/native/libonnxruntime.dylib"),
 ];
 
 /// This build's Rust target triple, assembled from `cfg`.
@@ -111,12 +88,12 @@ fn current_target() -> Option<&'static str> {
     })
 }
 
-/// The distribution entry for this build, if one exists.
-fn dist_for_current_target() -> Option<(&'static str, &'static str)> {
+/// Where this build's library sits inside the package, if it has one.
+fn entry_for_current_target() -> Option<&'static str> {
     let target = current_target()?;
     DIST.iter()
-        .find(|(triple, _, _)| *triple == target)
-        .map(|(_, url, hash)| (*url, *hash))
+        .find(|(triple, _)| *triple == target)
+        .map(|(_, entry)| *entry)
 }
 
 /// The library file name `parakeet::ensure_ort_dylib` looks for. Kept identical
@@ -158,7 +135,8 @@ pub struct OnnxRuntimeStatus {
     pub version: String,
 }
 
-/// Whether the ONNX Runtime library is already in place.
+/// Whether the ONNX Runtime library is already in place: the one installed
+/// here, or one the user supplied where `ensure_ort_dylib` also looks.
 ///
 /// A zero-byte file counts as absent: an interrupted write should present as
 /// "not installed" and be re-fetched, not as a library that fails to load.
@@ -167,8 +145,8 @@ pub async fn onnx_runtime_status() -> OnnxRuntimeStatus {
     let path = installed_path();
     let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     OnnxRuntimeStatus {
-        installed: size > 0,
-        supported: dist_for_current_target().is_some(),
+        installed: size > 0 || crate::commands::parakeet::ensure_ort_dylib().is_ok(),
+        supported: entry_for_current_target().is_some(),
         size_bytes: size,
         version: DIST_VERSION.to_string(),
     }
@@ -179,18 +157,22 @@ pub async fn onnx_runtime_status() -> OnnxRuntimeStatus {
 /// Idempotent: returns immediately when one is already installed, so callers can
 /// invoke it unconditionally before a transcription rather than tracking state.
 ///
-/// The whole archive is read into memory before anything is written. It is tens
-/// of megabytes, which is cheap next to the ~600 MB of weights this feature
-/// already requires, and it means the SHA-256 is checked against the complete
+/// The whole package (about 160 MB) is read into memory before anything is
+/// written. That is cheap next to the ~600 MB of weights this feature already
+/// requires, and it means the SHA-512 is checked against the complete
 /// bytes before a single one reaches disk — a streaming extract-then-verify
 /// would have to unpack an unverified native library first.
 #[tauri::command(async)]
 pub async fn onnx_runtime_download() -> Result<OnnxRuntimeStatus, String> {
+    // A model download and a first dictation can both ask at once.
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = ONE_AT_A_TIME.lock().await;
+
     if installed_path().metadata().map(|m| m.len()).unwrap_or(0) > 0 {
         return Ok(onnx_runtime_status().await);
     }
 
-    let Some((url, expected_hash)) = dist_for_current_target() else {
+    let Some(entry) = entry_for_current_target() else {
         return Err(format!(
             "There is no prebuilt ONNX Runtime for this platform ({} {}), so offline \
              speech-to-text is unavailable. Build ONNX Runtime yourself and set \
@@ -204,18 +186,15 @@ pub async fn onnx_runtime_download() -> Result<OnnxRuntimeStatus, String> {
     // timeout at all, and a stalled connection to the CDN then hangs the command
     // indefinitely — observed here as a 22-minute wait before the transport gave
     // up on its own. The whole-request budget is generous because the archive is
-    // ~80 MB on a slow line, but it is finite.
+    // ~160 MB on a slow line, but it is finite.
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(15 * 60))
         .build()
         .map_err(|e| format!("Could not create the download client: {e}"))?;
 
-    // Retried, because an ~80 MB transfer from GitHub's asset CDN does not
-    // reliably complete in one go: while building this, the same URL succeeded
-    // once and then twice dropped mid-body ("error decoding response body"). A
-    // user on a worse connection than a dev machine will see that more often,
-    // and one dropped read should not mean "offline STT is broken".
+    // Retried, because a transfer this size does not reliably complete in one
+    // go, and one dropped read should not mean "offline STT is broken".
     //
     // Each attempt restarts from zero rather than resuming: the digest is over
     // the whole archive, and a resumed transfer that silently stitched two
@@ -229,7 +208,7 @@ pub async fn onnx_runtime_download() -> Result<OnnxRuntimeStatus, String> {
         if attempt > 1 {
             tokio::time::sleep(std::time::Duration::from_secs(2 * attempt as u64)).await;
         }
-        let response = match client.get(url).send().await {
+        let response = match client.get(PACKAGE_URL).send().await {
             Ok(response) => response,
             Err(e) => {
                 last_error = format!("could not reach the download ({e})");
@@ -258,11 +237,11 @@ pub async fn onnx_runtime_download() -> Result<OnnxRuntimeStatus, String> {
         ));
     };
 
-    verify_sha256(&archive, expected_hash)?;
+    verify_sha512(&archive, PACKAGE_SHA512)?;
 
     let dir = models_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    let library = extract_library(url, &archive)?;
+    let library = extract_library(&archive, entry)?;
 
     // Write to a temp name and rename into place, so an interrupted install
     // never leaves a half-written library that would be loaded as if complete.
@@ -283,10 +262,10 @@ pub async fn onnx_runtime_download() -> Result<OnnxRuntimeStatus, String> {
 /// This is the gate that makes downloading a native library acceptable at all:
 /// what comes back is loaded into this process, so a hijacked CDN, a proxy that
 /// rewrites payloads, or a MITM must not be able to substitute one.
-fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
+fn verify_sha512(bytes: &[u8], expected: &str) -> Result<(), String> {
     use sha2::Digest;
 
-    let digest = sha2::Sha256::digest(bytes);
+    let digest = sha2::Sha512::digest(bytes);
     let actual = digest
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -301,54 +280,19 @@ fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
     }
 }
 
-/// Whether a path inside the archive is the main ONNX Runtime library.
-///
-/// The archive holds its shared libraries flat at the root, and on Unix there
-/// can be more than one — a versioned `libonnxruntime.so.1.24.2` alongside
-/// provider libraries such as `libonnxruntime_providers_shared.so`. Only the
-/// core library is wanted: an underscore after `onnxruntime` marks a provider,
-/// which `ort` loads separately if ever asked to and which must not be mistaken
-/// for the thing `dlopen` is pointed at.
-fn is_core_library(name: &str) -> bool {
-    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let stem = name.strip_prefix("lib").unwrap_or(name);
-    let Some(rest) = stem.strip_prefix("onnxruntime") else {
-        return false;
-    };
-    if rest.starts_with('_') {
-        return false;
-    }
-    name.contains(".dll") || name.contains(".dylib") || name.contains(".so")
-}
-
-/// Pull the ONNX Runtime library out of Microsoft's release archive.
-///
-/// Windows assets are `.zip`, macOS and Linux `.tgz`, so the format is chosen by
-/// the URL rather than by the host — the two stay in step because both come from
-/// the same [`DIST`] row.
-fn extract_library(url: &str, archive: &[u8]) -> Result<Vec<u8>, String> {
-    let found = if url.ends_with(".zip") {
-        extract_from_zip(archive)?
-    } else {
-        extract_from_tgz(archive)?
-    };
-    found.ok_or_else(|| {
-        "The ONNX Runtime archive did not contain a runtime library.".to_string()
-    })
-}
-
-fn extract_from_zip(archive: &[u8]) -> Result<Option<Vec<u8>>, String> {
+/// Pull one platform's library out of the package, which is a zip.
+fn extract_library(archive: &[u8], wanted: &str) -> Result<Vec<u8>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(archive))
-        .map_err(|e| format!("The ONNX Runtime archive could not be read: {e}"))?;
+        .map_err(|e| format!("The ONNX Runtime package could not be read: {e}"))?;
     for index in 0..zip.len() {
         let mut entry = zip
             .by_index(index)
-            .map_err(|e| format!("The ONNX Runtime archive is corrupt: {e}"))?;
-        let entry_name = entry
+            .map_err(|e| format!("The ONNX Runtime package is corrupt: {e}"))?;
+        let name = entry
             .name()
-            .map_err(|e| format!("The ONNX Runtime archive is corrupt: {e}"))?
+            .map_err(|e| format!("The ONNX Runtime package is corrupt: {e}"))?
             .into_owned();
-        if !entry.is_file() || !is_core_library(&entry_name) {
+        if name != wanted {
             continue;
         }
         let mut bytes = Vec::new();
@@ -356,39 +300,10 @@ fn extract_from_zip(archive: &[u8]) -> Result<Option<Vec<u8>>, String> {
             .read_to_end(&mut bytes)
             .map_err(|e| format!("Could not unpack the ONNX Runtime library: {e}"))?;
         if !bytes.is_empty() {
-            return Ok(Some(bytes));
+            return Ok(bytes);
         }
     }
-    Ok(None)
-}
-
-fn extract_from_tgz(archive: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    let decompressed = flate2::read::GzDecoder::new(archive);
-    let mut tar = tar::Archive::new(decompressed);
-    let entries = tar
-        .entries()
-        .map_err(|e| format!("The ONNX Runtime archive could not be read: {e}"))?;
-    for entry in entries {
-        let mut entry = entry.map_err(|e| format!("The ONNX Runtime archive is corrupt: {e}"))?;
-        let path = entry
-            .path()
-            .map_err(|e| format!("The ONNX Runtime archive has an unreadable entry: {e}"))?
-            .to_string_lossy()
-            .to_string();
-        if !is_core_library(&path) {
-            continue;
-        }
-        let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("Could not unpack the ONNX Runtime library: {e}"))?;
-        // `lib/libonnxruntime.so` is a symlink to the versioned file and reads
-        // as zero bytes; skipping empties lands on the real library instead.
-        if !bytes.is_empty() {
-            return Ok(Some(bytes));
-        }
-    }
-    Ok(None)
+    Err("The ONNX Runtime package did not contain a runtime library.".to_string())
 }
 
 /// Remove an installed library, so a corrupt one can be re-fetched.
@@ -414,82 +329,55 @@ pub(crate) fn runtime_present_in(dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
-    /// Every pinned entry must be a well-formed, HTTPS, 64-hex-digit record.
-    /// A typo in one of these is not a compile error and would only surface as
-    /// a failed download or — worse — a checksum that can never match.
+    /// A typo here is not a compile error and would only surface as a failed
+    /// download or a checksum that can never match.
     #[test]
-    fn the_pinned_distribution_list_is_well_formed() {
-        for (target, url, hash) in DIST {
-            assert!(url.starts_with("https://"), "{target} url is not https");
-            assert!(
-                url.starts_with("https://github.com/microsoft/onnxruntime/releases/download/"),
-                "{target} url is not a Microsoft release asset"
-            );
-            // Windows ships zip, macOS/Linux gzipped tar. `extract_library`
-            // picks its unpacker from this suffix, so an unexpected one would be
-            // silently handed to the wrong reader.
-            assert!(
-                url.ends_with(".zip") || url.ends_with(".tgz"),
-                "{target} url is neither a zip nor a tgz"
-            );
-            assert_eq!(
-                url.ends_with(".zip"),
-                target.contains("windows"),
-                "{target} archive format does not match the platform"
-            );
-            assert!(url.contains("1.29.0"), "{target} url is not the pinned version");
-            assert_eq!(hash.len(), 64, "{target} hash is not a sha256");
-            assert!(
-                hash.chars().all(|c| c.is_ascii_hexdigit()),
-                "{target} hash is not hex"
-            );
+    fn the_pinned_package_is_well_formed() {
+        assert!(PACKAGE_URL.starts_with("https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/"));
+        let version = DIST_VERSION.rsplit(' ').next().unwrap();
+        assert!(PACKAGE_URL.contains(version), "url is not the pinned version");
+        assert_eq!(PACKAGE_SHA512.len(), 128, "not a sha512");
+        assert!(PACKAGE_SHA512.chars().all(|c| c.is_ascii_hexdigit()));
+        for (target, entry) in DIST {
+            assert!(entry.starts_with("runtimes/"), "{target}");
+            assert_eq!(entry.ends_with(".dll"), target.contains("windows"), "{target}");
         }
     }
 
-    /// The host this test runs on must resolve to a real entry — otherwise CI
-    /// is silently shipping a platform that can never install the runtime.
-    /// Intel macOS is the known, deliberate exception and has no CI runner.
+    /// The host this test runs on must resolve to a real entry. Intel macOS is
+    /// the known, deliberate exception and has no CI runner.
     #[test]
-    fn this_platform_resolves_to_a_distribution() {
+    fn this_platform_resolves_to_a_library() {
         assert!(
-            dist_for_current_target().is_some(),
-            "no ONNX Runtime distribution for {} {}",
+            entry_for_current_target().is_some_and(|entry| entry.ends_with(dylib_name())),
+            "no ONNX Runtime library for {} {}",
             std::env::consts::OS,
             std::env::consts::ARCH
         );
+        assert!(!DIST.iter().any(|(t, _)| *t == "x86_64-apple-darwin"));
     }
 
     #[test]
-    fn intel_macs_are_reported_as_unsupported_rather_than_guessed_at() {
-        // pyke publishes no x86_64-apple-darwin build; inventing that URL would
-        // produce a 404 at download time instead of an honest message.
-        assert!(!DIST.iter().any(|(t, _, _)| *t == "x86_64-apple-darwin"));
+    fn only_the_wanted_library_is_unpacked() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in [
+            ("runtimes/win-x64/native/onnxruntime_providers_shared.dll", "providers"),
+            ("runtimes/win-x64/native/onnxruntime.dll", "core"),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let found = extract_library(&bytes, "runtimes/win-x64/native/onnxruntime.dll").unwrap();
+        assert_eq!(found, b"core");
+        assert!(extract_library(&bytes, "runtimes/linux-x64/native/libonnxruntime.so").is_err());
     }
 
-    #[test]
-    fn the_core_library_is_told_apart_from_provider_libraries() {
-        assert!(is_core_library("onnxruntime.dll"));
-        assert!(is_core_library("libonnxruntime.so"));
-        assert!(is_core_library("libonnxruntime.so.1.24.2"));
-        assert!(is_core_library("libonnxruntime.dylib"));
-        assert!(is_core_library("libonnxruntime.1.24.2.dylib"));
-        // Provider libraries ship alongside it and must never be picked.
-        assert!(!is_core_library("libonnxruntime_providers_shared.so"));
-        assert!(!is_core_library("onnxruntime_providers_cuda.dll"));
-        // Nor anything that merely sits in the archive.
-        assert!(!is_core_library("LICENSE"));
-        assert!(!is_core_library("headers/onnxruntime_c_api.h"));
-    }
-
-    /// The real thing: download, verify, extract, install, and confirm the
-    /// result is a library `ort` will actually load.
-    ///
-    /// Ignored by default — it hits the network, writes into this machine's real
-    /// models directory, and pulls tens of megabytes. It is the only check that
-    /// covers the pinned URL, the pinned hash, the LZMA2/tar unpacking and the
-    /// hand-off to `parakeet::ensure_ort_dylib` together, so run it after
-    /// touching any of them:
+    /// The real thing: download, verify, unpack, install, and confirm `ort` will
+    /// load the result. Ignored by default: it pulls about 160 MB and writes into
+    /// this machine's real models directory.
     ///
     /// ```text
     /// cargo test --lib installs_a_working_runtime -- --ignored --nocapture
@@ -508,74 +396,21 @@ mod tests {
 
         let path = installed_path();
         assert!(path.is_file(), "{} was not created", path.display());
-
-        // The payoff: the library resolves and loads through the same path the
-        // STT pipeline uses. This is what proves the archive yielded a real
-        // runtime rather than, say, a provider stub or a text file.
         crate::commands::parakeet::ensure_ort_dylib().expect("ort loads the installed runtime");
-    }
-
-    /// Diagnostic: print the archive's contents. Ignored; run when the layout
-    /// upstream ships appears to have changed.
-    ///
-    /// ```text
-    /// cargo test --lib lists_the_archive_contents -- --ignored --nocapture
-    /// ```
-    #[test]
-    #[ignore = "downloads the real ONNX Runtime over the network"]
-    fn lists_the_archive_contents() {
-        let (url, hash) = dist_for_current_target().expect("a distribution for this platform");
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let bytes = runtime.block_on(async {
-            reqwest::get(url)
-                .await
-                .expect("fetch")
-                .bytes()
-                .await
-                .expect("body")
-        });
-        verify_sha256(&bytes, hash).expect("checksum");
-        println!("archive bytes: {}", bytes.len());
-
-        if url.ends_with(".zip") {
-            let mut zip = zip::ZipArchive::new(Cursor::new(&bytes[..])).expect("zip");
-            for index in 0..zip.len() {
-                let entry = zip.by_index(index).expect("entry");
-                let entry_name = entry.name().expect("entry name");
-                println!(
-                    "  {} size={} core={}",
-                    entry_name,
-                    entry.size(),
-                    is_core_library(&entry_name)
-                );
-            }
-        } else {
-            let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));
-            for entry in tar.entries().expect("entries") {
-                let entry = entry.expect("entry");
-                let path = entry.path().expect("path").to_string_lossy().to_string();
-                println!(
-                    "  {path} size={} core={}",
-                    entry.header().size().unwrap_or(0),
-                    is_core_library(&path)
-                );
-            }
-        }
     }
 
     #[test]
     fn a_wrong_checksum_is_refused() {
-        let expected = "0".repeat(64);
-        let err = verify_sha256(b"not the real archive", &expected).unwrap_err();
+        let expected = "0".repeat(128);
+        let err = verify_sha512(b"not the real package", &expected).unwrap_err();
         assert!(err.contains("did not match"), "{err}");
     }
 
     #[test]
     fn the_matching_checksum_is_accepted() {
-        // sha256 of the empty string.
-        let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        assert!(verify_sha256(b"", empty).is_ok());
-        // Case-insensitively, since hex digests get pasted in either case.
-        assert!(verify_sha256(b"", &empty.to_uppercase()).is_ok());
+        // sha512 of the empty string.
+        let empty = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
+        assert!(verify_sha512(b"", empty).is_ok());
+        assert!(verify_sha512(b"", &empty.to_uppercase()).is_ok());
     }
 }

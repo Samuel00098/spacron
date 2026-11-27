@@ -269,18 +269,24 @@ export default function App() {
     });
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (isModalOpen()) return;
-      const zoomInShortcut = activeShortcuts.find((shortcut) => shortcut?.id === 'zoomIn');
-      const zoomOutShortcut = activeShortcuts.find((shortcut) => shortcut?.id === 'zoomOut');
-      const resetZoomShortcut = activeShortcuts.find((shortcut) => shortcut?.id === 'resetZoom');
+      if (event.defaultPrevented || isModalOpen()) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.getAttribute?.('data-shortcut-recorder') === 'true') return;
 
-      if (zoomInShortcut && matchShortcut(event, zoomInShortcut.keys)) {
+      const matchAction = (id: string) =>
+        activeShortcuts.some((shortcut) => {
+          if (!shortcut) return false;
+          const target = shortcut.id.startsWith('custom_') ? shortcut.action : shortcut.id;
+          return target === id && matchShortcut(event, shortcut.keys);
+        });
+
+      if (matchAction('zoomIn')) {
         event.preventDefault();
         zoomIn();
-      } else if (zoomOutShortcut && matchShortcut(event, zoomOutShortcut.keys)) {
+      } else if (matchAction('zoomOut')) {
         event.preventDefault();
         zoomOut();
-      } else if (resetZoomShortcut && matchShortcut(event, resetZoomShortcut.keys)) {
+      } else if (matchAction('resetZoom')) {
         event.preventDefault();
         uiZoom.set(100);
       }

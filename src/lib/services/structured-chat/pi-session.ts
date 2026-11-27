@@ -6,8 +6,11 @@
  * `get_available_models.data.models` the catalog, where ids repeat across
  * providers.
  */
+import { paneWireText } from '$lib/services/side-chat-context';
 import { openAgentSession, stderrTail, withTimeout, type AcpSession } from '$lib/services/acp-transport';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
+import { askTitle } from './ask';
+import { parsePiDialog, piDialogResponse, type PiDialog } from './pi-questions';
 import { acpImageBlocks, imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
 import { aboutYouEnv } from '$lib/stores/aboutYou';
@@ -99,6 +102,9 @@ async function sendRpc(runtime: { session: AcpSession; requestId: number }, comm
   await runtime.session.writeRaw(`${JSON.stringify(frame)}\n`);
 }
 
+/** Extension dialogs waiting for an answer, by `sessionId:requestId`. */
+const dialogs = new Map<string, PiDialog>();
+
 export const piProvider: StructuredChatProvider = {
   agent: 'pi', label: 'Pi',
   capabilities: {
@@ -136,6 +142,20 @@ export const piProvider: StructuredChatProvider = {
         if (type === 'response') {
           const waiter = str(frame.id) ? runtime.responses.get(str(frame.id)!) : undefined;
           if (waiter) { runtime.responses.delete(str(frame.id)!); waiter(frame); }
+          return;
+        }
+        if (type === 'extension_ui_request') {
+          const dialog = parsePiDialog(frame);
+          if (dialog === 'cancel') {
+            void runtime.session.writeRaw(`${JSON.stringify({ type: 'extension_ui_response', id: frame.id, cancelled: true })}\n`).catch(() => undefined);
+            stores.update(sessionId, { error: 'A Pi extension asked for typed input, which this chat can\'t collect yet, so it was cancelled.' });
+          } else if (dialog) {
+            dialogs.set(`${sessionId}:${dialog.id}`, dialog);
+            const asked = [{ header: dialog.message ? dialog.title : null, text: dialog.message ?? dialog.title, options: dialog.options.map((o) => ({ ...o, description: null })), multiple: false, allowOther: false }];
+            stores.update(sessionId, (state) => ({
+              approvals: [...state.approvals, { requestId: dialog.id, kind: 'other', title: askTitle(asked), detail: null, questions: asked }],
+            }));
+          }
           return;
         }
         const isConfirm = type === 'confirmation' || type === 'permission_request' || type === 'confirm' || type === 'approval_request' || (type === 'request' && /confirm|permission/i.test(str(frame.subtype) ?? ''));
@@ -224,7 +244,9 @@ export const piProvider: StructuredChatProvider = {
     activeAssistantIds.delete(sessionId);
     stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text, ...(previews.length ? { images: previews } : {}) });
     stores.update(sessionId, { status: 'working' });
-    await sendRpc(runtime, 'prompt', { message: text, ...(imageBlocks.length ? { images: imageBlocks } : {}) });
+    const wire = paneWireText(sessionId, text);
+    await sendRpc(runtime, 'prompt', { message: wire.text, ...(imageBlocks.length ? { images: imageBlocks } : {}) });
+    wire.sent();
   },
   async interrupt(sessionId) { const runtime = sessions.get(sessionId); if (runtime) await sendRpc(runtime, 'abort', {}); },
   setModel(sessionId, model) {
@@ -244,8 +266,16 @@ export const piProvider: StructuredChatProvider = {
       void sendRpc(runtime, 'set_permission_mode', { mode: access === 'full-access' ? 'yolo' : access === 'auto' ? 'auto' : 'ask' }).catch(() => undefined);
     }
   },
-  async answerApproval(sessionId, requestId, decision) {
+  async answerApproval(sessionId, requestId, decision, _optionId, answers) {
     const runtime = sessions.get(sessionId);
+    const dialogKey = `${sessionId}:${requestId}`;
+    const dialog = dialogs.get(dialogKey);
+    if (dialog) {
+      dialogs.delete(dialogKey);
+      stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
+      await runtime?.session.writeRaw(`${JSON.stringify(piDialogResponse(dialog, decision === 'decline' ? undefined : answers?.[0]?.optionIds[0]))}\n`).catch(() => undefined);
+      return;
+    }
     stores.update(sessionId, (state) => ({
       approvals: state.approvals.filter((approval) => approval.requestId !== requestId),
     }));

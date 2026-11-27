@@ -1,8 +1,7 @@
 /**
- * Turns one CHANGELOG release section into the few lines the title bar's
- * update card shows. The same text arrives two ways: as the update's notes
- * (`latest.json`, filled by the release workflow) and from the bundled
- * CHANGELOG for the version already installed.
+ * Turns one CHANGELOG release section, sent as the update's notes
+ * (`latest.json`, filled by the release workflow), into the few lines the
+ * title bar's update card shows.
  */
 
 export interface ReleaseHeadline {
@@ -25,16 +24,6 @@ function plain(text: string): string {
     .replace(/\*\*|`/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-/** The body under `## [vX.Y.Z]`, or null when the changelog has no such release. */
-export function changelogSection(changelog: string, version: string): string | null {
-  const wanted = version.replace(/^v/, '');
-  const lines = changelog.replace(/\r\n/g, '\n').split('\n');
-  const start = lines.findIndex((line) => /^## \[v?([^\]]+)\]/.exec(line)?.[1] === wanted);
-  if (start < 0) return null;
-  const end = lines.findIndex((line, i) => i > start && line.startsWith('## '));
-  return lines.slice(start + 1, end < 0 ? undefined : end).join('\n').trim() || null;
 }
 
 export function releaseHighlights(notes: string | null | undefined, limit = 6): ReleaseHighlights {

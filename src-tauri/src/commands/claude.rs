@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 /// Result of one Claude turn: the assistant's text and any session id the CLI
@@ -40,6 +40,8 @@ fn build_args(
         "-p".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        // Required by the CLI with `-p` and stream-json output.
+        "--verbose".to_string(),
         "--permission-mode".to_string(),
         permission_mode.to_string(),
     ];
@@ -62,6 +64,21 @@ fn build_args(
         args.push("--fork-session".to_string());
     }
     args
+}
+
+/// Settings for Fast mode and Ultracode, or `None` with both off. In `-p` mode
+/// Fast mode only runs when a flag setting asks for it, and Ultracode runs on
+/// dynamic workflows.
+fn switch_settings(fast: bool, ultracode: bool) -> Option<serde_json::Value> {
+    let mut settings = serde_json::Map::new();
+    if fast {
+        settings.insert("fastMode".into(), true.into());
+    }
+    if ultracode {
+        settings.insert("enableWorkflows".into(), true.into());
+        settings.insert("ultracode".into(), true.into());
+    }
+    (!settings.is_empty()).then(|| serde_json::Value::Object(settings))
 }
 
 /// Classify a Claude error message into the error kinds the orchestrator
@@ -102,10 +119,11 @@ async fn run_turn(
     _system_prompt: &str,
     user_text: &str,
     images: &[PathBuf],
-    _effort: Option<&str>,
+    effort: Option<&str>,
     access_mode: Option<&str>,
     session_id: Option<&str>,
     fork_session: bool,
+    settings: Option<serde_json::Value>,
 ) -> Result<ClaudeTurnResult, String> {
     let _cwd = validate_cwd(cwd)?;
 
@@ -125,10 +143,36 @@ async fn run_turn(
         prompt.push_str(&format!("\n\n[Image: {}]", image.display()));
     }
 
-    let args = build_args(model, permission_mode, session_id, fork_session);
+    let mut args = build_args(model, permission_mode, session_id, fork_session);
+    if let Some(effort) = effort.filter(|e| matches!(*e, "low" | "medium" | "high" | "xhigh" | "max")) {
+        args.extend(["--effort".to_string(), effort.to_string()]);
+    }
+    // A file, not inline JSON: the npm shim is a `.cmd`, which mangles quotes.
+    let settings_file = match settings {
+        Some(value) => {
+            let path = std::env::temp_dir().join(format!(
+                "spacron-claude-settings-{}-{}.json",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|t| t.as_nanos())
+                    .unwrap_or_default()
+            ));
+            std::fs::write(&path, value.to_string())
+                .map_err(|e| format!("provider_error: could not write Claude settings: {e}"))?;
+            args.extend(["--settings".to_string(), path.to_string_lossy().into_owned()]);
+            Some(path)
+        }
+        None => None,
+    };
 
-    let mut command = Command::new("claude");
-    command.args(args).current_dir(cwd).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // The npm install is a `claude.cmd` shim, which a bare name does not find.
+    let program = super::agent_probe::which("claude").unwrap_or_else(|| PathBuf::from("claude"));
+    let mut command = Command::new(program);
+    command.args(args).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(path) = super::agent_probe::search_path() {
+        command.env("PATH", path);
+    }
 
     #[cfg(windows)]
     {
@@ -139,6 +183,14 @@ async fn run_turn(
     let mut child = command
         .spawn()
         .map_err(|e| format!("provider_error: could not start Claude CLI: {e}"))?;
+
+    // The prompt goes on stdin, closed afterwards so the CLI starts the turn.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| format!("provider_error: could not send the prompt to Claude: {e}"))?;
+    }
 
     let stdout = child.stdout.take().ok_or("provider_error: Claude stdout unavailable")?;
     let stderr = child.stderr.take().ok_or("provider_error: Claude stderr unavailable")?;
@@ -195,6 +247,9 @@ async fn run_turn(
     }
 
     let status = child.wait().await.map_err(|e| format!("provider_error: {e}"))?;
+    if let Some(path) = settings_file {
+        let _ = std::fs::remove_file(path);
+    }
     if !status.success() {
         let tail = stderr_lines.join(" ").trim().to_string();
         let detail = if tail.is_empty() {
@@ -227,6 +282,8 @@ pub async fn claude_chat_complete(
     access_mode: Option<String>,
     session_id: Option<String>,
     fork_session: Option<bool>,
+    fast: Option<bool>,
+    ultracode: Option<bool>,
 ) -> Result<ClaudeTurnResult, String> {
     let image_paths = images.into_iter().map(PathBuf::from).collect::<Vec<_>>();
     run_turn(
@@ -239,6 +296,7 @@ pub async fn claude_chat_complete(
         access_mode.as_deref(),
         session_id.as_deref(),
         fork_session.unwrap_or(false),
+        switch_settings(fast.unwrap_or(false), ultracode.unwrap_or(false)),
     )
     .await
 }
@@ -264,6 +322,23 @@ pub async fn claude_fork_session(
         None,
         Some(&session_id),
         true,
+        None,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_mode_asks_for_verbose_and_switches_only_when_on() {
+        assert!(build_args(None, "default", None, false).contains(&"--verbose".to_string()));
+        assert_eq!(switch_settings(false, false), None);
+        assert_eq!(switch_settings(true, false), Some(serde_json::json!({"fastMode": true})));
+        assert_eq!(
+            switch_settings(false, true),
+            Some(serde_json::json!({"enableWorkflows": true, "ultracode": true}))
+        );
+    }
 }

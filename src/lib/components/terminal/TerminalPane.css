@@ -211,11 +211,8 @@
   min-width: 0;
   box-sizing: border-box;
   padding: 6px 6px 8px 6px;
-  /* Opaque dark base, which is what the solid (non-glass) themes land on in BOTH
-     modes — the terminal is a dark surface regardless of app mode, so light solid
-     mode must not fall through to a bright panel under light ANSI text. The
-     frosted themes override this with translucent scrims just below. */
-  background: var(--terminal-surface, #111116);
+  /* Inherit the active theme's terminal surface token (mirrors --app-surface). */
+  background: var(--terminal-surface, var(--app-surface, #101010));
   transition: opacity var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
   position: relative;
 }
@@ -242,23 +239,11 @@
   background: rgba(var(--terminal-surface-rgb, 0, 0, 0), var(--terminal-scrim-glass, 0.22)) !important;
 }
 
-/* Light mode needs a much heavier scrim than dark, and it is load-bearing rather
-   than cosmetic. The terminal's ANSI palette is dark in both modes (see
-   buildTerminalTheme), so its text is light — and at 0.22 over a bright wallpaper
-   the surface stays pale and that light text is unreadable. Closing the glass to
-   0.88 gives the dark well the text is drawn for, while the wallpaper still
-   registers at the edges. Tunable via --terminal-scrim-light. */
-:root:not(.solid-theme).light-theme .terminal-pane .xterm-container {
-  background: rgba(var(--terminal-surface-rgb, 0, 0, 0), var(--terminal-scrim-light, 0.88)) !important;
-}
-
-/* One colour. In dark mode the terminal IS the panel: no scrim of its own and
-   no sheen, so a pane reads as a single flat surface, whatever the theme,
-   wallpaper or renderer (xterm draws its own background transparent). The
-   scrims above stay for light mode only, where the terminal needs a dark well
-   because every agent CLI draws light ink (see buildTerminalTheme). Doubled
-   `:root` to outrank the custom-image rule in global.css. */
-html:root:root:not(.light-theme) .terminal-pane .xterm-container {
+/* One colour. In both light and dark modes the terminal IS the panel: no scrim
+   of its own and no sheen, so a pane reads as a single flat surface, whatever
+   the theme, wallpaper or renderer (xterm draws its own background transparent
+   for Canvas/DOM). Doubled `:root` to outrank frosted/custom rules. */
+html:root:root .terminal-pane .xterm-container {
   background: transparent !important;
 }
 

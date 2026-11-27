@@ -106,7 +106,7 @@
 @keyframes usage-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(0);
   }
   to {
     opacity: 1;

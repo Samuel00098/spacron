@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import type { McpServer } from '$lib/services/mcp-servers';
 import type { ChatAccessMode } from '$lib/types/chat';
 import { DEFAULT_MEDIA_GENERATION, type MediaGenerationSettings } from '$lib/services/media-generation';
+import {
+  RETIRED_SHORTCUT_IDS,
+  defaultShortcuts,
+  mergeDefaultShortcuts,
+  type KeyboardShortcut,
+} from '../shortcuts';
+
+export type { KeyboardShortcut };
 
 export type CloseBehavior = 'quit' | 'minimize';
 export type AiProviderId =
@@ -17,14 +25,6 @@ export type AiProviderId =
   | 'ollama'
   | 'lmstudio';
 export type VoiceInputProviderId = 'webspeech' | 'google' | 'openai' | 'openrouter' | 'vercel' | 'fish' | 'ollama' | 'lmstudio' | 'local';
-export interface KeyboardShortcut {
-  id: string;
-  label: string;
-  keys: string;
-  /** When-clause context — shortcut only fires when this matches. */
-  when?: string;
-  action?: string; // For custom shortcuts: id of the app action (see shortcutActions) this key triggers
-}
 
 const FONT_FALLBACK = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Ubuntu Mono', 'Noto Mono', Consolas, monospace";
 
@@ -42,75 +42,6 @@ function persistValue(key: string, value: unknown) {
   try {
     localStorage.setItem(`forge_setting_${key}`, JSON.stringify(value));
   } catch {}
-}
-
-// Built-in shortcut ids whose actions have been deleted. Listed so a persisted
-// `userShortcuts` from an older build can be cleaned up rather than carrying
-// them forever — see the prune in `mergeDefaultShortcuts`.
-const RETIRED_SHORTCUT_IDS = new Set([
-  'canvasZoomIn',
-  'canvasZoomOut',
-  'canvasResetZoom',
-  'goToOrchestrator',
-  'goToYoutube',
-  'openDailyNote',
-  'toggleSketch',
-  'launchVoiceMode',
-]);
-
-function mergeDefaultShortcuts(initial: KeyboardShortcut[]): KeyboardShortcut[] {
-  // Inlined defaultShortcuts to avoid circular import
-  const defaultShortcuts: KeyboardShortcut[] = [
-    { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
-    { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
-    { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
-    { id: 'toggleSidebar', label: 'Toggle Sidebar', keys: 'Ctrl+B' },
-    { id: 'toggleInteractionMode', label: 'Toggle Terminal / Chat View', keys: 'Ctrl+Shift+J' },
-    { id: 'newWorkspace', label: 'Create Project', keys: 'Ctrl+N' },
-    { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
-    { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },
-    { id: 'goToPreview', label: 'Go to Preview', keys: 'Ctrl+Shift+V' },
-    // goToOrchestrator removed
-    { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
-    { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
-    { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Sessions', keys: 'Ctrl+Shift+G' },
-    { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
-    { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
-    { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
-    { id: 'openSearch', label: 'Search in Files', keys: 'Ctrl+Shift+F' },
-    { id: 'openEnvManager', label: 'Environment Manager', keys: 'Ctrl+Shift+E' },
-    { id: 'saveFile', label: 'Save File', keys: 'Ctrl+S' },
-    { id: 'openFolder', label: 'Open Folder', keys: 'Ctrl+O' },
-    { id: 'newTerminal', label: 'New Terminal Tab', keys: 'Ctrl+Shift+`' },
-    { id: 'formatDocument', label: 'Format Document', keys: 'Alt+Shift+F' },
-    { id: 'startProxy', label: 'Start Preview Proxy', keys: 'Ctrl+Alt+P' },
-    { id: 'stopProxy', label: 'Stop Preview Proxy', keys: 'Ctrl+Alt+O' },
-    { id: 'zoomIn', label: 'Zoom In', keys: 'Ctrl+=' },
-    { id: 'zoomOut', label: 'Zoom Out', keys: 'Ctrl+-' },
-    { id: 'resetZoom', label: 'Reset Zoom', keys: 'Ctrl+0' },
-    { id: 'spawnAgent', label: 'Spawn Agents', keys: 'Ctrl+Shift+A' },
-    // openDailyNote removed
-    // toggleSketch removed
-    { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
-    { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'F9' },
-    // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
-    // they drove no longer exists, so they were unbound keys occupying Alt+=,
-    // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.
-    { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
-  ];
-  if (!Array.isArray(initial)) return defaultShortcuts;
-  // Prune before merging. This function is otherwise additive-only, so a binding
-  // whose action has been deleted survives in every existing install forever —
-  // still listed in the Settings shortcut map, still holding its keys hostage,
-  // and doing nothing when pressed. Dropping an id here retires it for real.
-  const merged = initial.filter((item) => item && !RETIRED_SHORTCUT_IDS.has(item.id));
-  for (const def of defaultShortcuts) {
-    if (!merged.some((item) => item && item.id === def.id)) {
-      merged.push(def);
-    }
-  }
-  return merged;
 }
 
 function migrateLegacySettings() {
@@ -190,6 +121,54 @@ function migrateLegacySettings() {
   if (!localStorage.getItem('forge_migration_chatgptDefault_v1')) {
     persistValue('aiProvider', 'chatgpt');
     localStorage.setItem('forge_migration_chatgptDefault_v1', '1');
+  }
+
+  // Shortcut audit migration: move defaults off F9 (OEM/Fn hijack on Windows
+  // laptops), off Ctrl+Alt+<letter> (AltGr on Windows), and off Ctrl+Shift+B
+  // (reassigned to Toggle Right Sidebar), and prune retired shortcuts. Only
+  // rewrites bindings still on the old defaults so custom user rebindings stick.
+  if (!localStorage.getItem('forge_migration_shortcutsAudit_v1')) {
+    try {
+      const raw = localStorage.getItem('forge_setting_userShortcuts');
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          let changed = false;
+          const filtered = list.filter((item) => {
+            if (!item || typeof item.id !== 'string') {
+              changed = true;
+              return false;
+            }
+            if (RETIRED_SHORTCUT_IDS.has(item.id)) {
+              changed = true;
+              return false;
+            }
+            if (item.id.startsWith('custom_') && item.action && RETIRED_SHORTCUT_IDS.has(item.action)) {
+              changed = true;
+              return false;
+            }
+            return true;
+          });
+          for (const item of filtered) {
+            const keysLower = typeof item.keys === 'string' ? item.keys.trim().toLowerCase() : '';
+            if (item.id === 'transcribeToTerminal' && (keysLower === 'f9' || keysLower === 'ctrl+alt+m')) {
+              item.keys = 'Ctrl+Shift+M';
+              item.label = 'Dictate (speech to text)';
+              changed = true;
+            } else if (item.id === 'cycleAmbientLayout' && keysLower === 'ctrl+alt+a') {
+              item.keys = 'Alt+Shift+L';
+              item.label = 'Toggle Split / Focus Layout';
+              changed = true;
+            } else if (item.id === 'goToDb' && keysLower === 'ctrl+shift+b') {
+              item.keys = 'Ctrl+Shift+D';
+              changed = true;
+            }
+          }
+          if (changed) persistValue('userShortcuts', filtered);
+        }
+      }
+    } catch {}
+    localStorage.setItem('forge_migration_shortcutsAudit_v1', '1');
   }
 }
 
@@ -378,45 +357,7 @@ const defaults: SettingsValues = {
   swipeNavigationEnabled: true,
   formatOnSave: true,
   autoSave: true,
-  userShortcuts: [
-    { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
-    { id: 'openSettings', label: 'Open Settings', keys: 'Ctrl+,' },
-    { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
-    { id: 'toggleSidebar', label: 'Toggle Sidebar', keys: 'Ctrl+B' },
-    { id: 'toggleInteractionMode', label: 'Toggle Terminal / Chat View', keys: 'Ctrl+Shift+J' },
-    { id: 'newWorkspace', label: 'Create Project', keys: 'Ctrl+N' },
-    { id: 'goToTerminal', label: 'Go to Terminal', keys: 'Ctrl+`' },
-    { id: 'goToEditor', label: 'Go to Editor', keys: 'Ctrl+E' },
-    { id: 'goToPreview', label: 'Go to Preview', keys: 'Ctrl+Shift+V' },
-    // goToOrchestrator removed
-    { id: 'goToReview', label: 'Go to Code Review', keys: 'Ctrl+Shift+R' },
-    { id: 'goToHttp', label: 'Go to HTTP Client', keys: 'Ctrl+Shift+H' },
-    { id: 'goToTasks', label: 'Go to Tasks', keys: 'Ctrl+Shift+T' },
-    { id: 'goToFleet', label: 'Go to Sessions', keys: 'Ctrl+Shift+G' },
-    { id: 'goToDb', label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
-    { id: 'goToContainers', label: 'Go to Containers', keys: 'Ctrl+Shift+C' },
-    { id: 'goToToolbox', label: 'Go to Dev Toolbox', keys: 'Ctrl+Shift+X' },
-    { id: 'openSearch', label: 'Search in Files', keys: 'Ctrl+Shift+F' },
-    { id: 'openEnvManager', label: 'Environment Manager', keys: 'Ctrl+Shift+E' },
-    { id: 'saveFile', label: 'Save File', keys: 'Ctrl+S' },
-    { id: 'openFolder', label: 'Open Folder', keys: 'Ctrl+O' },
-    { id: 'newTerminal', label: 'New Terminal Tab', keys: 'Ctrl+Shift+`' },
-    { id: 'formatDocument', label: 'Format Document', keys: 'Alt+Shift+F' },
-    { id: 'startProxy', label: 'Start Preview Proxy', keys: 'Ctrl+Alt+P' },
-    { id: 'stopProxy', label: 'Stop Preview Proxy', keys: 'Ctrl+Alt+O' },
-    { id: 'zoomIn', label: 'Zoom In', keys: 'Ctrl+=' },
-    { id: 'zoomOut', label: 'Zoom Out', keys: 'Ctrl+-' },
-    { id: 'resetZoom', label: 'Reset Zoom', keys: 'Ctrl+0' },
-    { id: 'spawnAgent', label: 'Spawn Agents', keys: 'Ctrl+Shift+A' },
-    // openDailyNote removed
-    // toggleSketch removed
-    { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
-    { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'F9' },
-    // canvasZoomIn / canvasZoomOut / canvasResetZoom removed — the Canvas view
-    // they drove no longer exists, so they were unbound keys occupying Alt+=,
-    // Alt+- and Alt+0 while rendering a "Canvas" group in the shortcut map.
-    { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
-  ],
+  userShortcuts: defaultShortcuts.map((s) => ({ ...s })),
   appearance: 'system',
   accentColor: '',
   interfaceTransparency: 0,

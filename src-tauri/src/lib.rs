@@ -591,6 +591,7 @@ pub fn run() {
             commands::agent_transcript::chat_image_preview,
             commands::agent_transcript::agent_subagent_transcript_read,
             commands::chat_extras::chat_list_files,
+            commands::chat_extras::chat_find_file,
             commands::chat_extras::chat_list_skills,
             commands::chat_extras::chat_claude_commands,
             commands::chat_extras::system_font_families,

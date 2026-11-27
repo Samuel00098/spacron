@@ -1057,190 +1057,36 @@ export const formatOnSave = persistentWritable('formatOnSave', true);
 // Editor autosave — saves the active file shortly after typing stops.
 export const autoSave = persistentWritable('autoSave', true);
 
-// Keyboard Shortcuts
-export interface KeyboardShortcut {
-  id: string;
-  label: string;
-  keys: string;
-  /** When-clause context — shortcut only fires when this matches. */
-  when?: string;
-  action?: string; // For custom shortcuts: id of the app action (see shortcutActions) this key triggers
-}
+// Keyboard Shortcuts — single source of truth lives in `./shortcuts`.
+import {
+  SHORTCUT_CATEGORY_ORDER,
+  defaultShortcuts,
+  findShortcutKeys,
+  formatEventToShortcut,
+  getDefaultShortcutKeys,
+  matchShortcut,
+  parseShortcutString,
+  shortcutActions,
+  type KeyboardShortcut,
+  type ShortcutAction,
+  type ShortcutCategory,
+} from './shortcuts';
 
-export interface ShortcutAction {
-  id: string;
-  label: string;
-  category: string;
-  /** Optional context clause — the shortcut only fires when this matches.
-   *  Examples: "editorFocused", "chatOpen", "terminalFocused". */
-  when?: string;
-}
-
-export const shortcutActions: ShortcutAction[] = [
-  { id: 'commandPalette', label: 'Command Palette', category: 'View' },
-  { id: 'openSettings',    label: 'Open Settings',   category: 'View' },
-  { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', category: 'View' },
-  { id: 'toggleSidebar',  label: 'Toggle Sidebar',  category: 'View' },
-  { id: 'toggleInteractionMode', label: 'Toggle Terminal / Chat View', category: 'View' },
-  // Id kept as-is so any saved custom binding keeps working; it opens the
-  // new-project-folder prompt now that workspaces are gone.
-  { id: 'newWorkspace',   label: 'Create Project', category: 'Project' },
-  { id: 'goToTerminal',   label: 'Go to Terminal',     category: 'View' },
-  { id: 'goToEditor',     label: 'Go to Editor',       category: 'View' },
-  { id: 'goToPreview',    label: 'Go to Preview',      category: 'View' },
-  // goToOrchestrator removed — Orchestrator panel no longer exists
-  { id: 'goToReview',     label: 'Go to Code Review',  category: 'View' },
-  { id: 'goToHttp',       label: 'Go to HTTP Client',  category: 'View' },
-  { id: 'goToTasks',      label: 'Go to Tasks',        category: 'View' },
-  { id: 'goToFleet',      label: 'Go to Sessions', category: 'View' },
-  { id: 'goToDb',         label: 'Go to Database Explorer', category: 'View' },
-  { id: 'goToContainers', label: 'Go to Containers',   category: 'View' },
-  { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  category: 'View' },
-  { id: 'openSearch',     label: 'Search in Files', category: 'View' },
-  { id: 'openEnvManager', label: 'Environment Manager', category: 'Workspace' },
-  { id: 'saveFile',       label: 'Save File',       category: 'File' },
-  { id: 'openFolder',     label: 'Open Folder',     category: 'Workspace' },
-  { id: 'newTerminal',    label: 'New Terminal Tab',category: 'Terminal' },
-  { id: 'formatDocument', label: 'Format Document',       category: 'Editor' },
-  { id: 'startProxy',     label: 'Start Preview Proxy', category: 'Preview' },
-  { id: 'stopProxy',      label: 'Stop Preview Proxy', category: 'Preview' },
-  { id: 'zoomIn',         label: 'Zoom In',         category: 'Window' },
-  { id: 'zoomOut',        label: 'Zoom Out',        category: 'Window' },
-  { id: 'resetZoom',      label: 'Reset Zoom',      category: 'Window' },
-  { id: 'spawnAgent',     label: 'Spawn Agents',     category: 'Workspace' },
-  { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', category: 'Voice' },
-  // Canvas actions removed with the Canvas view.
-  { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', category: 'View' },
-];
-
-export const defaultShortcuts: KeyboardShortcut[] = [
-  { id: 'commandPalette', label: 'Command Palette', keys: 'Ctrl+Shift+P' },
-  { id: 'openSettings',    label: 'Open Settings',   keys: 'Ctrl+,' },
-  { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
-  { id: 'toggleSidebar',  label: 'Toggle Sidebar',  keys: 'Ctrl+B' },
-  { id: 'toggleInteractionMode', label: 'Toggle Terminal / Chat View', keys: 'Ctrl+Shift+J' },
-  { id: 'newWorkspace',   label: 'Create Project', keys: 'Ctrl+N' },
-  { id: 'goToTerminal',   label: 'Go to Terminal',     keys: 'Ctrl+`' },
-  { id: 'goToEditor',     label: 'Go to Editor',       keys: 'Ctrl+E' },
-  { id: 'goToPreview',    label: 'Go to Preview',      keys: 'Ctrl+Shift+V' },
-  // goToOrchestrator removed — Orchestrator panel no longer exists
-  { id: 'goToReview',     label: 'Go to Code Review',  keys: 'Ctrl+Shift+R' },
-  { id: 'goToHttp',       label: 'Go to HTTP Client',  keys: 'Ctrl+Shift+H' },
-  { id: 'goToTasks',      label: 'Go to Tasks',        keys: 'Ctrl+Shift+T' },
-  { id: 'goToFleet',      label: 'Go to Sessions', keys: 'Ctrl+Shift+G' },
-  { id: 'goToDb',         label: 'Go to Database Explorer', keys: 'Ctrl+Shift+B' },
-  { id: 'goToContainers', label: 'Go to Containers',   keys: 'Ctrl+Shift+C' },
-  { id: 'goToToolbox',    label: 'Go to Dev Toolbox',  keys: 'Ctrl+Shift+X' },
-  { id: 'openSearch',     label: 'Search in Files', keys: 'Ctrl+Shift+F' },
-  { id: 'openEnvManager', label: 'Environment Manager', keys: 'Ctrl+Shift+E' },
-  { id: 'saveFile',       label: 'Save File',       keys: 'Ctrl+S' },
-  { id: 'openFolder',     label: 'Open Folder',     keys: 'Ctrl+O' },
-  { id: 'newTerminal',    label: 'New Terminal Tab',keys: 'Ctrl+Shift+`' },
-  { id: 'formatDocument', label: 'Format Document',       keys: 'Alt+Shift+F' },
-  { id: 'startProxy',     label: 'Start Preview Proxy', keys: 'Ctrl+Alt+P' },
-  { id: 'stopProxy',      label: 'Stop Preview Proxy', keys: 'Ctrl+Alt+O' },
-  { id: 'zoomIn',         label: 'Zoom In',         keys: 'Ctrl+=' },
-  { id: 'zoomOut',        label: 'Zoom Out',        keys: 'Ctrl+-' },
-  { id: 'resetZoom',      label: 'Reset Zoom',      keys: 'Ctrl+0' },
-  { id: 'spawnAgent',     label: 'Spawn Agents',     keys: 'Ctrl+Shift+A' },
-  { id: 'transcribeToTerminal', label: 'Transcribe (speech to text)', keys: 'F9' },
-  { id: 'cycleAmbientLayout', label: 'Cycle Ambient Layout', keys: 'Ctrl+Alt+A' },
-];
-
-export const userShortcuts = persistentWritable<KeyboardShortcut[]>('userShortcuts', defaultShortcuts);
-
-export function parseShortcutString(str: string): string[] {
-  const trimmed = str.trim();
-  if (trimmed.endsWith('+') && trimmed.length > 1) {
-    const lastPlus = trimmed.slice(0, -1).lastIndexOf('+');
-    if (lastPlus !== -1) {
-      const modifiersStr = trimmed.slice(0, lastPlus);
-      const parts = modifiersStr.split('+').map(p => p.trim());
-      parts.push('+');
-      return parts;
-    }
-  }
-  return trimmed.split('+').map(p => p.trim());
-}
-
-// Shifted punctuation → the unshifted character printed on the same key.
-//
-// `KeyboardEvent.key` reports the *produced* character, so `Ctrl+Shift+\`` -
-// which is how "New Terminal Tab" is written - arrives as `~`, not as `` ` ``.
-// Comparing the raw characters made every shortcut on a shifted punctuation key
-// unreachable. Canonicalising both sides through this table is what lets a
-// binding be written with the key cap the user actually presses.
-const UNSHIFTED_PUNCTUATION: Record<string, string> = {
-  '~': '`', '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6',
-  '&': '7', '*': '8', '(': '9', ')': '0', '_': '-', '+': '=',
-  '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'", '<': ',', '>': '.', '?': '/',
+export {
+  SHORTCUT_CATEGORY_ORDER,
+  defaultShortcuts,
+  findShortcutKeys,
+  formatEventToShortcut,
+  getDefaultShortcutKeys,
+  matchShortcut,
+  parseShortcutString,
+  shortcutActions,
+  type KeyboardShortcut,
+  type ShortcutAction,
+  type ShortcutCategory,
 };
 
-// `event.code` → the character that physical key prints on a US layout. Only
-// consulted when `event.key` is not plain ASCII, which is the macOS case: Option
-// (Alt) rewrites the produced character, so `Alt+Shift+F` arrives as `Ï` and
-// nothing would ever match. Deliberately NOT the primary comparison — on a
-// non-US layout `code` names the US key cap, so preferring it would fire the
-// Ctrl+Q binding when an AZERTY user pressed Ctrl+A.
-function keyFromCode(code: string | undefined): string | null {
-  if (!code) return null;
-  const letter = /^Key([A-Z])$/.exec(code);
-  if (letter) return letter[1].toLowerCase();
-  const digit = /^Digit(\d)$/.exec(code);
-  if (digit) return digit[1];
-  const punctuation: Record<string, string> = {
-    Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
-    Backslash: '\\', Semicolon: ';', Quote: "'", Comma: ',', Period: '.',
-    Slash: '/', Space: ' ',
-  };
-  return punctuation[code] ?? null;
-}
-
-function canonicalKey(key: string): string {
-  const lower = key.toLowerCase();
-  return UNSHIFTED_PUNCTUATION[lower] ?? lower;
-}
-
-export function matchShortcut(e: KeyboardEvent, shortcutKeys: string): boolean {
-  if (!shortcutKeys) return false;
-  const parts = parseShortcutString(shortcutKeys).map(p => p.toLowerCase());
-
-  const hasCtrl = parts.includes('ctrl');
-  const hasShift = parts.includes('shift');
-  const hasAlt = parts.includes('alt');
-  const hasMeta = parts.includes('meta');
-
-  const modifiers = ['ctrl', 'shift', 'alt', 'meta'];
-  const primaryKeyPart = parts.find(p => !modifiers.includes(p));
-  if (!primaryKeyPart) return false;
-
-  // A binding written with `Ctrl` matches Cmd on macOS, which is why Meta counts
-  // as Ctrl here. A binding that names `Meta` explicitly is the exception: it
-  // wants the Meta key specifically, so Ctrl is checked on its own.
-  const isCtrlPressed = hasMeta ? e.ctrlKey : (e.ctrlKey || e.metaKey);
-  const ctrlMatch = isCtrlPressed === hasCtrl;
-  const shiftMatch = e.shiftKey === hasShift;
-  const altMatch = e.altKey === hasAlt;
-  const metaMatch = hasMeta ? e.metaKey : true;
-
-  let keyMatch = false;
-  const eventKeyLower = e.key.toLowerCase();
-  const targetKeyLower = primaryKeyPart.toLowerCase();
-
-  if (targetKeyLower === 'space') {
-    keyMatch = eventKeyLower === ' ' || eventKeyLower === 'space';
-  } else if (targetKeyLower === 'esc' || targetKeyLower === 'escape') {
-    keyMatch = eventKeyLower === 'escape' || eventKeyLower === 'esc';
-  } else {
-    keyMatch = canonicalKey(eventKeyLower) === canonicalKey(targetKeyLower);
-    if (!keyMatch && !/^[\x20-\x7e]$/.test(e.key)) {
-      const fromCode = keyFromCode(e.code);
-      keyMatch = fromCode !== null && canonicalKey(fromCode) === canonicalKey(targetKeyLower);
-    }
-  }
-
-  return ctrlMatch && shiftMatch && altMatch && metaMatch && keyMatch;
-}
+export const userShortcuts = persistentWritable<KeyboardShortcut[]>('userShortcuts', defaultShortcuts);
 
 // Appearance / Theme
 export const appearance = persistentWritable<'system' | 'light' | 'dark'>('appearance', 'system');

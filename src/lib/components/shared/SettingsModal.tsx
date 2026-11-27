@@ -47,11 +47,15 @@ import {
   columnSelection,
   currentVoiceAiModel,
   currentVoiceInputModel,
+  SHORTCUT_CATEGORY_ORDER,
   defaultShortcuts,
   enableLsp,
+  findShortcutKeys,
   fontFamily,
   fontSize,
+  formatEventToShortcut,
   formatOnSave,
+  getDefaultShortcutKeys,
   getProviderBaseUrl,
   getProviderDef,
   getVoiceInputModelOptions,
@@ -59,6 +63,7 @@ import {
   isLocalProvider,
   keepSystemAwake,
   keepAwakeMode,
+  matchShortcut,
   minimap,
   notificationsEnabled,
   resetSettingsToDefault,
@@ -195,10 +200,8 @@ import type { SettingsTab as Tab } from '$lib/types/layout';
 import LinearSettings from './LinearSettings';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
-// App actions a custom shortcut can be bound to. Zoom actions are dispatched
-// separately (window zoom in App.tsx, canvas zoom is view-local), so they're
-// omitted here — every action listed is handled by AppShell's shortcut switch.
-const assignableActions = shortcutActions.filter((a) => !a.id.toLowerCase().includes('zoom'));
+// Every app action a custom shortcut can be bound to.
+const assignableActions = shortcutActions;
 const actionOptions: DropdownOption[] = assignableActions.map((a) => ({
   value: a.id,
   label: a.label,
@@ -1844,34 +1847,90 @@ function ModelSelect({
   );
 }
 
+function ShortcutKeyInput({
+  value,
+  onChange,
+  placeholder = 'Click & press keys…',
+  allowClear = false,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (keys: string) => void;
+  placeholder?: string;
+  allowClear?: boolean;
+  ariaLabel?: string;
+}) {
+  const [recording, setRecording] = useState(false);
+
+  return (
+    <input
+      type="text"
+      readOnly
+      data-shortcut-recorder="true"
+      className={`shortcut-recorder-input${recording ? ' recording' : ''}`}
+      value={recording ? '' : (value ? formatShortcutLabel(value) : '')}
+      placeholder={recording ? 'Press keys…' : placeholder}
+      aria-label={ariaLabel}
+      onFocus={() => setRecording(true)}
+      onBlur={() => setRecording(false)}
+      onKeyDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.key === 'Escape') {
+          event.currentTarget.blur();
+          return;
+        }
+        if (
+          allowClear &&
+          (event.key === 'Backspace' || event.key === 'Delete') &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          !event.shiftKey
+        ) {
+          onChange('');
+          event.currentTarget.blur();
+          return;
+        }
+
+        const recorded = formatEventToShortcut(event);
+        if (recorded) {
+          onChange(recorded);
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function ShortcutEditor({
   shortcuts,
   onUpdate,
   onDelete,
 }: {
   shortcuts: KeyboardShortcut[];
-  onUpdate: (id: string, keys: string, when?: string) => void;
+  onUpdate: (id: string, keys: string) => void;
   onDelete: (id: string) => void;
 }) {
   const grouped = useMemo(() => {
     const groups = new Map<string, KeyboardShortcut[]>();
+    const actionCategoryById = new Map<string, string>(
+      shortcutActions.map((a) => [a.id, a.category]),
+    );
     for (const shortcut of shortcuts) {
+      if (!shortcut) continue;
       const category = shortcut.id.startsWith('custom_')
         ? 'Custom Shortcuts'
-        : shortcut.id.includes('Terminal') || shortcut.id === 'newTerminal'
-          ? 'Terminal'
-          : shortcut.id.includes('zoom') || shortcut.id.includes('Zoom')
-            ? 'Window'
-            : shortcut.id.includes('Preview') || shortcut.id.includes('proxy')
-              ? 'Preview'
-              : shortcut.id.includes('File') || shortcut.id.includes('Folder')
-                ? 'File'
-                : shortcut.id.includes('Voice')
-                  ? 'Voice'
-                  : 'Workspace';
+        : actionCategoryById.get(shortcut.id) ?? 'General';
       groups.set(category, [...(groups.get(category) ?? []), shortcut]);
     }
-    return [...groups.entries()];
+    const order = new Map<string, number>(
+      SHORTCUT_CATEGORY_ORDER.map((cat, index) => [cat, index]),
+    );
+    return [...groups.entries()].sort(
+      ([a], [b]) => (order.get(a) ?? 99) - (order.get(b) ?? 99),
+    );
   }, [shortcuts]);
 
   return (
@@ -1879,58 +1938,53 @@ function ShortcutEditor({
       {grouped.map(([group, items]) => (
         <div className="shortcut-group" key={group}>
           <h4>{group}</h4>
-          {items.map((shortcut) => (
-            <div className="shortcut-row-container" key={shortcut.id}>
-              <label className="shortcut-row">
-                <span>{shortcut.label}</span>
-                {shortcut.when && (
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginRight: '6px' }}>{shortcut.when}</span>
+          {items.map((shortcut) => {
+            const defaultKeys = !shortcut.id.startsWith('custom_')
+              ? getDefaultShortcutKeys(shortcut.id)
+              : '';
+            const isModified = Boolean(
+              defaultKeys && shortcut.keys.toLowerCase() !== defaultKeys.toLowerCase(),
+            );
+            return (
+              <div className="shortcut-row-container" key={shortcut.id}>
+                <div className="shortcut-row">
+                  <span className="shortcut-row-label">{shortcut.label}</span>
+                  <div className="shortcut-row-controls">
+                    <ShortcutKeyInput
+                      value={shortcut.keys}
+                      onChange={(keys) => onUpdate(shortcut.id, keys)}
+                      ariaLabel={`Shortcut for ${shortcut.label}`}
+                    />
+                    {isModified && (
+                      <button
+                        type="button"
+                        className="shortcut-reset-btn"
+                        onClick={() => onUpdate(shortcut.id, defaultKeys)}
+                        title={`Reset to ${formatShortcutLabel(defaultKeys)}`}
+                      >
+                        Reset
+                      </button>
+                    )}
+                    {shortcut.id.startsWith('custom_') && (
+                      <button
+                        type="button"
+                        className="settings-delete-btn"
+                        onClick={() => onDelete(shortcut.id)}
+                        title="Delete Custom Shortcut"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {shortcut.id.startsWith('custom_') && shortcut.action && (
+                  <div className="shortcut-custom-action">
+                    Action: <code>{shortcutActions.find((a) => a.id === shortcut.action)?.label ?? shortcut.action}</code>
+                  </div>
                 )}
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input value={shortcut.keys} onChange={(event) => onUpdate(shortcut.id, event.target.value, shortcut.when)} />
-                  <input
-                    type="text"
-                    placeholder="when (optional)"
-                    value={shortcut.when ?? ''}
-                    onChange={(event) => onUpdate(shortcut.id, shortcut.keys, event.target.value || undefined)}
-                    style={{
-                      width: '130px',
-                      background: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '4px',
-                      color: 'var(--text-primary)',
-                      fontSize: '11px',
-                      padding: '2px 6px',
-                    }}
-                  />
-                  {shortcut.id.startsWith('custom_') && (
-                    <button 
-                      type="button"
-                      className="settings-delete-btn"
-                      onClick={() => onDelete(shortcut.id)}
-                      title="Delete Custom Shortcut"
-                      style={{
-                        background: 'rgba(248, 113, 113, 0.1)',
-                        color: 'var(--error)',
-                        border: '1px solid rgba(248, 113, 113, 0.2)',
-                        borderRadius: '6px',
-                        padding: '4px 8px',
-                        fontSize: '11px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
-              </label>
-              {shortcut.id.startsWith('custom_') && shortcut.action && (
-                <div style={{ paddingLeft: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                  Action: <code>{shortcutActions.find((a) => a.id === shortcut.action)?.label ?? shortcut.action}</code>
-                </div>
-              )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       ))}
     </div>
@@ -2522,7 +2576,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const [customLabel, setCustomLabel] = useState('');
   const [customKeys, setCustomKeys] = useState('');
   const [customAction, setCustomAction] = useState('');
-  const [customWhen, setCustomWhen] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
   // This selects which connection card is being managed. It deliberately does
   // not change the orchestrator: each Chat conversation owns that choice in
@@ -3042,8 +3095,19 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
   }
 
-  function updateShortcut(id: string, keys: string, when?: string) {
-    userShortcuts.set(shortcuts.map((shortcut) => (shortcut.id === id ? { ...shortcut, keys, ...(when !== undefined ? { when } : {}) } : shortcut)));
+  function updateShortcut(id: string, keys: string) {
+    const trimmed = keys.trim();
+    if (!trimmed) return;
+    const conflict = shortcuts.find(
+      (s) => s && s.id !== id && s.keys.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (conflict) {
+      showToast(`'${formatShortcutLabel(trimmed)}' is already assigned to ${conflict.label}.`, 'warning');
+      return;
+    }
+    userShortcuts.set(
+      shortcuts.map((shortcut) => (shortcut.id === id ? { ...shortcut, keys: trimmed } : shortcut)),
+    );
   }
 
   function handleAddShortcut() {
@@ -3053,26 +3117,24 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
     }
 
     const keysLower = customKeys.trim().toLowerCase();
-    const isConflict = shortcuts.some(s => s && s.keys.toLowerCase() === keysLower);
-    if (isConflict) {
-      showToast(`Shortcut '${customKeys}' is already assigned.`, 'warning');
+    const conflict = shortcuts.find((s) => s && s.keys.trim().toLowerCase() === keysLower);
+    if (conflict) {
+      showToast(`'${formatShortcutLabel(customKeys.trim())}' is already assigned to ${conflict.label}.`, 'warning');
       return;
     }
 
     const newId = `custom_${Math.random().toString(36).substring(2, 9)}`;
-    const newShortcut = {
+    const newShortcut: KeyboardShortcut = {
       id: newId,
       label: customLabel.trim(),
       keys: customKeys.trim(),
       action: customAction,
-      ...(customWhen.trim() ? { when: customWhen.trim() } : {}),
     };
 
     userShortcuts.set([...shortcuts, newShortcut]);
     setCustomLabel('');
     setCustomKeys('');
     setCustomAction('');
-    setCustomWhen('');
     showToast('Custom shortcut added successfully.', 'info');
   }
 
@@ -4113,12 +4175,12 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                   </SettingRow>
                 </Section>
 
-                <Section title="Terminal transcription">
+                <Section title="Dictation">
                   <SettingRow
                     title="Hotkey"
-                    detail="Tap to speak, tap again or press Esc to finish, Ctrl+Esc to cancel."
+                    detail={`Tap to speak, tap again or press Esc to finish, ${formatShortcutLabel('Ctrl+Esc')} to cancel.`}
                   >
-                    <kbd>{formatShortcutLabel(shortcuts.find((s) => s && s.id === 'transcribeToTerminal')?.keys ?? 'F9')}</kbd>
+                    <kbd>{formatShortcutLabel(findShortcutKeys(shortcuts, 'transcribeToTerminal'))}</kbd>
                   </SettingRow>
                   <SettingRow
                     title="Send after transcribing"
@@ -4818,20 +4880,11 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       </div>
                       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Key Combination</span>
-                        <input 
-                          type="text" 
-                          placeholder="e.g. Ctrl+Alt+B" 
-                          value={customKeys} 
-                          onChange={(e) => setCustomKeys(e.target.value)} 
-                          style={{
-                            background: 'var(--bg-secondary)',
-                            border: '1px solid var(--border)',
-                            borderRadius: '6px',
-                            color: 'var(--text-primary)',
-                            padding: '6px 10px',
-                            fontSize: '13px',
-                            outline: 'none'
-                          }}
+                        <ShortcutKeyInput
+                          value={customKeys}
+                          onChange={setCustomKeys}
+                          allowClear
+                          ariaLabel="Custom key combination"
                         />
                       </div>
                     </div>
@@ -4844,25 +4897,6 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                         onChange={(val) => setCustomAction(val)}
                         placeholder="Select an action…"
                         ariaLabel="Application Action"
-                      />
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>When Clause (optional)</span>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. editorFocused"
-                        value={customWhen}
-                        onChange={(e) => setCustomWhen(e.target.value)} 
-                        style={{
-                          background: 'var(--bg-secondary)',
-                          border: '1px solid var(--border)',
-                          borderRadius: '6px',
-                          color: 'var(--text-primary)',
-                          padding: '6px 10px',
-                          fontSize: '13px',
-                          outline: 'none'
-                        }}
                       />
                     </div>
 

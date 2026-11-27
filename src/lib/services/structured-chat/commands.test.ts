@@ -40,6 +40,7 @@ const h = vi.hoisted(() => {
     // A chat opened and never used (id `empty`) holds nothing worth resuming.
     recordHasConversation: vi.fn((record: { id: string }) => record.id !== 'empty'),
     resumeStructuredSessionInPane: vi.fn(async () => true),
+    openStructuredRecordBeside: vi.fn(async () => 2),
     recordForPane: vi.fn(() => ({
       id: 'cur',
       projectId: 'p',
@@ -60,11 +61,13 @@ const h = vi.hoisted(() => {
       { id: 'empty', title: 'Claude Chat', lifecycle: 'closed', updatedAt: Date.now() - 1000 },
     ]),
   };
-  return { state, provider, store };
+  const beside = vi.fn();
+  return { state, provider, store, beside };
 });
 
 vi.mock('./registry', () => ({ structuredChatProvider: () => h.provider }));
 vi.mock('./session-store', () => h.store);
+vi.mock('./side-chats', () => ({ addSideChat: h.beside }));
 
 import { runStructuredCommand } from './commands';
 
@@ -194,7 +197,7 @@ describe('structured slash commands', () => {
     expect(h.store.clearStructuredGoal).toHaveBeenCalledWith(1);
   });
 
-  it('archives, lists and restores chats, and opens a side chat in its own tab', async () => {
+  it('archives, lists and restores chats, and opens a side chat in the sidebar', async () => {
     (h.provider.capabilities as any).steering = 'inject';
     expect(await runStructuredCommand('codex', 1, '/archive')).toMatchObject({ handled: true });
     expect(h.store.archiveStructuredSession).toHaveBeenCalledWith(1);
@@ -203,9 +206,15 @@ describe('structured slash commands', () => {
     expect(await runStructuredCommand('codex', 1, '/unarchive 1')).toMatchObject({ handled: true });
     expect(h.store.archiveStructuredRecord).toHaveBeenCalledWith('old', false);
 
-    expect(await runStructuredCommand('codex', 1, '/side check the logs')).toMatchObject({ handled: true });
-    expect(h.store.forkStructuredSession).toHaveBeenCalled();
-    expect(h.store.resumeStructuredSessionInPane).toHaveBeenCalledWith(1, 'fork-1');
-    expect(h.provider.steer).toHaveBeenCalledWith(1, 'check the logs');
+    // A running turn does not block it, and this pane is not touched.
+    h.state.status = 'working';
+    h.provider.get.mockImplementation(((id: number) => (id === 2 ? { ...h.state, status: 'ready' } : h.state)) as () => typeof h.state);
+    h.store.resumeStructuredSessionInPane.mockClear();
+    expect((await runStructuredCommand('codex', 1, '/side check the logs')).output).toContain('right sidebar');
+    expect(h.store.openStructuredRecordBeside).toHaveBeenCalledWith(1, 'fork-1');
+    expect(h.store.resumeStructuredSessionInPane).not.toHaveBeenCalled();
+    expect(h.provider.send).toHaveBeenCalledWith(2, 'check the logs');
+    expect(h.beside).toHaveBeenCalledWith({ paneId: 2, parentPaneId: 1, projectId: 'p' });
+    h.state.status = 'ready';
   });
 });

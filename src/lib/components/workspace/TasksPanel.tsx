@@ -497,26 +497,6 @@ export default function TasksPanel() {
   }, [project]);
 
   useEffect(() => {
-    if (typeof document === 'undefined') return;
-    function handleGlobalVoiceShortcut(event: KeyboardEvent) {
-      if (event.key !== 'Alt' || event.location !== KeyboardEvent.DOM_KEY_LOCATION_LEFT || event.repeat) return;
-      const panelEl = panelRef.current;
-      const activeElement = document.activeElement;
-      if (!panelEl || !activeElement || !panelEl.contains(activeElement)) return;
-      event.preventDefault();
-      const taskInput = (activeElement as HTMLElement).closest('.kanban-col')?.querySelector('.add-task-input');
-      const taskInputIndex = taskInput
-        ? Array.from(panelEl.querySelectorAll('.add-task-input')).indexOf(taskInput as HTMLTextAreaElement)
-        : -1;
-      const preferredStatus = taskInputIndex >= 0 ? columns[taskInputIndex]?.id : null;
-      void toggleVoiceInput(preferredStatus ?? 'todo');
-    }
-    document.addEventListener('keydown', handleGlobalVoiceShortcut);
-    return () => document.removeEventListener('keydown', handleGlobalVoiceShortcut);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     const panelEl = panelRef.current;
     if (!panelEl) return;
     const ro = new ResizeObserver((entries) => {

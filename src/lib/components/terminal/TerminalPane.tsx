@@ -50,7 +50,12 @@ import {
   resolvedFontFamily,
   terminalShell,
   terminalRenderer,
+  matchShortcut,
+  findShortcutKeys,
 } from '$lib/stores/settings';
+import { useSettingsStore } from '$lib/stores/zustand/settings';
+import { isModalOpen } from '$lib/react/useModalFocus';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import { activeTheme } from '$lib/stores/theme';
 import { showTerminal } from '$lib/stores/layout';
 import { activeProject, projects } from '$lib/stores/workspace';
@@ -68,6 +73,11 @@ import { noteTerminalInput } from '$lib/services/terminal-chat-commands';
 import { useStructuredChatPane, structuredChatPreset } from '$lib/services/structured-chat/panes';
 import { startSessionStore } from '$lib/services/structured-chat/session-store';
 import { canContinueInChat, continueInChat, continueInTerminal } from '$lib/services/structured-chat/switch';
+import {
+  buildTerminalThemePalette,
+  resolveTerminalBackground,
+  resolveTerminalMinimumContrastRatio,
+} from './terminal-theme';
 import './TerminalPane.css';
 
 // Durable records + event journal for structured chat panes.
@@ -308,7 +318,12 @@ function TerminalPane({
   const paneTitleText = sessionInfo ? getSessionPaneDisplayTitle(sessionInfo, siblingSessions) : promptPath;
   const paneSecondaryText = sessionInfo ? getSessionPaneSecondaryTitle(sessionInfo) : '';
   const isDead = sessionInfo ? !sessionInfo.isRunning : false;
-  const isLightTheme = activeThemeValue?.type === 'light';
+
+  function isTerminalLightTheme(): boolean {
+    const liveTheme = get(activeTheme);
+    if (liveTheme?.type) return liveTheme.type === 'light';
+    return typeof document !== 'undefined' && document.documentElement.classList.contains('light-theme');
+  }
 
   useEffect(() => {
     isActiveRef.current = isActive;
@@ -402,108 +417,54 @@ function TerminalPane({
     } catch {}
   }
 
-  // The terminal stays dark in both app modes. Its dark-mode grey matches the
-  // surrounding panels; light mode keeps the black content well for ANSI text.
+  // The terminal follows the app's active light or dark surface.
   //
-  // Alpha stays 0 so the frosted wallpaper still shows through; the darkness comes
-  // from the scrim in TerminalPane.css (--terminal-surface-rgb). The RGB carried
-  // here is what xterm reports in reply to a TUI's OSC 11 "what is your
-  // background?" query, so it must match that scrim — it is how termenv-based apps
-  // (opencode, Claude Code, and any agent CLI wired up later) pick their theme.
-  //
-  // EXCEPT on WebGL, which cannot draw an attributed cell over a transparent
-  // surface. Its glyph atlas rasterises any cell carrying dim (SGR 2), italic,
-  // underline or strikethrough onto a tile pre-filled with the background colour,
-  // so at alpha 0 every such run lands as an opaque black slab. Measured
-  // 2026-08-07 over a magenta backdrop at xterm 5.5.0 / addon-webgl 0.18.0: plain,
-  // bold and colour-only runs stay correctly transparent; all four attributed ones
-  // slab. Agent statuslines lean on dim constantly, so WebGL panes come out
-  // striped with black boxes. It is not fixed upstream — xterm 6.0.0 +
-  // addon-webgl 0.19.0 drops transparency for the entire surface instead.
-  //
-  // An opaque surface is therefore the only way WebGL renders correctly. The RGB
-  // is deliberately unchanged, so the OSC 11 answer a TUI negotiates is identical
-  // and only the see-through glass is traded away — and only for the user who
-  // opted into WebGL. Canvas (the default) and DOM keep the wallpaper.
-  //
-  // Every renderer carries the surface's real RGB, read from the same token that
-  // paints the scrim (`--terminal-surface-rgb`). Canvas/DOM used to carry black
-  // at alpha 0, so on the grey panel every CLI that shades its own chrome
-  // against the reported background (Codex's input box, Claude Code's prompt
-  // bar) blended toward black and landed on the panel's own grey: invisible.
-  // A CLI reads this once at launch, so an agent started before a theme switch
-  // keeps its old shade until it is restarted.
+  // Alpha stays 0 for Canvas/DOM so the surrounding panel (solid or frosted
+  // wallpaper glass) shows through; the RGB carried here is what xterm reports
+  // in reply to a TUI's OSC 11 "what is your background?" query, so it must
+  // match `--terminal-surface-rgb`. WebGL stays opaque because its glyph atlas
+  // renders attributed cells as opaque boxes when alpha is 0.
   function terminalBackground() {
-    const fallback = isLightTheme ? '0, 0, 0' : '16, 16, 16';
-    const rgb = typeof document === 'undefined'
-      ? fallback
-      : getComputedStyle(document.documentElement).getPropertyValue('--terminal-surface-rgb').trim() || fallback;
-    return renderer === 'webgl' ? `rgb(${rgb})` : `rgba(${rgb}, 0)`;
+    const cssSurfaceRgb = typeof document === 'undefined'
+      ? undefined
+      : getComputedStyle(document.documentElement).getPropertyValue('--terminal-surface-rgb');
+    return resolveTerminalBackground(isTerminalLightTheme(), get(terminalRenderer), cssSurfaceRgb);
   }
 
-  // The terminal's palette is deliberately independent from the app theme.
-  // Agent CLIs communicate their UI through ANSI (including truecolor), and
-  // remapping the 16 ANSI slots to Spacron semantic/syntax colors makes Codex,
-  // Claude, Gemini and any future agent look wrong. Keep xterm's native ANSI
-  // palette so every agent's emitted color means what it meant in its own CLI.
-  // The terminal surface itself remains dark and transparent; only the palette
-  // is native.
   function buildTerminalTheme() {
-    return {
-      background: terminalBackground(),
-      foreground: '#ffffff',
-      cursor: '#ffffff',
-      cursorAccent: '#000000',
-      selectionBackground: 'rgba(255, 255, 255, 0.3)',
-      // A standard dark-terminal palette (VS Code's), which is tuned for a
-      // grey ~#1e1e1e surface like ours. xterm's Tango defaults were built for
-      // black and read muddy on the grey panel. Do not replace these with app
-      // theme tokens: ANSI color codes belong to the child process.
-      black: '#000000',
-      red: '#cd3131',
-      green: '#0dbc79',
-      yellow: '#e5e510',
-      blue: '#2472c8',
-      magenta: '#bc3fbc',
-      cyan: '#11a8cd',
-      white: '#e5e5e5',
-      brightBlack: '#666666',
-      brightRed: '#f14c4c',
-      brightGreen: '#23d18b',
-      brightYellow: '#f5f543',
-      brightBlue: '#3b8eea',
-      brightMagenta: '#d670d6',
-      brightCyan: '#29b8db',
-      brightWhite: '#e5e5e5',
-    };
+    return buildTerminalThemePalette(isTerminalLightTheme(), terminalBackground());
   }
 
-  function applyRendererBackground() {
+  function applyTerminalTheme() {
     const term = termRef.current;
     if (!term) return;
+    const light = isTerminalLightTheme();
     term.options.allowTransparency = true;
-    term.options.theme = {
-      ...term.options.theme,
-      background: terminalBackground(),
-    };
+    term.options.minimumContrastRatio = resolveTerminalMinimumContrastRatio(light);
+    const themeService = (term as any)._core?._themeService;
+    themeService?._contrastCache?.clear?.();
+    themeService?._halfContrastCache?.clear?.();
+    term.options.theme = buildTerminalTheme();
+    forceRedraw();
   }
 
   function applyTerminalRenderer() {
     const term = termRef.current;
     if (!term) return;
+    const activeRenderer = get(terminalRenderer);
 
     // Only one GPU addon may be loaded at a time — tear down any that no longer
     // matches the requested renderer before loading the new one.
-    if (renderer !== 'canvas' && canvasAddonRef.current) {
+    if (activeRenderer !== 'canvas' && canvasAddonRef.current) {
       canvasAddonRef.current.dispose();
       canvasAddonRef.current = null;
     }
-    if (renderer !== 'webgl' && webglAddonRef.current) {
+    if (activeRenderer !== 'webgl' && webglAddonRef.current) {
       webglAddonRef.current.dispose();
       webglAddonRef.current = null;
     }
 
-    if (renderer === 'canvas' && !canvasAddonRef.current) {
+    if (activeRenderer === 'canvas' && !canvasAddonRef.current) {
       try {
         const canvasAddon = new CanvasAddon();
         canvasAddonRef.current = canvasAddon;
@@ -516,7 +477,7 @@ function TerminalPane({
         showToast('Canvas renderer unavailable; using DOM renderer.', 'warning');
         return;
       }
-    } else if (renderer === 'webgl' && !webglAddonRef.current) {
+    } else if (activeRenderer === 'webgl' && !webglAddonRef.current) {
       try {
         const webglAddon = new WebglAddon();
         // The GPU context can be evicted by the OS/WebView; fall back to DOM
@@ -539,7 +500,7 @@ function TerminalPane({
       }
     }
 
-    applyRendererBackground();
+    applyTerminalTheme();
     scheduleFit();
     requestAnimationFrame(() => forceRedraw());
   }
@@ -1209,10 +1170,10 @@ function TerminalPane({
       letterSpacing: 0,
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
-      // Do not rewrite ANSI/truecolor output to satisfy a contrast ratio. That
-      // changes the colors selected by agent CLIs and makes their normal UI
-      // colors inconsistent with the same CLI in a native terminal.
-      minimumContrastRatio: 1,
+      // In dark mode, keep native ANSI/truecolor colors untouched (ratio 1).
+      // In light mode, enforce WCAG AA contrast (4.5) so Windows ConPTY and
+      // CLI pale/white text stays legible against the light panel surface.
+      minimumContrastRatio: resolveTerminalMinimumContrastRatio(isTerminalLightTheme()),
       windowsPty,
       theme: buildTerminalTheme(),
     });
@@ -1284,6 +1245,16 @@ function TerminalPane({
         event.stopPropagation();
         pasteClipboard();
         return false;
+      }
+
+      // Block app-wide shortcuts from leaking control bytes (e.g. ^C on
+      // Ctrl+Shift+C, ^D on Ctrl+Shift+D, ^S on Ctrl+S) into the PTY while
+      // letting the DOM keydown bubble cleanly to AppShell / App.
+      if (!isModalOpen()) {
+        const activeShortcuts = useSettingsStore.getState().userShortcuts;
+        if (activeShortcuts?.some((shortcut) => shortcut && matchShortcut(event, shortcut.keys))) {
+          return false;
+        }
       }
       return true;
     });
@@ -1823,13 +1794,8 @@ function TerminalPane({
   }, [renderer]);
 
   useEffect(() => {
-    const term = termRef.current;
-    if (term && activeThemeValue) {
-      term.options.allowTransparency = true;
-      // Re-applied on every theme change. Note this only re-themes xterm itself —
-      // a TUI already running keeps whatever palette it chose at launch, which is
-      // exactly why buildTerminalTheme() no longer varies by mode.
-      term.options.theme = buildTerminalTheme();
+    if (termRef.current) {
+      applyTerminalTheme();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThemeValue]);
@@ -1964,7 +1930,10 @@ function TerminalPane({
               className={chatActive ? '' : 'active'}
               aria-pressed={!chatActive}
               aria-label="Terminal view"
-              title={structuredChat ? 'Continue in the terminal, same conversation (Ctrl+Shift+J)' : 'Terminal (Ctrl+Shift+J)'}
+              title={(() => {
+                const toggleHint = formatShortcutLabel(findShortcutKeys(useSettingsStore.getState().userShortcuts, 'toggleInteractionMode'));
+                return structuredChat ? `Continue in the terminal, same conversation (${toggleHint})` : `Terminal (${toggleHint})`;
+              })()}
               onClick={(e) => {
                 e.stopPropagation();
                 onActivate();
@@ -1982,7 +1951,7 @@ function TerminalPane({
               className={chatActive ? 'active' : ''}
               aria-pressed={chatActive}
               aria-label="Chat view"
-              title="Chat, same session (Ctrl+Shift+J)"
+              title={`Chat, same session (${formatShortcutLabel(findShortcutKeys(useSettingsStore.getState().userShortcuts, 'toggleInteractionMode'))})`}
               onClick={(e) => {
                 e.stopPropagation();
                 onActivate();

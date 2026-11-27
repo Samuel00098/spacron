@@ -6,12 +6,21 @@ All notable changes to Spacron will be documented here.
 
 ### Added
 
-- **An update icon in the title bar** — a dot appears when Spacron or an agent CLI has a newer version. Hover for what changed and one-click updates; click to check again. It replaces the update banner.
+- **An update icon in the title bar** — a wheel that checks for updates, turning into a download arrow when there is one. A click installs agent updates; hover for what a new Spacron version changes. It replaces the update banner.
 - **Fast and Ultracode switches in the chat's model menu** — Fast mode for Claude Code and Codex models that have it, Ultracode for Claude Code and Ultra for Codex.
 
 ### Changed
 
 - **Update notes show before you install** — each release now sends its changelog section with the update.
+
+### Fixed
+
+- **Open works on Antigravity's changed files** — it no longer reports "Path does not exist".
+- **Open and file links work however an agent writes the path** — including a file named without its folder.
+- **Chat mode can talk to Claude Code again** — Spacron started `claude` without handing it your message, so every turn failed. The reasoning level you pick now reaches it too.
+- **Fast and Ultracode / Ultra in Chat mode** — under the model list for Claude Code and Codex.
+- **Long error messages stay inside their box** — file paths now wrap.
+- **Offline dictation installs ONNX Runtime again** — the old download link had stopped working. It now comes from Microsoft's nuget.org package, on your first dictation if it is missing, with no restart needed.
 
 
 ## [v5.1.17] - 2026-11-27

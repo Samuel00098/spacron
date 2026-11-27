@@ -764,7 +764,7 @@
 }
 
 @keyframes chat-mode-ticker-out {
-  to { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 0; transform: translateY(0); }
 }
 
 /* Queued messages strip: what is waiting to run + steer/remove per row. */
@@ -839,7 +839,7 @@
 }
 
 @keyframes chat-mode-ticker-in {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(0); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -3259,6 +3259,7 @@
   cursor: pointer;
 }
 .chat-mode-lineage-actions button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.chat-mode-lineage-actions button:disabled { opacity: 0.45; cursor: default; background: transparent; }
 
 
 /* --- Usage limits card (/limits) ------------------------------------------ */
@@ -3369,3 +3370,31 @@
 .thread-worktree-error {
   color: var(--danger, #ff6b6b);
 }
+
+/* Fast and Ultracode / Ultra: side by side under the model list. */
+.chat-agent-model-toggles {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-agent-model-toggles button {
+  flex: 1;
+  justify-content: center;
+  text-align: center;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  box-shadow: var(--surface-outline) !important;
+  cursor: pointer;
+}
+
+.chat-agent-model-toggles button.on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+

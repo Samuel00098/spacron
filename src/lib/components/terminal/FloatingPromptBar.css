@@ -62,7 +62,6 @@
 }
 
 .floating-prompt-shell .prompt-bubble:hover {
-  transform: translateY(-1px);
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -190,7 +189,6 @@
 .floating-prompt-shell .attach-toggle:hover {
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
   color: var(--text-primary);
-  transform: translateY(-1px);
 }
 
 .floating-prompt-shell .spawn-toggle {
@@ -200,7 +198,6 @@
 .floating-prompt-shell .spawn-toggle:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
   color: var(--text-primary);
-  transform: translateY(-1px);
 }
 
 .floating-prompt-shell .spawn-toggle.active {
@@ -237,7 +234,6 @@
 .floating-prompt-shell .voice-toggle:hover {
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
   color: var(--text-primary);
-  transform: translateY(-1px);
 }
 
 .floating-prompt-shell .voice-toggle.listening {

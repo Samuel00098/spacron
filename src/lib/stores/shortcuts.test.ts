@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SHORTCUT_CATEGORY_ORDER,
   defaultShortcuts,
+  formatEventToShortcut,
   matchShortcut,
+  mergeDefaultShortcuts,
   parseShortcutString,
   shortcutActions,
-} from './settings';
+} from './shortcuts';
 
 /**
  * The characters a US layout produces when Shift is held. `KeyboardEvent.key`
@@ -138,5 +141,92 @@ describe('defaultShortcuts', () => {
     const defaultIds = new Set(defaultShortcuts.map((shortcut) => shortcut.id));
     expect([...defaultIds].filter((id) => !actionIds.has(id))).toEqual([]);
     expect([...actionIds].filter((id) => !defaultIds.has(id))).toEqual([]);
+
+    const labelMismatches = defaultShortcuts
+      .filter((s) => shortcutActions.find((a) => a.id === s.id)?.label !== s.label)
+      .map((s) => s.id);
+    expect(labelMismatches).toEqual([]);
+
+    const categories = new Set<string>(SHORTCUT_CATEGORY_ORDER);
+    const badCategories = shortcutActions
+      .filter((a) => !categories.has(a.category))
+      .map((a) => `${a.id}:${a.category}`);
+    expect(badCategories).toEqual([]);
+  });
+
+  it('never uses Ctrl+Alt+<letter> (Windows AltGr) or bare F1-F12 (laptop Fn hijack) as defaults', () => {
+    const altGr = defaultShortcuts.filter((s) => {
+      const parts = parseShortcutString(s.keys).map((p) => p.toLowerCase());
+      return parts.includes('ctrl') && parts.includes('alt');
+    });
+    expect(altGr.map((s) => `${s.id} (${s.keys})`)).toEqual([]);
+
+    const bareFn = defaultShortcuts.filter((s) => /^f([1-9]|1[0-2])$/i.test(s.keys.trim()));
+    expect(bareFn.map((s) => `${s.id} (${s.keys})`)).toEqual([]);
+  });
+});
+
+describe('formatEventToShortcut', () => {
+  it('formats standard chords canonically', () => {
+    expect(
+      formatEventToShortcut({ key: 'M', code: 'KeyM', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false }),
+    ).toBe('Ctrl+Shift+M');
+    expect(
+      formatEventToShortcut({ key: 'L', code: 'KeyL', ctrlKey: false, shiftKey: true, altKey: true, metaKey: false }),
+    ).toBe('Alt+Shift+L');
+    expect(
+      formatEventToShortcut({ key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false }),
+    ).toBe('Ctrl+Shift+`');
+  });
+
+  it('normalizes macOS Meta to Ctrl and recovers Option-mangled characters from code', () => {
+    expect(
+      formatEventToShortcut({ key: 'k', code: 'KeyK', ctrlKey: false, shiftKey: false, altKey: false, metaKey: true }),
+    ).toBe('Ctrl+K');
+    expect(
+      formatEventToShortcut({ key: 'Ï', code: 'KeyF', ctrlKey: false, shiftKey: true, altKey: true, metaKey: false }),
+    ).toBe('Alt+Shift+F');
+  });
+
+  it('ignores bare modifiers and plain non-function keys without modifiers', () => {
+    expect(
+      formatEventToShortcut({ key: 'Control', code: 'ControlLeft', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }),
+    ).toBeNull();
+    expect(
+      formatEventToShortcut({ key: 'a', code: 'KeyA', ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }),
+    ).toBeNull();
+    expect(
+      formatEventToShortcut({ key: 'F8', code: 'F8', ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }),
+    ).toBe('F8');
+    expect(
+      formatEventToShortcut({ key: ' ', code: 'Space', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }),
+    ).toBe('Ctrl+Space');
+  });
+});
+
+describe('mergeDefaultShortcuts', () => {
+  it('prunes retired shortcuts and custom shortcuts targeting retired actions', () => {
+    const merged = mergeDefaultShortcuts([
+      { id: 'launchVoiceMode', label: 'Launch Voice Mode', keys: 'Ctrl+Shift+M' },
+      { id: 'toggleProjectHUD', label: 'Toggle Projects Sidebar', keys: 'Ctrl+K' },
+      { id: 'startProxy', label: 'Start Preview Proxy', keys: 'Ctrl+Alt+P' },
+      { id: 'stopProxy', label: 'Stop Preview Proxy', keys: 'Ctrl+Alt+O' },
+      { id: 'custom_dead', label: 'Old Proxy', keys: 'Ctrl+Alt+Z', action: 'startProxy' },
+      { id: 'custom_live', label: 'Jump Editor', keys: 'Alt+E', action: 'goToEditor' },
+      { id: 'openSettings', label: 'Old Label', keys: 'Ctrl+Alt+,' },
+    ]);
+
+    expect(merged.some((s) => s.id === 'launchVoiceMode')).toBe(false);
+    expect(merged.some((s) => s.id === 'toggleProjectHUD')).toBe(false);
+    expect(merged.some((s) => s.id === 'startProxy')).toBe(false);
+    expect(merged.some((s) => s.id === 'stopProxy')).toBe(false);
+    expect(merged.some((s) => s.id === 'custom_dead')).toBe(false);
+    expect(merged.find((s) => s.id === 'custom_live')?.keys).toBe('Alt+E');
+    // Built-in preserves custom key binding while syncing updated label
+    expect(merged.find((s) => s.id === 'openSettings')).toEqual({
+      id: 'openSettings',
+      label: 'Open Settings',
+      keys: 'Ctrl+Alt+,',
+    });
   });
 });

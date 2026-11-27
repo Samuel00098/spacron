@@ -824,7 +824,6 @@
 .app-shell .stage-empty-agent-btn:hover {
   border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
   background: color-mix(in srgb, var(--accent) 23%, var(--bg-secondary));
-  transform: translateY(-1px);
 }
 
 .app-shell .stage-empty-agent-btn:focus-visible {
@@ -1337,25 +1336,6 @@
     inset 0 1px 0 var(--edge-hi);
 }
 
-.app-shell .room-panel:hover {
-  transform: translateY(-1px);
-}
-
-/* 3. The hover lift does not move the glass while a wallpaper is on.
-   Translating a `backdrop-filter` element drags its sampled rectangle across
-   the wallpaper by a sub-pixel amount for the whole `--dur-fast` transition, so
-   the 1px lift costs a visible shimmer along the panel edge every time the
-   cursor crosses it — the most-noticed instance of this bug, because it fires
-   on ordinary mouse movement rather than on a switch.
-   The lift is pure decoration and it is not the only hover cue: the room header
-   brightens on hover in the rule directly below, and that is a repaint of an
-   opaque strip, which re-samples nothing. Keep the lift for the no-wallpaper
-   look, where there is no backdrop to disturb. */
-html.has-bg-image .app-shell .room-panel:hover,
-html.has-bg-media .app-shell .room-panel:hover {
-  transform: none;
-}
-
 .app-shell .room-panel:hover .room-header {
   background: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary));
 }
@@ -1484,7 +1464,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   color: var(--text-primary);
   border-color: var(--border);
   background: var(--bg-hover);
-  transform: translateY(-1px);
 }
 
 .app-shell .room-action.danger:hover {
@@ -1673,7 +1652,6 @@ html.has-bg-media .app-shell .room-panel:hover {
 .app-shell .room-card:hover {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
-  transform: translateY(-1px);
 }
 
 .app-shell .room-card-name {
@@ -1785,7 +1763,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
   background: color-mix(in srgb, var(--accent) 10%, rgba(var(--panel-tint-rgb), var(--panel-tint)));
-  transform: translateY(-1px);
 }
 
 /* Tiled right now. `.primary` (the focused pane) reads a step stronger again, so
@@ -2143,7 +2120,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-primary));
-  transform: translateY(-1px);
 }
 
 .app-shell .minimized-room-icon {
@@ -2286,7 +2262,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 13%, var(--bg-secondary));
-  transform: translateY(-1px);
 }
 
 .app-shell .agent-room-pulse {
@@ -2443,11 +2418,10 @@ html.has-bg-media .app-shell .room-panel:hover {
 .app-shell .ambient-switch-btn:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
-  transform: translateY(-1px);
 }
 
 .app-shell .ambient-switch-btn:hover svg {
-  transform: translateY(-1px) scale(1.04);
+  transform: scale(1.04);
 }
 
 .app-shell .ambient-switch-btn.active {
@@ -3714,4 +3688,19 @@ html.has-bg-media .app-shell .room-panel:hover {
 
 @keyframes right-sidebar-spin {
   to { transform: rotate(360deg); }
+}
+
+/* A side chat's view is absolutely positioned inside this box. */
+.app-shell .right-sidebar-tab-pane:has(> .side-chat-pane) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.app-shell .right-sidebar-tab-pane:has(> .side-chat-pane)[hidden] {
+  display: none;
+}
+.side-chat-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
 }

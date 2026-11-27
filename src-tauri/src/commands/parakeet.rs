@@ -109,13 +109,19 @@ const ORT_DYLIB_NAME: &str = if cfg!(windows) {
 ///
 /// Note the mechanism is the environment variable rather than a builder call:
 /// rc.12 exposes no `with_dylib_path`, and `ORT_DYLIB_PATH` is the only lever it
-/// reads. Setting it here is safe because it happens inside a `OnceLock`, before
+/// reads. Setting it here is safe because it happens under a lock, before
 /// this process has made any `ort` call — nothing else in the tree reads or
 /// writes that variable.
 pub(crate) fn ensure_ort_dylib() -> Result<(), String> {
-    static INIT: OnceLock<Result<(), String>> = OnceLock::new();
+    // Only success is remembered: the library can arrive while the app runs.
+    static FOUND: OnceLock<()> = OnceLock::new();
+    static LOOKING: Mutex<()> = Mutex::new(());
 
-    INIT.get_or_init(|| {
+    if FOUND.get().is_some() {
+        return Ok(());
+    }
+    let _looking = LOOKING.lock().map_err(|_| "ONNX Runtime lock poisoned".to_string())?;
+    let result = (|| {
         if std::env::var_os("ORT_DYLIB_PATH").is_some_and(|value| !value.is_empty()) {
             return Ok(());
         }
@@ -136,17 +142,20 @@ pub(crate) fn ensure_ort_dylib() -> Result<(), String> {
         }
 
         Err(format!(
-            "ONNX Runtime is not installed. Offline speech-to-text needs the \
-             {ORT_DYLIB_NAME} shared library, which the app does not currently ship. \
-             Put it in one of these locations, or set ORT_DYLIB_PATH to it: {}",
+            "ONNX Runtime is not installed. Spacron downloads it the first time you \
+             dictate, so check your connection and try again. To add it by hand, put \
+             {ORT_DYLIB_NAME} in {} or set ORT_DYLIB_PATH to it.",
             candidates
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join("; ")
+                .first()
+                .and_then(|path| path.parent())
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_default()
         ))
-    })
-    .clone()
+    })();
+    if result.is_ok() {
+        let _ = FOUND.set(());
+    }
+    result
 }
 
 fn build_session(path: &PathBuf) -> Result<Session, String> {

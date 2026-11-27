@@ -32,6 +32,52 @@ pub async fn chat_list_files(root: String, query: String, limit: Option<usize>) 
     .map_err(|e| e.to_string())?
 }
 
+/// The file an agent meant by `path`, for the chat's Open buttons and file links.
+///
+/// `path` arrives already joined to `root`. When nothing is there, the agent
+/// usually left out folders (`main.js` for `render/main.js`), so the project is
+/// searched for a file ending in the same segments. Ignored folders are searched
+/// too, since rendered output often lives in one. `None` leaves the caller with
+/// its own path, and its error.
+#[tauri::command]
+pub async fn chat_find_file(root: String, path: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || find_file(Path::new(&root), &path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn find_file(root: &Path, path: &str) -> Option<String> {
+    let shown = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let path = path.replace('\\', "/");
+    if let Some(rest) = path.strip_prefix("~/") {
+        let full = dirs::home_dir()?.join(rest);
+        return full.is_file().then(|| shown(&full));
+    }
+    if Path::new(&path).is_file() {
+        return Some(path);
+    }
+    let root_text = shown(root);
+    let wanted = path.strip_prefix(root_text.trim_end_matches('/'))?.trim_start_matches('/');
+    if wanted.is_empty() {
+        return None;
+    }
+    let suffix = format!("/{}", wanted.to_lowercase());
+    ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .standard_filters(false)
+        .filter_entry(|entry| {
+            !matches!(entry.file_name().to_str(), Some(".git" | "node_modules" | "target"))
+        })
+        .build()
+        .filter_map(Result::ok)
+        .take(MAX_WALK_FILES)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .map(|entry| shown(entry.path()))
+        .filter(|found| found.to_lowercase().ends_with(&suffix))
+        // The shallowest match is the likeliest one meant.
+        .min_by_key(|found| (found.matches('/').count(), found.len()))
+}
+
 fn list_entries(base: &Path, query: &str, limit: usize) -> Vec<String> {
     let typed = query.trim().replace('\\', "/");
     let (folder, leaf) = match typed.rfind('/') {
@@ -1007,5 +1053,25 @@ mod tests {
         ]});
         let s = pr_status_from(&v);
         assert_eq!((s.checks_total, s.checks_passed, s.checks_failed, s.checks_pending), (4, 2, 1, 1));
+    }
+}
+
+#[cfg(test)]
+mod find_file_tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_name_finds_the_shallowest_file_in_the_project() {
+        let dir = std::env::temp_dir().join(format!("spacron-find-{}", std::process::id()));
+        let deep = dir.join("a").join("render");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("main.js"), "x").unwrap();
+        let root = dir.to_string_lossy().replace('\\', "/");
+
+        let found = find_file(&dir, &format!("{root}/main.js")).unwrap();
+        assert!(found.ends_with("/a/render/main.js"), "{found}");
+        assert!(find_file(&dir, &format!("{root}/render/main.js")).is_some());
+        assert_eq!(find_file(&dir, &format!("{root}/absent.js")), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -13,6 +13,7 @@
  *   denied silently in print mode; with it they arrive as `can_use_tool`
  *   control requests, answered with `{behavior, updatedInput | message}`.
  */
+import { paneWireText } from '$lib/services/side-chat-context';
 import { openAgentSession, stderrTail, withTimeout, type AcpNotification, type AcpSession } from '$lib/services/acp-transport';
 import { accountEnvFor } from '$lib/stores/agentAccounts';
 import { imageDataUrlsFor, parseImageDataUrl } from './attachments';
@@ -24,22 +25,9 @@ import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type { StructuredChatProvider } from './provider';
 import type { StructuredAccess, StructuredModel } from './codex-session';
 import { initialStructuredState, StructuredStateStore } from './state';
+import { allAnswered, answerLabels, askTitle, type AskAnswer, type AskQuestion } from './ask';
 import { answeredInput, isAskUserQuestion, parseAskUserQuestion, type ClaudeQuestion } from './claude-questions';
 import type { StructuredApproval } from './codex-session';
-
-/** One `AskUserQuestion` question as an approval card whose options are the answers. */
-function questionApproval(requestId: string, questions: ClaudeQuestion[], index: number): StructuredApproval {
-  const q = questions[index];
-  const progress = questions.length > 1 ? ` (${index + 1} of ${questions.length})` : '';
-  const described = q.options.filter((option) => option.description).map((option) => `${option.label}: ${option.description}`);
-  return {
-    requestId,
-    kind: 'other',
-    title: `${q.header ? `${q.header}: ` : ''}${q.question}${progress}`,
-    detail: [q.multiSelect ? 'Claude allows several answers; pick the main one here.' : null, ...described].filter(Boolean).join('\n') || null,
-    options: q.options.map((option, i) => ({ id: String(i), label: option.label, kind: 'allow_once' })),
-  };
-}
 
 type Json = Record<string, unknown>;
 const str = (value: unknown): string | null => typeof value === 'string' ? value : null;
@@ -55,6 +43,16 @@ function textFrom(value: unknown): string {
 const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const INITIALIZE_TIMEOUT_MS = 60_000;
 
+function claudeAsk(questions: ClaudeQuestion[]): AskQuestion[] {
+  return questions.map((q) => ({
+    header: q.header,
+    text: q.question,
+    options: q.options.map((o, i) => ({ id: String(i), label: o.label, description: o.description })),
+    multiple: q.multiSelect,
+    allowOther: true,
+  }));
+}
+
 interface Runtime {
   session: AcpSession;
   cwd: string;
@@ -64,8 +62,8 @@ interface Runtime {
   controls: Map<string, { resolve: (frame: Json) => void; reject: (error: Error) => void }>;
   /** Tool input per permission request, echoed back as `updatedInput`. */
   permissionInputs: Map<string, { input: Json; suggestions: unknown }>;
-  /** `AskUserQuestion` requests in progress: answered one question at a time. */
-  questions: Map<string, { input: Json; questions: ClaudeQuestion[]; index: number; answers: Record<string, string> }>;
+  /** `AskUserQuestion` requests waiting for the user. */
+  questions: Map<string, { input: Json; asked: AskQuestion[] }>;
   stderr: ReturnType<typeof stderrTail>;
   exited: boolean;
 }
@@ -85,7 +83,7 @@ function permissionMode(access: StructuredAccess | undefined): string | null {
 }
 
 /** The CLI arguments for a structured Claude session. Exported for tests. */
-export function claudeArgs(options: { effort?: string | null; resumeId?: string | null; access?: StructuredAccess }): string[] {
+export function claudeArgs(options: { effort?: string | null; resumeId?: string | null; access?: StructuredAccess; forkSession?: boolean }): string[] {
   const args = [
     '-p',
     '--input-format', 'stream-json',
@@ -100,6 +98,8 @@ export function claudeArgs(options: { effort?: string | null; resumeId?: string 
   if (mode) args.push('--permission-mode', mode);
   if (options.effort && CLAUDE_EFFORTS.has(options.effort)) args.push('--effort', options.effort);
   if (options.resumeId) args.push('--resume', options.resumeId);
+  // A new session id with the resumed history; the source stays untouched.
+  if (options.resumeId && options.forkSession) args.push('--fork-session');
   return args;
 }
 
@@ -229,7 +229,7 @@ async function control(sessionId: number, subtype: string, request: Json = {}, t
   }
 }
 
-async function start(sessionId: number, cwd: string, options: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null } = {}): Promise<void> {
+async function start(sessionId: number, cwd: string, options: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null; forkSession?: boolean } = {}): Promise<void> {
   if (sessions.has(sessionId)) return;
   const previous = stores.get(sessionId);
   stores.set(sessionId, initialStructuredState(options.access, previous ?? undefined));
@@ -238,12 +238,13 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
   let runtime: Runtime | null = null;
   try {
     const accountEnv = await accountEnvFor('claude', options.accountId ?? null);
-    const session = await openAgentSession('claude', claudeArgs({ effort: targetEffort, resumeId: options.resumeId ?? null, access }), cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
+    const session = await openAgentSession('claude', claudeArgs({ effort: targetEffort, resumeId: options.resumeId ?? null, access, forkSession: options.forkSession }), cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
     runtime = {
       session,
       cwd,
       requestId: 0,
-      pendingSessionId: options.resumeId ?? null,
+      // A fork has no id of its own yet: reporting the source's would alias it.
+      pendingSessionId: options.forkSession ? null : options.resumeId ?? null,
       controls: new Map(),
       permissionInputs: new Map(),
       questions: new Map(),
@@ -279,7 +280,7 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
       effort,
       access,
       fast: previous?.fast ?? (initialized.fast_mode_state === 'on' ? true : undefined),
-      threadId: options.resumeId ?? null,
+      threadId: options.forkSession ? null : options.resumeId ?? null,
     });
     if (chosenModel && chosenModel !== defaultModel) {
       void control(sessionId, 'set_model', { model: chosenModel }).catch(() => undefined);
@@ -311,13 +312,15 @@ async function send(sessionId: number, text: string, images: string[] = []): Pro
     const parsed = parseImageDataUrl(image);
     if (parsed) content.push({ type: 'image', source: { type: 'base64', media_type: parsed.mimeType, data: parsed.data } });
   }
-  if (text.trim()) content.push({ type: 'text', text });
+  const wire = paneWireText(sessionId, text);
+  if (wire.text.trim()) content.push({ type: 'text', text: wire.text });
   if (!content.length) {
     stores.update(sessionId, { status: 'ready', error: 'Those attachments could not be read as images.' });
     return;
   }
   try {
     await runtime.session.writeRaw(`${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`);
+    wire.sent();
   } catch (error) {
     stores.update(sessionId, { status: 'failed', error: `Couldn't send to Claude: ${error instanceof Error ? error.message : String(error)}` });
   }
@@ -369,26 +372,15 @@ function setAccess(sessionId: number, access: StructuredAccess): void {
   void control(sessionId, 'set_permission_mode', { mode }).catch((error) => stores.update(sessionId, { error: `Claude kept its permission mode: ${error instanceof Error ? error.message : String(error)}` }));
 }
 
-async function answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string): Promise<void> {
+async function answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string, answers?: AskAnswer[]): Promise<void> {
   const runtime = sessions.get(sessionId);
   const asking = runtime?.questions.get(String(requestId));
-  if (runtime && asking && decision !== 'decline') {
-    const chosen = asking.questions[asking.index].options[Number(optionId)];
-    if (chosen) {
-      asking.answers[asking.questions[asking.index].question] = chosen.label;
-      asking.index += 1;
-      if (asking.index < asking.questions.length) {
-        // Next question replaces this card; the request stays open until the last.
-        stores.update(sessionId, (state) => ({
-          approvals: state.approvals.map((approval) => approval.requestId === requestId ? questionApproval(String(requestId), asking.questions, asking.index) : approval),
-        }));
-        return;
-      }
-      runtime.questions.delete(String(requestId));
-      stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
-      await runtime.session.writeRaw(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: String(requestId), response: { behavior: 'allow', updatedInput: answeredInput(asking.input, asking.answers) } } })}\n`);
-      return;
-    }
+  if (runtime && asking && decision !== 'decline' && allAnswered(asking.asked, answers)) {
+    runtime.questions.delete(String(requestId));
+    stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
+    const chosen = Object.fromEntries(asking.asked.map((q, i) => [q.text, answerLabels(q, answers[i]).join(', ')]));
+    await runtime.session.writeRaw(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: String(requestId), response: { behavior: 'allow', updatedInput: answeredInput(asking.input, chosen) } } })}\n`);
+    return;
   }
   runtime?.questions.delete(String(requestId));
   stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
@@ -440,8 +432,9 @@ function onFrame(sessionId: number, frame: AcpNotification | Json): void {
       if (isAskUserQuestion(tool) && runtime) {
         const questions = parseAskUserQuestion(input);
         if (questions) {
-          runtime.questions.set(requestId, { input, questions, index: 0, answers: {} });
-          stores.update(sessionId, (state) => ({ approvals: [...state.approvals, questionApproval(requestId, questions, 0)] }));
+          const asked = claudeAsk(questions);
+          runtime.questions.set(requestId, { input, asked });
+          stores.update(sessionId, (state) => ({ approvals: [...state.approvals, { requestId, kind: 'other', title: askTitle(asked), detail: null, questions: asked }] }));
           return;
         }
       }
@@ -536,13 +529,13 @@ export const claudeProvider: StructuredChatProvider = {
   agent: 'claude',
   label: 'Claude',
   capabilities: {
-    // Stream-json has no rollback or fork RPC: `rewind` re-seeds a fresh
-    // process from the shortened journal, `fork` copies the history into a new
-    // Spacron chat. Neither is a native Claude conversation operation.
+    // Stream-json has no rollback RPC: `rewind` re-seeds a fresh process from
+    // the shortened journal. `fork` is the CLI's own `--fork-session`, applied
+    // when the new chat first starts.
     rewind: true,
     fork: true,
     rewindMode: 'conversation-reset',
-    forkMode: 'journal-branch',
+    forkMode: 'native-provider',
     compact: 'native',
     steering: 'inject',
     contextUsage: true,
@@ -572,9 +565,8 @@ export const claudeProvider: StructuredChatProvider = {
     return false;
   },
   fork: async (sessionId) => {
-    // Claude stream-json has no native thread fork RPC. Return null so session-store
-    // creates an independent journal branch rather than aliasing the parent's session file on disk.
-    return { nativeSessionId: null };
+    // No id exists until the fork runs; hand back the session to fork from.
+    return { nativeSessionId: null, forkSourceId: stores.get(sessionId)?.threadId ?? null };
   },
   steer: async (sessionId, text, images = []) => {
     await send(sessionId, text, images);

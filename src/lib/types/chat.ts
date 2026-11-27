@@ -237,6 +237,9 @@ export interface ChatThread {
   accessMode: ChatAccessMode;
   workMode: ChatWorkMode;
   reasoningEffort: ChatReasoningEffort;
+  /** Fast mode and Ultracode / Ultra, from the model picker. */
+  fastMode?: boolean;
+  ultraMode?: boolean;
   taskId: string | null;
   sessionId: number | null;
   status: ChatThreadStatus;

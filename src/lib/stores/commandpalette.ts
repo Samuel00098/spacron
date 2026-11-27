@@ -73,6 +73,12 @@ import { createTerminalSession } from './terminal';
 import { startProxy, stopProxy } from './preview';
 import { toggleFloatingSearch } from './projectsearch';
 import { chatThreadState, getProjectThreads, selectChatThread } from './chatThreads';
+import { findShortcutKeys } from './shortcuts';
+import { useSettingsStore } from './zustand/settings';
+
+function shortcutFor(actionId: string): string {
+  return findShortcutKeys(useSettingsStore.getState().userShortcuts, actionId);
+}
 
 export function initDefaultCommands() {
   const defaultCmds: any[] = [
@@ -80,42 +86,42 @@ export function initDefaultCommands() {
       id: 'file.save',
       name: 'Save Active File',
       category: 'File',
-      shortcut: 'Ctrl+S',
+      shortcut: shortcutFor('saveFile'),
       action: () => saveActiveFile(),
     },
     {
       id: 'project.open',
       name: 'Open Project...',
       category: 'Project',
-      shortcut: 'Ctrl+O',
+      shortcut: shortcutFor('openFolder'),
       action: () => openProject(),
     },
     {
       id: 'project.new_folder',
       name: 'Create Project...',
       category: 'Project',
-      shortcut: 'Ctrl+N',
+      shortcut: shortcutFor('newWorkspace'),
       action: () => newFolderPromptOpen.set(true),
     },
     {
       id: 'sidebar.toggle',
-      name: 'Toggle Sidebar',
+      name: 'Toggle Left Sidebar',
       category: 'View',
-      shortcut: 'Ctrl+B',
+      shortcut: shortcutFor('toggleSidebar'),
       action: () => toggleSidebar(),
     },
     {
       id: 'search.project',
       name: 'Search in Files',
       category: 'View',
-      shortcut: 'Ctrl+Shift+F',
+      shortcut: shortcutFor('openSearch'),
       action: () => toggleFloatingSearch(),
     },
     {
       id: 'project.env',
       name: 'Environment Manager',
       category: 'Project',
-      shortcut: 'Ctrl+Shift+E',
+      shortcut: shortcutFor('openEnvManager'),
       action: () => openEnvManager(),
     },
     // ('Memory Graph' needs no entry here — it is a Tools-menu room now, so the
@@ -124,20 +130,21 @@ export function initDefaultCommands() {
       id: 'view.editor',
       name: 'Go to Editor',
       category: 'View',
-      shortcut: 'Ctrl+E',
+      shortcut: shortcutFor('goToEditor'),
       action: () => setActiveView('editor'),
     },
     {
       id: 'view.terminal',
       name: 'Go to Terminal',
       category: 'View',
-      shortcut: 'Ctrl+`',
+      shortcut: shortcutFor('goToTerminal'),
       action: () => setActiveView('terminal'),
     },
     {
       id: 'view.preview',
       name: 'Go to Preview',
       category: 'View',
+      shortcut: shortcutFor('goToPreview'),
       action: () => setActiveView('preview'),
     },
     {
@@ -150,6 +157,7 @@ export function initDefaultCommands() {
       id: 'view.settings',
       name: 'Go to Settings',
       category: 'View',
+      shortcut: shortcutFor('openSettings'),
       // Settings is a modal, not a view. `setActiveView('settings')` set a field
       // nothing reads, so this command silently did nothing.
       action: () => openSettings(),
@@ -158,6 +166,7 @@ export function initDefaultCommands() {
       id: 'terminal.new',
       name: 'New Terminal',
       category: 'Terminal',
+      shortcut: shortcutFor('newTerminal'),
       action: async () => {
         setActiveView('terminal');
         await createTerminalSession();
@@ -173,7 +182,7 @@ export function initDefaultCommands() {
       id: 'editor.format',
       name: 'Format Document (Prettier)',
       category: 'Editor',
-      shortcut: 'Alt+Shift+F',
+      shortcut: shortcutFor('formatDocument'),
       action: () => formatActiveFile(),
     },
     {

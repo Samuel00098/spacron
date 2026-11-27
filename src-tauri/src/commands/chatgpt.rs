@@ -519,10 +519,10 @@ pub async fn complete(model: &str, system_prompt: &str, user_text: &str, images:
 }
 
 pub async fn complete_in_cwd(model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str) -> Result<String, String> {
-    complete_in_cwd_with_access(model, system_prompt, user_text, images, effort, on_delta, cwd, None).await
+    complete_in_cwd_with_access(model, system_prompt, user_text, images, effort, on_delta, cwd, None, false).await
 }
 
-async fn complete_in_cwd_with_access(model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str, access_mode: Option<&str>) -> Result<String, String> {
+async fn complete_in_cwd_with_access(model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str, access_mode: Option<&str>, fast: bool) -> Result<String, String> {
     let (sandbox, approval_policy) = match access_mode {
         Some("full-access") => ("danger-full-access", "never"),
         Some("auto") => ("workspace-write", "never"),
@@ -530,7 +530,7 @@ async fn complete_in_cwd_with_access(model: &str, system_prompt: &str, user_text
         _ => ("read-only", "on-request"),
     };
     if let Some(mut warm) = take_warm() {
-        match run_turn(&mut warm.server, model, system_prompt, user_text, images, effort, on_delta, cwd, sandbox, approval_policy).await {
+        match run_turn(&mut warm.server, model, system_prompt, user_text, images, effort, on_delta, cwd, sandbox, approval_policy, fast).await {
             Ok(text) => {
                 warm.turns += 1;
                 keep_warm(warm);
@@ -545,7 +545,7 @@ async fn complete_in_cwd_with_access(model: &str, system_prompt: &str, user_text
         }
     }
     let mut server = AppServer::start().await?;
-    let text = run_turn(&mut server, model, system_prompt, user_text, images, effort, on_delta, cwd, sandbox, approval_policy).await?;
+    let text = run_turn(&mut server, model, system_prompt, user_text, images, effort, on_delta, cwd, sandbox, approval_policy, fast).await?;
     keep_warm(Warm { server, turns: 1, last_used: Instant::now() });
     Ok(text)
 }
@@ -562,6 +562,7 @@ pub async fn chatgpt_chat_complete(
     images: Vec<String>,
     effort: Option<String>,
     access_mode: Option<String>,
+    fast: Option<bool>,
 ) -> Result<String, String> {
     let cwd = completion_cwd(&cwd)?;
     let image_paths = images.into_iter().map(PathBuf::from).collect::<Vec<_>>();
@@ -574,10 +575,11 @@ pub async fn chatgpt_chat_complete(
         None,
         &cwd,
         access_mode.as_deref(),
+        fast.unwrap_or(false),
     ).await
 }
 
-async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str, sandbox: &str, approval_policy: &str) -> Result<String, String> {
+async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user_text: &str, images: &[PathBuf], effort: Option<&str>, on_delta: OnDelta<'_>, cwd: &str, sandbox: &str, approval_policy: &str, fast: bool) -> Result<String, String> {
     let mut params = json!({
         "ephemeral": true,
         "baseInstructions": format!("{system_prompt}\n\nYou are running as a text model inside Spacron. Your own built-in shell, file, web and image tools are disabled here: never try to use them. Any Spacron tools listed above (such as generate_image) ARE available: call them with the tool_calls JSON described above and Spacron runs them. Never tell the user a listed tool is unavailable. Answer only in the format described above."),
@@ -605,6 +607,10 @@ async fn run_turn(server: &mut AppServer, model: &str, system_prompt: &str, user
     });
     if let Some(effort) = effort.filter(|e| !e.is_empty() && *e != "default") {
         turn["effort"] = json!(effort);
+    }
+    // Left out when off, so the user's own configured tier still applies.
+    if fast {
+        turn["serviceTier"] = json!("priority");
     }
     server.request("turn/start", turn).await?;
 

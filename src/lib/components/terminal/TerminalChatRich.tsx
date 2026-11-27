@@ -99,7 +99,7 @@ export function DiffCard({ change, onOpen, defaultOpen = true, bare = false }: {
           <svg className="tcr-chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2 6.5 5l-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
           <span className="tcr-diff-kind">{label}</span>
           <span className="tcr-diff-name">{baseName(change.path)}</span>
-          {dirName(change.path) && <span className="tcr-diff-dir">{dirName(change.path)}</span>}
+          {dirName(change.path) && <span className="tcr-diff-dir"><bdi>{dirName(change.path)}</bdi></span>}
           <Counts added={change.added} removed={change.removed} />
         </button>
         {onOpen && change.kind !== 'delete' && (
@@ -144,7 +144,7 @@ export function TurnChanges({ files, changesFor, onOpen }: { files: FileRollup[]
           <button type="button" className="tcr-turn-file-row" title={file.path} aria-expanded={open === file.path} onClick={() => setOpen((v) => (v === file.path ? null : file.path))}>
             <span className={`tcr-file-badge${file.created ? ' new' : file.deleted ? ' gone' : ''}`}>{file.created ? 'A' : file.deleted ? 'D' : 'M'}</span>
             <span className="tcr-diff-name">{baseName(file.path)}</span>
-            {dirName(file.path) && <span className="tcr-diff-dir">{dirName(file.path)}</span>}
+            {dirName(file.path) && <span className="tcr-diff-dir"><bdi>{dirName(file.path)}</bdi></span>}
             <Counts added={file.added} removed={file.removed} />
           </button>
           {!file.deleted && <button type="button" className="tcr-link-btn" onClick={() => onOpen(file.path)}>Open</button>}
@@ -534,8 +534,8 @@ export function FindBar({ root, onClose, revision }: { root: HTMLElement | null;
 // ---------------------------------------------------------------------------
 
 /**
- * A tick down the right edge for each of your messages, placed where it sits
- * in the conversation; click one to jump there. Hover shows its first words.
+ * A tick down the left edge for each of your messages; click one to jump
+ * there. Hover shows its first words.
  */
 export function MessageRail({ scroller, turns, revision }: { scroller: HTMLElement | null; turns: { id: string; text: string }[]; revision: unknown }) {
   const [marks, setMarks] = useState<{ id: string; top: number; text: string }[]>([]);
@@ -580,13 +580,11 @@ export function MessageRail({ scroller, turns, revision }: { scroller: HTMLEleme
   const current = marks.filter((mark) => mark.top <= viewport.top + viewport.height * 0.3).at(-1)?.id ?? marks[0]?.id;
   return (
     <nav className="tcr-rail tcr-skip-find" aria-label="Your messages">
-      <span className="tcr-rail-viewport" aria-hidden="true" style={{ top: `${viewport.top * 100}%`, height: `${viewport.height * 100}%` }} />
       {marks.map((mark) => (
         <button
           key={mark.id}
           type="button"
           className="tcr-rail-mark"
-          style={{ top: `clamp(9px, ${Math.min(100, Math.max(0, mark.top * 100))}%, calc(100% - 9px))` }}
           aria-current={current === mark.id ? 'location' : undefined}
           title={mark.text.slice(0, 120)}
           aria-label={`Jump to: ${mark.text.slice(0, 60)}`}

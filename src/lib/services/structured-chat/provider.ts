@@ -1,3 +1,4 @@
+import type { AskAnswer } from './ask';
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type {
   StructuredAccess,
@@ -87,7 +88,7 @@ export interface StructuredChatProvider {
   get(sessionId: number): StructuredChatState | null;
   subscribe(listener: () => void): () => void;
   /** `accountId` launches under that managed account (or `default` for the CLI's own home) instead of the selected one. */
-  start(sessionId: number, cwd: string, options?: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null }): Promise<void>;
+  start(sessionId: number, cwd: string, options?: { access?: StructuredAccess; resumeId?: string | null; model?: string | null; effort?: string | null; accountId?: string | null; forkSession?: boolean }): Promise<void>;
   send(sessionId: number, text: string, images?: string[]): Promise<void>;
   interrupt(sessionId: number): Promise<void>;
   setModel(sessionId: number, model: string): void;
@@ -99,7 +100,7 @@ export interface StructuredChatProvider {
    * Answer a pending approval. `optionId` picks one of the agent's own options
    * (the numbered answers on a question card) when it offered a list.
    */
-  answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string): Promise<void>;
+  answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string, answers?: AskAnswer[]): Promise<void>;
   close(sessionId: number): Promise<void>;
   /** Providers may expose a live catalog for tests and settings surfaces. */
   models?(sessionId: number): StructuredModel[];
@@ -108,7 +109,7 @@ export interface StructuredChatProvider {
   /** Native rewind when supported by the provider. */
   rewind?(sessionId: number, target?: { turnId?: string; checkpointId?: string } | number): Promise<boolean>;
   /** Native conversation fork when supported by the provider. */
-  fork?(sessionId: number, newSessionId?: number): Promise<{ nativeSessionId: string | null } | boolean>;
+  fork?(sessionId: number, newSessionId?: number): Promise<{ nativeSessionId: string | null; forkSourceId?: string | null } | boolean>;
   /** Mid-turn steering / prompt injection when supported. */
   steer?(sessionId: number, text: string, images?: string[]): Promise<void>;
   /** Native context compaction when supported. */

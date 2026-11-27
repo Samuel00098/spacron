@@ -56,6 +56,9 @@ import type { AgentProviderModel } from '$lib/services/chat-provider-adapters';
 import { REASONING_LABELS } from '$lib/services/orchestrator/reasoning-levels';
 import type { ChatReasoningEffort } from '$lib/types/chat';
 import { useStore } from '$lib/react/useStore';
+import { findShortcutKeys } from '$lib/stores/settings';
+import { useSettingsStore } from '$lib/stores/zustand/settings';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import { toggleTerminalTranscription, transcriptionActive } from '$lib/services/transcription-hotkey';
 import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
@@ -131,6 +134,8 @@ import {
 } from '$lib/services/structured-chat/registry';
 import { modelTogglesFor, type ModelToggleId, type ModelToggleSpec } from '$lib/services/model-toggles';
 import { useStructuredChatHistory, type StructuredChatAgent } from '$lib/services/structured-chat/panes';
+import { AskCard } from './AskCard';
+import { answerLabels, type AskAnswer } from '$lib/services/structured-chat/ask';
 import { answerStructuredApproval, hydrateStructuredHistory, reconnectStructuredSession } from '$lib/services/structured-chat/session-store';
 import { runStructuredCommand, STRUCTURED_COMMANDS } from '$lib/services/structured-chat/commands';
 import { modelCatalogNote, modelCatalogStatus, selectedModelIssue } from '$lib/services/structured-chat/model-catalog';
@@ -816,6 +821,14 @@ export default function TerminalChatView({
     void answerStructuredApproval(sessionId, approval.requestId, decision, optionId);
   }
 
+  const asking = structuredMode ? structuredState?.approvals.find((approval) => approval.questions?.length) : undefined;
+
+  function submitAnswers(approval: NonNullable<typeof asking>, answers: AskAnswer[]) {
+    const summary = (approval.questions ?? []).map((q, i) => answerLabels(q, answers[i]).join(', ')).join(' · ');
+    void answerStructuredApproval(sessionId, approval.requestId, 'accept', undefined, summary, answers);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
   // A numbered question card is answerable from the keyboard: 1…9 picks that
   // option, unless the user is typing in a field.
   useEffect(() => {
@@ -978,11 +991,14 @@ export default function TerminalChatView({
   async function send(options: { now?: boolean } = {}) {
     const text = draft.trim();
     const images = attachments;
-    if ((!text && !images.length) || sending || !isRunning) return;
+    // A structured side chat opens its own pane, so it neither waits for this
+    // turn nor joins its queue.
+    const isSide = structuredMode && !images.length && /^\/(side|btw)(\s|$)/i.test(text);
+    if ((!text && !images.length) || (sending && !isSide) || !isRunning) return;
     const isCommand = Boolean(agent) && text.startsWith('/') && !images.length;
     // Settings > Chat > "Queue follow-ups": while a turn runs, the message
     // waits here. Ctrl+Enter ("send now") types it into the running turn.
-    if (busy && !options.now && queueFollowUps) {
+    if (busy && !options.now && queueFollowUps && !isSide) {
       enqueue(sessionId, text, images.map((a) => ({ path: a.path, preview: a.preview })));
       setDraft('');
       setAttachments([]);
@@ -1373,9 +1389,14 @@ export default function TerminalChatView({
 
   const openPath = useCallback((path: string, line?: number) => {
     const resolved = resolvePath(root, path);
-    void openFile(resolved).then((opened) => {
-      if (opened && line && line > 0) jumpToLine.set({ path: resolved, line });
-    });
+    void (async () => {
+      // A reply often names a file without its folder: find it in the project.
+      const found = root
+        ? await invoke<string | null>('chat_find_file', { root, path: resolved }).catch(() => null)
+        : null;
+      const target = found || resolved;
+      if (await openFile(target) && line && line > 0) jumpToLine.set({ path: target, line });
+    })();
   }, [root]);
 
   // Each agent turn's file changes, shown under the turn's last block.
@@ -1463,12 +1484,17 @@ export default function TerminalChatView({
     fast: structuredMode ? structuredState?.fast === true : picks.fast === true,
     ultra: toggleAgent === 'codex' ? currentEffort === 'ultra' : structuredMode ? structuredState?.ultracode === true : picks.ultracode === true,
   };
-  // Before a conversation names its model, the CLI runs its default one.
-  const toggleModel = currentModel ?? (currentModelId ? null : catalogModels.find((model) => model.isDefault) ?? null);
+  // Before a conversation names its model, the CLI runs its default one. A new
+  // terminal Claude chat may have no list that says which: `default` covers it.
+  const listedDefault = catalogModels.find((model) => model.isDefault) ?? null;
+  const toggleModel = currentModel
+    ?? (currentModelId
+      ? { id: currentModelId }
+      : listedDefault ?? (toggleAgent === 'claude' && !structuredMode ? { id: 'default', reasoningEfforts: CLAUDE_EFFORTS } : null));
   const modelToggles = modelTogglesFor(
     toggleAgent ?? null,
-    toggleModel ?? (currentModelId ? { id: currentModelId } : null),
-    efforts.length ? efforts : toggleModel?.reasoningEfforts ?? [],
+    toggleModel,
+    efforts.length ? efforts : toggleModel && 'reasoningEfforts' in toggleModel ? toggleModel.reasoningEfforts ?? [] : [],
   )
     .map((spec) => ({ ...spec, on: toggleStates[spec.id] }));
   const permissionMode: ChatPermissionMode = picks.permission ?? reported.permission ?? sessionPermissionMode(sessionId);
@@ -1962,7 +1988,7 @@ export default function TerminalChatView({
             return <Fragment key={key}>{marker}{body}{changes}</Fragment>;
           })}
           {pending.map((p) => <UserTurn key={`pending-${p.id}`} text={p.text} images={p.images} onOpenImage={openViewer} pending />)}
-          {structuredState?.approvals.map((approval) => (
+          {structuredState?.approvals.filter((approval) => !approval.questions).map((approval) => (
             <div key={String(approval.requestId)} className="tcr-command-notice structured-chat-approval" role="group" aria-label={approval.title}>
               <span>
                 <strong>{approval.title}</strong>
@@ -2091,6 +2117,16 @@ export default function TerminalChatView({
           </div>
         )}
         {structuredMode && <GoalPanel sessionId={sessionId} onCommand={(command) => void runSlashCommand(command)} />}
+        {asking?.questions && (
+          <AskCard
+            key={String(asking.requestId)}
+            questions={asking.questions}
+            keysRef={viewRef}
+            onSubmit={(answers) => submitAnswers(asking, answers)}
+            onSkip={() => answerStructuredCard(asking, 'decline')}
+            onDictate={toggleTerminalTranscription}
+          />
+        )}
         <div
           ref={composerRef}
           className={`terminal-chat-composer${isRunning ? '' : ' exited'}${dropOver ? ' drop-over' : ''}`}
@@ -2220,7 +2256,12 @@ export default function TerminalChatView({
               models={menuModels.filter((m) => m.supported !== false).map((m) => ({ value: m.id, label: m.label, hint: m.description }))}
               model={currentModel?.id ?? null}
               onModel={(value) => void applyOption(modelApply, value, 'model')}
-              efforts={effortApply.kind !== 'none' ? efforts.map((e) => ({ value: e, label: shortEffort(e) })) : []}
+              // Codex's Ultra has its own button below, so it is left out of this row.
+              efforts={effortApply.kind !== 'none'
+                ? efforts
+                  .filter((e) => String(e) !== 'ultra' || !modelToggles.some((t) => t.id === 'ultra'))
+                  .map((e) => ({ value: e, label: shortEffort(e) }))
+                : []}
               effort={currentEffort}
               onEffort={(value) => void applyOption(effortApply, value, 'effort')}
               toggles={modelToggles}
@@ -2229,7 +2270,10 @@ export default function TerminalChatView({
             <button
               type="button"
               className={`terminal-chat-icon-btn${dictating ? ' recording' : ''}`}
-              title={dictating ? 'Stop dictation (F9)' : 'Dictate (F9)'}
+              title={(() => {
+                const key = formatShortcutLabel(findShortcutKeys(useSettingsStore.getState().userShortcuts, 'transcribeToTerminal'));
+                return dictating ? `Stop dictation (${key})` : `Dictate (${key})`;
+              })()}
               aria-label={dictating ? 'Stop dictation' : 'Dictate'}
               aria-pressed={dictating}
               disabled={!isRunning}
@@ -2361,9 +2405,12 @@ function appFontSize(): number {
  */
 export function contrastVars(contrast: number, matchTerminal: boolean): Record<string, string> {
   if (contrast === 100) return {};
-  const lightText = matchTerminal || isLightColor(typeof document === 'undefined'
-    ? '#fff'
-    : getComputedStyle(document.documentElement).getPropertyValue('--text-primary'));
+  const isLightMode = typeof document !== 'undefined' && document.documentElement.classList.contains('light-theme');
+  const lightText = matchTerminal
+    ? !isLightMode
+    : isLightColor(typeof document === 'undefined'
+      ? '#fff'
+      : getComputedStyle(document.documentElement).getPropertyValue('--text-primary'));
   const extreme = lightText ? '#ffffff' : '#000000';
   const mix = (base: string) => (contrast < 100
     ? `color-mix(in srgb, var(${base}) ${contrast}%, transparent)`
@@ -2761,7 +2808,7 @@ export function ModelMenu({
         <span className="terminal-chat-pill-label">{modelLabel}</span>
         {effortText && <span className="terminal-chat-pill-effort">{effortText}</span>}
         {toggles.filter((t) => t.on && !(t.label === 'Ultra' && effortText)).map((t) => (
-          <span key={t.id} className="terminal-chat-pill-effort">{t.id === 'fast' ? 'Fast' : t.label}</span>
+          <span key={t.id} className="terminal-chat-pill-effort">{t.label}</span>
         ))}
         <svg className="terminal-chat-pill-caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M2.5 3.8 5 6.3l2.5-2.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
@@ -2849,14 +2896,11 @@ export function ModelMenu({
                   type="button"
                   role="menuitemcheckbox"
                   aria-checked={toggle.on}
-                  className="terminal-chat-model-toggle"
+                  className={`terminal-chat-model-toggle${toggle.on ? ' on' : ''}`}
+                  title={toggle.hint}
                   onClick={() => onToggle?.(toggle.id, !toggle.on)}
                 >
-                  <span className="terminal-chat-menu-text">
-                    <span className="terminal-chat-menu-label">{toggle.label}</span>
-                    <span className="terminal-chat-menu-hint">{toggle.hint}</span>
-                  </span>
-                  <span className={`terminal-chat-switch${toggle.on ? ' on' : ''}`} aria-hidden="true" />
+                  {toggle.label}
                 </button>
               ))}
             </div>

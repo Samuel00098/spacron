@@ -128,6 +128,18 @@ describe('resolveChatFilePath', () => {
     );
   });
 
+  it('drops the leading slash ACP agents put before a drive letter', () => {
+    expect(resolveChatFilePath('C:\\Users\\dev\\spacron', '/C:/Users/dev/My Videos/a.md')).toBe('C:/Users/dev/My Videos/a.md');
+  });
+
+  it('reads the other ways agents spell a Windows path', () => {
+    const root = 'C:\\Users\\dev\\spacron';
+    for (const path of ['file:///C:/Users/dev/a%20b.md', '/mnt/c/Users/dev/a b.md', '/cygdrive/c/Users/dev/a b.md', '/c/Users/dev/a b.md']) {
+      expect(resolveChatFilePath(root, path), path).toBe('C:/Users/dev/a b.md');
+    }
+    expect(resolveChatFilePath(root, '~/notes.md')).toBe('~/notes.md');
+  });
+
   it('keeps absolute Unix paths untouched on Unix roots', () => {
     expect(resolveChatFilePath('/home/dev/spacron', '/etc/hosts')).toBe('/etc/hosts');
     expect(resolveChatFilePath('/home/dev/spacron', '.github/workflows/release.yml')).toBe(

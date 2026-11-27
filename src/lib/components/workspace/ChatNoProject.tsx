@@ -1,5 +1,7 @@
 import { openProject, openWorkspace, switchToProject } from '$lib/stores/workspace';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
+import { useSettingsStore } from '$lib/stores/zustand/settings';
+import { findShortcutKeys } from '$lib/stores/settings';
 import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 
 /**
@@ -25,6 +27,7 @@ function FolderIcon() {
 export default function ChatNoProject() {
   const projects = useWorkspaceStore((s) => s.projects);
   const recents = useWorkspaceStore((s) => s.recentWorkspaces) || [];
+  const shortcuts = useSettingsStore((s) => s.userShortcuts);
   // Projects already loaded in this workspace switch instantly; recents
   // reopen their workspace. A path listed in both shows once, as the former.
   const open = [...projects.values()];
@@ -83,7 +86,7 @@ export default function ChatNoProject() {
         <button type="button" className="chat-no-project-open" onClick={() => void openProject()}>
           <FolderIcon />
           <span>Open Project</span>
-          <kbd>{formatShortcutLabel('Ctrl+O')}</kbd>
+          <kbd>{formatShortcutLabel(findShortcutKeys(shortcuts, 'openFolder'))}</kbd>
         </button>
       </div>
     </section>

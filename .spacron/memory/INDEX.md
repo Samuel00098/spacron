@@ -27,7 +27,7 @@ short enough that it says what the note is *about*, never what it says.
 - [blocked-reason-is-raw-pty](blocked-reason-is-raw-pty.md) — "needs input" text is raw PTY; strip ANSI before rendering it
 - [agent-inbox-unread](agent-inbox-unread.md) — why "read" and "dismissed" have to stay separate bits
 - [notification-card-design](notification-card-design.md) — colour rules for the agent notification card; never tint a whole surface
-- [transcription-hotkey](transcription-hotkey.md) — F9 dictation: pause/end semantics and its lifecycle ordering traps
+- [transcription-hotkey](transcription-hotkey.md) — Dictation hotkey (`Ctrl+Shift+M`, formerly `F9`): pause/end semantics and its lifecycle ordering traps
 - [voice-is-realtime-only](voice-is-realtime-only.md) — reply TTS is deleted; speech-to-speech is realtime-only; the one exception is the user-pressed Read aloud button
 - [transcript-quality](transcript-quality.md) — the two cleanup stages for dictated text, and why the deterministic one stays conservative
 - [voice-history](voice-history.md) — the two durable voice logs, and where retention lives

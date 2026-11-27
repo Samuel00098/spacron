@@ -362,19 +362,26 @@
 
 .tcr-rail {
   position: absolute;
-  top: 12px;
-  bottom: 12px;
-  right: 12px;
-  width: 20px;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  width: 18px;
+  max-height: calc(100% - 32px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  overflow-y: auto;
+  scrollbar-width: none;
   z-index: 4;
   pointer-events: none;
 }
+.tcr-rail::-webkit-scrollbar { display: none; }
 .terminal-chat-view button.tcr-rail-mark {
-  position: absolute;
-  right: 0;
-  width: 20px;
-  height: 18px;
-  margin-top: -9px;
+  position: relative;
+  flex: none;
+  width: 18px;
+  height: 12px;
   padding: 0;
   border: 0;
   border-radius: 2px;
@@ -382,6 +389,9 @@
   box-shadow: none !important;
   pointer-events: auto;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   transition: color var(--dur-fast, 120ms);
 }
 .terminal-chat-view button.tcr-rail-mark::after {
@@ -389,21 +399,16 @@
   display: block;
   width: 10px;
   height: 3px;
-  margin: 0 auto;
   border-radius: 2px;
   background: color-mix(in srgb, var(--text-primary) 35%, transparent);
+  transition: width var(--dur-fast, 120ms), background var(--dur-fast, 120ms);
 }
 .terminal-chat-view button.tcr-rail-mark:hover::after,
-.terminal-chat-view button.tcr-rail-mark[aria-current]::after { background: var(--accent); }
-.terminal-chat-view button.tcr-rail-mark:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-.tcr-rail-viewport {
-  position: absolute;
-  left: 0;
-  right: 0;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
-  pointer-events: none;
+.terminal-chat-view button.tcr-rail-mark[aria-current]::after {
+  width: 14px;
+  background: var(--accent);
 }
+.terminal-chat-view button.tcr-rail-mark:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
 .terminal-chat-view button.tcr-jump {
   flex: none;
@@ -900,6 +905,19 @@
   --tc-line: rgba(255, 255, 255, 0.1);
   --tc-line-strong: rgba(255, 255, 255, 0.17);
   background: rgb(var(--terminal-surface-rgb, 16, 16, 16));
+}
+:root.light-theme .terminal-chat-view[data-match-terminal] {
+  --text-primary: #171717;
+  --text-muted: rgba(23, 23, 23, 0.58);
+  --text-secondary: rgba(23, 23, 23, 0.72);
+  --success: #008000;
+  --error: #cd3131;
+  --accent: #0451a5;
+  --tc-surface: rgba(0, 0, 0, 0.04);
+  --tc-surface-strong: rgba(0, 0, 0, 0.08);
+  --tc-line: rgba(0, 0, 0, 0.1);
+  --tc-line-strong: rgba(0, 0, 0, 0.17);
+  background: rgb(var(--terminal-surface-rgb, 239, 239, 239));
 }
 #app#app .terminal-chat-view[data-match-terminal],
 #app#app .terminal-chat-view[data-match-terminal] :where(*):not(pre, pre *, code, code *, kbd, samp) {

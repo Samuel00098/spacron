@@ -19,6 +19,6 @@ describe('Codex request_user_input', () => {
   });
 
   it('answers by question id in the shape the schema requires', () => {
-    expect(codexAnswers({ db: 'SQLite' })).toEqual({ answers: { db: { answers: ['SQLite'] } } });
+    expect(codexAnswers({ db: ['SQLite'] })).toEqual({ answers: { db: { answers: ['SQLite'] } } });
   });
 });

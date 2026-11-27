@@ -197,7 +197,6 @@
 
 .annotation-send-btn:hover:not(:disabled) {
   opacity: 0.92;
-  transform: translateY(-1px);
   box-shadow: 0 4px 14px rgba(124, 106, 247, 0.5);
 }
 

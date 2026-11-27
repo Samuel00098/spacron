@@ -112,6 +112,7 @@ import { effectiveReasoningEffort } from '$lib/services/orchestrator/reasoning-l
 import { estimateFileOverlap } from '$lib/services/jev';
 import type { ChatAccessMode, ChatAttachment, ChatFileRef, ChatInlineRequest, ChatMessageType, ChatReasoningEffort } from '$lib/types/chat';
 import { buildChatContextHandoff, lastDispatchedChatAgent } from '$lib/services/chat-context-handoff';
+import { sideChatContextFor, withContext } from '$lib/services/side-chat-context';
 import { decideChatProviderTransition } from '$lib/services/chat-provider-transition';
 import { getAgentAdapter, disposeAgentAdapter } from '$lib/services/orchestrator/agent-adapter';
 import { agentTurnStates, noteAgentTurnEnded, turnEndWasCounted, type AgentTurnPhase } from '$lib/stores/agentTurnState';
@@ -4778,6 +4779,7 @@ async function sendPiRpcChatTurn(
   const assistantId = msgId();
   const cwd = threadWorkingRoot(thread, rootPath);
   const prompt = attachments.length ? buildAttachmentPrompt(text, attachments) : text;
+  const sideContext = sideChatContextFor(getThreadMessageSnapshot(thread.id));
   appendChat(projectId, { id: userId, role: 'user', text, ts: Date.now(), attachments }, thread.id);
   appendChat(projectId, { id: assistantId, role: 'assistant', text: '', ts: Date.now(), pending: true, dispatchedAgent: displayName ?? command }, thread.id);
   updateChatThread(thread.id, { status: 'working', contextUsage: null, turnPlan: null, updatedAt: Date.now(), lastActivityAt: Date.now() });
@@ -4816,7 +4818,8 @@ async function sendPiRpcChatTurn(
     }
   });
   try {
-    await session.command(piPrompt(prompt));
+    // A process already running for this thread has seen the conversation.
+    await session.command(piPrompt(existing?.command === command ? prompt : withContext(sideContext, prompt)));
     while (!settled) await new Promise((resolve) => setTimeout(resolve, 50));
     patchChat(projectId, assistantId, { text: responseText || 'Pi completed the turn without returning text.', pending: false });
     updateChatThread(thread.id, { status: 'idle', turnEndedAt: Date.now(), updatedAt: Date.now(), lastActivityAt: Date.now() });
@@ -4881,8 +4884,10 @@ async function sendNativeCodexChatTurn(
         ? `Conversation so far:\n${priorMessages}\n\nContinue the conversation and answer this new message:\n${basePrompt}`
         : basePrompt,
       images: attachments.map((attachment) => attachment.path).filter((path): path is string => Boolean(path)),
-      effort: reasoningEffort && reasoningEffort !== 'default' ? reasoningEffort : null,
+      // Codex's Ultra is its top reasoning level.
+      effort: thread.ultraMode ? 'ultra' : reasoningEffort && reasoningEffort !== 'default' ? reasoningEffort : null,
       accessMode: thread.accessMode,
+      fast: thread.fastMode === true,
     });
     patchChat(projectId, assistantId, { text: response || 'Codex completed the turn without returning text.', pending: false });
     updateChatThread(thread.id, {
@@ -5198,6 +5203,8 @@ async function sendNativeAcpChatTurn(
       if (sourceAgent && sourceAgent !== agentCommand) {
         prompt = buildChatContextHandoff(priorMessages, sourceAgent, agentCommand, basePrompt).prompt;
       }
+      const sideContext = sideChatContextFor(priorMessages);
+      if (sideContext) prompt = withContext(sideContext, basePrompt);
     }
     updateChatThread(thread.id, {
       nativeAcpCommand: agentCommand,
@@ -6357,6 +6364,7 @@ export async function sendChatMessage(
     return;
   }
   if (opts?.chatMode && chatThread && opts.forcedAgent && isClaudeProvider(opts.forcedAgent)) {
+    const sideContext = sideChatContextFor(getThreadMessageSnapshot(chatThread.id));
     const userId = msgId();
     const assistantId = msgId();
     appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
@@ -6365,7 +6373,7 @@ export async function sendChatMessage(
     const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
     const permissionMode = claudePermissionModeForAccess(tier);
     const sdkOpts = {
-      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      userText: withContext(chatThread.claudeSdkSessionId ? null : sideContext, opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
       cwd: threadWorkingRoot(chatThread, rootPath),
       model: opts.model,
       permissionMode,
@@ -6374,6 +6382,8 @@ export async function sendChatMessage(
       effort: opts.reasoningEffort ?? null,
       accessMode: chatThread.accessMode,
       sessionId: chatThread.claudeSdkSessionId ?? null,
+      fast: chatThread.fastMode === true,
+      ultracode: chatThread.ultraMode === true,
     };
     try {
       const { text, sessionId } = await runClaudeNativeTurn(sdkOpts);
@@ -6383,7 +6393,8 @@ export async function sendChatMessage(
     } catch (error) {
       try {
         const cliOpts = {
-          prompt: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+          // The CLI fallback never resumes a session.
+          prompt: withContext(sideContext, opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
           cwd: threadWorkingRoot(chatThread, rootPath),
           model: opts.model,
           permissionMode,
@@ -6403,6 +6414,7 @@ export async function sendChatMessage(
     return;
   }
   if (opts?.chatMode && chatThread && opts.forcedAgent && isCursorProvider(opts.forcedAgent)) {
+    const sideContext = sideChatContextFor(getThreadMessageSnapshot(chatThread.id));
     const userId = msgId();
     const assistantId = msgId();
     appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
@@ -6411,7 +6423,7 @@ export async function sendChatMessage(
     const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
     const permissionMode = cursorPermissionModeForAccess(tier);
     const nativeOpts = {
-      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      userText: withContext((chatThread as unknown as { cursorSdkSessionId?: string | null }).cursorSdkSessionId ? null : sideContext, opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
       cwd: threadWorkingRoot(chatThread, rootPath),
       model: opts.model,
       permissionMode,
@@ -6434,6 +6446,7 @@ export async function sendChatMessage(
     return;
   }
   if (opts?.chatMode && chatThread && opts.forcedAgent && isOpenCodeProvider(opts.forcedAgent)) {
+    const sideContext = sideChatContextFor(getThreadMessageSnapshot(chatThread.id));
     const userId = msgId();
     const assistantId = msgId();
     appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
@@ -6442,7 +6455,7 @@ export async function sendChatMessage(
     const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
     const permissionMode = opencodePermissionModeForAccess(tier);
     const nativeOpts = {
-      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      userText: withContext((chatThread as unknown as { opencodeSdkSessionId?: string | null }).opencodeSdkSessionId ? null : sideContext, opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
       cwd: threadWorkingRoot(chatThread, rootPath),
       model: opts.model,
       permissionMode,
@@ -6465,6 +6478,7 @@ export async function sendChatMessage(
     return;
   }
   if (opts?.chatMode && chatThread && opts.forcedAgent && isMuseProvider(opts.forcedAgent)) {
+    const sideContext = sideChatContextFor(getThreadMessageSnapshot(chatThread.id));
     const userId = msgId();
     const assistantId = msgId();
     appendChat(projectId, { id: userId, role: 'user', text: trimmed, ts: Date.now(), attachments: opts.attachments ?? [] }, chatThread.id);
@@ -6473,7 +6487,7 @@ export async function sendChatMessage(
     const tier = accessTier(opts.accessMode ?? chatThread.accessMode);
     const permissionMode = musePermissionModeForAccess(tier);
     const nativeOpts = {
-      userText: (opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
+      userText: withContext((chatThread as unknown as { museSdkSessionId?: string | null }).museSdkSessionId ? null : sideContext, opts.attachments?.length ? buildAttachmentPrompt(trimmed, opts.attachments) : trimmed),
       cwd: threadWorkingRoot(chatThread, rootPath),
       model: opts.model,
       permissionMode,

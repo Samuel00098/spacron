@@ -1,4 +1,5 @@
 /** One ACP client for agents whose CLI exposes `session/new`/`session/prompt`. */
+import { paneWireText, stripSideChatContext } from '$lib/services/side-chat-context';
 import {
   ACP_NO_CLIENT_TOOLS,
   authenticateAcp,
@@ -20,7 +21,9 @@ import { get } from '$lib/stores/storeCompat';
 import { chatAutoAnswerInline } from '$lib/stores/settings';
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type { StructuredAccess, StructuredApproval, StructuredApprovalOption, StructuredChatState, StructuredModel } from './codex-session';
-import { acpAskAnswer, acpAskSkip, askKindFor, parseAcpQuestions, type AcpAskKind, type AcpAskQuestion } from './acp-questions';
+import { acpAskAnswer, acpAskCard, acpAskSkip, askKindFor, askReplyText, parseAcpQuestions, parseAntigravityAsk, type AcpAskKind, type AcpAskQuestion } from './acp-questions';
+import { allAnswered, askTitle, type AskAnswer, type AskQuestion } from './ask';
+import { ELICITATION_AGENTS, ELICITATION_DECLINE, elicitationAccept, isPermissionQuestion, parseElicitation, permissionQuestion, type Elicitation } from './acp-elicitation';
 import { acpImageBlocks, imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
 import { aboutYouEnv } from '$lib/stores/aboutYou';
@@ -46,7 +49,7 @@ function textFrom(value: unknown): string {
  * `session/new` never answers (seen with cursor-agent on Windows, 2026-11-20).
  */
 export const ACP_LAUNCHES: Record<string, { command: string; args: string[]; label: string; env?: Record<string, string>; authMethod?: string }> = {
-  opencode: { command: 'opencode', args: ['acp'], label: 'OpenCode', env: { OPENCODE_CLIENT: 'acp', OPENCODE_ENABLE_QUESTION_TOOL: 'false' } },
+  opencode: { command: 'opencode', args: ['acp'], label: 'OpenCode', env: { OPENCODE_CLIENT: 'acp' } },
   grok: { command: 'grok', args: ['agent', 'stdio'], label: 'Grok' },
   antigravity: { command: 'agy', args: ['acp'], label: 'Antigravity', env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } },
   cursor: { command: 'cursor-agent', args: ['--disable-auto-update', 'acp'], label: 'Cursor', authMethod: 'cursor_login' },
@@ -116,7 +119,7 @@ export function chatItemForAcpUpdate(agent: string, notification: Json, fallback
   const text = textFrom(update.content ?? update.message ?? update.text ?? update.delta ?? update.output ?? update.rawOutput);
   if (kind.includes('agent_message') || kind.includes('assistant_message') || kind === 'text_delta' || kind === 'message_chunk') return text ? { id, kind: 'assistant', text } : null;
   if (kind.includes('agent_thought') || kind.includes('assistant_thought') || kind.includes('reasoning') || kind === 'thought_chunk') return text ? { id, kind: 'reasoning', text } : null;
-  if (kind.includes('user_message')) return { id, kind: 'user', text };
+  if (kind.includes('user_message')) return { id, kind: 'user', text: stripSideChatContext(text) };
   if (kind.includes('tool_call') || kind.includes('tool_result') || kind.includes('tool_use')) {
     const isUpdate = kind.includes('tool_call_update') || kind.includes('tool_result');
     const rawInput = update.rawInput ?? update.input ?? update.arguments;
@@ -306,19 +309,18 @@ function makeProvider(agent: string): StructuredChatProvider {
   let segmentSequence = 0;
   /** The options each pending permission request offered. */
   const permissionOptions = new Map<string, Json[]>();
-  /** Extension questions (Grok, Cursor) being answered one card at a time. */
-  const pendingAsks = new Map<string, { kind: AcpAskKind; questions: AcpAskQuestion[]; title: string | null; index: number; answers: Record<string, string> }>();
+  /** Extension questions (Grok, Cursor) waiting for the user. */
+  const pendingAsks = new Map<string, { kind: AcpAskKind; questions: AcpAskQuestion[] }>();
   const askKey = (sessionId: number, requestId: string | number) => `${sessionId}:${requestId}`;
-  const askApproval = (requestId: string | number, ask: { questions: AcpAskQuestion[]; title: string | null; index: number }): StructuredApproval => {
-    const q = ask.questions[ask.index];
-    const progress = ask.questions.length > 1 ? ` (${ask.index + 1} of ${ask.questions.length})` : '';
-    return {
-      requestId,
-      kind: 'other',
-      title: `${q.header ?? ask.title ? `${q.header ?? ask.title}: ` : ''}${q.text}${progress}`,
-      detail: [q.multiple ? 'This agent allows several answers; pick the main one here.' : null, ...q.options.filter((o) => o.description).map((o) => `${o.label}: ${o.description}`)].filter(Boolean).join('\n') || null,
-      options: q.options.map((o) => ({ id: o.id, label: o.label, kind: 'allow_once' })),
-    };
+  /** Antigravity's question, held until its turn ends: the answer is the next message. */
+  const textAsks = new Map<number, { requestId: string; questions: AcpAskQuestion[] }>();
+  /** `elicitation/create` forms, and questions sent as permission requests. */
+  const pendingForms = new Map<string, { form: Elicitation } | { permission: AskQuestion; options: Json[] }>();
+  const formApproval = (requestId: string | number, questions: AskQuestion[]): StructuredApproval =>
+    ({ requestId, kind: 'other', title: askTitle(questions), detail: null, questions });
+  const askApproval = (requestId: string | number, kind: AcpAskKind | 'antigravity', questions: AcpAskQuestion[]): StructuredApproval => {
+    const card = acpAskCard(kind, questions);
+    return { requestId, kind: 'other', title: askTitle(card), detail: null, questions: card };
   };
 
   function applyConfigOptions(sessionId: number, value: unknown): void {
@@ -358,7 +360,7 @@ function makeProvider(agent: string): StructuredChatProvider {
         const reason = tail.text();
         stores.update(sessionId, (state) => state.status === 'closed' ? {} : { status: 'failed', error: reason ? `${launch.label} stopped: ${reason}` : state.error ?? `${launch.label} stopped.` });
       });
-      const initialized = await withTimeout(initializeAcp(session, ACP_NO_CLIENT_TOOLS), 60_000, `${launch.label} did not answer initialize`);
+      const initialized = await withTimeout(initializeAcp(session, ELICITATION_AGENTS.has(agent) ? { ...ACP_NO_CLIENT_TOOLS, elicitation: { form: {} } } : ACP_NO_CLIENT_TOOLS), 60_000, `${launch.label} did not answer initialize`);
       const methods = initialized.authMethods.map((method) => str(rec(method)?.id)).filter((id): id is string => !!id);
       if (launch.authMethod && methods.includes(launch.authMethod)) {
         await withTimeout(authenticateAcp(session, launch.authMethod), 30_000, `${launch.label} did not finish signing in`);
@@ -433,14 +435,20 @@ function makeProvider(agent: string): StructuredChatProvider {
       return;
     }
     stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text, images: dataUrls.length ? dataUrls : undefined });
-    stores.update(sessionId, { status: 'working', error: null });
+    // A typed message supersedes a question card left from the last turn.
+    textAsks.delete(sessionId);
+    stores.update(sessionId, { status: 'working', error: null, approvals: [] });
+    const wire = paneWireText(sessionId, text);
     try {
-      const result = await promptAcpNativeSession(runtime.session, runtime.sessionId, text, acpImageBlocks(dataUrls));
+      const result = await promptAcpNativeSession(runtime.session, runtime.sessionId, wire.text, acpImageBlocks(dataUrls));
+      wire.sent();
       if (sessions.get(sessionId) !== runtime) return;
       const stopReason = result?.stopReason;
+      const asked = stopReason === 'cancelled' ? undefined : textAsks.get(sessionId);
+      if (!asked) textAsks.delete(sessionId);
       stores.update(sessionId, (state) => state.status !== 'working' ? {} : {
         status: 'ready',
-        approvals: [],
+        approvals: asked ? [askApproval(asked.requestId, 'antigravity', asked.questions)] : [],
         ...(stopReason && stopReason !== 'end_turn' && stopReason !== 'cancelled'
           ? { error: `Turn stopped (${stopReason.replace(/_/g, ' ')}).` }
           : {}),
@@ -503,23 +511,35 @@ function makeProvider(agent: string): StructuredChatProvider {
     }
   }
 
-  async function answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string): Promise<void> {
+  async function answerApproval(sessionId: number, requestId: string | number, decision: 'accept' | 'acceptForSession' | 'decline', optionId?: string, answers?: AskAnswer[]): Promise<void> {
     const runtime = sessions.get(sessionId);
+    const late = textAsks.get(sessionId);
+    if (late && late.requestId === requestId) {
+      textAsks.delete(sessionId);
+      stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
+      // Not awaited: it settles only when the whole next turn does.
+      if (decision !== 'decline' && allAnswered(acpAskCard('antigravity', late.questions), answers)) void send(sessionId, askReplyText(late.questions, answers));
+      return;
+    }
+    const form = pendingForms.get(askKey(sessionId, requestId));
+    if (form) {
+      pendingForms.delete(askKey(sessionId, requestId));
+      stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
+      if ('form' in form) {
+        const complete = decision !== 'decline' && allAnswered(form.form.questions, answers);
+        await runtime?.session.respond(requestId, complete ? elicitationAccept(form.form, answers!) : ELICITATION_DECLINE);
+      } else {
+        const chosen = decision !== 'decline' && allAnswered([form.permission], answers) ? answers![0].optionIds[0] : undefined;
+        await runtime?.session.respond(requestId, permissionOutcome(form.options, chosen ? 'accept' : 'decline', chosen));
+      }
+      return;
+    }
     const ask = pendingAsks.get(askKey(sessionId, requestId));
     if (ask) {
-      const chosen = decision !== 'decline' ? ask.questions[ask.index].options.find((o) => o.id === optionId) : undefined;
-      if (chosen) {
-        ask.answers[ask.questions[ask.index].key] = chosen.id;
-        ask.index += 1;
-        if (ask.index < ask.questions.length) {
-          // The next question replaces this card; the request stays open until the last.
-          stores.update(sessionId, (state) => ({ approvals: state.approvals.map((approval) => approval.requestId === requestId ? askApproval(requestId, ask) : approval) }));
-          return;
-        }
-      }
       pendingAsks.delete(askKey(sessionId, requestId));
       stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
-      await runtime?.session.respond(requestId, chosen ? acpAskAnswer(ask.kind, ask.questions, ask.answers) : acpAskSkip(ask.kind));
+      const complete = decision !== 'decline' && allAnswered(acpAskCard(ask.kind, ask.questions), answers);
+      await runtime?.session.respond(requestId, complete ? acpAskAnswer(ask.kind, ask.questions, answers!) : acpAskSkip(ask.kind));
       return;
     }
     stores.update(sessionId, (state) => ({ approvals: state.approvals.filter((approval) => approval.requestId !== requestId) }));
@@ -533,18 +553,36 @@ function makeProvider(agent: string): StructuredChatProvider {
     sessions.delete(sessionId);
     activeAssistantIds.delete(sessionId);
     activeReasoningIds.delete(sessionId);
+    textAsks.delete(sessionId);
     stores.delete(sessionId);
     await runtime?.session.close().catch(() => undefined);
   }
 
   function onRequest(sessionId: number, request: AcpServerRequest): void {
     const params = request.params ?? {};
+    if (request.method === 'elicitation/create') {
+      const form = parseElicitation(params);
+      if (!form) {
+        void sessions.get(sessionId)?.session.respond(request.requestId, ELICITATION_DECLINE);
+        return;
+      }
+      pendingForms.set(askKey(sessionId, request.requestId), { form });
+      stores.update(sessionId, (state) => ({ approvals: [...state.approvals, formApproval(request.requestId, form.questions)] }));
+      return;
+    }
     if (request.method.includes('permission') || request.method.includes('request_permission')) {
       const toolCall = rec(params.toolCall);
       const options = (Array.isArray(params.options) ? params.options : []).map(rec).filter((option): option is Json => option !== null);
       const access = stores.get(sessionId)?.access ?? 'ask';
       const autoAnswer = get(chatAutoAnswerInline);
       const offered = approvalOptions(options);
+      // A question dressed as a permission request: no access level may answer it.
+      if (isPermissionQuestion(offered)) {
+        const permission = permissionQuestion(str(toolCall?.title) ?? 'The agent has a question', offered);
+        pendingForms.set(askKey(sessionId, request.requestId), { permission, options });
+        stores.update(sessionId, (state) => ({ approvals: [...state.approvals, formApproval(request.requestId, [permission])] }));
+        return;
+      }
       const toolKind = str(toolCall?.kind);
       const outcome = agent === 'antigravity'
         ? acpApprovalDecision(
@@ -564,9 +602,10 @@ function makeProvider(agent: string): StructuredChatProvider {
       const kind = askKindFor(request.method);
       const parsed = kind ? parseAcpQuestions(kind, params) : null;
       if (kind && parsed) {
-        const ask = { kind, questions: parsed.questions, title: parsed.title, index: 0, answers: {} as Record<string, string> };
-        pendingAsks.set(askKey(sessionId, request.requestId), ask);
-        stores.update(sessionId, (state) => ({ approvals: [...state.approvals, askApproval(request.requestId, ask)] }));
+        // Cursor titles the whole request; it stands in for a missing question header.
+        const questions = parsed.questions.map((q) => ({ ...q, header: q.header ?? parsed.title }));
+        pendingAsks.set(askKey(sessionId, request.requestId), { kind, questions });
+        stores.update(sessionId, (state) => ({ approvals: [...state.approvals, askApproval(request.requestId, kind, questions)] }));
         return;
       }
       void sessions.get(sessionId)?.session.respond(request.requestId, {}, { code: -32601, message: `Spacron cannot answer ${request.method}` });
@@ -577,6 +616,11 @@ function makeProvider(agent: string): StructuredChatProvider {
     const params = rec(notification.params) ?? notification;
     const update = rec(params.update) ?? params;
     applyConfigOptions(sessionId, update);
+    // Only during a turn, so replayed history never raises an old question.
+    if (agent === 'antigravity' && stores.get(sessionId)?.status === 'working') {
+      const questions = parseAntigravityAsk(update);
+      if (questions) textAsks.set(sessionId, { requestId: `ask-${str(update.toolCallId) ?? ++segmentSequence}`, questions });
+    }
     // The agent's own slash commands, for the chat's `/` menu.
     const published = acpCommandsFrom(notification);
     const cwd = sessions.get(sessionId)?.cwd;

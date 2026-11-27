@@ -122,7 +122,12 @@ export function openSettings(tab?: import('$lib/types/layout').SettingsTab) { us
 export function closeSettings() { useLayoutStore.getState().closeSettings(); }
 export function openAgentSpawn() { useLayoutStore.getState().openAgentSpawn(); }
 export function closeAgentSpawn() { useLayoutStore.getState().closeAgentSpawn(); }
-export function openEnvManager() { withTransition(() => { useLayoutStore.getState().openEnvManager(); }); }
+export function openEnvManager() {
+  withTransition(() => {
+    rightSidebarVisible.set(true);
+    useLayoutStore.getState().openEnvManager();
+  });
+}
 export function closeEnvManager() { withTransition(() => { useLayoutStore.getState().closeEnvManager(); }); }
 // Sidebar visibility changes resize the live Chat/CLI stage but do not change
 // the presentation mode. Keep them out of the document-wide View Transition:
@@ -173,12 +178,37 @@ export function toggleReviewVisible() {
     useLayoutStore.getState().toggleReviewVisible();
   });
 }
-export function toggleHttpVisible() { withTransition(() => { useLayoutStore.getState().toggleHttpVisible(); }); }
+export function toggleHttpVisible() {
+  withTransition(() => {
+    if (useLayoutStore.getState().activeView !== 'http') rightSidebarVisible.set(true);
+    useLayoutStore.getState().toggleHttpVisible();
+  });
+}
 export function toggleTasksVisible() { withTransition(() => { useLayoutStore.getState().toggleTasksVisible(); }); }
-export function toggleFleetVisible() { withTransition(() => { useLayoutStore.getState().toggleFleetVisible(); }); }
-export function toggleDbVisible() { withTransition(() => { useLayoutStore.getState().toggleDbVisible(); }); }
-export function toggleContainersVisible() { withTransition(() => { useLayoutStore.getState().toggleContainersVisible(); }); }
-export function toggleToolboxVisible() { withTransition(() => { useLayoutStore.getState().toggleToolboxVisible(); }); }
+export function toggleFleetVisible() {
+  withTransition(() => {
+    if (!useLayoutStore.getState().fleetVisible) rightSidebarVisible.set(true);
+    useLayoutStore.getState().toggleFleetVisible();
+  });
+}
+export function toggleDbVisible() {
+  withTransition(() => {
+    if (useLayoutStore.getState().activeView !== 'db') rightSidebarVisible.set(true);
+    useLayoutStore.getState().toggleDbVisible();
+  });
+}
+export function toggleContainersVisible() {
+  withTransition(() => {
+    if (useLayoutStore.getState().activeView !== 'containers') rightSidebarVisible.set(true);
+    useLayoutStore.getState().toggleContainersVisible();
+  });
+}
+export function toggleToolboxVisible() {
+  withTransition(() => {
+    if (useLayoutStore.getState().activeView !== 'toolbox') rightSidebarVisible.set(true);
+    useLayoutStore.getState().toggleToolboxVisible();
+  });
+}
 export function setRightDrawerTool(tool: import('./zustand/layout').RightDrawerTool | null) { withTransition(() => { useLayoutStore.getState().setRightDrawerTool(tool); }); }
 /** The right drawer's currently-showing tool, read straight off the live store.
  *  Goes through the store rather than the `layout` compat writable because the
@@ -191,7 +221,12 @@ export function currentRightDrawerTool(): import('./zustand/layout').RightDrawer
 export function applyRightDrawerTool(tool: import('./zustand/layout').RightDrawerTool | null) { useLayoutStore.getState().applyRightDrawerTool(tool); }
 export function setRightDrawerWidth(width: number) { useLayoutStore.getState().setRightDrawerWidth(width); }
 export function toggleOrchestratorVisible() { withTransition(() => { useLayoutStore.getState().toggleOrchestratorVisible(); }); }
-export function toggleMobileVisible() { withTransition(() => { useLayoutStore.getState().toggleMobileVisible(); }); }
+export function toggleMobileVisible() {
+  withTransition(() => {
+    if (useLayoutStore.getState().activeView !== 'mobile') rightSidebarVisible.set(true);
+    useLayoutStore.getState().toggleMobileVisible();
+  });
+}
 export function toggleTerminal() { withTransition(() => { useLayoutStore.getState().toggleTerminal(); }); }
 export function setSidebarTab(tab: SidebarTab) { withTransition(() => { useLayoutStore.getState().setSidebarTab(tab); }); }
 export function toggleSidebarTab(tab: SidebarTab) { withTransition(() => { useLayoutStore.getState().toggleSidebarTab(tab); }); }

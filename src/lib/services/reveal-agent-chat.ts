@@ -1,3 +1,4 @@
+import { showSideChat } from '$lib/services/structured-chat/side-chats';
 import { closeSettings } from '$lib/stores/layout';
 import { closeBots } from '$lib/services/bots/bots';
 import { requestRoomControl } from '$lib/stores/layoutControl';
@@ -36,6 +37,8 @@ export async function revealAgentView(
     ?? recordForPane(paneId)?.projectId
     ?? get(allProjectSessions).find((session) => session.id === paneId)?.projectId;
   if (projectId && get(activeProjectId) !== projectId) await switchToProject(projectId);
+  // A side chat has no room: its sidebar tab is where it is.
+  if (showSideChat(paneId)) return;
   setActiveSession(paneId);
   // Let dialog cleanup restore its old focus before revealing the agent room.
   requestAnimationFrame(() => requestRoomControl('focus', `agent:${paneId}`));

@@ -38,7 +38,7 @@ export function modelTogglesFor(
   const toggles: ModelToggleSpec[] = [];
   const fast = model ? model.supportsFast ?? (agent === 'claude' && claudeSupportsFast(model.id)) : false;
   if (fast) {
-    toggles.push({ id: 'fast', label: 'Fast mode', hint: 'Quicker answers at a higher usage cost' });
+    toggles.push({ id: 'fast', label: 'Fast', hint: 'Quicker answers at a higher usage cost' });
   }
   if (agent === 'claude' && efforts.includes('xhigh')) {
     toggles.push({ id: 'ultra', label: 'Ultracode', hint: 'Runs agent workflows on every task' });

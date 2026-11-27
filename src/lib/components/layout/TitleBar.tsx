@@ -10,6 +10,8 @@ import {
 } from '$lib/stores/layout';
 import { useLayoutStore } from '$lib/stores/zustand/layout';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
+import { findShortcutKeys } from '$lib/stores/settings';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
@@ -32,6 +34,9 @@ export default function TitleBar() {
   const showWorkspaceTools = Boolean(workspaceId);
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
   const rightSidebarOpen = useStore(rightSidebarVisible);
+  const shortcuts = useSettingsStore((s) => s.userShortcuts);
+  const leftSidebarKey = formatShortcutLabel(findShortcutKeys(shortcuts, 'toggleSidebar'));
+  const rightSidebarKey = formatShortcutLabel(findShortcutKeys(shortcuts, 'toggleRightSidebar'));
   const { setLayout, setMenu, setVoice, setParked } = useTitleBarSlots.getState();
 
   async function minimize() {
@@ -114,7 +119,7 @@ export default function TitleBar() {
               onClick={toggleSidebar}
               aria-label={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
               aria-pressed={sidebarVisible}
-              title={sidebarVisible ? 'Hide left sidebar' : 'Show left sidebar'}
+              title={sidebarVisible ? `Hide left sidebar (${leftSidebarKey})` : `Show left sidebar (${leftSidebarKey})`}
             >
               <svg
                 width="15"
@@ -160,7 +165,7 @@ export default function TitleBar() {
               onClick={toggleRightSidebar}
               aria-label={rightSidebarOpen ? 'Hide right sidebar' : 'Show right sidebar'}
               aria-pressed={rightSidebarOpen}
-              title={rightSidebarOpen ? 'Hide right sidebar' : 'Show right sidebar'}
+              title={rightSidebarOpen ? `Hide right sidebar (${rightSidebarKey})` : `Show right sidebar (${rightSidebarKey})`}
             >
               <svg
                 width="15"

@@ -12,6 +12,7 @@ import {
 } from '$lib/stores/modelFavourites';
 import { showToast } from '$lib/stores/notification';
 import type { AgentProviderModel } from '$lib/services/agent-provider-catalogue';
+import type { ModelToggleId, ModelToggleSpec } from '$lib/services/model-toggles';
 
 export type ChatEngineOption = { command: string; name: string };
 
@@ -33,7 +34,12 @@ export default function ChatAgentModelPicker({
   renderEngineIcon,
   onRefresh,
   renderModelBadges,
+  toggles = [],
+  onToggle,
 }: {
+  /** Fast and Ultracode / Ultra for the chosen model, as buttons under the list. */
+  toggles?: (ModelToggleSpec & { on: boolean })[];
+  onToggle?: (id: ModelToggleId, on: boolean) => void;
   agents: ChatEngineOption[];
   provider: string;
   model: string;
@@ -197,7 +203,7 @@ export default function ChatAgentModelPicker({
         <span className="chat-agent-model-mark">
           <EngineIcon command={provider} name={selectedAgent?.name ?? provider} />
         </span>
-        <span>{triggerLabel}</span>
+        <span>{[triggerLabel, ...toggles.filter((t) => t.on).map((t) => t.label)].join(' · ')}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9" /></svg>
       </button>
 
@@ -304,6 +310,22 @@ export default function ChatAgentModelPicker({
               );
             })}
             </div>
+            {previewProvider === provider && toggles.length > 0 && (
+              <div className="chat-agent-model-toggles" role="group" aria-label="Model switches">
+                {toggles.map((toggle) => (
+                  <button
+                    key={toggle.id}
+                    type="button"
+                    className={toggle.on ? 'on' : ''}
+                    aria-pressed={toggle.on}
+                    title={toggle.hint}
+                    onClick={() => onToggle?.(toggle.id, !toggle.on)}
+                  >
+                    {toggle.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="chat-agent-model-menu-footer">
               <span>
                 {loadingProvider === previewProvider

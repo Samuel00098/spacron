@@ -1,11 +1,11 @@
-# Transcription hotkey (F9)
+# Transcription hotkey (`Ctrl+Shift+M`, formerly `F9`)
 
 Speech-to-text only — WhisperFlow-style. Nothing is ever spoken back;
 conversation is a separate path (see [[voice-is-realtime-only]]).
 
-    F9               start dictating
+    Ctrl+Shift+M     start dictating (Cmd+Shift+M on macOS)
     ...speak, pause, keep speaking — pauses do NOT end it...
-    F9 / Escape      end, then paste everything at once
+    hotkey / Escape  end, then paste everything at once
     Ctrl/Cmd+Escape  discard without pasting
 
 ## Pauses must not end the dictation
@@ -116,13 +116,16 @@ drain covers STT + optional polish, not just sending.
   (their moat is the LLM rewrite pass + dictionary/context plumbing, NOT a
   secret ASR engine; Typeless likewise, cloud-only with an undisclosed model).
 
-## Why F9, and why it needs a capture-phase listener
+## Why `Ctrl+Shift+M`, and why it needs a capture-phase listener
 
-`Ctrl+Alt+M` was the old default and did not work reliably: on Windows Ctrl+Alt
+`Ctrl+Alt+M` was the original default and did not work reliably: on Windows Ctrl+Alt
 IS AltGr, and the chord also reaches xterm, which forwards anything it doesn't
-claim to the shell. F9 is a bare key nothing else claims. `mergeDefaultShortcuts`
-is additive-only, so existing installs needed the one-time
-`forge_migration_transcribeF9_v1` rebind in `zustand/settings.ts`.
+claim to the shell. `F9` replaced it briefly, but on Windows laptops `F9` / `Fn+F9`
+often triggers OEM hardware or Windows Search shortcuts before the app sees it, and
+on macOS `F9` is a media key. `Ctrl+Shift+M` (`M` = Microphone, with the retired
+`launchVoiceMode` cleared) has zero OS/AltGr/Fn/WebView2 conflicts and works with the
+capture-phase listener. `forge_migration_shortcutsAudit_v1` in `zustand/settings.ts`
+moves legacy `F9` and `Ctrl+Alt+M` installs onto `Ctrl+Shift+M` once.
 
 The dispatch lives in its OWN capture-phase `keydown` listener in `AppShell`
 (`handleTranscriptionKeyDown`), not the shared bubble-phase handler: xterm sees

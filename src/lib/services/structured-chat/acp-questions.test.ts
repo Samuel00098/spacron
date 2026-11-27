@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acpAskAnswer, acpAskSkip, askKindFor, parseAcpQuestions } from './acp-questions';
+import { acpAskAnswer, acpAskSkip, askKindFor, parseAcpQuestions, askReplyText, parseAntigravityAsk } from './acp-questions';
 
 // Captured from a live grok 1.0.77 request.
 const grok = {
@@ -27,7 +27,7 @@ describe('ACP ask-question extensions', () => {
 
   it('answers Grok by question text with the label, as accepted live', () => {
     const { questions } = parseAcpQuestions('grok', grok)!;
-    expect(acpAskAnswer('grok', questions, { [questions[0].key]: '1' }))
+    expect(acpAskAnswer('grok', questions, [{ optionIds: ['1'], other: '' }]))
       .toEqual({ outcome: 'accepted', answers: { 'Which colour do you prefer?': 'Blue' } });
     expect(acpAskSkip('grok')).toEqual({ outcome: 'skip' });
   });
@@ -36,7 +36,7 @@ describe('ACP ask-question extensions', () => {
     const parsed = parseAcpQuestions('cursor', cursor)!;
     expect(parsed.title).toBe('Setup');
     expect(parsed.questions[0]).toMatchObject({ key: 'db', multiple: true });
-    expect(acpAskAnswer('cursor', parsed.questions, { db: 'sq' }))
+    expect(acpAskAnswer('cursor', parsed.questions, [{ optionIds: ['sq'], other: '' }]))
       .toEqual({ outcome: { outcome: 'answered', answers: [{ questionId: 'db', selectedOptionIds: ['sq'] }] } });
     expect(acpAskSkip('cursor')).toMatchObject({ outcome: { outcome: 'skipped' } });
   });
@@ -45,5 +45,21 @@ describe('ACP ask-question extensions', () => {
     expect(parseAcpQuestions('grok', { questions: [{ question: 'free text?', options: [] }] })).toBeNull();
     expect(parseAcpQuestions('cursor', { questions: [{ id: 'a', prompt: 'p', options: [{ label: 'no id' }] }] })).toBeNull();
     expect(parseAcpQuestions('grok', {})).toBeNull();
+  });
+});
+
+describe('Antigravity ask_question', () => {
+  // The tool call as agy 1.5.18 sent it.
+  const update = { sessionUpdate: 'tool_call', toolCallId: 'call_1', name: 'ask_question', rawInput: { questions: [{ is_multi_select: false, options: ['Red', 'Blue'], question: 'Which color do you prefer?' }] } };
+
+  it('reads the question and answers it as a message', () => {
+    const questions = parseAntigravityAsk(update)!;
+    expect(questions[0].options.map((o) => o.label)).toEqual(['Red', 'Blue']);
+    expect(askReplyText(questions, [{ optionIds: ['1'], other: '' }])).toBe('Blue');
+    expect(askReplyText(questions, [{ optionIds: [], other: 'Green' }])).toBe('Green');
+  });
+
+  it('ignores other tool calls', () => {
+    expect(parseAntigravityAsk({ ...update, name: 'run_command' })).toBeNull();
   });
 });

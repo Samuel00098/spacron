@@ -157,6 +157,8 @@ export interface ClaudeNativeTurnOptions {
   accessMode?: string | null;
   sessionId?: string | null;
   forkSession?: boolean;
+  fast?: boolean;
+  ultracode?: boolean;
 }
 
 /** Run one Claude turn through the Rust-native Tauri adapter (`claude_chat_complete`). */
@@ -164,13 +166,15 @@ export async function runClaudeNativeTurn(opts: ClaudeNativeTurnOptions): Promis
   const result = await invoke<{ text: string; session_id: string | null }>('claude_chat_complete', {
     cwd: opts.cwd,
     model: opts.model ?? null,
-    system_prompt: opts.systemPrompt,
-    user_text: opts.userText,
+    systemPrompt: opts.systemPrompt,
+    userText: opts.userText,
     images: opts.images,
     effort: opts.effort ?? null,
-    access_mode: opts.accessMode ?? null,
-    session_id: opts.sessionId ?? null,
-    fork_session: opts.forkSession ?? false,
+    accessMode: opts.accessMode ?? null,
+    sessionId: opts.sessionId ?? null,
+    forkSession: opts.forkSession ?? false,
+    fast: opts.fast ?? false,
+    ultracode: opts.ultracode ?? false,
   });
   return { text: result.text, sessionId: result.session_id ?? null };
 }

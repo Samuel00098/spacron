@@ -5,6 +5,7 @@ import {
   transcriptionTarget,
   transcriptionWordCount,
 } from '$lib/services/transcription-hotkey';
+import { formatShortcutLabel } from '$lib/utils/shortcut-label';
 import './TranscriptionIndicator.css';
 
 // Colors mapped across the meter bars to create a vibrant spectrum
@@ -90,7 +91,7 @@ export default function TranscriptionIndicator() {
       )}
       {listening && (
         <span className="hint">
-          <kbd className="key">Esc</kbd> cancel
+          <kbd className="key">Esc</kbd> finish · <kbd className="key">{formatShortcutLabel('Ctrl+Esc')}</kbd> cancel
         </span>
       )}
     </div>

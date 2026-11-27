@@ -73,32 +73,28 @@ import {
   togglePreviewVisible,
   setPreviewDocked,
   toggleTerminal,
-  toggleReviewVisible,
   toggleHttpVisible,
-  toggleTasksVisible,
-  toggleFleetVisible,
   toggleDbVisible,
   toggleContainersVisible,
   toggleToolboxVisible,
   RIGHT_DRAWER_TOOLS,
   rightSidebarVisible,
   rightSidebarTab as rightSidebarTabStore,
+  openRightSidebar,
   openAgentSpawn,
   closeAgentSpawn,
-  openEnvManager,
   terminalRoomOpen as terminalRoomOpenStore,
   homeScreenOpen,
 } from '$lib/stores/layout';
 import {
   openProject,
-  toggleProjectHUD,
   newFolderPromptOpen,
   cloneRepoPromptOpen,
 } from '$lib/stores/workspace';
 import { toggleCommandPalette, registerCommand } from '$lib/stores/commandpalette';
 import { showToast } from '$lib/stores/notification';
 import { saveActiveFile, formatActiveFile } from '$lib/stores/editor';
-import { startProxy, stopProxy, previewTabs, activePreviewTabId, createBlankPreviewBrowserTab, selectPreviewBrowserTab, closePreviewBrowserTab } from '$lib/stores/preview';
+import { previewTabs, activePreviewTabId, createBlankPreviewBrowserTab, selectPreviewBrowserTab, closePreviewBrowserTab } from '$lib/stores/preview';
 import { useSettingsStore } from '$lib/stores/zustand/settings';
 import { appearance, matchShortcut, speakAgentCompletions } from '$lib/stores/settings';
 import { toggleFloatingSearch } from '$lib/stores/projectsearch';
@@ -132,6 +128,11 @@ import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/type
 import type { TerminalSessionInfo } from '$lib/stores/terminal';
 import { toggleActiveTerminalChatView } from '$lib/services/terminal-chat';
 import type { RightDrawerTool } from '$lib/stores/layout';
+import SideChatPane from '$lib/components/terminal/SideChatPane';
+import { removeSideChat, sideChats } from '$lib/services/structured-chat/side-chats';
+import { useSideChatSource } from '$lib/services/structured-chat/side-chat-source';
+import { runStructuredCommand } from '$lib/services/structured-chat/commands';
+import { structuredChatPanes } from '$lib/services/structured-chat/panes';
 import { hoveredStageRoom, layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
 import { deepSeekAgentName, deepSeekPanelRoot, deepSeekPlacements } from '$lib/services/deepseek-harness';
@@ -834,7 +835,7 @@ export default function AppShell() {
   );
 
   const agentSessions = useMemo(
-    () => allTerminalSessions.filter((session) => session.isRunning && isAgentSession(session)),
+    () => allTerminalSessions.filter((session) => session.isRunning && !session.hidden && isAgentSession(session)),
     [allTerminalSessions],
   );
   const agentRoomIds = useMemo<AgentRoomId[]>(
@@ -858,7 +859,7 @@ export default function AppShell() {
   const mountedAgentRoomIds = useMemo<AgentRoomId[]>(
     () =>
       crossProjectSessions
-        .filter((session) => session.isRunning && isAgentSession(session))
+        .filter((session) => session.isRunning && !session.hidden && isAgentSession(session))
         .map((session) => `agent:${session.id}` as AgentRoomId),
     [crossProjectSessions],
   );
@@ -1449,13 +1450,135 @@ export default function AppShell() {
     };
   }, [auxEditorHeight, auxPanelWidth, auxResizing, auxRowResizing, sidebarResizing, leftPanelResizing, windowWidth, zoom]);
 
+  const shortcutHandlerRef = useRef<(actionId: string, event: KeyboardEvent) => boolean>(() => false);
+  shortcutHandlerRef.current = (actionId: string, event: KeyboardEvent) => {
+    switch (actionId) {
+      case 'toggleInteractionMode':
+        // Same id so saved key bindings carry over; it now flips the focused
+        // agent pane between Terminal and Chat instead of the whole window.
+        if (!event.repeat) toggleActiveTerminalChatView();
+        return true;
+      case 'commandPalette':
+        toggleCommandPalette();
+        return true;
+      case 'openSettings':
+        openSettings();
+        return true;
+      case 'toggleSidebar':
+        toggleSidebar();
+        return true;
+      case 'toggleRightSidebar':
+        if (rightSidebarOpen) closeRightSidebar();
+        else openRightSidebar();
+        return true;
+      case 'newWorkspace':
+        withTransition(() => {
+          newFolderPromptOpen.set(true);
+        });
+        return true;
+      case 'goToTerminal': {
+        closeBots();
+        setActiveView('terminal');
+        setTerminalRoomOpen(true);
+        focusRoom('terminal');
+        const pa = get(paneAssignments);
+        if (pa.every((id) => id === null) && claimStartupShell(activeProjectIdValue)) {
+          void createTerminalSession();
+        }
+        return true;
+      }
+      case 'goToEditor':
+        closeBots();
+        // setActiveView already asks the room system to focus the editor —
+        // a bare setFocusedRoom on top of it would skip claimSplitSlot.
+        setActiveView('editor');
+        return true;
+      case 'goToPreview':
+        togglePanelRoom('preview');
+        return true;
+      case 'goToTasks':
+        togglePanelRoom('tasks');
+        return true;
+      case 'goToSketch':
+        togglePanelRoom('sketch');
+        return true;
+      case 'goToLibrary':
+        togglePanelRoom('library');
+        return true;
+      case 'goToReview':
+        toggleRightTool('review');
+        return true;
+      case 'goToHttp':
+        toggleRightTool('http');
+        return true;
+      case 'goToFleet':
+        toggleRightTool('fleet');
+        return true;
+      case 'goToDb':
+        toggleRightTool('db');
+        return true;
+      case 'goToContainers':
+        toggleRightTool('containers');
+        return true;
+      case 'goToToolbox':
+        toggleRightTool('toolbox');
+        return true;
+      case 'openEnvManager':
+        toggleRightTool('env');
+        return true;
+      case 'openSearch':
+        toggleFloatingSearch();
+        return true;
+      case 'saveFile':
+        saveActiveFile();
+        return true;
+      case 'openFolder':
+        void openProject();
+        return true;
+      case 'newTerminal': {
+        closeBots();
+        const isDev = ambientLayout === 'development';
+        if (isDev) {
+          setDevTerminalRoomOpen(true);
+          focusRoom('dev-terminal');
+          void createTerminalSession(undefined, undefined, undefined, { isDev: true });
+        } else {
+          setActiveView('terminal');
+          setTerminalRoomOpen(true);
+          focusRoom('terminal');
+          void createTerminalSession();
+        }
+        return true;
+      }
+      case 'formatDocument':
+        void formatActiveFile();
+        return true;
+      case 'spawnAgent':
+        openAgentSpawn();
+        return true;
+      case 'cycleAmbientLayout':
+        // Two reachable arrangements now that Fleet is an action rather than a
+        // mode: Focus ↔ Split.
+        switchAmbientLayout(ambientLayout === 'focus' ? 'gallery' : 'focus');
+        return true;
+      default:
+        return false;
+    }
+  };
+
   useEffect(() => {
+    function isRecordingShortcut(): boolean {
+      const active = document.activeElement as HTMLElement | null;
+      return active?.getAttribute?.('data-shortcut-recorder') === 'true';
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
       // A modal dialog is open — its keys are the modal's, not the app's. A
       // shortcut firing behind Settings (e.g. Ctrl+` while choosing a shell)
       // is a real reported bug; the modal hook registers itself in the shared
       // counter so every global handler can stand down at once.
-      if (isModalOpen()) return;
+      if (isModalOpen() || isRecordingShortcut()) return;
       const matched = (shortcuts || []).find((shortcut) => shortcut && matchShortcut(event, shortcut.keys));
       if (!matched) return;
 
@@ -1464,111 +1587,14 @@ export default function AppShell() {
       const actionId = matched.id.startsWith('custom_') ? matched.action : matched.id;
       if (!actionId) return;
 
-      event.preventDefault();
+      // Zoom is owned by App.tsx; dictation is handled in the capture-phase
+      // listener below so it never double-fires or gets eaten here.
+      if (actionId === 'zoomIn' || actionId === 'zoomOut' || actionId === 'resetZoom' || actionId === 'transcribeToTerminal') {
+        return;
+      }
 
-      switch (actionId) {
-        case 'toggleInteractionMode':
-          // Same id so saved key bindings carry over; it now flips the focused
-          // agent pane between Terminal and Chat instead of the whole window.
-          if (!event.repeat) toggleActiveTerminalChatView();
-          break;
-        case 'toggleProjectHUD':
-          toggleProjectHUD();
-          break;
-        case 'commandPalette':
-          toggleCommandPalette();
-          break;
-        case 'openSettings':
-          openSettings();
-          break;
-        case 'toggleSidebar':
-          toggleSidebar();
-          break;
-        case 'newWorkspace':
-          withTransition(() => {
-            newFolderPromptOpen.set(true);
-          });
-          break;
-        case 'goToTerminal':
-          setActiveView('terminal');
-          setTerminalRoomOpen(true);
-          setFocusedRoom('terminal');
-          break;
-        case 'goToEditor':
-          // setActiveView already asks the room system to focus the editor —
-          // a bare setFocusedRoom on top of it would skip claimSplitSlot.
-          setActiveView('editor');
-          break;
-        case 'goToPreview':
-          setActiveView('preview');
-          setFocusedRoom('preview');
-          break;
-        // goToOrchestrator removed — Orchestrator panel no longer exists
-        case 'goToReview':
-          toggleReviewVisible();
-          break;
-        case 'goToHttp':
-          toggleHttpVisible();
-          break;
-        case 'goToTasks':
-          toggleTasksVisible();
-          break;
-        case 'goToFleet':
-          toggleFleetVisible();
-          break;
-        case 'goToDb':
-          toggleDbVisible();
-          break;
-        case 'goToContainers':
-          toggleContainersVisible();
-          break;
-        case 'goToToolbox':
-          toggleToolboxVisible();
-          break;
-        case 'openSearch':
-          toggleFloatingSearch();
-          break;
-        case 'openEnvManager':
-          openEnvManager();
-          break;
-        case 'saveFile':
-          saveActiveFile();
-          break;
-        case 'openFolder':
-          openProject();
-          break;
-        case 'newTerminal': {
-          const isDev = ambientLayout === 'development';
-          if (isDev) {
-            setDevTerminalRoomOpen(true);
-            setFocusedRoom('dev-terminal');
-            createTerminalSession(undefined, undefined, undefined, { isDev: true });
-          } else {
-            setActiveView('terminal');
-            setTerminalRoomOpen(true);
-            setFocusedRoom('terminal');
-            createTerminalSession();
-          }
-          break;
-        }
-        case 'formatDocument':
-          formatActiveFile();
-          break;
-        case 'startProxy':
-          startProxy();
-          break;
-        case 'stopProxy':
-          stopProxy();
-          break;
-        case 'spawnAgent':
-          openAgentSpawn();
-          break;
-        case 'cycleAmbientLayout': {
-          // Two reachable arrangements now that Fleet is an action rather than a
-          // mode: Focus ↔ Split.
-          switchAmbientLayout(ambientLayout === 'focus' ? 'gallery' : 'focus');
-          break;
-        }
+      if (shortcutHandlerRef.current(actionId, event)) {
+        event.preventDefault();
       }
     }
 
@@ -1587,13 +1613,13 @@ export default function AppShell() {
      *
      * It also deliberately does NOT stand down for `isModalOpen()`. Every other
      * shortcut should: a dialog owns its keys. But dictation is an input method,
-     * not navigation, and the modals ARE text-entry surfaces — Quick Capture,
-     * Task Editor, Clone Repo, Create Project, Agent Spawn,
-     * Settings. Gating on the modal counter made the key dead in exactly the
-     * places you most want to dictate into, leaving the terminal as the only
-     * thing that ever worked.
+     * not navigation, and the modals ARE text-entry surfaces — Task Editor,
+     * Clone Repo, Create Project, Agent Spawn, Settings. Gating on the modal
+     * counter made the key dead in exactly the places you most want to dictate
+     * into, leaving the terminal as the only thing that ever worked.
      */
     function handleTranscriptionKeyDown(event: KeyboardEvent) {
+      if (isRecordingShortcut()) return;
       // A held key repeats. Without this, holding the hotkey for a moment fires
       // keydown over and over and every repeat reads as another tap — start,
       // send, start, send — which is how a single deliberate press ended up
@@ -1624,7 +1650,7 @@ export default function AppShell() {
       window.removeEventListener('keydown', handleTranscriptionKeyDown, true);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [project, shortcuts, ambientLayout]);
+  }, [shortcuts]);
 
   function startSidebarResize(event: React.MouseEvent) {
     setSidebarResizing(true);
@@ -1902,11 +1928,16 @@ export default function AppShell() {
   function toggleRightTool(tool: RightTool) {
     const leavingBots = get(botsOpen);
     if (leavingBots) closeBots();
-    if (!leavingBots && rightActiveTool === tool) {
-      closeRightUtility();
-      rightSidebarTabStore.set('files');
+    if (!leavingBots && rightSidebarOpen && rightActiveTool === tool) {
+      if (activeRightTab && activeRightTab.surface === tool) {
+        closeRightTab(activeRightTab);
+      } else {
+        closeRightUtility();
+        closeRightSidebar();
+      }
+    } else {
+      selectRightTool(tool);
     }
-    else selectRightTool(tool);
   }
 
   // --- Right sidebar tabs ----------------------------------------------------
@@ -1916,8 +1947,8 @@ export default function AppShell() {
   // Tabs are the view; the layout stores still say which surface is showing,
   // so shortcuts, agents and project restores keep working: when the stores
   // move to a surface on their own, the matching tab is selected (or added).
-  type RightSurfaceId = 'preview' | RightNavigatorTool | RightTool;
-  type RightSidebarTabItem = { id: string; surface: RightSurfaceId; previewTabId?: string };
+  type RightSurfaceId = 'preview' | 'sidechat' | RightNavigatorTool | RightTool;
+  type RightSidebarTabItem = { id: string; surface: RightSurfaceId; previewTabId?: string; sidePaneId?: number };
   const [rightTabs, setRightTabs] = useState<RightSidebarTabItem[]>([]);
   const [activeRightTabId, setActiveRightTabId] = useState<string | null>(null);
   const activeRightTab = rightTabs.find((t) => t.id === activeRightTabId) ?? null;
@@ -1943,6 +1974,8 @@ export default function AppShell() {
 
   /** Point the layout stores at a tab's surface. */
   function applyRightTab(tab: RightSidebarTabItem) {
+    // A side chat has no layout store behind it.
+    if (tab.surface === 'sidechat') return;
     if (tab.surface === 'preview' && layoutState.previewVisible && !layoutState.previewDocked) return;
     if (tab.surface === 'preview') {
       if (tab.previewTabId && get(previewTabs).some((p) => p.id === tab.previewTabId)) {
@@ -1965,6 +1998,12 @@ export default function AppShell() {
 
   /** "+" menu / picker: always opens a new tab, even for a surface already open. */
   function openRightSurfaceTab(surface: RightSurfaceId) {
+    // A side chat's tab is added once its fork has opened.
+    if (surface === 'sidechat') {
+      setSurfaceMenuAnchor(null);
+      void startSideChat();
+      return;
+    }
     if (surface === 'preview' && layoutState.previewVisible && !layoutState.previewDocked) return;
     setSurfaceMenuAnchor(null);
     let previewTabId: string | undefined;
@@ -1988,6 +2027,11 @@ export default function AppShell() {
     const index = rightTabs.findIndex((t) => t.id === tab.id);
     const remaining = rightTabs.filter((t) => t.id !== tab.id);
     setRightTabs(remaining);
+    // Closing the tab ends the side chat; the conversation stays in /history.
+    if (tab.sidePaneId != null) {
+      removeSideChat(tab.sidePaneId);
+      void killSession(tab.sidePaneId);
+    }
     if (tab.surface === 'preview' && tab.previewTabId && remaining.some((t) => t.surface === 'preview')) {
       closePreviewBrowserTab(tab.previewTabId);
     }
@@ -2016,6 +2060,57 @@ export default function AppShell() {
     setActiveRightTabId(tab.id);
   }
 
+  // --- Side chats: one tab each, for the project on screen -------------------
+  const sideChatState = useStore(sideChats);
+  const openingSideChatRef = useRef(false);
+  const sideTabId = (paneId: number) => `rtab-side-${paneId}`;
+  // The "Side chat" entry stays greyed out until a chat has a message.
+  const sideSource = useSideChatSource(activeProjectIdValue ?? null, currentActiveSessionId);
+  const startingSideChatRef = useRef(false);
+  async function startSideChat() {
+    const agent = sideSource == null ? null : get(structuredChatPanes)[sideSource];
+    if (sideSource == null || !agent || startingSideChatRef.current) return;
+    startingSideChatRef.current = true;
+    try {
+      // The same path as typing /side in that chat.
+      const result = await runStructuredCommand(agent, sideSource, '/side');
+      if (result.error) showToast(result.error, 'warning');
+    } finally {
+      startingSideChatRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    for (const chat of sideChatState.list) {
+      if (!crossProjectSessions.some((session) => session.id === chat.paneId)) removeSideChat(chat.paneId);
+    }
+  }, [crossProjectSessions]);
+
+  useEffect(() => {
+    const mine = sideChatState.list.filter((chat) => chat.projectId == null || chat.projectId === activeProjectIdValue);
+    const wanted = new Set(mine.map((chat) => sideTabId(chat.paneId)));
+    const kept = rightTabs.filter((tab) => tab.surface !== 'sidechat' || wanted.has(tab.id));
+    const added = mine
+      .filter((chat) => !kept.some((tab) => tab.id === sideTabId(chat.paneId)))
+      .map((chat): RightSidebarTabItem => ({ id: sideTabId(chat.paneId), surface: 'sidechat', sidePaneId: chat.paneId }));
+    if (!added.length && kept.length === rightTabs.length) return;
+    setRightTabs([...kept, ...added]);
+    if (activeRightTabId && ![...kept, ...added].some((tab) => tab.id === activeRightTabId)) {
+      setActiveRightTabId(kept.at(-1)?.id ?? null);
+    }
+  }, [sideChatState.list, activeProjectIdValue]);
+
+  useEffect(() => {
+    const show = sideChatState.show;
+    if (!show) return;
+    setActiveRightTabId(sideTabId(show.paneId));
+    if (!rightSidebarOpen) {
+      // Opening must not pull the sidebar back to its last tool.
+      openingSideChatRef.current = true;
+      rightSidebarVisible.set(true);
+    }
+  }, [sideChatState.show?.nonce]);
+
   const rightSyncRef = useRef({ open: rightSidebarOpen, surface: storeRightSurface });
   useEffect(() => {
     const prev = rightSyncRef.current;
@@ -2038,7 +2133,11 @@ export default function AppShell() {
     const opened = !prev.open;
     const chosen = rightSurfaceChosenRef.current;
     rightSurfaceChosenRef.current = false;
-    if (opened && !chosen && !projectSwitching) {
+    if (opened && openingSideChatRef.current) {
+      openingSideChatRef.current = false;
+      return;
+    }
+    if (opened && !chosen && prev.surface === storeRightSurface && !projectSwitching) {
       // Opened by hand: bring back the tab that was showing (or the list).
       if (activeRightTab) applyRightTab(activeRightTab);
       return;
@@ -2062,6 +2161,7 @@ export default function AppShell() {
   };
   const PROJECT_FREE_TOOLS: readonly RightTool[] = ['toolbox', 'http', 'db', 'mobile'];
   const rightSurfaces: RightSurface[] = [
+    { id: 'sidechat', title: 'Side chat', icon: <Icon><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Icon>, shortcut: 'S', needsProject: true },
     { id: 'preview', title: 'Browser', icon: browserIcon, shortcut: 'B', needsProject: false },
     ...rightNavigatorTools.map((tool): RightSurface => ({
       id: tool,
@@ -2079,12 +2179,15 @@ export default function AppShell() {
     })),
   ];
   const surfaceMeta = (id: RightSurfaceId): { title: string; icon: React.ReactNode } =>
-    id === 'preview'
+    id === 'sidechat'
+      ? { title: 'Side chat', icon: <Icon><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Icon> }
+      : id === 'preview'
       ? { title: 'Browser', icon: browserIcon }
       : (RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(id)
       ? LEFT_TOOL_META[id as RightNavigatorTool]
       : RIGHT_TOOL_META[id as RightTool];
-  const surfaceAvailable = (surface: RightSurface) => !surface.needsProject || activeProjectIdValue != null;
+  const surfaceAvailable = (surface: RightSurface) =>
+    surface.id === 'sidechat' ? sideSource != null : !surface.needsProject || activeProjectIdValue != null;
 
   function handleSurfaceKey(event: React.KeyboardEvent) {
     if (event.key === 'Escape' && surfaceMenuAnchor) {
@@ -2113,7 +2216,7 @@ export default function AppShell() {
             className={itemClass}
             onClick={() => openRightSurfaceTab(surface.id)}
             disabled={!available}
-            title={inRoom ? 'Browser is open in the main room' : available ? `${surface.title} (${surface.shortcut})` : `${surface.title} — open a project first`}
+            title={inRoom ? 'Browser is open in the main room' : available ? `${surface.title} (${surface.shortcut})` : surface.id === 'sidechat' ? `${surface.title}: send a message in an agent chat first` : `${surface.title} — open a project first`}
             aria-keyshortcuts={surface.shortcut}
           >
             <span className="right-surface-icon" aria-hidden="true">{surface.icon}</span>
@@ -2165,7 +2268,9 @@ export default function AppShell() {
     // The single docked PreviewPanel serves every Browser tab; each tab
     // points it at its own preview page.
     if (tab.surface === 'preview') return null;
-    const content = (RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(tab.surface)
+    const content = tab.sidePaneId != null
+      ? <SideChatPane paneId={tab.sidePaneId} />
+      : (RIGHT_NAVIGATOR_TOOLS as readonly string[]).includes(tab.surface)
       ? <SidebarContent key={activeProjectIdValue ?? 'no-project'} tab={tab.surface as RightNavigatorTool} onOpenIssues={openIssues} />
       : <PanelHost id={tab.surface as RightTool} onClose={() => closeRightTab(tab)} />;
     return (
@@ -2197,7 +2302,9 @@ export default function AppShell() {
         <header className={`drawer-header right-sidebar-header${rightTabs.length === 0 ? ' is-picker' : ''}`}>
           <div className="right-sidebar-tabs" role="tablist" aria-label="Open surfaces">
             {rightTabs.filter((tab) => tab.surface !== 'preview' || !layoutState.previewVisible || layoutState.previewDocked).map((tab) => {
-              const meta = surfaceMeta(tab.surface);
+              const sideNumber = tab.sidePaneId == null ? 0 : rightTabs.filter((t) => t.sidePaneId != null).indexOf(tab) + 1;
+              const base = surfaceMeta(tab.surface);
+              const meta = sideNumber > 1 ? { ...base, title: `${base.title} ${sideNumber}` } : base;
               const active = tab.id === activeRightTabId;
               return (
                 <div

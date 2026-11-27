@@ -14,6 +14,8 @@ export interface CodexQuestion {
   header: string;
   question: string;
   options: { label: string; description: string | null }[];
+  /** Codex's `isOther`: a typed answer is accepted too. */
+  allowOther: boolean;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -35,12 +37,12 @@ export function parseCodexQuestions(params: unknown): CodexQuestion[] | null {
       return label ? [{ label, description: typeof o?.description === 'string' && o.description.trim() ? o.description.trim() : null }] : [];
     });
     if (!id || !question || !options.length) return null;
-    out.push({ id, header: typeof q.header === 'string' ? q.header.trim() : '', question, options });
+    out.push({ id, header: typeof q.header === 'string' ? q.header.trim() : '', question, options, allowOther: q.isOther === true });
   }
   return out;
 }
 
 /** The JSON-RPC result once every question is answered. */
-export function codexAnswers(answers: Record<string, string>): { answers: Record<string, { answers: string[] }> } {
-  return { answers: Object.fromEntries(Object.entries(answers).map(([id, label]) => [id, { answers: [label] }])) };
+export function codexAnswers(answers: Record<string, string[]>): { answers: Record<string, { answers: string[] }> } {
+  return { answers: Object.fromEntries(Object.entries(answers).map(([id, labels]) => [id, { answers: labels }])) };
 }

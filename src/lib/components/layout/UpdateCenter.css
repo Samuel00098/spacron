@@ -66,8 +66,6 @@
   overscroll-behavior: none;
 }
 
-.titlebar .update-center-scroll:empty { display: none; }
-
 .titlebar .update-center-notes {
   display: flex;
   flex-direction: column;
@@ -132,7 +130,7 @@
   gap: 6px;
   flex-shrink: 0;
   max-height: 180px;
-  overflow-y: auto;
+  overflow: hidden auto;
 }
 
 .titlebar .update-center-agents-head,
@@ -147,6 +145,7 @@
 .titlebar .update-center-foot { justify-content: space-between; }
 
 .titlebar .update-center-agent-name {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

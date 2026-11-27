@@ -13,6 +13,8 @@ import {
 import { search as paletteSearch } from '$lib/stores/commandpalette';
 import { useWorkspaceStore } from '$lib/stores/zustand/workspace';
 import { useThemeStore } from '$lib/stores/zustand/theme';
+import { useSettingsStore } from '$lib/stores/zustand/settings';
+import { findShortcutKeys } from '$lib/stores/settings';
 import { openSettings } from '$lib/stores/layout';
 import { useStore } from '$lib/react/useStore';
 import type { Workspace } from '$lib/types/workspace';
@@ -71,6 +73,8 @@ export default function WelcomeScreen() {
   const workspaces = useWorkspaceStore((s) => s.recentWorkspaces);
   const search = useStore(paletteSearch);
   const theme = useThemeStore((s) => s.activeTheme);
+  const shortcuts = useSettingsStore((s) => s.userShortcuts);
+  const keyFor = (actionId: string) => formatShortcutLabel(findShortcutKeys(shortcuts, actionId));
 
   const [iconError, setIconError] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -163,12 +167,12 @@ export default function WelcomeScreen() {
           <button className="action-btn primary" onClick={() => void openProject()}>
             <span className="action-icon"><FolderIcon size={15} /></span>
             <span className="action-label">Open Project</span>
-            <kbd>{formatShortcutLabel('Ctrl+O')}</kbd>
+            <kbd>{keyFor('openFolder')}</kbd>
           </button>
           <button className="action-btn secondary" onClick={() => newFolderPromptOpen.set(true)}>
             <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></svg></span>
             <span className="action-label">New Project</span>
-            <kbd>{formatShortcutLabel('Ctrl+N')}</kbd>
+            <kbd>{keyFor('newWorkspace')}</kbd>
           </button>
           <button className="action-btn secondary" onClick={() => cloneRepoPromptOpen.set(true)}>
             <span className="action-icon"><GitHubIcon size={15} /></span>
@@ -177,7 +181,7 @@ export default function WelcomeScreen() {
           <button className="action-btn secondary" onClick={() => openSettings()}>
             <span className="action-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" /></svg></span>
             <span className="action-label">Settings</span>
-            <kbd>{formatShortcutLabel('Ctrl+,')}</kbd>
+            <kbd>{keyFor('openSettings')}</kbd>
           </button>
         </div>
 
@@ -222,13 +226,13 @@ export default function WelcomeScreen() {
           <div className="shortcuts-bar">
             <div className="shortcuts-inline">
               {[
-                ['Open project', 'Ctrl+O'],
-                ['New project', 'Ctrl+N'],
-                ['Quick switch', 'Ctrl+K'],
-                ['Open settings', 'Ctrl+,'],
-                ['Command palette', 'Ctrl+Shift+P'],
-                ['Zoom in', 'Ctrl+='],
-                ['Zoom out', 'Ctrl+-'],
+                ['Open project', keyFor('openFolder')],
+                ['New project', keyFor('newWorkspace')],
+                ['Command palette', keyFor('commandPalette')],
+                ['Open settings', keyFor('openSettings')],
+                ['Dictate', keyFor('transcribeToTerminal')],
+                ['Zoom in', keyFor('zoomIn')],
+                ['Zoom out', keyFor('zoomOut')],
               ].map(([label, keys]) => (
                 <div className="shortcut-pill" key={label}>
                   <span className="shortcut-key-label">{label}</span>

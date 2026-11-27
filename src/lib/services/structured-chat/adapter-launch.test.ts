@@ -14,6 +14,8 @@ describe('agent launch lines', () => {
   it('starts Claude with host permission prompts, valid effort only, and resume', () => {
     const args = claudeArgs({ effort: 'high', resumeId: 'abc', access: 'auto' });
     expect(args).toEqual(expect.arrayContaining(['--permission-prompt-tool', 'stdio', '--permission-mode', 'acceptEdits', '--effort', 'high', '--resume', 'abc']));
+    expect(claudeArgs({ resumeId: 'abc', forkSession: true })).toEqual(expect.arrayContaining(['--resume', 'abc', '--fork-session']));
+    expect(claudeArgs({ forkSession: true })).not.toContain('--fork-session');
     expect(claudeArgs({ effort: 'ultra' })).not.toContain('--effort');
     expect(claudeArgs({})).not.toContain('--permission-mode');
     expect(claudeArgs({ access: 'full-access' })).toEqual(expect.arrayContaining(['--permission-mode', 'bypassPermissions', '--allow-dangerously-skip-permissions']));
