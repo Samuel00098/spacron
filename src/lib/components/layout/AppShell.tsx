@@ -33,6 +33,8 @@ import {
   type SplitPresetId,
 } from '$lib/components/layout/split-layout';
 import SplitLayoutPicker from '$lib/components/layout/SplitLayoutPicker.tsx';
+import TitleBarLayoutMenu from '$lib/components/layout/TitleBarLayoutMenu';
+import { useTitleBarSlots } from '$lib/components/layout/titleBarSlots';
 import Dropdown from '$lib/components/shared/Dropdown.tsx';
 
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand.tsx';
@@ -401,19 +403,6 @@ function XIcon() {
   );
 }
 
-function ActivityButton({ item }: { item: ActivityItem }) {
-  return (
-    <button
-      className={`svt-btn${item.active ? ' svt-active' : ''}`}
-      onClick={item.onClick}
-      title={item.title}
-      aria-label={item.title}
-    >
-      {item.icon}
-    </button>
-  );
-}
-
 function AuxTab({
   id,
   active,
@@ -645,6 +634,8 @@ export default function AppShell() {
   // `homeScreenOpen`). With no workspace open at all there is nothing behind it,
   // so it is the only thing rendered.
   const homeOpen = useStore(homeScreenOpen);
+  // The title bar sits above Settings, Home and Chat, where the stage is hidden.
+  const showLayoutControls = Boolean(workspaceId) && !homeOpen && !isSettingsOpen && currentInteractionMode !== 'chat';
     const project = useWorkspaceStore((s) => (s.activeProjectId ? s.projects.get(s.activeProjectId) ?? null : null));
   const currentAppearance = useStore(appearance);
   const projectSwitching = useWorkspaceStore((s) => s.isProjectSwitching);
@@ -808,64 +799,8 @@ export default function AppShell() {
   const lastLayoutCommandNonce = useRef(0);
 
   const roomsTableRef = useRef<HTMLElement | null>(null);
-  const overlaysRef = useRef<HTMLDivElement | null>(null);
-  // The Split/expanded layout control renders from the stage but paints in the
-  // bottom-right of the overlay row, beside the prompt bar, so the stage can
-  // start directly under the title bar.
-  const [layoutControlHost, setLayoutControlHost] = useState<HTMLDivElement | null>(null);
-  const [overlaysHeight, setOverlaysHeight] = useState(48);
-
-  useEffect(() => {
-    const el = overlaysRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setOverlaysHeight(Math.ceil(entry.contentRect.height));
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [workspaceId]);
-
-  // Visibility guarantee for the floating prompt bar (.composer-strip) on
-  // WebKitGTK (Linux). Even at opacity:1 it is regularly
-  // left *present but unpainted* after a first paint or a layout switch — either an
-  // entrance animation stuck at its 0% frame, or an uncomposited GPU layer. The CSS
-  // override handles the animation/opacity case; here we additionally force a hard
-  // repaint (a display flush) to re-composite a stale layer, which a plain opacity
-  // fix can't do. Runs on mount and on every ambient-layout change (opening an agent
-  // that promotes the Development layout was a reported trigger). No-op off Linux.
-  useEffect(() => {
-    if (!workspaceId || !isWebkitGtk()) return;
-    const el = overlaysRef.current;
-    if (!el) return;
-
-    const forceVisible = () => {
-      el.querySelectorAll<HTMLElement>('.composer-strip').forEach((node) => {
-        node.style.animation = 'none';
-        node.style.visibility = 'visible';
-        node.style.opacity = '1';
-        node.style.transform = 'none';
-        node.style.willChange = 'transform';
-        // Force a GPU compositor layer flush without toggling display (which
-        // causes visible flicker). Setting opacity to a near-1 value and back
-        // in the same synchronous block forces WebKitGTK to repaint the stale
-        // layer while the user sees no perceptible change.
-        node.style.opacity = '0.999';
-        void node.offsetHeight;
-        node.style.opacity = '1';
-      });
-    };
-
-    const raf = requestAnimationFrame(forceVisible);
-    const t1 = window.setTimeout(forceVisible, 250);
-    const t2 = window.setTimeout(forceVisible, 700);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-    };
-  }, [workspaceId, ambientLayout]);
+  // The voice and layout controls render from here but live in the title bar.
+  const titleBarSlots = useTitleBarSlots();
   const allTerminalSessions = useStore(terminalSessions);
   const deepSeekPlacementState = useStore(deepSeekPlacements);
   const allDevTerminalSessions = useStore(devTerminalSessions);
@@ -1861,8 +1796,6 @@ export default function AppShell() {
     return (
       <aside
         className="left-utility-panel left-sidebar bento-card"
-        // Below 240px the rail compacts its contents (see AppShell.css).
-        data-narrow={leftPanelWidthFit < 240 ? '' : undefined}
         style={{
           width: 'var(--left-sidebar-width)',
           '--left-sidebar-width': `${leftPanelWidthFit}px`,
@@ -3668,6 +3601,13 @@ export default function AppShell() {
       ...roomOrder.filter((room) => minimizedRooms.has(room)),
       ...Array.from(minimizedRooms).filter((room) => !roomOrder.includes(room)),
     ];
+    // A chip is just its icon; the name shows only where two would look alike
+    // (two agents of the same CLI, or both terminals).
+    const iconKey = (room: RoomId) => {
+      if (isAgentRoomId(room)) return `agent:${getAgentSessionForRoom(room)?.agentPreset ?? ''}`;
+      return room === 'dev-terminal' ? 'terminal' : room;
+    };
+    const shared = new Set(orderedMinimized.map(iconKey).filter((key, i, keys) => keys.indexOf(key) !== i));
     return (
       <div ref={minimizedStackRef} className="minimized-room-stack" aria-label="Minimized rooms">
         {orderedMinimized.map((room) => (
@@ -3679,7 +3619,7 @@ export default function AppShell() {
             aria-label={`Restore ${roomTitle(room)}`}
           >
             <span className="minimized-room-icon" aria-hidden="true">{roomIcon(room)}</span>
-            <span className="minimized-room-label">{roomTitle(room)}</span>
+            {shared.has(iconKey(room)) && <span className="minimized-room-label">{roomTitle(room)}</span>}
           </button>
         ))}
       </div>
@@ -3962,7 +3902,7 @@ export default function AppShell() {
 
     return (
       <>
-        {((isExpanded || isSplit) && visibleRooms.length > 0) && layoutControlHost && createPortal(
+        {showLayoutControls && (isExpanded || isSplit) && visibleRooms.length > 0 && titleBarSlots.layout && createPortal(
           <div
             className={`split-layout-control${isExpanded ? ' expanded-layout-control' : ''}`}
             aria-label={isExpanded ? 'Expanded panel controls' : 'Split layout controls'}
@@ -3982,7 +3922,7 @@ export default function AppShell() {
                     value={stageExpandedRoom ?? ''}
                     onChange={(room) => focusRoom(room as RoomId)}
                     ariaLabel="Change expanded panel"
-                    direction="up"
+                    direction="down"
                   />
                 </div>
               )
@@ -4001,7 +3941,7 @@ export default function AppShell() {
               />
             ) : null}
           </div>,
-          layoutControlHost,
+          titleBarSlots.layout,
         )}
         <div
           className={`focused-room stage-layers${stageModifier}${stageExpansionMotion ? ` stage-${stageExpansionMotion}` : ''}${stageIsVacant ? ' empty-stage' : ''}`}
@@ -4074,9 +4014,6 @@ export default function AppShell() {
             <div
               className={`app-body rooms-workspace${resizing ? ' resizing' : ''}`}
               style={{
-                // Keep the room panels just above the bottom voice/control row
-                // in either sidebar state, with a small gap above the voice bar.
-                '--overlay-clear': `${Math.max(58, overlaysHeight + 10)}px`,
                 '--left-nav-space': `${leftDrawerOpen ? leftPanelWidthFit + 20 : 0}px`,
                 '--right-drawer-space': `${
                   rightSidebarOpen ? rightDrawerWidthFit + 20 : 0
@@ -4110,26 +4047,16 @@ export default function AppShell() {
                 {renderRightUtilityPanel()}
               </div>
 
-              {/* Minimalist room stack anchored at workspace level — independent of sidebar toggle */}
-              {currentInteractionMode === 'cli' && renderMinimizedRooms()}
+              {/* Minimized panels wait in the title bar, so they take no height from the workspace. */}
+              {showLayoutControls && titleBarSlots.parked && createPortal(renderMinimizedRooms(), titleBarSlots.parked)}
 
-              <div ref={overlaysRef} className="workspace-overlays">
-              {/* The room dock used to sit here as its own strip. Its layout
-                  actions and the Editor/Terminal launchers now sit in the
-                  prompt bar; the other launchers are right-sidebar tabs. */}
-              <div className="composer-strip">
-                <FloatingPromptBar
-                  trailingControls={
-                    <div className="prompt-trailing">
-                      {layoutActionItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                      <div className="prompt-trailing-separator" />
-                      {roomShortcutItems.map((item) => <ActivityButton key={item.id} item={item} />)}
-                    </div>
-                  }
-                />
-              </div>
-              <div ref={setLayoutControlHost} className="stage-layout-control-host" />
-              </div>
+              {titleBarSlots.voice && createPortal(<FloatingPromptBar />, titleBarSlots.voice)}
+              {/* The layout actions and Editor/Terminal/Preview launchers; the
+                  other launchers are right-sidebar tabs. */}
+              {showLayoutControls && titleBarSlots.menu && createPortal(
+                <TitleBarLayoutMenu items={[...layoutActionItems, ...roomShortcutItems]} />,
+                titleBarSlots.menu,
+              )}
             </div>
           </div>
         </div>

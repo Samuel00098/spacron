@@ -18,7 +18,8 @@ import {
   spawnAgentPreset,
   writeToSession,
 } from '$lib/stores/terminal';
-import { openFile } from '$lib/stores/editor';
+import { jumpToLine, openFile } from '$lib/stores/editor';
+import { CHAT_MARKDOWN_URI_REGEXP, parseChatFileLink, resolveChatFilePath } from '$lib/services/chat-markdown-links';
 import {
   bindTranscript,
   contextUsageFor,
@@ -153,6 +154,8 @@ import {
   type ChatSkillEntry,
   type ComposerSuggestion,
 } from './TerminalChatRich';
+import { agentCommands, agentCommandsKey } from '$lib/services/agent-commands';
+import { canProbeCommands, probeAgentCommands } from '$lib/services/agent-command-probe';
 import { ToolRun } from './TerminalChatToolRun';
 import TerminalChatContextMenu, { type ChatMenuAgent, type ChatMenuPoint } from './TerminalChatContextMenu';
 import './TerminalChatView.css';
@@ -165,7 +168,7 @@ export type RichContextValue = {
   cwd: string | null;
   parentSessionId: string | null;
   diffs: boolean;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   renderNested: (items: TerminalChatItem[]) => React.ReactNode;
 };
 export const RichContext = createContext<RichContextValue | null>(null);
@@ -173,10 +176,9 @@ export const RichContext = createContext<RichContextValue | null>(null);
 /** Usage-limit stops already continued, so a reset sends "continue" once. */
 const continuedLimits = new Set<string>();
 
-/** A path from a tool call, made absolute against the pane's folder. */
+/** A path from a tool call or Markdown link, made absolute against the pane's folder. */
 function resolvePath(root: string | null, path: string): string {
-  if (/^([a-zA-Z]:[\\/]|[\\/])/.test(path) || !root) return path;
-  return `${root.replace(/[\\/]+$/, '')}/${path.replace(/^\.\//, '')}`;
+  return resolveChatFilePath(root, path);
 }
 
 const POLL_MS = 900;
@@ -893,7 +895,10 @@ export default function TerminalChatView({
         // resume…) run in Spacron against the provider; the rest go to the
         // agent through its native prompt channel. No terminal keystrokes.
         const lastUserMessage = [...itemsRef.current].reverse().find((i) => i.kind === 'user')?.text ?? null;
-        const result = await runStructuredCommand(structuredAgent, sessionId, text, { lastUserMessage });
+        const result = await runStructuredCommand(structuredAgent, sessionId, text, {
+          lastUserMessage,
+          agentCommands: (root && agent ? get(agentCommands)[agentCommandsKey(agent, root)] ?? [] : []).map((c) => c.name),
+        });
         if (!result.handled) {
           await sendStructuredChat(structuredAgent, sessionId, text);
           return;
@@ -1107,6 +1112,18 @@ export default function TerminalChatView({
   // skill added while the chat is open shows up.
   const [skills, setSkills] = useState<ChatSkillEntry[]>(() => (agent && root ? peekSkills(agent, root) : []));
   const skillMenuOpen = slash != null || dollar != null;
+  // The agent's own slash commands, as it publishes them. A structured chat
+  // reports them from its session; otherwise the agent is asked.
+  const publishedCommands = useStore(agentCommands);
+  const ownCommands = agent && root ? publishedCommands[agentCommandsKey(agent, root)] : undefined;
+  const [askingCommands, setAskingCommands] = useState(false);
+  useEffect(() => {
+    if (!agent || !root || slash == null || structuredMode || !canProbeCommands(agent)) return undefined;
+    let cancelled = false;
+    setAskingCommands(true);
+    void probeAgentCommands(agent, root).finally(() => { if (!cancelled) setAskingCommands(false); });
+    return () => { cancelled = true; };
+  }, [agent, root, slash != null, structuredMode]);
   useEffect(() => {
     if (!agent || !root || (!skillMenuOpen && skills.length)) return undefined;
     let cancelled = false;
@@ -1121,33 +1138,38 @@ export default function TerminalChatView({
         .map((skill) => ({ kind: 'skill' as const, skill }));
     }
     if (slash == null) return [];
-    // A structured chat runs these as session operations (see
-    // structured-chat/commands.ts); they replace the CLI's rows of the same name.
     const curated = slashCommandsFor(agent);
     const liveBuiltins = skills.filter((sk) => sk.kind === 'builtin');
     // Claude's own list names every built-in it has right now; the curated
     // rows add the "opens in terminal" knowledge and fill missing prose.
-    const cliRows: SlashCommand[] = liveBuiltins.length
-      ? liveBuiltins.map((sk) => {
-        const known = curated.find((c) => c.name === sk.name);
-        return { ...known, name: sk.name, description: sk.description || known?.description || '' };
+    // The agent's published list wins. While it is still being asked, show
+    // nothing made up; the built-in catalog is only for agents that publish none.
+    const live = ownCommands?.length ? ownCommands : liveBuiltins;
+    const cliRows: SlashCommand[] = live.length
+      ? live.map((entry) => {
+        const known = curated.find((c) => c.name === entry.name);
+        return { ...known, name: entry.name, description: entry.description || known?.description || '' };
       })
-      : curated;
+      : askingCommands ? [] : curated;
     // A structured chat runs these as session operations (see
     // structured-chat/commands.ts); they replace the CLI's rows of the same
     // name, and rows that only open a TUI screen have no place without one.
+    // The agent's own commands come first; Spacron's chat controls (which a
+    // chat without a terminal still needs) follow, without repeating a name.
+    const usable = cliRows.filter((c) => !c.opensInTerminal);
     const commandRows: SlashCommand[] = structuredMode
-      ? [...STRUCTURED_COMMANDS, ...cliRows.filter((c) => !c.opensInTerminal && !STRUCTURED_COMMANDS.some((s) => s.name === c.name))]
+      ? [...usable, ...STRUCTURED_COMMANDS.filter((s) => !usable.some((c) => c.name === s.name))]
       : cliRows;
     const builtins = rankByName(commandRows, slash, (c) => c.name.slice(1))
       .map((command) => ({ kind: 'command' as const, command }));
-    const custom = rankByName(skills.filter((sk) => sk.kind !== 'builtin'), slash, (sk) => sk.name.replace(/^[/$]/, ''));
+    // A skill the agent already lists as a command appears once.
+    const custom = rankByName(skills.filter((sk) => sk.kind !== 'builtin' && !commandRows.some((c) => c.name === sk.name)), slash, (sk) => sk.name.replace(/^[/$]/, ''));
     return [
       ...builtins,
       ...custom.filter((sk) => sk.kind === 'skill').map((skill) => ({ kind: 'skill' as const, skill })),
       ...custom.filter((sk) => sk.kind === 'command').map((skill) => ({ kind: 'skill' as const, skill })),
     ];
-  }, [slash, dollar?.query, agent, skills, structuredMode]);
+  }, [slash, dollar?.query, agent, skills, structuredMode, ownCommands, askingCommands]);
 
   useEffect(() => {
     if (!mention || !root) {
@@ -1156,7 +1178,7 @@ export default function TerminalChatView({
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      invoke<string[]>('chat_list_files', { root, query: mention.query, limit: 20 })
+      invoke<string[]>('chat_list_files', { root, query: mention.query, limit: 1000 })
         .then((list) => { if (!cancelled) setFileMatches(list); })
         .catch(() => { if (!cancelled) setFileMatches([]); });
     }, 110);
@@ -1168,7 +1190,7 @@ export default function TerminalChatView({
 
   const suggestions: ComposerSuggestion[] = menuKey && menuKey !== menuDismissed
     ? slash != null || dollar
-      ? commandMatches.slice(0, 80)
+      ? commandMatches
       : fileMatches.map((path) => ({ kind: 'file' as const, path }))
     : [];
   useEffect(() => setMenuIndex(0), [menuKey]);
@@ -1183,6 +1205,13 @@ export default function TerminalChatView({
     const at = start + insert.length;
     setCaret(at);
     requestAnimationFrame(() => textareaRef.current?.setSelectionRange(at, at));
+  }
+
+  /** Look inside a folder: keep the mention open with the folder as its path. */
+  function openFolder(path: string) {
+    if (!mention) return;
+    replaceToken(mention.start, `@${/\s/.test(path) ? '"' : ''}${path}`);
+    textareaRef.current?.focus();
   }
 
   function pickSuggestion(item: ComposerSuggestion) {
@@ -1208,6 +1237,13 @@ export default function TerminalChatView({
         event.preventDefault();
         const delta = event.key === 'ArrowDown' ? 1 : -1;
         setMenuIndex((i) => (i + delta + suggestions.length) % suggestions.length);
+        return;
+      }
+      // Right arrow at the end of a mention goes into the highlighted folder.
+      if (event.key === 'ArrowRight' && selectedSuggestion?.kind === 'file' && selectedSuggestion.path.endsWith('/')
+        && event.currentTarget.selectionStart === draft.length) {
+        event.preventDefault();
+        openFolder(selectedSuggestion.path);
         return;
       }
       if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey && selectedName !== draft.trim())) {
@@ -1330,7 +1366,12 @@ export default function TerminalChatView({
     });
   }
 
-  const openPath = useCallback((path: string) => { void openFile(resolvePath(root, path)); }, [root]);
+  const openPath = useCallback((path: string, line?: number) => {
+    const resolved = resolvePath(root, path);
+    void openFile(resolved).then((opened) => {
+      if (opened && line && line > 0) jumpToLine.set({ path: resolved, line });
+    });
+  }, [root]);
 
   // Each agent turn's file changes, shown under the turn's last block.
   const turnRollups = useMemo(() => {
@@ -2019,9 +2060,10 @@ export default function TerminalChatView({
             <ComposerMenu
               items={suggestions}
               active={Math.min(menuIndex, suggestions.length - 1)}
-              title={slash != null ? `${agentLabel} commands and skills` : dollar ? `${agentLabel} skills` : 'Files'}
+              title={slash != null ? `${agentLabel} commands and skills` : dollar ? `${agentLabel} skills` : 'Files and folders'}
               onHover={setMenuIndex}
               onPick={pickSuggestion}
+              onOpenFolder={openFolder}
             />
           )}
         {!structuredMode && showKeys && (
@@ -2061,6 +2103,7 @@ export default function TerminalChatView({
           )}
           <textarea
             ref={textareaRef}
+            aria-label={agentLabel}
             value={draft}
             onPaste={(e) => void onPaste(e)}
             rows={1}
@@ -2853,9 +2896,12 @@ export function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (im
   const rich = useContext(RichContext);
   const html = useMemo(() => {
     try {
-      return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }) as string);
+      return DOMPurify.sanitize(
+        marked.parse(text, { gfm: true, breaks: true }) as string,
+        { ALLOWED_URI_REGEXP: CHAT_MARKDOWN_URI_REGEXP },
+      );
     } catch {
-      return DOMPurify.sanitize(text);
+      return DOMPurify.sanitize(text, { ALLOWED_URI_REGEXP: CHAT_MARKDOWN_URI_REGEXP });
     }
   }, [text]);
   // One object per `html`, so React doesn't rewrite the markup (and drop the copy buttons) every render.
@@ -2966,6 +3012,11 @@ export function Markdown({ text, onOpenImage }: { text: string; onOpenImage: (im
         if (/^(?:https?:|mailto:)/i.test(href)) {
           if (/^https?:/i.test(href)) void openUrlInPreviewPanel(href);
           else void invoke('preview_open_in_browser', { url: href }).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
+          return;
+        }
+        const fileLink = parseChatFileLink(href);
+        if (fileLink && rich?.onOpenFile) {
+          rich.onOpenFile(fileLink.path, fileLink.line);
         }
       }}
       dangerouslySetInnerHTML={innerHtml}

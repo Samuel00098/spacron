@@ -288,3 +288,57 @@
   height: 13px;
   flex-shrink: 0;
 }
+
+/* The rail at or near its narrowest: two readings, the "+N" badge and the caret
+   have to fit beside both footer buttons, so the spacing gives way, not them.
+   Last in the file so it overrides the sizes above. */
+@container usage-footer (max-width: 268px) {
+  .app-shell footer.left-sidebar-footer .usage-dock {
+    flex: 0 0 auto;
+    padding: 2px;
+    gap: 4px;
+  }
+
+  .app-shell footer.left-sidebar-footer .usage-dock-agent {
+    gap: 2.5px;
+  }
+
+  .app-shell footer.left-sidebar-footer .usage-dock-mark,
+  .app-shell footer.left-sidebar-footer .usage-dock-mark svg,
+  .app-shell footer.left-sidebar-footer .usage-dock-mark img {
+    width: 12px;
+    height: 12px;
+  }
+
+  .app-shell footer.left-sidebar-footer .usage-dock-caret {
+    margin-left: -2px;
+  }
+
+  /* The footer is the query container, so it cannot restyle its own padding
+     and gaps: its children take them back with negative margins. */
+  .app-shell footer.left-sidebar-footer .usage-dock {
+    margin: 0 -4px 0 -6px;
+  }
+
+  .app-shell footer.left-sidebar-footer .left-sidebar-theme-btn,
+  .app-shell footer.left-sidebar-footer .left-sidebar-settings-btn {
+    width: 24px;
+  }
+
+  .app-shell footer.left-sidebar-footer .left-sidebar-theme-btn {
+    margin-left: auto;
+  }
+
+  .app-shell footer.left-sidebar-footer .left-sidebar-settings-btn {
+    margin: 0 -6px 0 -4px;
+  }
+
+  /* Breathing room from the card's edge while there is any to spare; it is the
+     first thing to give way when the readings are wide. */
+  .app-shell footer.left-sidebar-footer::before {
+    content: '';
+    flex: 0 100 14px;
+    min-width: 0;
+    margin-right: -6px;
+  }
+}

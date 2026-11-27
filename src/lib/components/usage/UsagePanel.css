@@ -425,7 +425,8 @@
   cursor: pointer;
 }
 
-.usage-row-open:hover .usage-row-name { color: var(--accent, var(--text-primary)); }
+/* Words stay black or white; the row's own highlight shows the hover. */
+.usage-row-open:hover .usage-row-name { color: var(--text-primary); }
 
 .usage-row-summary {
   display: grid;

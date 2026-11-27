@@ -77,6 +77,11 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  // Track whether pointerdown began on the empty stage backdrop (not on the
+  // image). setPointerCapture on the stage retargets the post-pan click event
+  // onto stageRef, so event.target === stageRef alone cannot distinguish a
+  // backdrop click from releasing an image pan.
+  const backdropDownRef = useRef(false);
   const image = images[index];
   const [renameName, setRenameName] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -230,6 +235,13 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
     if (event.button !== 0) return;
     // Capturing a navigation button's pointer redirects its click to the stage.
     if (event.target instanceof Element && event.target.closest('button')) return;
+    // Clicking the transparent backdrop outside the image dismisses the lightbox
+    // instead of starting a pan drag.
+    if (!editing && event.target === stageRef.current) {
+      backdropDownRef.current = true;
+      return;
+    }
+    backdropDownRef.current = false;
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     if (editing) {
       const point = markPoint(event);
@@ -300,7 +312,9 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
         role="dialog"
         aria-modal="true"
         aria-label={`Image: ${image.name}`}
-        onClick={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          if (event.target !== event.currentTarget || editing) event.stopPropagation();
+        }}
       >
         <header className="image-viewer-bar">
           {renameName !== null ? (
@@ -354,8 +368,13 @@ export default function ImageViewer({ images, startIndex = 0, projectRoot, onClo
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
+          onClick={(event) => {
+            const startedOnBackdrop = backdropDownRef.current;
+            backdropDownRef.current = false;
+            if (!editing && startedOnBackdrop && event.target === stageRef.current) onClose();
+          }}
           onDoubleClick={(event) => {
-            if (editing || (event.target instanceof Element && event.target.closest('button'))) return;
+            if (editing || backdropDownRef.current || (event.target instanceof Element && event.target.closest('button'))) return;
             setZoom(zoom === null ? 1 : null);
             setOffset({ x: 0, y: 0 });
           }}

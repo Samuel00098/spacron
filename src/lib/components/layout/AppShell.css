@@ -69,33 +69,8 @@
 }
 
 .app-shell .rooms-workspace {
-  /* Height of the floating bottom cluster (the composer, which now carries the
-     Tools menu and layout actions too). Focus/Split pad their content by this so
-     it clears the controls; Canvas lets windows flow full-bleed behind them. */
-  --overlay-clear: 84px;
   flex-direction: column;
   padding: 16px 20px 20px;
-}
-
-/* The prompt bar floats over the workspace as a bottom-centred cluster instead
-   of sitting in its own opaque band. pointer-events pass through the empty gaps
-   so the canvas behind stays draggable. */
-.app-shell .workspace-overlays {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1300;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 0 20px 14px;
-  pointer-events: none;
-}
-
-.app-shell .workspace-overlays > * {
-  pointer-events: auto;
 }
 
 /* Side utility panels — left hosts workspace nav (Files/Search/Git/...), right
@@ -108,10 +83,6 @@
   overflow: hidden;
   position: relative;
   flex: 0 0 auto;
-  /* Constrain the panel height to the space above the composer so the panel
-     ends naturally at that boundary. Content taller than this scrolls inside
-     the drawer body. */
-  max-height: calc(100% - var(--overlay-clear, 128px));
 }
 
 /* Make the drawer body a scroll container so content taller than the panel
@@ -151,6 +122,13 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Nothing scrolls here while Preview shows, so the app-wide stable scrollbar
+   gutter would only leave an empty strip down the panel's right edge. */
+.app-shell .right-utility-panel .drawer-body:has(> .right-sidebar-preview:not([hidden])) {
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 .app-shell .right-utility-panel .drawer-body > .right-sidebar-preview[hidden] {
@@ -429,7 +407,6 @@
 .app-shell .rooms-table.ambient-focus,
 .app-shell .rooms-table.ambient-development,
 .app-shell .rooms-table.ambient-preview {
-  padding-bottom: var(--overlay-clear);
 }
 
 /* Focus mode: the active panel fills 100% of the stage cleanly without side cards. */
@@ -611,7 +588,7 @@
   /* No top/side padding: like the Chat window, rooms start level with the
      drawers' top edge and 8px (the table's margin) from each drawer. The
      bottom still clears the floating prompt bar. */
-  padding: 0 0 var(--overlay-clear);
+  padding: 0;
 }
 
 /* Interaction mode is a presentation layer over the existing room stage. The
@@ -684,77 +661,11 @@
   margin-right: auto;
 }
 
-/* The Split layout control is rendered by the stage but portaled into the
-   overlay row (`.stage-layout-control-host`), where it sits in the bottom-right
-   corner level with the prompt bar. That keeps the stage free of a reserved top
-   band, so panes start right under the title bar like the Chat window does. */
-.app-shell .workspace-overlays {
-  container-type: inline-size;
-  container-name: workspace-overlays;
-  /* The selector becomes an in-flow sibling at narrow widths. Keep the
-     overlay row horizontal at every size so it stays beside the voice bar. */
-  flex-direction: row;
-  justify-content: center;
-}
-
-.app-shell .workspace-overlays > .stage-layout-control-host {
-  position: absolute;
-  right: 20px;
-  bottom: 12px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  pointer-events: auto;
-  z-index: 200;
-}
-
-.app-shell .workspace-overlays > .stage-layout-control-host:empty {
-  display: none;
-}
-
 .app-shell .split-layout-control {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   pointer-events: auto;
-}
-
-/* The overlay row narrows when a sidebar opens. Compact the selector, then
-   bring it into the voice bar's row so both controls remain side by side. */
-@container workspace-overlays (max-width: 1500px) {
-  .app-shell .workspace-overlays .split-layout-mode-label,
-  .app-shell .workspace-overlays .split-layout-count-full {
-    display: none;
-  }
-
-  .app-shell .workspace-overlays .split-layout-count-compact {
-    display: inline;
-  }
-
-  .app-shell .workspace-overlays .split-expanded-room-picker {
-    max-width: 150px;
-  }
-}
-
-@container workspace-overlays (max-width: 1140px) {
-  .app-shell .workspace-overlays > .stage-layout-control-host {
-    /* Keep the room selector in its right-side position while the voice input
-       remains centered independently in the full workspace. */
-    position: absolute;
-    left: auto;
-    right: 20px;
-    bottom: 12px;
-    height: 26px;
-    z-index: 200;
-    pointer-events: auto;
-  }
-
-  .app-shell .workspace-overlays > .composer-strip {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-    pointer-events: none !important;
-  }
 }
 
 .app-shell .split-layout-count {
@@ -2158,8 +2069,7 @@ html.has-bg-media .app-shell .room-panel:hover {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
 }
 
-:root.light-theme .app-shell .ambient-switch-btn.active,
-:root.light-theme .app-shell .svt-btn.svt-active {
+:root.light-theme .app-shell .ambient-switch-btn.active {
   background: color-mix(in srgb, var(--accent) 16%, rgb(var(--bg-primary-rgb, 248, 248, 252)));
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
 }
@@ -2179,7 +2089,7 @@ html.has-bg-media .app-shell .room-panel:hover {
   justify-content: flex-start;
   gap: 6px;
   width: fit-content;
-  max-width: max(0px, calc((100vw - var(--left-nav-space, 0px) - var(--right-drawer-space, 0px)) / 2 - 376px));
+  max-width: max(0px, calc(100vw - var(--left-nav-space, 0px) - var(--right-drawer-space, 0px) - 24px));
   padding: 8px 6px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -2552,51 +2462,7 @@ html.has-bg-media .app-shell .room-panel:hover {
   animation: mode-icon-pop 0.44s var(--ease-out);
 }
 
-.app-shell .svt-btn {
-  appearance: none;
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 7px;
-  border-radius: 9px;
-  border: 1px solid transparent;
-  color: var(--text-muted);
-  background: transparent;
-  position: relative;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
-}
-
-.app-shell .svt-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-  border-color: var(--border);
-  transform: translateY(-1px);
-}
-
-.app-shell .svt-btn.svt-active {
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-active));
-  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
-}
-
-.app-shell .svt-btn.svt-active::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: 3px;
-  width: 12px;
-  height: 2px;
-  border-radius: 99px;
-  transform: translateX(-50%);
-  background: var(--accent);
-}
-
 .app-shell .ambient-switch-btn:focus-visible,
-.app-shell .svt-btn:focus-visible,
 .app-shell .room-action:focus-visible,
 .app-shell .room-card:focus-visible,
 .app-shell .agent-room-card:focus-visible,
@@ -2612,11 +2478,6 @@ html.has-bg-media .app-shell .room-panel:hover {
 }
 
 @keyframes shell-chip-in {
-  0% { opacity: 0; }
-  100% { opacity: 1; }
-}
-
-@keyframes shell-composer-in {
   0% { opacity: 0; }
   100% { opacity: 1; }
 }
@@ -2814,129 +2675,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   display: contents;
 }
 
-.app-shell .composer-strip {
-  /* IMPORTANT: no view-transition-name / transform / will-change / contain here.
-     Each of those makes this strip a CSS "backdrop root", which isolates the
-     floating prompt bar's backdrop-filter from the workspace behind it — the
-     bar's frosted-glass blur then samples only this empty transparent strip and
-     the bar looks flat/transparent instead of frosted (it frosts correctly
-     only once the strip is NOT a backdrop root). We previously gave this
-     view-transition-name: spacron-composer to hold the bar steady during ambient
-     mode switches; that is sacrificed for the glass. The strip floats over the
-     workspace with no band/background of its own — just the prompt pill on top of
-     the content behind it. */
-  flex-shrink: 0;
-  width: min(720px, 100%);
-  container-type: inline-size;
-  container-name: composer-strip;
-  padding: 0;
-  border-top: none;
-  background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  pointer-events: none !important;
-}
-
-.app-shell .composer-strip .floating-prompt-bar,
-.app-shell .composer-strip .prompt-bubble {
-  pointer-events: auto;
-}
-
-.app-shell .composer-strip .floating-prompt-shell {
-  position: relative;
-  left: auto;
-  bottom: auto;
-  transform: none;
-  width: 100%;
-  margin: 0 auto;
-  pointer-events: none;
-  touch-action: manipulation;
-}
-
-.app-shell .composer-strip .floating-prompt-bar {
-  border-radius: 22px;
-  width: 100%;
-  min-width: 0;
-  min-height: 54px;
-  padding: 8px 10px 8px 12px;
-  animation: shell-composer-in 0.16s var(--ease-out) both;
-  pointer-events: auto;
-  touch-action: manipulation;
-}
-
-/* Tail of the prompt bar, between the input and Send: the layout actions that
-   used to sit in the room dock, then the Tools menu. Holds its natural width —
-   the textarea beside it is the flexible part — and never wraps. */
-.app-shell .composer-strip .prompt-trailing {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  min-width: 0;
-  flex-shrink: 0;
-}
-
-.app-shell .composer-strip .prompt-trailing-separator {
-  width: 1px;
-  height: 20px;
-  flex-shrink: 0;
-  margin-inline: 4px;
-  background: var(--border);
-}
-
-/* Match the bar's other icon buttons rather than the old 34px dock sizing. */
-.app-shell .composer-strip .prompt-trailing .svt-btn {
-  width: 36px;
-  height: 36px;
-}
-
-/* The dock's lit-button underline reads as clutter in a dense bar row — the
-   tinted fill already carries the active state here. */
-.app-shell .composer-strip .prompt-trailing .svt-btn.svt-active::after {
-  display: none;
-}
-
-.app-shell .composer-strip .spawn-toggle,
-.app-shell .composer-strip .attach-toggle,
-.app-shell .composer-strip .voice-toggle,
-.app-shell .composer-strip .agent-toggle,
-.app-shell .composer-strip .voice-pill-close-btn,
-.app-shell .composer-strip .send-btn {
-  border-radius: 9px;
-  touch-action: manipulation;
-}
-
-.app-shell .composer-strip .send-btn {
-  min-width: 56px;
-  height: 36px;
-  padding-inline: 15px;
-}
-
-.app-shell .composer-strip .spawn-toggle,
-.app-shell .composer-strip .attach-toggle,
-.app-shell .composer-strip .voice-toggle,
-.app-shell .composer-strip .agent-toggle {
-  width: 36px;
-  height: 36px;
-}
-
-.app-shell .composer-strip .prompt-input {
-  min-height: 26px;
-  height: 26px;
-  max-height: 90px;
-}
-
-.app-shell .composer-strip .prompt-copy {
-  gap: 6px;
-}
-
-.app-shell .composer-strip .prompt-meta {
-  padding-right: 3px;
-}
-
-.app-shell .composer-strip .prompt-hint {
-  max-width: 280px;
-}
-
 .app-shell .welcome-fullpage {
   flex: 1;
   overflow: hidden;
@@ -3004,12 +2742,6 @@ html.has-bg-media .app-shell .room-panel:hover {
     height: auto;
   }
 
-/* NOTE: .composer-strip deliberately does NOT get `will-change: transform`.
-   will-change:transform makes it a backdrop root, which would isolate the
-   floating prompt bar's backdrop-filter from the terminal behind it and kill
-   the frosted-glass blur. The view-transition-name below is enough to hold the
-   composer still during mode switches. */
-
 .app-shell .room-stack {
     min-height: 78px;
     max-height: 116px;
@@ -3031,129 +2763,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   .app-shell .ambient-switch-btn span {
     display: none;
   }
-
-  .app-shell .composer-strip {
-    padding: 7px 8px 8px;
-  }
-
-  .app-shell .composer-strip .floating-prompt-bar {
-    gap: 8px;
-    min-height: 50px;
-    padding: 7px 8px;
-    border-radius: 20px;
-  }
-
-  .app-shell .composer-strip .spawn-toggle,
-  .app-shell .composer-strip .attach-toggle,
-  .app-shell .composer-strip .voice-toggle,
-  .app-shell .composer-strip .agent-toggle {
-    width: 34px;
-    height: 34px;
-  }
-
-  .app-shell .composer-strip .send-btn {
-    min-width: 52px;
-    height: 34px;
-    padding-inline: 13px;
-  }
-
-  /* Tight bar: the Tools trigger drops to its icon and the layout actions
-     shrink, so the textarea keeps a usable width. Nothing is hidden — every
-     launcher stays reachable. */
-  .app-shell .composer-strip .tools-trigger-label {
-    display: none;
-  }
-
-  .app-shell .composer-strip .tools-trigger {
-    height: 34px;
-    padding-inline: 7px;
-  }
-
-  .app-shell .composer-strip .prompt-trailing .svt-btn {
-    width: 30px;
-    height: 30px;
-    padding: 6px;
-  }
-
-  .app-shell .composer-strip .prompt-trailing-separator {
-    margin-inline: 2px;
-  }
-
-  .app-shell .composer-strip .prompt-hint {
-    display: none;
-  }
-}
-
-/* The overlay width is reduced by drawers and by narrow windows independently
-   of the viewport. Query the strip itself so the floating bar responds to its
-   real available width, not just the browser window width. */
-@container composer-strip (max-width: 700px) {
-  .app-shell .composer-strip .floating-prompt-bar {
-    gap: 8px;
-    padding-inline: 9px;
-  }
-  .app-shell .composer-strip .prompt-trailing .svt-btn {
-    width: 30px;
-    height: 30px;
-    padding: 6px;
-  }
-  .app-shell .composer-strip .tools-trigger {
-    height: 32px;
-    padding-inline: 7px;
-  }
-  .app-shell .composer-strip .tools-trigger-label {
-    display: none;
-  }
-  .app-shell .composer-strip .transcript-empty > span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .app-shell .composer-strip .prompt-trailing-separator {
-    margin-inline: 2px;
-  }
-}
-
-@container composer-strip (max-width: 520px) {
-  .app-shell .composer-strip .floating-prompt-bar {
-    gap: 6px;
-    padding-inline: 7px;
-  }
-  .app-shell .composer-strip .transcript-empty {
-    gap: 0;
-  }
-  .app-shell .composer-strip .transcript-empty > span {
-    display: none;
-  }
-  .app-shell .composer-strip .prompt-trailing {
-    gap: 1px;
-  }
-  .app-shell .composer-strip .prompt-trailing-separator {
-    margin-inline: 1px;
-  }
-}
-
-@container composer-strip (max-width: 360px) {
-  .app-shell .composer-strip .floating-prompt-bar {
-    gap: 4px;
-    padding-inline: 5px;
-  }
-  .app-shell .composer-strip .voice-toggle {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-  }
-  .app-shell .composer-strip .prompt-trailing .svt-btn,
-  .app-shell .composer-strip .tools-trigger {
-    width: 28px;
-    height: 28px;
-  }
-  .app-shell .composer-strip .prompt-trailing .svt-btn {
-    padding: 5px;
-  }
-  .app-shell .composer-strip .tools-trigger {
-    padding-inline: 5px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3161,7 +2770,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   .app-shell .room-card,
   .app-shell .split-switch-item,
   .app-shell .minimized-room,
-  .app-shell .composer-strip .floating-prompt-bar,
   .app-shell .rooms-table.layout-switching .focused-room,
   .app-shell .rooms-table.layout-switching .ambient-secondary-room,
   .app-shell .rooms-table.layout-switching .room-stack,
@@ -3181,20 +2789,6 @@ html.has-bg-media .app-shell .room-panel:hover {
   .app-shell ::view-transition-new(root) {
     animation-duration: 0.001ms !important;
   }
-}
-
-/* WebKitGTK (Linux) regularly leaves elements that carry an entrance animation,
-   a `view-transition-name`, or a GPU layer hint (`will-change`) present but never
-   painted — which is why the floating prompt bar went invisible on first paint
-   and on layout switches. Neutralise those fragile hints for the bottom overlay
-   so it is always drawn at its resting visible state. Scoped to
-   WebKitGTK via the `is-webkitgtk` root class, so Windows/macOS keep the polish. */
-html.is-webkitgtk .app-shell .composer-strip {
-  animation: none !important;
-  opacity: 1 !important;
-  transform: none !important;
-  view-transition-name: none !important;
-  will-change: auto !important;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -3283,10 +2877,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   box-shadow: var(--depth-bevel), var(--depth-shadow-sm);
 }
 
-.app-shell .composer-strip .floating-prompt-bar {
-  box-shadow: var(--depth-bevel), var(--depth-shadow-md);
-}
-
 /* ── Cards & chips: gallery rail cards, split chips, agents, minimized ── */
 .app-shell .room-card {
   border: 1px solid var(--border);
@@ -3324,7 +2914,6 @@ html.is-webkitgtk .app-shell .composer-strip {
 }
 
 /* ── Keys: every small button gets an extruded hover and a pressed-in active ── */
-.app-shell .svt-btn:hover,
 .app-shell .room-action:hover,
 .app-shell .ambient-switch-btn:hover,
 .app-shell .drawer-tab-btn:hover,
@@ -3335,7 +2924,6 @@ html.is-webkitgtk .app-shell .composer-strip {
     0 2px 5px rgba(0, 0, 0, 0.3);
 }
 
-.app-shell .svt-btn:active,
 .app-shell .room-action:active,
 .app-shell .ambient-switch-btn:active,
 .app-shell .drawer-tab-btn:active,
@@ -3348,7 +2936,6 @@ html.is-webkitgtk .app-shell .composer-strip {
 
 /* Selected mode/tool reads as a key held down, not a floating one. */
 .app-shell .ambient-switch-btn.active,
-.app-shell .svt-btn.svt-active,
 .app-shell .drawer-tab-btn.active,
 .app-shell .split-target-btn.active {
   box-shadow: var(--depth-pressed);
@@ -3600,11 +3187,6 @@ html.is-webkitgtk .app-shell .composer-strip {
   margin-left: 0;
 }
 
-.app-shell .workspace-layer.interaction-chat .workspace-overlays {
-  visibility: hidden;
-  pointer-events: none;
-}
-
 .app-shell .left-sidebar-footer .left-sidebar-theme-btn {
   margin-left: auto;
 }
@@ -3637,17 +3219,7 @@ html.is-webkitgtk .app-shell .composer-strip {
   flex: 1 1 120px;
 }
 
-
-/* The full-height Bento navigator now carries status controls at its foot. The
-   composer is centered in the remaining workspace so the two never collide. */
-.app-shell .workspace-overlays {
-  left: var(--left-nav-space, 0px);
-  right: var(--right-drawer-space, 0px);
-  transition: left var(--dur-base, 0.2s) var(--ease-out, ease), right var(--dur-base, 0.2s) var(--ease-out, ease);
-}
-
-.app-shell .rooms-workspace.resizing .minimized-room-stack,
-.app-shell .rooms-workspace.resizing .workspace-overlays {
+.app-shell .rooms-workspace.resizing .minimized-room-stack {
   transition: none !important;
 }
 
@@ -3765,22 +3337,6 @@ html.is-webkitgtk .app-shell .composer-strip {
 .app-shell .left-sidebar-footer {
   min-height: 51px;
   padding: 9px 10px 10px;
-}
-
-/* Narrow rail (`data-narrow`, set below 240px — the rail gives way to keep the
-   stage usable in small windows, or the user dragged it there). The project
-   name gets priority over the Active badge (the card's highlight already says
-   which is active), and the wordmark shrinks so it clears the collapse button. */
-.app-shell .left-sidebar[data-narrow] .project-active-badge {
-  display: none;
-}
-
-.app-shell .left-sidebar[data-narrow] .left-sidebar-heading {
-  inset: 0 36px;
-}
-
-.app-shell .left-sidebar[data-narrow] .left-sidebar-app-name {
-  font-size: 19px !important;
 }
 
 /* Right sidebar header: the open surface's name, with a button back to the

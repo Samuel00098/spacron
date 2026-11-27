@@ -12,7 +12,7 @@ import { layoutSnapshot, requestRoomArrangement, focusedRoomOf, type AmbientLayo
 import { isSafePresetId } from '$lib/components/layout/split-layout';
 import { isTauriRuntime } from '$lib/utils/tauri';
 import { useWorkspaceStore } from './zustand/workspace';
-import { LEFT_PANEL_DEFAULT_WIDTH, clampLeftPanelWidth } from './zustand/layout';
+import { clampLeftPanelWidth } from './zustand/layout';
 import { backendInvoke } from '$lib/services/backend';
 import { resetProjectSearchState } from './projectsearch';
 import type { RemoteConnection } from './remoteWorkspace';
@@ -1047,7 +1047,6 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         sidebarVisible: cached.layout.sidebarVisible,
         sidebarWidth: cached.layout.sidebarWidth,
         sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(cached.layout.sidebarTab, l.sidebarTab),
-        leftPanelWidth: cached.layout.leftPanelWidth,
         rightDrawerWidth: cached.layout.rightDrawerWidth,
       }));
 
@@ -1163,7 +1162,6 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           sidebarVisible: true,
           sidebarWidth: 310,
           sidebarTab: 'files',
-          leftPanelWidth: LEFT_PANEL_DEFAULT_WIDTH,
           rightDrawerWidth: 380,
         }));
         rightSidebarTab.set('files');
@@ -1195,7 +1193,6 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
           sidebarVisible: persisted.layout!.sidebarVisible ?? true,
           sidebarWidth: persisted.layout!.sidebarWidth ?? 310,
           sidebarTab: l.sidebarTab === 'projects' ? 'projects' : sanitiseSidebarTab(persisted.layout!.sidebarTab, 'files'),
-          leftPanelWidth: persisted.layout!.leftPanelWidth ?? LEFT_PANEL_DEFAULT_WIDTH,
           rightDrawerWidth: persisted.layout!.rightDrawerWidth ?? 380,
         }));
         rightSidebarTab.set(

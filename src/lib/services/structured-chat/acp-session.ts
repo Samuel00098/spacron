@@ -26,6 +26,7 @@ import { prepareStructuredVisuals } from './visuals';
 import { aboutYouEnv } from '$lib/stores/aboutYou';
 import type { StructuredChatProvider } from './provider';
 import { initialStructuredState, StructuredStateStore } from './state';
+import { acpCommandsFrom, setAgentCommands } from '$lib/services/agent-commands';
 
 type Json = Record<string, unknown>;
 const str = (value: unknown): string | null => typeof value === 'string' ? value : null;
@@ -44,7 +45,7 @@ function textFrom(value: unknown): string {
  * `authenticate` before `session/new`. Cursor needs it: without it,
  * `session/new` never answers (seen with cursor-agent on Windows, 2026-11-20).
  */
-const LAUNCHES: Record<string, { command: string; args: string[]; label: string; env?: Record<string, string>; authMethod?: string }> = {
+export const ACP_LAUNCHES: Record<string, { command: string; args: string[]; label: string; env?: Record<string, string>; authMethod?: string }> = {
   opencode: { command: 'opencode', args: ['acp'], label: 'OpenCode', env: { OPENCODE_CLIENT: 'acp', OPENCODE_ENABLE_QUESTION_TOOL: 'false' } },
   grok: { command: 'grok', args: ['agent', 'stdio'], label: 'Grok' },
   antigravity: { command: 'agy', args: ['acp'], label: 'Antigravity', env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } },
@@ -297,7 +298,7 @@ function capabilitiesForAgent(agent: string): import('./provider').StructuredPro
 }
 
 function makeProvider(agent: string): StructuredChatProvider {
-  const launch = LAUNCHES[agent] ?? { command: agent, args: [], label: agent };
+  const launch = ACP_LAUNCHES[agent] ?? { command: agent, args: [], label: agent };
   const stores = new StructuredStateStore();
   const sessions = new Map<number, { session: AcpSession; sessionId: string; cwd: string; modes?: string[] }>();
   const activeAssistantIds = new Map<number, string>();
@@ -576,6 +577,10 @@ function makeProvider(agent: string): StructuredChatProvider {
     const params = rec(notification.params) ?? notification;
     const update = rec(params.update) ?? params;
     applyConfigOptions(sessionId, update);
+    // The agent's own slash commands, for the chat's `/` menu.
+    const published = acpCommandsFrom(notification);
+    const cwd = sessions.get(sessionId)?.cwd;
+    if (published && cwd) setAgentCommands(agent, cwd, published);
     const kind = String(update.sessionUpdate ?? update.type ?? '').toLowerCase().replace(/[-\s]/g, '_');
     const isAssistantChunk = kind === 'agent_message_chunk' || kind === 'assistant_message_chunk' || kind === 'text_delta' || kind === 'message_chunk';
     const isReasoningChunk = kind === 'agent_thought_chunk' || kind === 'assistant_thought_chunk' || kind === 'thought_chunk' || kind === 'reasoning_chunk';

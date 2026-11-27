@@ -35,14 +35,11 @@ export const PREVIEW_DRAWER_DEFAULT_WIDTH = 560;
 // The left Navigator's width, on the same terms: one definition for the
 // default, the setter and the load-time sanitiser in `workspace.ts`.
 //
-// 340 rather than the earlier 310 because the footer's usage readout is the
-// widest fixed thing in the rail — two agents, a "+N" and the disclosure caret
-// — and at 310 the footer had about 216px to give it, which was roughly what
-// that row needs. The caret was the part with nowhere to go. The extra 30px is
-// the margin that keeps the whole readout, caret included, on one line.
-export const LEFT_PANEL_MIN_WIDTH = 180;
+// The rail always opens at its narrowest. Dragging can widen it for as long as
+// it stays open; reopening it or restarting the app returns it to this width.
+export const LEFT_PANEL_MIN_WIDTH = 255;
 export const LEFT_PANEL_MAX_WIDTH = 600;
-export const LEFT_PANEL_DEFAULT_WIDTH = 340;
+export const LEFT_PANEL_DEFAULT_WIDTH = LEFT_PANEL_MIN_WIDTH;
 
 /** Narrow anything (a persisted value, a drag result) to a usable rail width. */
 export function clampLeftPanelWidth(v: unknown): number {
@@ -61,7 +58,7 @@ export function clampRightDrawerWidth(v: unknown): number {
 
 /** The stage (the rooms between the two drawers) keeps at least this much width
  *  while either drawer still has room to give. At the 960px window minimum with
- *  both drawers at their minimums the stage lands just above it. */
+ *  both drawers at their minimums the stage gets less (about 370px). */
 export const STAGE_MIN_WIDTH = 440;
 
 /** Fit the saved drawer widths to the window for rendering. The saved widths are
@@ -229,6 +226,7 @@ function loadLayout(): LayoutState {
     parsed.rightDrawerWidth = clampRightDrawerWidth(parsed.rightDrawerWidth);
     parsed.previewDrawerWidth = clampRightDrawerWidth(parsed.previewDrawerWidth ?? PREVIEW_DRAWER_DEFAULT_WIDTH);
     parsed.previewDocked = Boolean(parsed.previewDocked);
+    parsed.leftPanelWidth = LEFT_PANEL_DEFAULT_WIDTH;
     return parsed;
   } catch {
     return defaultLayout;
@@ -805,3 +803,11 @@ export const useLayoutStore = create<LayoutState & LayoutActions>((set, getState
     });
   },
 }));
+
+// Every way of opening the rail (button, shortcut, a tool, a project restore)
+// goes through this store, so the width is reset here rather than at each one.
+useLayoutStore.subscribe((state, previous) => {
+  if (state.sidebarVisible && !previous.sidebarVisible && state.leftPanelWidth !== LEFT_PANEL_DEFAULT_WIDTH) {
+    useLayoutStore.setState({ leftPanelWidth: LEFT_PANEL_DEFAULT_WIDTH });
+  }
+});

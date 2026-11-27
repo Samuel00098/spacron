@@ -142,7 +142,7 @@
   border: 1.5px solid color-mix(in srgb, var(--text-primary) 28%, transparent);
   color: transparent;
 }
-.chh-option.selected .chh-check { background: var(--text-primary); border-color: var(--text-primary); color: var(--bg-primary, #111); }
+.chh-option.selected .chh-check { background: var(--accent); border-color: var(--accent); color: var(--on-accent, var(--button-text, #000)); }
 
 .chh-mode-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
 .chh-mode { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
@@ -166,8 +166,10 @@
   cursor: pointer;
 }
 .chh-actions button:hover:not(:disabled) { background: color-mix(in srgb, var(--text-primary) 8%, transparent); }
-.chh-actions button.primary { background: var(--text-primary); color: var(--bg-primary, #111); border-color: transparent; }
-.chh-actions button.primary:hover:not(:disabled) { background: var(--text-primary); filter: brightness(0.92); }
+/* The theme accent and its paired text colour: --bg-primary is see-through in
+   glass themes, which left this label unreadable. */
+.chh-actions button.primary { background: var(--accent); color: var(--on-accent, var(--button-text, #000)); border-color: transparent; }
+.chh-actions button.primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); color: var(--on-accent, var(--button-text, #000)); }
 .chh-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
 .terminal-pane .pane-handoff-btn ~ .pane-view-switch { margin-left: 6px; }
 

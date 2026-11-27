@@ -637,7 +637,7 @@ function suggestionKey(item: ComposerSuggestion): string {
 function suggestionSection(item: ComposerSuggestion): string {
   if (item.kind === 'command') return 'Commands';
   if (item.kind === 'skill') return item.skill.kind === 'skill' ? 'Skills' : 'Custom commands';
-  return 'Files';
+  return 'Files and folders';
 }
 
 function sourceLabel(source: string): string {
@@ -654,12 +654,14 @@ export function ComposerMenu({
   onPick,
   onHover,
   title,
+  onOpenFolder,
 }: {
   items: ComposerSuggestion[];
   active: number;
   onPick: (item: ComposerSuggestion) => void;
   onHover: (index: number) => void;
   title: string;
+  onOpenFolder?: (path: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -698,12 +700,27 @@ export function ComposerMenu({
                 <span className="tcr-suggest-badge">{sourceLabel(item.skill.source)}</span>
               </>
             )}
-            {item.kind === 'file' && (
+            {item.kind === 'file' && (item.path.endsWith('/') ? (
+              <>
+                <svg className="tcr-suggest-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+                <span className="tcr-suggest-name">{baseName(item.path.slice(0, -1))}/</span>
+                <span className="tcr-suggest-desc">{dirName(item.path.slice(0, -1))}</span>
+                {onOpenFolder && (
+                  <span
+                    className="tcr-suggest-open"
+                    title="Open this folder (Right arrow)"
+                    onClick={(e) => { e.stopPropagation(); onOpenFolder(item.path); }}
+                  >
+                    Open ›
+                  </span>
+                )}
+              </>
+            ) : (
               <>
                 <span className="tcr-suggest-name">{baseName(item.path)}</span>
                 <span className="tcr-suggest-desc">{dirName(item.path)}</span>
               </>
-            )}
+            ))}
           </button>,
         ];
       })}

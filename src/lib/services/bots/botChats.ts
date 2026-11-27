@@ -91,3 +91,22 @@ export function setBotChatArchived(botId: string, chatId: number, archived: bool
 export function removeBotChat(botId: string, chatId: number) {
   update(botId, (s) => ({ starts: s.starts.filter((id) => id !== chatId), archived: s.archived.filter((id) => id !== chatId) }));
 }
+
+/**
+ * The chats as one timeline, oldest first. Only the newest `limit` runs are
+ * drawn; the current chat is always there (its divider marks a fresh start),
+ * and archived chats only when asked for.
+ */
+export function botTimeline(chats: BotChat[], showArchived: boolean, limit: number): { sections: { chat: BotChat; runs: BotRun[] }[]; hidden: number } {
+  const sections: { chat: BotChat; runs: BotRun[] }[] = [];
+  let room = limit;
+  let hidden = 0;
+  for (const chat of chats) {
+    if (chat.archived && !chat.current && !showArchived) continue;
+    const runs = chat.runs.slice(0, room).reverse();
+    room -= runs.length;
+    hidden += chat.runs.length - runs.length;
+    if (runs.length || chat.current) sections.unshift({ chat, runs });
+  }
+  return { sections, hidden };
+}

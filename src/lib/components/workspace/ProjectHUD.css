@@ -545,8 +545,9 @@
 }
 
 .project-active-dot {
-  width: 5px;
-  height: 5px;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 6px var(--accent);

@@ -131,6 +131,8 @@ describe('terminal chat rich helpers', () => {
     expect(slashQuery('/compact now')).toBeNull();
     expect(mentionAt('look at @src/li', 15)).toEqual({ start: 8, query: 'src/li' });
     expect(mentionAt('mail me@x', 9)).toBeNull();
+    expect(mentionAt('see @"My Docs/no', 16)).toEqual({ start: 4, query: 'My Docs/no' });
+    expect(mentionAt('see @"My Docs/" and', 19)).toBeNull();
     expect(forkArgs('codex', 'abc')).toBe('fork abc');
     expect(forkArgs('opencode', 'abc')).toBeNull();
   });

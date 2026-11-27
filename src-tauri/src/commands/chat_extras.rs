@@ -8,10 +8,16 @@ use std::path::Path;
 use std::time::Duration;
 
 const MAX_WALK_FILES: usize = 40_000;
-const MAX_FILE_RESULTS: usize = 50;
+const MAX_FILE_RESULTS: usize = 2_000;
 
-/// Project files for the composer's `@` menu, relative to `root` with forward
-/// slashes, best matches first. Honours .gitignore; hidden folders are skipped.
+/// Project files and folders for the composer's `@` menu, relative to `root`
+/// with forward slashes; folders end in `/`.
+///
+/// With nothing typed, or a query ending in `/`, it lists everything directly
+/// inside that folder, ignored and hidden entries included, so anything in the
+/// project can be reached. Otherwise it searches the whole project, best matches
+/// first; the search honours .gitignore so dependencies don't bury the project,
+/// but a typed folder path still finds what is inside an ignored folder.
 #[tauri::command]
 pub async fn chat_list_files(root: String, query: String, limit: Option<usize>) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -19,25 +25,76 @@ pub async fn chat_list_files(root: String, query: String, limit: Option<usize>) 
         if !base.is_dir() {
             return Err("Folder not found".to_string());
         }
-        let needle = query.trim().to_lowercase().replace('\\', "/");
-        let limit = limit.unwrap_or(20).clamp(1, MAX_FILE_RESULTS);
-        let mut scored: Vec<(i64, String)> = Vec::new();
-        let walker = ignore::WalkBuilder::new(base).hidden(true).git_ignore(true).parents(true).build();
-        for entry in walker.filter_map(Result::ok).take(MAX_WALK_FILES) {
-            if !entry.file_type().is_some_and(|t| t.is_file()) {
-                continue;
-            }
-            let Ok(rel) = entry.path().strip_prefix(base) else { continue };
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            if let Some(score) = file_match_score(&rel, &needle) {
-                scored.push((score, rel));
-            }
-        }
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.len().cmp(&b.1.len())).then_with(|| a.1.cmp(&b.1)));
-        Ok(scored.into_iter().take(limit).map(|(_, p)| p).collect())
+        let limit = limit.unwrap_or(200).clamp(1, MAX_FILE_RESULTS);
+        Ok(list_entries(base, &query, limit))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn list_entries(base: &Path, query: &str, limit: usize) -> Vec<String> {
+    let typed = query.trim().replace('\\', "/");
+    let (folder, leaf) = match typed.rfind('/') {
+        Some(i) => (&typed[..i], &typed[i + 1..]),
+        None => ("", typed.as_str()),
+    };
+    if typed.is_empty() || typed.ends_with('/') {
+        let mut children = folder_children(base, folder);
+        children.truncate(limit);
+        return children;
+    }
+    let needle = typed.to_lowercase();
+    let mut scored: Vec<(i64, String)> = Vec::new();
+    let walker = ignore::WalkBuilder::new(base)
+        .hidden(false)
+        .git_ignore(true)
+        .parents(true)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    for entry in walker.filter_map(Result::ok).take(MAX_WALK_FILES) {
+        let Some(kind) = entry.file_type() else { continue };
+        let Ok(rel) = entry.path().strip_prefix(base) else { continue };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if rel.is_empty() {
+            continue;
+        }
+        if let Some(score) = file_match_score(&rel, &needle) {
+            scored.push((score, if kind.is_dir() { format!("{rel}/") } else { rel }));
+        }
+    }
+    // A typed folder path: its own entries count even when the search skips them.
+    if !folder.is_empty() {
+        let wanted = leaf.to_lowercase();
+        for child in folder_children(base, folder) {
+            let name = child.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_lowercase();
+            if name.contains(&wanted) && !scored.iter().any(|(_, path)| *path == child) {
+                scored.push((if name.starts_with(&wanted) { 8_000 } else { 4_000 }, child));
+            }
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.len().cmp(&b.1.len())).then_with(|| a.1.cmp(&b.1)));
+    scored.into_iter().take(limit).map(|(_, p)| p).collect()
+}
+
+/// Everything directly inside `folder` (relative to `base`), folders first.
+/// Only plain path segments are followed, so it cannot leave the project.
+fn folder_children(base: &Path, folder: &str) -> Vec<String> {
+    let parts: Vec<&str> = folder.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.iter().any(|part| *part == ".." || *part == "." || part.contains(':')) {
+        return Vec::new();
+    }
+    let dir = parts.iter().fold(base.to_path_buf(), |path, part| path.join(part));
+    let prefix: String = parts.iter().map(|part| format!("{part}/")).collect();
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut rows: Vec<(bool, String)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name() != ".git")
+        .map(|entry| (entry.path().is_dir(), entry.file_name().to_string_lossy().into_owned()))
+        .collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    rows.into_iter()
+        .map(|(is_dir, name)| format!("{prefix}{name}{}", if is_dir { "/" } else { "" }))
+        .collect()
 }
 
 /// Higher is better; None when `needle` is not a subsequence of the path.
@@ -795,6 +852,27 @@ fn pr_status_from(v: &Value) -> PullRequestStatus {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_mention_list_has_folders_hidden_and_ignored_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/lib")).unwrap();
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        for file in ["src/lib/app.ts", "dist/bundle.js", ".env", "README.md"] {
+            std::fs::write(root.join(file), "x").unwrap();
+        }
+        std::fs::write(root.join(".ignore"), "dist/\n").unwrap();
+
+        let top = super::list_entries(root, "", 100);
+        assert_eq!(top, ["dist/", "src/", ".env", ".ignore", "README.md"]);
+        assert_eq!(super::list_entries(root, "dist/", 100), ["dist/bundle.js"]);
+        assert_eq!(super::list_entries(root, "dist/bun", 100), ["dist/bundle.js"]);
+        assert!(super::list_entries(root, "lib", 100).contains(&"src/lib/".to_string()));
+        assert!(super::list_entries(root, "env", 100).contains(&".env".to_string()));
+        assert!(super::list_entries(root, "../", 100).is_empty());
+    }
+
     use super::*;
 
     #[test]

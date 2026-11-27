@@ -25,7 +25,7 @@ import {
   type Bot, type BotAccess, type BotRun, type BotSchedule, type BotTemplate,
 } from '$lib/services/bots/bots';
 import { BOT_NOTIFY_MODES, botNotifyModes, setBotNotifyMode, type BotNotifyMode } from '$lib/services/bots/botNotify';
-import { botAutoArchive, botChats, newBotChat, setBotAutoArchive, setBotChatArchived, splitChats, type BotChat as ChatThread } from '$lib/services/bots/botChats';
+import { botAutoArchive, botChats, botTimeline, newBotChat, setBotAutoArchive, setBotChatArchived, splitChats, type BotChat as ChatThread } from '$lib/services/bots/botChats';
 import { BOT_AVATARS, DEFAULT_AVATAR, avatarUrl, resizeAvatar } from '$lib/services/bots/avatars';
 import { Dots, Markdown, UserTurn, contrastVars } from '$lib/components/terminal/TerminalChatView';
 import { MessageActions, markPointerMessage, clearPointerMessage } from '$lib/components/terminal/TerminalChatRich';
@@ -625,9 +625,6 @@ function BotEditor({ bot, runs = [], onDone }: { bot?: Bot; runs?: BotRun[]; onD
 
 // ── a bot: chat and details ─────────────────────────────────────────────────
 
-/** The chat each bot was last showing, kept while the app runs so a visit to another page does not reset it. */
-const pickedChats = new Map<string, number>();
-
 function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: string }) {
   const hostName = useHostName();
   const [tab, setTab] = useState<'chat' | 'about'>('chat');
@@ -636,30 +633,21 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
   const next = nextBotRun(bot);
   const chatState = useStore(botChats)[bot.id];
   const chats = useMemo(() => splitChats(chatState, runs), [chatState, runs]);
-  // Which chat is open is remembered per bot, so leaving the Bots page and coming back
-  // shows the chat you were reading, not the newest one.
-  const [picked, setPickedState] = useState<number | null>(() => pickedChats.get(bot.id) ?? null);
-  const setPicked = (id: number | null) => {
-    if (id === null) pickedChats.delete(bot.id); else pickedChats.set(bot.id, id);
-    setPickedState(id);
-  };
-  const chat = chats.find((c) => c.id === picked) ?? chats.find((c) => c.current)!;
   function startChat() {
     // With "Archive the old chat" on in the bot's settings, the chat being left goes to the archive.
     const leaving = chats.find((c) => c.current);
     if (get(botAutoArchive)[bot.id] && leaving?.runs.length) setBotChatArchived(bot.id, leaving.id, true);
-    setPicked(newBotChat(bot.id, runs));
+    newBotChat(bot.id, runs);
     setTab('chat');
   }
   function archive(target: ChatThread, archived: boolean) {
     setBotChatArchived(bot.id, target.id, archived);
-    if (archived && target.current) setPicked(newBotChat(bot.id, runs));
-    else if (archived) setPicked(null);
+    // Archiving the chat you are in starts the next one.
+    if (archived && target.current) newBotChat(bot.id, runs);
   }
-  /** Delete a whole chat thread; the open chat moves to the newest one. Throws with a message for the bar to show. */
+  /** Delete a whole chat from the timeline. Throws with a message for the chat to show. */
   async function removeChat(target: ChatThread) {
     await deleteBotChat(bot, target);
-    if (!target.current) setPicked(null);
   }
   if (editing) return <BotEditor bot={bot} runs={runs} onDone={() => setEditing(false)} />;
   return (
@@ -678,7 +666,7 @@ function BotView({ bot, runs, homeRoot }: { bot: Bot; runs: BotRun[]; homeRoot: 
         <CloseButton />
       </header>
       {tab === 'chat'
-        ? <BotChat key={chat.id} bot={bot} runs={chat.runs} active={active} chat={chat} chats={chats} onPick={setPicked} onNewChat={startChat} onArchive={archive} onDelete={removeChat} />
+        ? <BotChat key={bot.id} bot={bot} active={active} chats={chats} onNewChat={startChat} onArchive={archive} onDelete={removeChat} />
         : <BotAbout bot={bot} runs={runs} homeRoot={homeRoot} active={active} onEdit={() => setEditing(true)} />}
     </div>
   );
@@ -697,25 +685,25 @@ function botChatReply(log: Awaited<ReturnType<typeof fetchBotLog>>): string {
     : log.text;
 }
 
-function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive, onDelete }: {
-  bot: Bot; runs: BotRun[]; active?: BotRun;
-  chat: ChatThread; chats: ChatThread[];
-  onPick: (id: number) => void; onNewChat: () => void; onArchive: (chat: ChatThread, archived: boolean) => void;
+function BotChat({ bot, active, chats, onNewChat, onArchive, onDelete }: {
+  bot: Bot; active?: BotRun;
+  chats: ChatThread[];
+  onNewChat: () => void; onArchive: (chat: ChatThread, archived: boolean) => void;
   onDelete: (chat: ChatThread) => Promise<void>;
 }) {
   const [showArchived, setShowArchived] = useState(false);
-  // Delete arms on the first click and deletes on a second within 3 seconds.
-  const [deleteArmed, setDeleteArmed] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  useEffect(() => {
-    if (!deleteArmed) return undefined;
-    const timer = setTimeout(() => setDeleteArmed(false), 3000);
-    return () => clearTimeout(timer);
-  }, [deleteArmed]);
-  const chatWorking = chat.runs.some((r) => r.status === 'running');
-  // Only the newest chat takes messages; an older or archived one is for reading.
-  const readOnly = !chat.current || chat.archived;
-  const listed = chats.filter((c) => c.id === chat.id || showArchived === c.archived);
+  async function deleteChat(target: ChatThread) {
+    if (deleting) return;
+    setDeleting(true); setError('');
+    try { await onDelete(target); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setDeleting(false); }
+  }
+  // One timeline: every chat in order, with a divider where each one starts.
+  // Messages always go to the newest chat, which is all the bot remembers.
+  const current = chats.find((c) => c.current)!;
+  const readOnly = current.archived;
+  const [limit, setLimit] = useState(30);
+  const { sections, hidden } = useMemo(() => botTimeline(chats, showArchived, limit), [chats, showArchived, limit]);
   const archivedCount = chats.filter((c) => c.archived).length;
   const appearance = useStore(botChatAppearance);
   const visualsOn = useStore(botChatVisuals);
@@ -743,7 +731,9 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
   }
   const scroller = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const shown = useMemo(() => runs.slice(0, 30).reverse(), [runs]);
+  const shown = useMemo(() => sections.flatMap((s) => s.runs), [sections]);
+  // Follow the newest message unless the reader has scrolled up to older ones.
+  const following = useRef(true);
   const finishedKey = shown.map((r) => `${r.id}:${r.status}`).join('|');
   const noImages = () => {};
 
@@ -769,7 +759,11 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [active?.id]);
-  useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [shown.length, active ? replies[active.id]?.length : 0]);
+  const toBottom = () => scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
+  // A new message or a new chat always comes into view.
+  useEffect(() => { following.current = true; toBottom(); }, [shown[shown.length - 1]?.id, current.id]);
+  // Replies arrive after their messages are drawn; stay at the bottom for them.
+  useEffect(() => { if (following.current) toBottom(); }, [replies]);
   // Grow the composer with its text, like the structured chat.
   useEffect(() => {
     const el = textarea.current;
@@ -786,7 +780,7 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
       // Upload first: the bot is told where each file landed in its folder.
       const paths = revision?.paths ?? [];
       if (!revision) for (const p of pending) paths.push(await attachToBot(bot, p.file));
-      await sendBotMessage(bot.id, text, paths, chat.id);
+      await sendBotMessage(bot.id, text, paths, current.id);
       if (!revision) {
         setDraft('');
         pending.forEach((p) => p.preview && URL.revokeObjectURL(p.preview));
@@ -841,38 +835,17 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
       } as React.CSSProperties}
     >
       <div className="bots-chat-bar">
-        <Dropdown
-          ariaLabel="Chats with this bot"
-          value={String(chat.id)}
-          onChange={(v) => onPick(Number(v))}
-          options={listed.map((c) => ({ value: String(c.id), label: c.title, sublabel: c.runs[0] ? `${c.archived ? 'Archived · ' : ''}${when(c.runs[0].startedAt)}` : undefined }))}
-        />
         {archivedCount > 0 && <button type="button" className="bots-chat-bar-btn" aria-pressed={showArchived} onClick={() => setShowArchived((v) => !v)}>
           {showArchived ? 'Hide archived' : `Archived (${archivedCount})`}
         </button>}
         <span className="bots-chat-bar-spacer" />
-        <button type="button" className="bots-chat-bar-btn" disabled={chat.archived ? false : !chat.runs.length && chat.current} onClick={() => onArchive(chat, !chat.archived)}>
-          {chat.archived ? 'Unarchive' : 'Archive'}
-        </button>
-        <button
-          type="button"
-          className={`bots-chat-bar-btn danger${deleteArmed ? ' armed' : ''}`}
-          disabled={deleting || chatWorking || (!chat.runs.length && chat.current)}
-          title={chatWorking ? 'Stop the run first' : deleteArmed ? 'Click again to delete this chat for good' : 'Delete this chat and everything in it'}
-          onClick={async () => {
-            if (!deleteArmed) { setDeleteArmed(true); return; }
-            setDeleteArmed(false); setDeleting(true); setError('');
-            try { await onDelete(chat); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setDeleting(false); }
-          }}
-        >
-          {deleting ? 'Deleting…' : deleteArmed ? 'Delete chat?' : 'Delete'}
-        </button>
         <button type="button" className="bots-chat-bar-btn primary" disabled={Boolean(active)} title="Start a new conversation with this bot" onClick={onNewChat}>New chat</button>
       </div>
       <div className="terminal-chat-transcript">
-        <div className="terminal-chat-scroll" ref={scroller}>
+        <div className="terminal-chat-scroll" ref={scroller} onScroll={(e) => { const el = e.currentTarget; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
           <div className="terminal-chat-thread">
-            {!shown.length && <div className="bots-chat-empty">
+            {hidden > 0 && <button type="button" className="bots-chat-bar-btn bots-chat-earlier" onClick={() => { following.current = false; setLimit((n) => n + 30); }}>Show earlier messages</button>}
+            {!shown.length && sections.length <= 1 && !hidden && <div className="bots-chat-empty">
               <BotAvatar avatar={bot.avatar} size={64} />
               <h3>{bot.name}</h3>
               <p>{bot.canCreateBots
@@ -887,7 +860,15 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
                 ))}
               </div>}
             </div>}
-            {shown.map((run) => {
+            {sections.map(({ chat, runs }) => <section key={chat.id} className="bots-chat-section">
+              {(sections.length > 1 || runs.length > 0 || hidden > 0) && <ChatDivider
+                chat={chat}
+                deleting={deleting}
+                onArchive={onArchive}
+                onDelete={deleteChat}
+              />}
+              {chat.current && !runs.length && sections.length > 1 && <div className="terminal-chat-notice">{bot.name} starts fresh from here.</div>}
+              {runs.map((run) => {
               const reply = replies[run.id]?.trim();
               const segments = reply ? splitReply(reply) : [];
               const replyText = visualReplyText(segments);
@@ -900,7 +881,7 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
                       align="end"
                       text={run.message}
                       time={showTimes ? run.startedAt : null}
-                      canResend={!active && busy === null}
+                      canResend={chat.current && !active && busy === null}
                       onResend={(text) => send({ text, paths: run.attachments ?? [] })}
                     />}
                   </div>
@@ -924,7 +905,8 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
                   </div>
                 )}
               </div>;
-            })}
+              })}
+            </section>)}
           </div>
         </div>
       </div>
@@ -951,7 +933,7 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
             onPaste={(e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); addFiles(files); } }}
             rows={1}
             value={draft}
-            placeholder={readOnly ? (chat.archived ? 'This chat is archived. Unarchive it to read along, or start a new chat.' : 'This chat has ended. Start a new chat to message this bot.') : active ? `${bot.name} is working… (Stop to send something new)` : `Message ${bot.name}`}
+            placeholder={readOnly ? 'This chat is archived. Unarchive it, or start a new chat.' : active ? `${bot.name} is working… (Stop to send something new)` : `Message ${bot.name}`}
             disabled={Boolean(active) || readOnly}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -986,6 +968,50 @@ function BotChat({ bot, runs, active, chat, chats, onPick, onNewChat, onArchive,
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Where one chat starts in the timeline, with what can be done to that chat. */
+function ChatDivider({ chat, deleting, onArchive, onDelete }: {
+  chat: ChatThread; deleting: boolean;
+  onArchive: (chat: ChatThread, archived: boolean) => void;
+  onDelete: (chat: ChatThread) => void;
+}) {
+  // Delete arms on the first click and deletes on a second within 3 seconds.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return undefined;
+    const timer = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+  const first = chat.runs[chat.runs.length - 1];
+  const working = chat.runs.some((r) => r.status === 'running');
+  const empty = !chat.runs.length && chat.current;
+  return (
+    <div className="bots-chat-divider">
+      <span className="bots-chat-divider-label" title={chat.title}>
+        {chat.archived ? 'Archived · ' : ''}{chat.title}{first ? ` · ${when(first.startedAt)}` : ''}
+      </span>
+      {!empty && <>
+        <button type="button" onClick={() => onArchive(chat, !chat.archived)}>{chat.archived ? 'Unarchive' : 'Archive'}</button>
+        <button
+          type="button"
+          className={armed ? 'armed' : undefined}
+          disabled={deleting || working}
+          aria-label={armed ? `Confirm: delete chat ${chat.title}` : `Delete chat ${chat.title}`}
+          title={working ? 'Stop the run first' : armed ? 'Click again to delete for good' : 'Delete this chat and everything in it'}
+          onClick={() => {
+            if (!armed) { setArmed(true); return; }
+            setArmed(false);
+            onDelete(chat);
+          }}
+        >
+          {armed ? 'Delete?' : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5" /></svg>
+          )}
+        </button>
+      </>}
     </div>
   );
 }

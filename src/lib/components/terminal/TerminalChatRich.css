@@ -691,7 +691,13 @@
 }
 .tcr-glyph.live { color: var(--accent); }
 
-.tcr-run { display: flex; flex-direction: column; min-width: 0; }
+.tcr-run {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
 
 .terminal-chat-view .tcr-run button {
   box-shadow: none !important;
@@ -702,7 +708,9 @@
 
 .terminal-chat-view .tcr-run-head {
   align-self: flex-start;
+  box-sizing: border-box;
   max-width: 100%;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -723,20 +731,32 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  box-sizing: border-box;
   margin: 2px 0 0 7px;
   padding-left: 13px;
   box-shadow: inset 1px 0 0 var(--tc-line-strong);
   min-width: 0;
+  max-width: calc(100% - 7px);
+  overflow: hidden;
 }
 
-.tcr-line { display: flex; flex-direction: column; min-width: 0; }
+.tcr-line {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
 
 .terminal-chat-view .tcr-line-head {
   display: flex;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
+  overflow: hidden;
   padding: 3px 6px 3px 2px;
   border-radius: 7px;
   background: transparent;
@@ -746,9 +766,24 @@
 .terminal-chat-view .tcr-line-head:hover:not(:disabled) { background: var(--tc-surface); }
 .terminal-chat-view .tcr-line-head:disabled { cursor: default; opacity: 1; }
 
-.tcr-line-verb { flex: none; color: var(--text-muted); }
-.tcr-line-target {
+/* Must keep flex-shrink >= 1 when alone so a long tool title absorbs 100% of
+   overflow per CSS Flexbox §9.7; when paired with a target/context, keep short
+   verbs unclipped up to 45% of the row. */
+.tcr-line-verb {
   flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.tcr-line-verb:has(+ .tcr-line-target),
+.tcr-line-verb:has(+ .tcr-line-context) {
+  flex-shrink: 0;
+  max-width: 45%;
+}
+.tcr-line-target {
+  flex: 0 4 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -780,11 +815,16 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-sizing: border-box;
   margin: 2px 0 6px 24px;
   min-width: 0;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
 }
 .tcr-line-input,
 .tcr-line-output {
+  box-sizing: border-box;
+  max-width: 100%;
   margin: 0;
   max-height: 280px;
   overflow: auto;
@@ -1003,3 +1043,8 @@
   font-size: 12px;
   outline: none;
 }
+
+/* Folders in the `@` menu: the row picks the folder, "Open" looks inside. */
+.tcr-suggest-folder { flex: none; align-self: center; color: var(--text-muted); }
+.tcr-suggest-open { flex: none; margin-left: auto; padding: 0 8px; border-radius: 6px; color: var(--text-muted); }
+.tcr-suggest-open:hover { background: var(--bg-hover); color: var(--text-primary); }

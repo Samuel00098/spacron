@@ -51,6 +51,11 @@ export default function TranscriptionIndicator() {
 
   const listening = state === 'listening';
   const amplitude = Math.min(1, Math.max(0, level / LEVEL_FULL_SCALE));
+  // Strip verbose placeholder hints ("Message X · / for commands, @ for files")
+  // so the ambient pill stays short and scannable.
+  const shortTarget = target?.label
+    ? target.label.split(/\s+[·—–]\s+/)[0].replace(/^Message\s+/i, '').trim()
+    : '';
 
   return (
     <div className={`transcription-indicator ${state}`} role="status" aria-live="polite">
@@ -75,21 +80,17 @@ export default function TranscriptionIndicator() {
       ) : (
         <span className="dot" />
       )}
-      {/* Processing covers the final STT drain (and the optional AI polish), so
-        * "Sending to terminal" was a promise the label couldn't keep — it also
-        * showed while dictating into a text field. The target label closes the
-        * gap the other way: which terminal / which field the words are going to. */}
       <span className="label">
-        {listening ? `Listening${target ? ` · ${target.label}` : ''}` : 'Transcribing…'}
+        {listening ? `Listening${shortTarget ? ` · ${shortTarget}` : ''}` : 'Transcribing…'}
       </span>
       {words > 0 && (
         <span className="count">
-          {words} word{words === 1 ? '' : 's'}
+          {words}w
         </span>
       )}
       {listening && (
         <span className="hint">
-          again to send · <kbd className="key">Esc</kbd> to cancel
+          <kbd className="key">Esc</kbd> cancel
         </span>
       )}
     </div>

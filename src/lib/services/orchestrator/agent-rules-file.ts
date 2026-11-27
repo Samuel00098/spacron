@@ -555,7 +555,7 @@ export interface BriefOptions {
   isolated?: boolean;
   /**
    * Repository-scoped guidelines, rules, and brief configured in Project Settings.
-   * Injected into the standing rules file as rule #9.
+   * Injected into the standing rules file as rule #11.
    */
   customInstructions?: string;
 }
@@ -620,11 +620,14 @@ export function buildStandingBriefBody(opts?: BriefOptions): string {
     // commands/about_you.rs); only the variable's name may appear here, because
     // this brief is written into rules files that can be committed.
     '9. **About the user** — When `$SPACRON_ABOUT_YOU_FILE` is set, read that file once before you start: it is what the user wrote about themselves (who they are, what they are building, how they like answers). Use it to work well with them. It is private: never copy it into project files, commits, pull requests or messages to anyone else. If the variable is unset, skip this.',
+    // Some CLIs keep the documents they write in their own storage (Antigravity:
+    // ~/.gemini/antigravity-cli/brain/<conversation>/), outside the project.
+    '10. **Where files go** — Save every file you make for the user (documents, reports, plans, comparisons, code, images, exports) inside the project folder you were started in, and name its path in your answer. Never leave one only in storage that belongs to your tool (an artifacts, brain, scratch or session folder under the home or temp folder): if your tool puts it there, also write a copy into the project. If the project has no obvious place for it, use `docs/`. Throwaway working files and the inline visuals of rule 8 stay where they belong.',
   ];
 
   if (opts?.customInstructions?.trim()) {
     rules.push(
-      `10. **Project guidelines & instructions** — Always adhere to these repository-specific requirements:\n${opts.customInstructions.trim()}`
+      `11. **Project guidelines & instructions** — Always adhere to these repository-specific requirements:\n${opts.customInstructions.trim()}`
     );
   }
 

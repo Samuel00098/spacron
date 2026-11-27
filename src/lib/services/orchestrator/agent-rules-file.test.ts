@@ -226,6 +226,13 @@ describe('buildStandingBriefBody', () => {
     expect(differing).toHaveLength(2);
   });
 
+  it('tells every agent to save what it makes inside the project', () => {
+    for (const body of [buildStandingBriefBody(), buildStandingBriefBody({ isolated: true })]) {
+      expect(body).toContain('inside the project folder you were started in');
+      expect(body).toContain('also write a copy into the project');
+    }
+  });
+
   it('tells the agent to do its own task rather than delegate it', () => {
     const body = buildStandingBriefBody();
     expect(body).toContain('yours to carry out yourself');
@@ -682,7 +689,7 @@ describe('the standing brief tells agents how to be heard', () => {
     const numbers = [...buildStandingBriefBody().matchAll(/^(\d+)\. \*\*/gm)].map((m) =>
       Number(m[1]),
     );
-    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it('points agents at the About you file without ever carrying its text', () => {

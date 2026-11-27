@@ -16,6 +16,7 @@ import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import InboxBell from '$lib/components/orchestrator/InboxBell';
 import { useAppIcon } from '$lib/react/useAppIcon';
 import './TitleBar.css';
+import { useTitleBarSlots } from '$lib/components/layout/titleBarSlots';
 import Automations from '$lib/components/automations/Automations';
 
 export default function TitleBar() {
@@ -30,6 +31,7 @@ export default function TitleBar() {
   const showWorkspaceTools = Boolean(workspaceId);
   const sidebarVisible = useLayoutStore((s) => s.sidebarVisible);
   const rightSidebarOpen = useStore(rightSidebarVisible);
+  const { setLayout, setMenu, setVoice, setParked } = useTitleBarSlots.getState();
 
   async function minimize() {
     await win?.minimize();
@@ -131,12 +133,17 @@ export default function TitleBar() {
             </button>
           </div>
         )}
+
+        {/* Minimized panels, portaled in by AppShell. */}
+        <div className="titlebar-parked-slot" ref={setParked} />
       </div>
 
-      {/* Centre: kept as an empty drag region so the left and right groups
-          keep their places. The Code / Chat switch that lived here is gone:
-          chat is now a per-terminal view (Terminal | Chat in each agent pane). */}
-      <div className="titlebar-center" data-tauri-drag-region />
+      {/* Centre: the Split / Focus control and the layout menu, portaled in by
+          AppShell. The empty space around them still drags the window. */}
+      <div className="titlebar-center" data-tauri-drag-region>
+        <div className="titlebar-layout-slot" ref={setLayout} />
+        <div className="titlebar-menu-slot" ref={setMenu} />
+      </div>
 
       {/* Right side: Mode switcher + Settings + Window controls */}
       <div className="titlebar-right" data-tauri-drag-region>
@@ -179,6 +186,9 @@ export default function TitleBar() {
 
         {/* Finished agent work and pending decisions remain globally visible. */}
         {showWorkspaceTools && <InboxBell />}
+
+        {/* Dictation mic and its drop-down, portaled in by AppShell. */}
+        <div className="titlebar-voice-slot" ref={setVoice} />
 
         {/* Connection mode stays in the top-right chrome: it affects the whole
             workspace, not the currently selected Navigator context. */}

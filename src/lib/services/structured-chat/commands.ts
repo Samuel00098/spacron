@@ -112,11 +112,14 @@ export function resumable(paneId: number) {
     .filter(recordHasConversation);
 }
 
+/** Commands that change this pane's session, which only Spacron can do. */
+const PANE_COMMANDS = new Set(['/model', '/effort', '/permissions', '/compact', '/clear', '/stop', '/resume', '/terminal', '/handoff']);
+
 export async function runStructuredCommand(
   agent: string,
   paneId: number,
   input: string,
-  context: { lastUserMessage?: string | null } = {},
+  context: { lastUserMessage?: string | null; agentCommands?: string[] } = {},
 ): Promise<StructuredCommandResult> {
   const provider = structuredChatProvider(agent);
   const text = input.trim();
@@ -124,6 +127,7 @@ export async function runStructuredCommand(
   const name = rawName?.toLowerCase();
   const arg = rest.join(' ').trim();
   if (!provider || !name?.startsWith('/')) return { handled: false };
+  if (context.agentCommands?.some((command) => command.toLowerCase() === name) && !PANE_COMMANDS.has(name)) return { handled: false };
   const state = provider.get(paneId);
 
   switch (name) {

@@ -1477,10 +1477,7 @@ export default function ProjectHUD() {
               )}
               {!isExpanded && <ProjectChatUnreadDot sessionIds={projectSessions.map((session) => session.id)} />}
               {p.isActive && (
-                <span className="project-active-badge">
-                  <span className="project-active-dot" />
-                  Active
-                </span>
+                <span className="project-active-dot" role="img" aria-label="Active project" title="Active project" />
               )}
             </div>
 

@@ -75,9 +75,10 @@ describe('fitDrawerWidths', () => {
     expect(fitDrawerWidths({ ...both, available: 1224 })).toEqual({ left: 340, right: 380 });
   });
 
-  it('squeezes both drawers so the stage keeps its minimum at the 960px window', () => {
+  it('squeezes both drawers down to their minimums at the 960px window', () => {
     const fit = fitDrawerWidths({ ...both, available: 904 });
-    expect(904 - fit.left - fit.right).toBeGreaterThanOrEqual(STAGE_MIN_WIDTH);
+    // The minimums come first here: the stage gets what they leave.
+    expect(fit).toEqual({ left: LEFT_PANEL_MIN_WIDTH, right: RIGHT_DRAWER_MIN_WIDTH });
     expect(fit.left).toBeGreaterThanOrEqual(LEFT_PANEL_MIN_WIDTH);
     expect(fit.right).toBeGreaterThanOrEqual(RIGHT_DRAWER_MIN_WIDTH);
   });
@@ -142,5 +143,21 @@ describe('docked preview', () => {
 
     useLayoutStore.getState().setPreviewDocked(true);
     expect(useLayoutStore.getState()).toMatchObject({ previewVisible: true, previewDocked: true, activeView: 'terminal' });
+  });
+});
+
+describe('left sidebar width', () => {
+  it('opens at its narrowest however wide it was left', () => {
+    useLayoutStore.setState({ sidebarVisible: true });
+    useLayoutStore.getState().setLeftPanelWidth(480);
+    expect(useLayoutStore.getState().leftPanelWidth).toBe(480);
+    useLayoutStore.getState().setSidebarVisible(false);
+    useLayoutStore.getState().setSidebarVisible(true);
+    expect(useLayoutStore.getState().leftPanelWidth).toBe(LEFT_PANEL_MIN_WIDTH);
+  });
+
+  it('cannot be made narrower than that', () => {
+    useLayoutStore.getState().setLeftPanelWidth(100);
+    expect(useLayoutStore.getState().leftPanelWidth).toBe(LEFT_PANEL_MIN_WIDTH);
   });
 });

@@ -614,12 +614,15 @@ export function slashQuery(draft: string): string | null {
   return m ? m[1].toLowerCase() : null;
 }
 
-/** The `@` mention being typed at the caret: `@` at a word start, then no space. */
+/**
+ * The `@` mention being typed at the caret: `@` at a word start, then no space,
+ * or `@"` and anything up to the closing quote (a folder with spaces).
+ */
 export function mentionAt(draft: string, caret: number): { start: number; query: string } | null {
   const before = draft.slice(0, caret);
-  const m = /(^|\s)@([^\s@]*)$/.exec(before);
+  const m = /(?:^|\s)(@(?:"([^"\n]*)|([^\s@"]*)))$/.exec(before);
   if (!m) return null;
-  return { start: caret - m[2].length - 1, query: m[2] };
+  return { start: caret - m[1].length, query: m[2] ?? m[3] };
 }
 
 // ---------------------------------------------------------------------------
@@ -835,8 +838,10 @@ export function toolLine(item: TerminalChatItem, live: boolean): ToolLine {
       const done = todos.filter((t) => t.status === 'completed').length;
       return { ...base, verb, target: todos.length ? `${done} of ${todos.length} done` : '' };
     }
-    default:
-      return { ...base, verb: item.toolName ?? 'Tool', target: input };
+    default: {
+      const verb = (item.toolName ?? 'Tool').split('\n').find((l) => l.trim())?.trim() || 'Tool';
+      return { ...base, verb, target: input };
+    }
   }
 }
 

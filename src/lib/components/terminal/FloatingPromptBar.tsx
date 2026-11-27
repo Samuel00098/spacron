@@ -105,18 +105,7 @@ function useSyncedState<T>(initialValue: T) {
   return [value, setValue, valueRef] as const;
 }
 
-interface FloatingPromptBarProps {
-  /** Chrome rendered at the tail of the bar, between the input and Send — the
-   *  Tools menu and the layout actions that used to live in the room dock.
-   *  Owned by AppShell (it holds the room/drawer wiring). Always rendered —
-   *  including in voice mode — so the layout and Tools buttons never
-   *  move out from under the cursor when the orb takes over the bar. */
-  trailingControls?: React.ReactNode;
-}
-
-export default function FloatingPromptBar({
-  trailingControls,
-}: FloatingPromptBarProps = {}) {
+export default function FloatingPromptBar() {
   useEffect(() => {
     // Install before the bar's mic can steal focus from a page input inside
     // Preview. The page focus bridge itself is delivered through this window.
@@ -1303,33 +1292,28 @@ export default function FloatingPromptBar({
                   )}
                 </div>
               </>
-
-            {/* Layout and Tools stay put in voice mode: they sit at the tail of
-                the bar either way, so switching modes never shuffles them. */}
-            {trailingControls}
           </div>
         </>
       )}
-      {!isActive && (
-        <button
-          type="button"
-          className={`prompt-bubble${transcribing ? ' listening' : ''}`}
-          onClick={toggleTranscriptionMode}
-          title={transcribing ? 'Stop dictation' : 'Start voice input'}
-          aria-label={transcribing ? 'Stop dictation' : 'Start voice input'}
-          aria-controls="floating-prompt-bar"
-          aria-expanded={isActive}
-        >
-          {transcribing ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <rect x="5.5" y="5.5" width="13" height="13" rx="1.6" />
-            </svg>
-          ) : <VoiceInputIcon />}
-          {waitingTaskCount > 0 && (
-            <span className="bubble-waiting-badge">{waitingTaskCount}</span>
-          )}
-        </button>
-      )}
+      {/* Always shown: this is the title bar's mic. The bar above is its drop-down. */}
+      <button
+        type="button"
+        className={`prompt-bubble${transcribing ? ' listening' : ''}`}
+        onClick={toggleTranscriptionMode}
+        title={transcribing ? 'Stop dictation' : 'Start voice input'}
+        aria-label={transcribing ? 'Stop dictation' : 'Start voice input'}
+        aria-controls="floating-prompt-bar"
+        aria-expanded={isActive}
+      >
+        {transcribing ? (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="5.5" y="5.5" width="13" height="13" rx="1.6" />
+          </svg>
+        ) : <VoiceInputIcon />}
+        {waitingTaskCount > 0 && (
+          <span className="bubble-waiting-badge">{waitingTaskCount}</span>
+        )}
+      </button>
 
       <TranscriptionIndicator />
 

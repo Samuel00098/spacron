@@ -1256,10 +1256,6 @@
   font-size: 12px;
   line-height: 1;
 }
-  color: var(--text-primary);
-  cursor: pointer;
-  touch-action: manipulation;
-}
 
 .mobile-panel .mobile-floating-header .mobile-device-menu-wrap {
   flex: 0 0 auto;

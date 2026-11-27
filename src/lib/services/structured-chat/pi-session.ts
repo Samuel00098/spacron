@@ -16,6 +16,7 @@ import { chatAutoAnswerInline } from '$lib/stores/settings';
 import type { StructuredChatProvider } from './provider';
 import type { StructuredAccess, StructuredModel } from './codex-session';
 import { initialStructuredState, StructuredStateStore } from './state';
+import { commandRows, setAgentCommands } from '$lib/services/agent-commands';
 
 type Json = Record<string, unknown>;
 const str = (value: unknown): string | null => typeof value === 'string' ? value : null;
@@ -200,6 +201,10 @@ export const piProvider: StructuredChatProvider = {
         // The catalog is optional; the current model still shows.
       }
       if (current && !models.some((model) => model.id === current.id)) models.unshift(current);
+      // Pi's own slash commands, for the chat's `/` menu. Optional, so it never delays the chat.
+      void withTimeout(rpcRequest(runtime, 'get_commands', {}), 30_000, 'Pi did not list its commands')
+        .then((listed) => setAgentCommands('pi', cwd, commandRows(rec(listed.data)?.commands)))
+        .catch(() => {});
       stores.update(sessionId, { status: 'ready', error: null, threadId: str(rec(state.data)?.sessionId) ?? options.resumeId ?? null, models, model: current?.id ?? models[0]?.id ?? null, effort: str(rec(state.data)?.thinkingLevel) ?? null });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

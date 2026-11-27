@@ -28,6 +28,7 @@ import { adoptSpawnedAgent } from '$lib/stores/orchestrator';
 import { isDeepSeekHarness, openDeepSeekHarnessPanel } from '$lib/services/deepseek-harness';
 import { workingRootFor } from '$lib/stores/projectWorktrees';
 import { allProjectSettings, projectConfigFor } from '$lib/stores/projectSettings';
+import { agentHasNativeExtras, agentReadsRulesFile, ensureAgentRulesFiles } from '$lib/services/orchestrator/agent-rules-file';
 
 function enrichPromptWithProjectInstructions(rawPrompt: string | undefined, projectId: string, rootPath: string): string | undefined {
   if (!rawPrompt?.trim()) return rawPrompt;
@@ -213,6 +214,13 @@ async function openStructuredChat(
   setActiveSession(id);
   useLayoutStore.getState().showTerminal();
   void revealAgentView(id, projectId, { keepDialogs: true });
+  // A chat launch types no CLI command, so the terminal launcher never writes
+  // the standing brief for it. Write it before the agent starts and reads it.
+  if (agentReadsRulesFile(command) || agentHasNativeExtras(command)) {
+    const { customInstructions } = projectConfigFor(get(allProjectSettings), projectRoot, projectId);
+    try { await ensureAgentRulesFiles(cwd, command, { customInstructions }); }
+    catch (err) { console.error('Failed to ensure agent rules files:', err); }
+  }
   await startStructuredChat(agent, id, cwd, {
     access: structuredAccessFor(command),
     resumeId: options.resumeId ?? null,

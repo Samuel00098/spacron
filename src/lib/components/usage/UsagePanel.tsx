@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from '$lib/react/useStore';
 import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
@@ -231,7 +231,9 @@ export default function UsagePanel() {
     if (open) void refreshAccounts();
   }, [open]);
 
-  useEffect(() => {
+  // Placed before the first paint: a passive effect let one frame show at the
+  // stylesheet's top-left default before the panel jumped down to the footer.
+  useLayoutEffect(() => {
     if (!open) return;
     const placePanel = () => {
       const rect = document.querySelector<HTMLElement>('[data-usage-toggle]')?.getBoundingClientRect();

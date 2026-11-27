@@ -2,45 +2,49 @@
   position: fixed;
   inset: 38px 0 0;
   z-index: 9000;
-  background: rgba(0, 0, 0, 0.55);
-  /* Blur the app behind so the frame reads as its own surface. The viewer
-     has no position: fixed children, so this containing block is safe. */
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  background: transparent;
+  /* Pure transparent frosted blur with no dark scrim behind the popup.
+     The viewer has no position: fixed children, so this containing block is safe. */
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(16px, 3vmin, 36px);
+  padding: clamp(12px, 2.5vmin, 24px);
   overscroll-behavior: none;
+  animation: image-viewer-fade-in 140ms var(--ease-out, ease-out);
 }
 
-.image-viewer {
-  /* A centred viewing surface with breathing room below the title bar. */
-  width: 96%;
-  height: 94%;
+/* Transparent lightbox popup: the image floats directly over the transparent backdrop.
+   Scoped under .image-viewer-overlay so editor image tabs (.image-viewer) stay untouched. */
+.image-viewer-overlay > .image-viewer {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  /* Themes with a translucent --bg-primary let the app show through the bar
-     and footer. The overlay's backdrop blur frosts it; a second
-     backdrop-filter here would only see the overlay, not the app. */
-  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  gap: 10px;
   color: var(--text-primary);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
-  border-radius: var(--radius-lg, 12px);
-  overflow: hidden;
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.04),
-    0 0 40px color-mix(in srgb, var(--text-primary) 8%, transparent),
-    0 24px 70px rgba(0, 0, 0, 0.45);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .image-viewer-bar {
+  align-self: center;
+  max-width: min(100%, 960px);
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px 8px 14px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-  min-height: 44px;
+  padding: 6px 8px 6px 14px;
+  min-height: 40px;
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  background: color-mix(in srgb, var(--app-surface, #16161a) 72%, transparent);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: none;
 }
 
 .image-viewer-name {
@@ -129,9 +133,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: grab;
+  cursor: default;
   touch-action: none;
-  background: #000;
+  background: transparent;
 }
 
 .image-viewer-stage.dragging {
@@ -142,6 +146,18 @@
   flex: none;
   user-select: none;
   image-rendering: auto;
+  cursor: grab;
+  border-radius: 10px;
+  box-shadow: none;
+  animation: image-viewer-pop-in 160ms var(--ease-out, ease-out);
+}
+
+.image-viewer-stage.dragging img {
+  cursor: grabbing;
+}
+
+.image-viewer-stage.editing img {
+  cursor: crosshair;
 }
 
 .image-viewer .image-viewer-step,
@@ -196,13 +212,20 @@
 }
 
 .image-viewer-foot {
+  align-self: center;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 6px 14px;
+  padding: 5px 14px;
   font-size: 11px;
   color: var(--text-muted);
-  border-top: 1px solid var(--border-subtle, var(--border));
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+  background: color-mix(in srgb, var(--app-surface, #16161a) 70%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: none;
 }
 
 .image-viewer-status {
@@ -230,12 +253,28 @@
 }
 
 .image-viewer-edit {
+  align-self: center;
+  width: min(100%, 720px);
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-primary);
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  background: color-mix(in srgb, var(--app-surface, #16161a) 82%, transparent);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: none;
+}
+
+@keyframes image-viewer-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes image-viewer-pop-in {
+  from { opacity: 0; scale: 0.96; }
+  to { opacity: 1; scale: 1; }
 }
 
 .image-viewer-edit textarea {
