@@ -24,6 +24,7 @@ import {
   bindTranscript,
   contextUsageFor,
   effortApplyFor,
+  applyClaudeSwitch,
   formatTokens,
   modelApplyFor,
   readTerminalTranscript,
@@ -123,9 +124,12 @@ import {
   sendStructuredChat,
   setStructuredChatAccess,
   setStructuredChatEffort,
+  setStructuredChatFast,
+  setStructuredChatUltracode,
   setStructuredChatModel,
   subscribeStructuredChat,
 } from '$lib/services/structured-chat/registry';
+import { modelTogglesFor, type ModelToggleId, type ModelToggleSpec } from '$lib/services/model-toggles';
 import { useStructuredChatHistory, type StructuredChatAgent } from '$lib/services/structured-chat/panes';
 import { answerStructuredApproval, hydrateStructuredHistory, reconnectStructuredSession } from '$lib/services/structured-chat/session-store';
 import { runStructuredCommand, STRUCTURED_COMMANDS } from '$lib/services/structured-chat/commands';
@@ -602,6 +606,7 @@ export default function TerminalChatView({
         description: model.description ?? undefined,
         reasoningEfforts: model.efforts as ChatReasoningEffort[],
         defaultReasoningEffort: model.defaultEffort as ChatReasoningEffort | undefined,
+        supportsFast: model.supportsFast,
         isDefault: model.isDefault,
       })));
       return () => { cancelled = true; };
@@ -1451,6 +1456,21 @@ export default function TerminalChatView({
   const catalogNote = catalogStatus
     ? modelCatalogNote(agentLabel, catalogStatus, selectedModelIssue(catalogStatus, currentModelId ?? null, currentEffort ?? null))
     : null;
+  // Fast mode and Ultracode / Ultra, under the model list. A structured chat
+  // knows what is on; a terminal one shows what was set from here.
+  const toggleAgent = structuredMode ? structuredAgent : agent;
+  const toggleStates: Record<ModelToggleId, boolean> = {
+    fast: structuredMode ? structuredState?.fast === true : picks.fast === true,
+    ultra: toggleAgent === 'codex' ? currentEffort === 'ultra' : structuredMode ? structuredState?.ultracode === true : picks.ultracode === true,
+  };
+  // Before a conversation names its model, the CLI runs its default one.
+  const toggleModel = currentModel ?? (currentModelId ? null : catalogModels.find((model) => model.isDefault) ?? null);
+  const modelToggles = modelTogglesFor(
+    toggleAgent ?? null,
+    toggleModel ?? (currentModelId ? { id: currentModelId } : null),
+    efforts.length ? efforts : toggleModel?.reasoningEfforts ?? [],
+  )
+    .map((spec) => ({ ...spec, on: toggleStates[spec.id] }));
   const permissionMode: ChatPermissionMode = picks.permission ?? reported.permission ?? sessionPermissionMode(sessionId);
   const permissionModes = agent ? permissionModesFor(agent, structuredMode) : [];
   const context = structuredMode
@@ -1491,6 +1511,28 @@ export default function TerminalChatView({
         effort: which === 'effort' ? value : null,
       });
     }, () => setSessionPicks(sessionId, before));
+  }
+
+  async function applyToggle(id: ModelToggleId, on: boolean) {
+    if (optionsLocked) return;
+    // Codex's Ultra is its top reasoning level; off goes back to the model's own.
+    const codexUltra = toggleAgent === 'codex' && id === 'ultra';
+    const effort = codexUltra ? (on ? 'ultra' : currentModel?.defaultReasoningEffort ?? 'medium') : null;
+    const pick = effort ? { effort } : id === 'fast' ? { fast: on } : { ultracode: on };
+    const before = { effort: picks.effort, fast: picks.fast, ultracode: picks.ultracode };
+    const key = Object.keys(pick)[0] as keyof typeof before;
+    setSessionPicks(sessionId, pick);
+    await runSetting(async () => {
+      if (structuredMode && structuredAgent) {
+        if (effort) setStructuredChatEffort(structuredAgent, sessionId, effort);
+        else if (id === 'fast') setStructuredChatFast(structuredAgent, sessionId, on);
+        else setStructuredChatUltracode(structuredAgent, sessionId, on);
+        return null;
+      }
+      // Codex has no command for these: restart on the same conversation.
+      if (toggleAgent === 'codex') return relaunchTerminalAgent(sessionId, agentPreset, boundRef.current, effort ? { effort } : { fast: on });
+      return applyClaudeSwitch(sessionId, id, on);
+    }, () => setSessionPicks(sessionId, { [key]: before[key] }));
   }
 
   async function applyPermission(mode: ChatPermissionMode) {
@@ -2181,6 +2223,8 @@ export default function TerminalChatView({
               efforts={effortApply.kind !== 'none' ? efforts.map((e) => ({ value: e, label: shortEffort(e) })) : []}
               effort={currentEffort}
               onEffort={(value) => void applyOption(effortApply, value, 'effort')}
+              toggles={modelToggles}
+              onToggle={(id, on) => void applyToggle(id, on)}
             />
             <button
               type="button"
@@ -2556,10 +2600,15 @@ export function ModelMenu({
   efforts,
   effort,
   onEffort,
+  toggles = [],
+  onToggle,
   applying = false,
   error = null,
   onPicker,
 }: {
+  /** On/off switches under the list (Fast mode, Ultracode). */
+  toggles?: (ModelToggleSpec & { on: boolean })[];
+  onToggle?: (id: ModelToggleId, on: boolean) => void;
   modelLabel: string;
   effortLabel: string | null;
   title: string;
@@ -2681,7 +2730,9 @@ export function ModelMenu({
     : models;
   // Firm: the list keeps the CLI's order and a fixed height, and only scrolls vertically.
   const visible = matches;
-  const hasMenu = models.length > 0 || efforts.length > 0;
+  const hasMenu = models.length > 0 || efforts.length > 0 || toggles.length > 0;
+  // Codex's picker owns its model and reasoning; its switches still need this menu.
+  const usesPicker = Boolean(onPicker) && toggles.length === 0;
 
   // Single-line models without hints are ~36px; models with hints are ~52px.
   // Sized from the whole list, not the search results, so typing never resizes or bounces the menu.
@@ -2699,16 +2750,19 @@ export function ModelMenu({
         className={`terminal-chat-pill model${open ? ' open' : ''}${applying ? ' applying' : ''}`}
         title={error ?? title}
         disabled={disabled || applying}
-        aria-haspopup={onPicker ? 'dialog' : 'menu'}
-        aria-expanded={onPicker ? undefined : open}
+        aria-haspopup={usesPicker ? 'dialog' : 'menu'}
+        aria-expanded={usesPicker ? undefined : open}
         aria-busy={applying}
         onClick={() => {
-          if (onPicker) onPicker();
+          if (usesPicker) onPicker?.();
           else if (hasMenu) setOpen((v) => !v);
         }}
       >
         <span className="terminal-chat-pill-label">{modelLabel}</span>
         {effortText && <span className="terminal-chat-pill-effort">{effortText}</span>}
+        {toggles.filter((t) => t.on && !(t.label === 'Ultra' && effortText)).map((t) => (
+          <span key={t.id} className="terminal-chat-pill-effort">{t.id === 'fast' ? 'Fast' : t.label}</span>
+        ))}
         <svg className="terminal-chat-pill-caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M2.5 3.8 5 6.3l2.5-2.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -2716,7 +2770,20 @@ export function ModelMenu({
       {error && !open && <span className="terminal-chat-pill-error" role="status">{error}</span>}
       {open && (
         <div className="terminal-chat-menu right model" role="menu" ref={menuRef}>
-          {models.length > 0 && (
+          {onPicker && (
+            <button
+              type="button"
+              role="menuitem"
+              className="terminal-chat-menu-item"
+              onClick={() => { setOpen(false); onPicker(); }}
+            >
+              <span className="terminal-chat-menu-text">
+                <span className="terminal-chat-menu-label">Choose model and reasoning…</span>
+                <span className="terminal-chat-menu-hint">Opens the CLI's own picker</span>
+              </span>
+            </button>
+          )}
+          {!onPicker && models.length > 0 && (
             <>
               <label className="terminal-chat-model-search">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
@@ -2755,7 +2822,7 @@ export function ModelMenu({
               </div>
             </>
           )}
-          {efforts.length > 0 && (
+          {!onPicker && efforts.length > 0 && (
             <div className="terminal-chat-effort-bar" role="group" aria-label="Reasoning effort">
               <span>Effort</span>
               <div className="terminal-chat-effort-segments">
@@ -2772,6 +2839,26 @@ export function ModelMenu({
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+          {toggles.length > 0 && (
+            <div className="terminal-chat-model-toggles">
+              {toggles.map((toggle) => (
+                <button
+                  key={toggle.id}
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={toggle.on}
+                  className="terminal-chat-model-toggle"
+                  onClick={() => onToggle?.(toggle.id, !toggle.on)}
+                >
+                  <span className="terminal-chat-menu-text">
+                    <span className="terminal-chat-menu-label">{toggle.label}</span>
+                    <span className="terminal-chat-menu-hint">{toggle.hint}</span>
+                  </span>
+                  <span className={`terminal-chat-switch${toggle.on ? ' on' : ''}`} aria-hidden="true" />
+                </button>
+              ))}
             </div>
           )}
         </div>

@@ -35,6 +35,7 @@ export interface StructuredModel {
   efforts: string[];
   defaultEffort: string | null;
   isDefault: boolean;
+  supportsFast?: boolean;
 }
 
 /** One answer an agent offered on its own permission/question request. */
@@ -65,6 +66,10 @@ export interface StructuredChatState {
   models: StructuredModel[];
   model: string | null;
   effort: string | null;
+  /** Fast mode. Undefined until known: the CLI's own setting then applies. */
+  fast?: boolean;
+  /** Claude Code's ultracode. (Codex's Ultra is an effort level.) */
+  ultracode?: boolean;
   /** The agent's own session mode when it advertises one (`plan`, `agent`…). */
   mode?: string | null;
   access: StructuredAccess;
@@ -255,6 +260,7 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
     models: existing?.models ?? [],
     model: opts.model ?? existing?.model ?? null,
     effort: opts.effort ?? existing?.effort ?? null,
+    fast: existing?.fast,
     access: opts.access ?? existing?.access ?? 'ask',
     threadId: null,
     approvals: [],
@@ -303,7 +309,7 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
       ?? (requestedEffort && current?.efforts.includes(requestedEffort) ? requestedEffort : current?.defaultEffort ?? null);
     const { approvalPolicy, sandboxPolicy } = accessPolicy(states.get(sessionId)!.access, cwd);
     // A conversation that ran in the terminal resumes by its thread id.
-    const started = await session.request<{ thread?: Json }>(opts.resumeId ? 'thread/resume' : 'thread/start', {
+    const started = await session.request<{ thread?: Json; serviceTier?: string | null }>(opts.resumeId ? 'thread/resume' : 'thread/start', {
       ...(opts.resumeId ? { threadId: opts.resumeId } : {}),
       cwd,
       ...(model ? { model } : {}),
@@ -312,7 +318,9 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
     });
     const threadId = str(started.thread?.id);
     if (!threadId) throw new Error('Codex did not start a conversation.');
-    update(sessionId, { status: 'ready', models, model, effort, threadId });
+    // A pick made here wins; otherwise show the tier Codex started on.
+    const fast = states.get(sessionId)?.fast ?? (started.serviceTier === 'priority' || started.serviceTier === 'fast' ? true : undefined);
+    update(sessionId, { status: 'ready', models, model, effort, fast, threadId });
   } catch (error) {
     update(sessionId, { status: 'failed', error: error instanceof Error ? error.message : String(error) });
   }
@@ -331,6 +339,7 @@ function toModel(raw: Json): StructuredModel | null {
     efforts,
     defaultEffort: str(raw.defaultReasoningEffort),
     isDefault: raw.isDefault === true,
+    supportsFast: Array.isArray(raw.serviceTiers) && raw.serviceTiers.some((tier) => str(rec(tier)?.id) === 'priority'),
   };
 }
 
@@ -351,6 +360,8 @@ export async function sendCodexTurn(sessionId: number, text: string, images: str
       input,
       ...(state.model ? { model: state.model } : {}),
       ...(state.effort ? { effort: state.effort } : {}),
+      // "default" is standard speed; leaving it out keeps the thread's tier.
+      ...(state.fast === undefined ? {} : { serviceTier: state.fast ? 'priority' : 'default' }),
       approvalPolicy,
       sandboxPolicy,
     });
@@ -376,12 +387,17 @@ export function setStructuredModel(sessionId: number, model: string): void {
     const next = s.models.find((m) => m.id === model);
     // Keep the level when the new model has it; otherwise its own default.
     const effort = next && s.effort && next.efforts.includes(s.effort) ? s.effort : next?.defaultEffort ?? null;
-    return { model, effort };
+    // A model without a fast tier goes back to standard speed.
+    return { model, effort, ...(s.fast && next && !next.supportsFast ? { fast: false } : {}) };
   });
 }
 
 export function setStructuredEffort(sessionId: number, effort: string): void {
   update(sessionId, { effort });
+}
+
+export function setStructuredFast(sessionId: number, fast: boolean): void {
+  update(sessionId, { fast });
 }
 
 export function setStructuredAccess(sessionId: number, access: StructuredAccess): void {
@@ -467,6 +483,7 @@ export const codexProvider: StructuredChatProvider = {
   interrupt: interruptCodexTurn,
   setModel: setStructuredModel,
   setEffort: setStructuredEffort,
+  setFast: setStructuredFast,
   setAccess: setStructuredAccess,
   answerApproval: answerStructuredApproval,
   close: closeCodexChat,

@@ -9,6 +9,8 @@ export function initialStructuredState(access: StructuredAccess = 'ask', previou
     models: previous?.models ?? [],
     model: previous?.model ?? null,
     effort: previous?.effort ?? null,
+    fast: previous?.fast,
+    ultracode: previous?.ultracode,
     mode: previous?.mode ?? null,
     access: previous?.access ?? access,
     threadId: null,

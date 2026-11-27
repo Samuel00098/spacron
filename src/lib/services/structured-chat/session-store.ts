@@ -71,6 +71,8 @@ export interface StructuredSessionRecord {
   lifecycle: StructuredLifecycle;
   model: string | null;
   effort: string | null;
+  fast?: boolean;
+  ultracode?: boolean;
   access: StructuredAccess | null;
   turnId: string | null;
   lastSeq: number;
@@ -309,6 +311,8 @@ function recordState(paneId: number): void {
     lifecycle: lifecycleOf(state),
     model: state.model ?? record.model,
     effort: state.effort ?? record.effort,
+    fast: state.fast ?? record.fast,
+    ultracode: state.ultracode ?? record.ultracode,
     access: state.access ?? record.access,
     nativeSessionId: nativeId,
     turnId: journal.currentTurnId,
@@ -565,6 +569,8 @@ async function openRecordInPane(paneId: number, record: StructuredSessionRecord)
   if (state?.status === 'ready' || state?.status === 'working') {
     if (record.model && state.model !== record.model) provider.setModel(paneId, record.model);
     if (record.effort && state.effort !== record.effort) provider.setEffort(paneId, record.effort);
+    if (record.fast !== undefined && state.fast !== record.fast) provider.setFast?.(paneId, record.fast);
+    if (record.ultracode && !state.ultracode) provider.setUltracode?.(paneId, true);
   }
 }
 

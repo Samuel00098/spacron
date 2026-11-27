@@ -28,6 +28,9 @@ pub struct AgentModel {
     pub reasoning_efforts: Vec<String>,
     pub default_reasoning_effort: Option<String>,
     pub is_default: bool,
+    /// Whether the model has a faster tier; `None` where the list does not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_fast: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -235,6 +238,7 @@ fn parse_codex_cache(value: &serde_json::Value, configured: Option<&str>) -> Opt
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
             is_default: configured == Some(id),
+            supports_fast: Some(has_fast_tier(model.get("service_tiers"))),
         });
         output.push_str(id);
         output.push_str(" - ");
@@ -254,6 +258,15 @@ fn parse_codex_cache(value: &serde_json::Value, configured: Option<&str>) -> Opt
         exit_code: Some(0),
         error: None,
         models: Some(model_list),
+    })
+}
+
+/// Codex lists its fast tier as the service tier `priority`.
+fn has_fast_tier(tiers: Option<&serde_json::Value>) -> bool {
+    tiers.and_then(|value| value.as_array()).is_some_and(|tiers| {
+        tiers
+            .iter()
+            .any(|tier| tier.get("id").and_then(|id| id.as_str()) == Some("priority"))
     })
 }
 
@@ -387,6 +400,7 @@ fn codex_live_models() -> AgentModelProbe {
                         .map(str::to_owned),
                     reasoning_efforts,
                     default_reasoning_effort,
+                    supports_fast: Some(has_fast_tier(model.get("serviceTiers"))),
                     is_default: model
                         .get("isDefault")
                         .and_then(|value| value.as_bool())
@@ -542,6 +556,7 @@ fn parse_claude_catalogue(value: &serde_json::Value) -> AgentModelProbe {
             reasoning_efforts,
             default_reasoning_effort,
             is_default: id == default_model,
+            supports_fast: None,
         });
         output.push_str(id);
         output.push_str(" - ");

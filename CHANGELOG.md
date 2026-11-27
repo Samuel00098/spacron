@@ -4,6 +4,15 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **An update icon in the title bar** — a dot appears when Spacron or an agent CLI has a newer version. Hover for what changed and one-click updates; click to check again. It replaces the update banner.
+- **Fast and Ultracode switches in the chat's model menu** — Fast mode for Claude Code and Codex models that have it, Ultracode for Claude Code and Ultra for Codex.
+
+### Changed
+
+- **Update notes show before you install** — each release now sends its changelog section with the update.
+
 
 ## [v5.1.17] - 2026-11-27
 

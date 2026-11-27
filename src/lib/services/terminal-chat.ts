@@ -320,6 +320,9 @@ export interface SessionPicks {
   model?: string | null;
   effort?: string | null;
   permission?: ChatPermissionMode;
+  /** The switches under the model list, as last set from this chat. */
+  fast?: boolean;
+  ultracode?: boolean;
 }
 
 /**
@@ -430,11 +433,12 @@ export function resumeArgs(agent: TranscriptAgent, providerSessionId: string): s
   }
 }
 
-function modelArgs(agent: TranscriptAgent, model: string | null, effort: string | null): string {
+function modelArgs(agent: TranscriptAgent, model: string | null, effort: string | null, fast?: boolean): string {
   const parts: string[] = [];
   if (agent === 'codex') {
     if (model) parts.push(`-m ${model}`);
     if (effort) parts.push(`-c model_reasoning_effort="${effort}"`);
+    if (fast !== undefined) parts.push(`-c service_tier="${fast ? 'priority' : 'default'}"`);
   } else if (agent === 'claude' || agent === 'openclaude') {
     if (model) parts.push(`--model ${model}`);
     if (effort) parts.push(`--effort ${effort}`);
@@ -445,7 +449,7 @@ function modelArgs(agent: TranscriptAgent, model: string | null, effort: string 
   return parts.join(' ');
 }
 
-type LaunchState = { permission: ChatPermissionMode; model: string | null; effort: string | null };
+type LaunchState = { permission: ChatPermissionMode; model: string | null; effort: string | null; fast?: boolean };
 
 /** What each pane's CLI was last launched with from the chat view. */
 const launchState = new Map<number, LaunchState>();
@@ -581,7 +585,7 @@ export async function relaunchTerminalAgent(
   const args = [
     providerSessionId ? resumeArgs(agent, providerSessionId) : '',
     permissionArgs(agent, next.permission),
-    modelArgs(agent, next.model, next.effort),
+    modelArgs(agent, next.model, next.effort, next.fast),
   ].filter(Boolean).join(' ');
   if (!(await relaunchAgentInSession(sessionId, preset, args))) return "Couldn't restart the agent in this terminal.";
   launchState.set(sessionId, next);
@@ -611,6 +615,25 @@ export async function applyModelChange(
     return null;
   }
   return 'This agent cannot change models mid-session.';
+}
+
+/** What Claude Code prints when it refuses one of its switches. */
+const SWITCH_REFUSALS = /(Ultracode needs [^\n]*|Fast mode unavailable:[^\n]*)/g;
+
+/**
+ * Flip one of Claude Code's own switches with its slash command. A refusal is
+ * only printed on screen, so a new one there is returned as the error.
+ */
+export async function applyClaudeSwitch(sessionId: number, which: 'fast' | 'ultra', on: boolean): Promise<string | null> {
+  const refusals = () => (readTerminalScreen(sessionId, { maxLines: 60 }) ?? '').match(SWITCH_REFUSALS) ?? [];
+  const before = refusals().length;
+  const command = which === 'fast'
+    ? `/fast ${on ? 'on' : 'off'}`
+    : on ? '/effort ultracode' : '/effort ultracode off';
+  await typeSlashCommand(sessionId, command, { clearInput: true });
+  await sleep(1500);
+  const after = refusals();
+  return after.length > before ? after[after.length - 1].trim() : null;
 }
 
 /**

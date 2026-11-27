@@ -2302,3 +2302,56 @@ html:root .terminal-pane.chat-view.chat-view .xterm-container.xterm-container {
 }
 
 .terminal-chat-user-fold:hover { color: var(--text-primary); }
+
+/* Fast mode and Ultracode / Ultra, under the model list. */
+.terminal-chat-model-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--tc-line);
+}
+
+.terminal-chat-model-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  box-shadow: none !important;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-chat-model-toggle:hover { background: var(--bg-hover); }
+
+.terminal-chat-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  box-shadow: var(--surface-outline);
+}
+
+.terminal-chat-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.terminal-chat-switch.on { background: var(--accent); }
+.terminal-chat-switch.on::after { transform: translateX(12px); background: var(--on-accent); }

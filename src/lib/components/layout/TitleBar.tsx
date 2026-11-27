@@ -14,6 +14,7 @@ import { isTauriRuntime, restoreWindowToRelativeSize } from '$lib/utils/tauri';
 import { useStore } from '$lib/react/useStore';
 import RemoteStatus from '$lib/components/layout/RemoteStatus';
 import InboxBell from '$lib/components/orchestrator/InboxBell';
+import UpdateCenter from '$lib/components/layout/UpdateCenter';
 import { useAppIcon } from '$lib/react/useAppIcon';
 import './TitleBar.css';
 import { useTitleBarSlots } from '$lib/components/layout/titleBarSlots';
@@ -193,6 +194,9 @@ export default function TitleBar() {
         {/* Connection mode stays in the top-right chrome: it affects the whole
             workspace, not the currently selected Navigator context. */}
         <RemoteStatus dropdownUp={false} />
+
+        {/* App and agent updates, last before the window controls. */}
+        {win && <UpdateCenter />}
 
         {/* Window controls — rendered unconditionally on every OS. The window is
             frameless (decorations:false), so macOS shows no native traffic

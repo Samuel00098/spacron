@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { createPortal, flushSync } from 'react-dom';
 import { isWebkitGtk, viewTransitionsReliable } from '$lib/utils/tauri';
 import TitleBar from './TitleBar.tsx';
-import UpdateBanner from '$lib/components/shared/UpdateBanner.tsx';
 import { useAction } from '$lib/react/useAction';
 import { useStore } from '$lib/react/useStore';
 import { isModalOpen } from '$lib/react/useModalFocus';
@@ -126,7 +125,7 @@ import {
 } from '$lib/stores/terminal';
 import { toggleChatModeTranscription, toggleTerminalTranscription } from '$lib/services/transcription-hotkey';
 
-import { useUpdaterStore } from '$lib/stores/zustand/updater';
+import { startAppUpdateChecks } from '$lib/stores/zustand/updater';
 import { clampHorizontalScroll } from '$lib/actions/clampHorizontalScroll';
 import ConfirmDialog from '$lib/components/shared/ConfirmDialog.tsx';
 import type { ActiveView, LayoutState, SettingsTab, SidebarTab } from '$lib/types/layout';
@@ -1394,12 +1393,7 @@ export default function AppShell() {
 
 
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      void useUpdaterStore.getState().checkForUpdate().catch(() => {});
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, []);
+  useEffect(() => startAppUpdateChecks(), []);
 
   useEffect(() => {
     function handleMouseMove(event: MouseEvent) {
@@ -3996,7 +3990,6 @@ export default function AppShell() {
   return (
     <div className="app-shell">
       <TitleBar />
-      <UpdateBanner />
       <MobilePanelFloatingHostLazy />
 
       <div className="zoom-wrapper">

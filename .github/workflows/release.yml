@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
+      notes: ${{ steps.notes.outputs.body }}
     steps:
       - name: Resolve and validate release tag
         id: resolve
@@ -39,6 +40,23 @@ jobs:
           fi
           echo "tag=$TAG_CANDIDATE" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # This version's CHANGELOG section: the release body, and the notes the
+      # app shows on its title bar before installing the update.
+      - name: Extract release notes
+        id: notes
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          node scripts/release-notes.js "$TAG" > release-notes.md
+          delimiter="NOTES_$(openssl rand -hex 16)"
+          {
+            echo "body<<$delimiter"
+            cat release-notes.md
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create release in spacron-releases
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -52,7 +70,7 @@ jobs:
             gh release create "$TAG" \
               --repo Samuel00098/spacron-releases \
               --title "Spacron $TAG" \
-              --notes "See the changelog for what is new in this release." \
+              --notes-file release-notes.md \
               --target main
           fi
 
@@ -179,7 +197,7 @@ jobs:
           repo: spacron-releases
           tagName: ${{ needs.prepare.outputs.tag }}
           releaseName: "Spacron ${{ needs.prepare.outputs.tag }}"
-          releaseBody: 'See the changelog for what is new in this release.'
+          releaseBody: ${{ needs.prepare.outputs.notes }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true

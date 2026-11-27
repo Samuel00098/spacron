@@ -23,7 +23,7 @@ describe('agent launch lines', () => {
 describe('Claude stream-json mapping', () => {
   it('reads the initialize model catalog shape Claude Code 2.1 returns', () => {
     expect(modelFrom({ value: 'default', displayName: 'Default (recommended)', description: 'Opus', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }))
-      .toEqual({ id: 'default', label: 'Default (recommended)', description: 'Opus', efforts: ['low', 'high'], defaultEffort: null, isDefault: true });
+      .toEqual({ id: 'default', label: 'Default (recommended)', description: 'Opus', efforts: ['low', 'high'], defaultEffort: null, isDefault: true, supportsFast: false });
     expect(modelFrom({ value: 'haiku', supportsEffort: false, supportedEffortLevels: ['low'] })?.efforts).toEqual([]);
   });
 

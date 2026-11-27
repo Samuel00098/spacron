@@ -1055,7 +1055,6 @@ input:where(:not([type='range'])):focus {
   .settings-panel,
   .settings-tabs,
   .sselect-options-list,
-  .update-notes,
   .vh-list,
   .sketch-style-panel,
   .voice-transcript,

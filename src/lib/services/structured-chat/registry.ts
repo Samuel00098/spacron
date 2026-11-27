@@ -72,6 +72,14 @@ export function setStructuredChatEffort(agent: string, sessionId: number, effort
   structuredChatProvider(agent)?.setEffort(sessionId, effort);
 }
 
+export function setStructuredChatFast(agent: string, sessionId: number, fast: boolean): void {
+  structuredChatProvider(agent)?.setFast?.(sessionId, fast);
+}
+
+export function setStructuredChatUltracode(agent: string, sessionId: number, on: boolean): void {
+  structuredChatProvider(agent)?.setUltracode?.(sessionId, on);
+}
+
 export function setStructuredChatAccess(agent: string, sessionId: number, access: StructuredAccess): void {
   structuredChatProvider(agent)?.setAccess(sessionId, access);
 }

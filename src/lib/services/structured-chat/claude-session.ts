@@ -138,6 +138,7 @@ export function modelFrom(raw: unknown): StructuredModel | null {
     efforts: row.supportsEffort === false ? [] : efforts,
     defaultEffort: str(row.defaultEffort) ?? str(row.defaultReasoningEffort),
     isDefault: row.isDefault === true || id === 'default',
+    supportsFast: row.supportsFastMode === true,
   };
 }
 
@@ -277,11 +278,15 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
       model: chosenModel,
       effort,
       access,
+      fast: previous?.fast ?? (initialized.fast_mode_state === 'on' ? true : undefined),
       threadId: options.resumeId ?? null,
     });
     if (chosenModel && chosenModel !== defaultModel) {
       void control(sessionId, 'set_model', { model: chosenModel }).catch(() => undefined);
     }
+    // A new process starts without the switches this chat had on.
+    if (previous?.fast !== undefined) setFast(sessionId, previous.fast);
+    if (previous?.ultracode) setUltracode(sessionId, true);
   } catch (error) {
     const reason = runtime?.stderr.text();
     const message = error instanceof Error ? error.message : String(error);
@@ -323,6 +328,9 @@ async function interrupt(sessionId: number): Promise<void> {
 }
 
 function setModel(sessionId: number, model: string): void {
+  const state = stores.get(sessionId);
+  const next = state?.models.find((candidate) => candidate.id === model);
+  if (state?.fast && next && !next.supportsFast) setFast(sessionId, false);
   stores.update(sessionId, { model });
   void control(sessionId, 'set_model', { model }).catch((error) => stores.update(sessionId, { error: `Claude kept its model: ${error instanceof Error ? error.message : String(error)}` }));
 }
@@ -331,6 +339,28 @@ function setEffort(sessionId: number, effort: string): void {
   // Claude takes effort at launch (`--effort`); it is used on the next start.
   stores.update(sessionId, { effort });
   void control(sessionId, 'apply_flag_settings', { settings: { effort } }).catch(() => undefined);
+}
+
+/**
+ * Both switches are flag settings, applied to the running session (checked on
+ * Claude Code 2.1.332). Fast mode is off in `-p` mode until a flag setting
+ * asks for it, so this is also the opt-in.
+ */
+function setFast(sessionId: number, fast: boolean): void {
+  stores.update(sessionId, { fast });
+  void control(sessionId, 'apply_flag_settings', { settings: { fastMode: fast } })
+    .catch((error) => stores.update(sessionId, { fast: !fast, error: `Claude kept its speed: ${error instanceof Error ? error.message : String(error)}` }));
+}
+
+function setUltracode(sessionId: number, on: boolean): void {
+  stores.update(sessionId, { ultracode: on });
+  void (async () => {
+    // Ultracode runs on dynamic workflows, switched on for this session only.
+    await control(sessionId, 'apply_flag_settings', { settings: on ? { enableWorkflows: true, ultracode: true } : { ultracode: false, enableWorkflows: null } });
+    if (!on) return;
+    const applied = rec((await control(sessionId, 'get_settings', {}, 15_000)).applied);
+    if (applied?.ultracode === false) throw new Error('this model or account does not offer it');
+  })().catch((error) => stores.update(sessionId, { ultracode: !on, error: `Ultracode didn't change: ${error instanceof Error ? error.message : String(error)}` }));
 }
 
 function setAccess(sessionId: number, access: StructuredAccess): void {
@@ -488,6 +518,8 @@ function onFrame(sessionId: number, frame: AcpNotification | Json): void {
         ? (textFrom(value.result) || (Array.isArray(value.errors) ? value.errors.map(textFrom).join('\n') : '') || 'Claude could not finish this turn.')
         : null,
       approvals: [],
+      // Claude reports what it really ran: show Fast mode off if it refused.
+      ...(value.fast_mode_state === 'off' && stores.get(sessionId)?.fast ? { fast: false } : {}),
       // The conversation now exists on disk, so it can be resumed by this id.
       threadId: runtime?.pendingSessionId ?? stores.get(sessionId)?.threadId ?? null,
       ...(used ? { contextUsed: used } : {}),
@@ -526,6 +558,8 @@ export const claudeProvider: StructuredChatProvider = {
   interrupt,
   setModel,
   setEffort,
+  setFast,
+  setUltracode,
   setAccess,
   answerApproval,
   close,

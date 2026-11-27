@@ -39,6 +39,8 @@ export interface AgentProviderModel {
   reasoningEfforts?: ChatReasoningEffort[];
   defaultReasoningEffort?: ChatReasoningEffort;
   isDefault?: boolean;
+  /** The CLI says this model has a faster tier. */
+  supportsFast?: boolean;
 }
 
 export interface AgentProviderCapabilities {

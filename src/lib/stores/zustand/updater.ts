@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Update } from '@tauri-apps/plugin-updater';
+import { showToast } from '$lib/stores/notification';
 
 export interface UpdateInfo {
   version: string;
@@ -24,6 +25,8 @@ export const useUpdaterStore = create<UpdaterState>((set) => ({
   updateProgress: 0,
 
   checkForUpdate: async () => {
+    // A check mid-download would replace the update being installed.
+    if (useUpdaterStore.getState().updateDownloading) return;
     set({ updateChecking: true });
     try {
       const { check } = await import('@tauri-apps/plugin-updater');
@@ -35,8 +38,7 @@ export const useUpdaterStore = create<UpdaterState>((set) => ({
         set({ pendingUpdate: null });
       }
     } catch {
-      cachedUpdate = null;
-      set({ pendingUpdate: null });
+      // Offline now says nothing about the update already found: keep it.
       throw new Error('Failed to check for updates');
     } finally {
       set({ updateChecking: false });
@@ -70,8 +72,24 @@ export const useUpdaterStore = create<UpdaterState>((set) => ({
       await relaunch();
     } catch (e) {
       console.error('Update install failed:', e);
+      showToast('Spacron could not install the update. Try again.', 'error', 7000);
     } finally {
       set({ updateDownloading: false });
     }
   },
 }));
+
+/** A release can land while the app sits open for days. */
+const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const FIRST_CHECK_DELAY_MS = 5000;
+
+/** Check shortly after launch, then on a timer. Returns a stop function. */
+export function startAppUpdateChecks(): () => void {
+  const check = () => void useUpdaterStore.getState().checkForUpdate().catch(() => {});
+  const first = setTimeout(check, FIRST_CHECK_DELAY_MS);
+  const timer = setInterval(check, CHECK_INTERVAL_MS);
+  return () => {
+    clearTimeout(first);
+    clearInterval(timer);
+  };
+}

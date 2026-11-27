@@ -1,0 +1,161 @@
+/* The title bar's update icon and its card. Borders are drawn as rings because
+   global.css clears border colours on buttons and *-popover surfaces. */
+.titlebar .update-center {
+  position: relative;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.titlebar .update-center-btn { position: relative; }
+
+.titlebar .update-center-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--major-panel-surface);
+}
+
+.titlebar .update-center-spin { animation: update-center-spin 0.8s linear infinite; }
+
+@keyframes update-center-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .titlebar .update-center-spin { animation-duration: 2.4s; }
+}
+
+.titlebar .update-center-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  max-height: min(520px, calc(100vh - 60px));
+  padding: 12px;
+  border-radius: 10px;
+  background: rgb(var(--bg-secondary-rgb, 24, 24, 30));
+  box-shadow: var(--surface-outline), 0 16px 36px rgba(0, 0, 0, 0.45) !important;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: default;
+  user-select: text;
+}
+
+.titlebar .update-center-title { font-weight: 600; }
+
+.titlebar .update-center-sub,
+.titlebar .update-center-more,
+.titlebar .update-center-section,
+.titlebar .update-center-text,
+.titlebar .update-center-agent-version,
+.titlebar .update-center-foot { color: var(--text-muted); }
+
+.titlebar .update-center-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
+.titlebar .update-center-scroll:empty { display: none; }
+
+.titlebar .update-center-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 8px;
+  padding-left: 16px;
+  list-style: disc;
+}
+
+.titlebar .update-center-lead { color: var(--text-primary); }
+
+.titlebar .update-center-primary,
+.titlebar .update-center-action,
+.titlebar .update-center-link {
+  flex-shrink: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.titlebar .update-center-primary {
+  padding: 7px 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.titlebar .update-center-action {
+  padding: 3px 9px;
+  background: var(--accent-light);
+  color: var(--text-primary);
+}
+
+.titlebar .update-center-action:disabled { opacity: 0.6; cursor: default; }
+
+.titlebar .update-center-link {
+  padding: 2px 0;
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.titlebar .update-center-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.titlebar .update-center-track {
+  flex: 1;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bg-hover);
+}
+
+.titlebar .update-center-track > div {
+  height: 100%;
+  background: var(--accent);
+}
+
+.titlebar .update-center-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.titlebar .update-center-agents-head,
+.titlebar .update-center-agent,
+.titlebar .update-center-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.titlebar .update-center-agents-head,
+.titlebar .update-center-foot { justify-content: space-between; }
+
+.titlebar .update-center-agent-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.titlebar .update-center-agent-version {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

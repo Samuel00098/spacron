@@ -92,6 +92,8 @@ export interface StructuredChatProvider {
   interrupt(sessionId: number): Promise<void>;
   setModel(sessionId: number, model: string): void;
   setEffort(sessionId: number, effort: string): void;
+  setFast?(sessionId: number, fast: boolean): void;
+  setUltracode?(sessionId: number, on: boolean): void;
   setAccess(sessionId: number, access: StructuredAccess): void;
   /**
    * Answer a pending approval. `optionId` picks one of the agent's own options
