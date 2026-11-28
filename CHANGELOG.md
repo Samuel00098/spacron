@@ -4,6 +4,38 @@ All notable changes to Spacron will be documented here.
 
 ## [Unreleased]
 
+## [v5.1.19] - 2026-11-28
+
+A release about moving around without losing your place. Switching projects keeps each one's panels as you left them, the sidebar is much quieter, chats can carry on under another account or after a stopped turn, and glass backgrounds now behave the same on every panel.
+
+### Added
+
+- **Continue a chat in another account** — Agent History has a "Continue in …" button for Claude Code, Codex and Grok sessions. It copies that one transcript into the other account's folder and resumes it with the CLI's own command. No login file is touched, and a copy that has gone its own way is refused rather than overwritten.
+- **Cursor accounts** — add more than one under Settings > Accounts with a Cursor user API key each. The key is kept in the system keychain and Cursor is told to hold the session in memory, so your own Cursor login is never overwritten.
+- **Resume turn** — a chat whose turn stopped early (interrupted, out of turns or tokens, or an error) offers to carry on, also as `/continue`.
+- **The sidebar search finds chats** — open agents, project chat threads and chats outside a project, matched by title, beside matching projects.
+- **Match terminal font and color** — an appearance setting that uses the terminal's font and text colour across the app.
+- **Unreal Engine and Unity developer bot templates.**
+
+### Changed
+
+- **A quieter sidebar** — Tasks, Sketch and Library are icons beside Search. A project with only its main checkout lists its terminals and agents directly, open tools are icons on its row, and Bots and Chats start folded with a count.
+- **Faster project switching** — a project with a saved layout appears as soon as its panes are back, instead of waiting for its tasks, inbox and memory to load.
+- **A new usage meter** — a rectangular bar with the unused part hatched, a line showing even pace through the window, and the reset countdown inside.
+- **Web links open in Preview** — links the app did not already handle, including those in Sketch, no longer take over the window. A closed Preview opens at the side.
+- **Side chats start only from the chat** — type `/side` or `/btw`; the right sidebar entry is greyed out.
+- **Images attach to the message box in chat view** — pasted or dropped images become attachments there instead of going to the strip above the pane. SVG and AVIF are accepted.
+- **Account emails are blurred** in the usage panel, the account switcher and Settings.
+
+### Fixed
+
+- **The bot templates page no longer bounces** when scrolled to either end.
+- **Grok shows a usage meter on free accounts** — Grok leaves the percentage out while it is zero, which now reads as 0% used.
+- **Each project keeps its own right sidebar** — its tabs no longer follow you into the next project, and a sidebar you closed stays closed.
+- **Glass panels match** — on your own background image, agent chats, chats outside a project, bot screens, bot cards and suggested prompts all follow Panel opacity, in light and dark, including with "Match terminal interface" on. Agent chat panes give up their layout morph animation while an image is showing, which is what lets them blur it.
+- **ChatGPT sign-in status survives a failed check** — it is read from the local Codex login instead of showing the error.
+- **No more sheen in the corner of an empty editor.**
+
 ## [v5.1.18] - 2026-11-27
 
 A release about chatting. You can now start a chat outside any project, pick the agent and model as you go, and turn it into a project when it grows. Side chats, question cards and a clearer permission card make agent chats easier to follow, and there are many more bot templates.
