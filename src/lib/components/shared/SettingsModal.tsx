@@ -83,6 +83,7 @@ import {
   terminalShell,
   uiZoom,
   uiFontSize,
+  matchTerminalFont,
   userShortcuts,
   vimMode,
   voiceAiProvider,
@@ -2715,6 +2716,7 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
   const currentCloseBehavior = useStore(closeBehavior);
   const currentZoom = useStore(uiZoom);
   const currentUiFontSize = useStore(uiFontSize);
+  const currentMatchTerminalFont = useStore(matchTerminalFont);
   const currentAccentColor = useStore(accentColor);
   const currentFormatOnSave = useStore(formatOnSave);
   const currentAutoSave = useStore(autoSave);
@@ -3899,6 +3901,9 @@ export default function SettingsModal({ onclose }: SettingsModalProps) {
                       <button className="num-btn" onClick={() => uiFontSize.set(Math.min(20, currentUiFontSize + 1))} aria-label="Increase UI font size">+</button>
                       <button className="num-btn-reset" onClick={() => uiFontSize.set(14)}>Reset</button>
                     </div>
+                  </SettingRow>
+                  <SettingRow title="Match terminal font and color" detail="Use the terminal's font and text color across the whole app">
+                    <Toggle label="Match terminal font and color" checked={currentMatchTerminalFont} onChange={matchTerminalFont.set} />
                   </SettingRow>
                   <SettingRow title="Accent color" detail={currentAccentColor ? `${currentAccentColor} · custom` : `${defaultAccentColor} · theme default`}>
                     <div className="accent-picker">

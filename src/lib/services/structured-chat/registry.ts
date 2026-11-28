@@ -64,6 +64,13 @@ export async function interruptStructuredChat(agent: string, sessionId: number):
   await structuredChatProvider(agent)?.interrupt(sessionId);
 }
 
+export async function resumeStructuredTurn(agent: string, sessionId: number): Promise<boolean> {
+  const provider = structuredChatProvider(agent);
+  if (!provider?.resumeTurn) return false;
+  await provider.resumeTurn(sessionId);
+  return true;
+}
+
 export function setStructuredChatModel(agent: string, sessionId: number, model: string): void {
   structuredChatProvider(agent)?.setModel(sessionId, model);
 }

@@ -23,7 +23,7 @@ export default function StandaloneChatsSidebar() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(() => loadBoolean('spacron_chats_collapsed'));
+  const [collapsed, setCollapsed] = useState(() => loadBoolean('spacron_chats_collapsed', true));
 
   function toggleCollapsed() {
     setCollapsed((current) => {
@@ -47,6 +47,7 @@ export default function StandaloneChatsSidebar() {
             <path d="m9 5 7 7-7 7" />
           </svg>
           <span>Chats</span>
+          {collapsed && threads.length > 0 && <span className="sidebar-fold-count">{threads.length}</span>}
         </button>
         <button
           type="button"

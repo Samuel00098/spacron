@@ -149,6 +149,23 @@ export async function addAccount(provider: string, label: string): Promise<strin
   }
 }
 
+/** Add an account that is an API key rather than a login (Cursor), and use it. */
+export async function addKeyAccount(provider: string, label: string, key: string): Promise<boolean> {
+  const id = await addAccount(provider, label);
+  if (!id) return false;
+  try {
+    const invoke = await invoker();
+    await invoke('usage_set_account_key', { provider, accountId: id, key });
+  } catch (err) {
+    // An account with no key is no account.
+    await removeAccount(provider, id);
+    accountsState.update((s) => ({ ...s, error: String(err) }));
+    return false;
+  }
+  await refreshAccounts();
+  return selectAccount(provider, id);
+}
+
 export async function removeAccount(provider: string, accountId: string): Promise<void> {
   if (!isTauriRuntime()) return;
   try {

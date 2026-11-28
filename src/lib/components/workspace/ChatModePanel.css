@@ -3280,7 +3280,7 @@
 .chat-mode-limits-provider { display: grid; gap: 3px; }
 .chat-mode-limits-window { display: grid; grid-template-columns: minmax(90px, auto) 1fr auto auto; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
 .chat-mode-limits-window-label { opacity: 0.8; }
-.chat-mode-limits-track { height: 4px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, currentColor 16%, transparent); }
+.chat-mode-limits-track { height: 10px; border-radius: 3px; overflow: hidden; background: repeating-linear-gradient(135deg, color-mix(in srgb, currentColor 22%, transparent) 0 1px, transparent 1px 4px); }
 .chat-mode-limits-track > span { display: block; height: 100%; border-radius: inherit; background: color-mix(in srgb, currentColor 60%, transparent); }
 .chat-mode-limits-window[data-severity='warn'] .chat-mode-limits-track > span { background: #e5a13a; }
 .chat-mode-limits-window[data-severity='critical'] .chat-mode-limits-track > span { background: #e5533a; }

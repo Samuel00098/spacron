@@ -34,6 +34,11 @@ const fake = vi.hoisted(() => {
       listeners.forEach((l) => l());
     }),
     conversationId: (id: number) => states.get(id)?.threadId ?? null,
+    resumeTurn: vi.fn(async (id: number) => {
+      const s = states.get(id);
+      if (s) states.set(id, { ...s, status: 'working', error: null, stoppedTurn: null });
+      listeners.forEach((l) => l());
+    }),
   });
   const provider = providerFor('codex', 'Codex');
   const claudeProvider = providerFor('claude', 'Claude Code');
@@ -119,6 +124,7 @@ import {
   listStructuredSessions,
   replayStructuredEvents,
   restoreStructuredInChat,
+  resumeStoppedTurn,
   resumeStructuredSessionInPane,
   rewindStructuredSession,
   recordForPane,
@@ -569,5 +575,26 @@ describe('structured session store', () => {
 
     await deleteStandaloneStructuredRecord(created.id);
     expect(listStandaloneStructuredRecords().map((r) => r.id)).not.toContain(created.id);
+  });
+
+  it('resumes a stopped turn directly when ready and reconnects first when failed', async () => {
+    const pane = 61;
+    fake.set(pane, ready({ status: 'ready', threadId: 'thread-61', stoppedTurn: { reason: 'interrupted', detail: null, at: 1 } }));
+    panes.markStructuredChatPane(pane, 'codex');
+    await tick();
+    fake.provider.start.mockClear();
+    fake.provider.resumeTurn.mockClear();
+
+    expect(await resumeStoppedTurn(pane)).toBe(true);
+    expect(fake.provider.start).not.toHaveBeenCalled();
+    expect(fake.provider.resumeTurn).toHaveBeenCalledWith(pane);
+
+    fake.set(pane, ready({ status: 'failed', error: 'Codex stopped.', threadId: 'thread-61', stoppedTurn: { reason: 'error', detail: 'Codex stopped.', at: 2 } }));
+    fake.provider.start.mockClear();
+    fake.provider.resumeTurn.mockClear();
+
+    expect(await resumeStoppedTurn(pane)).toBe(true);
+    expect(fake.provider.start).toHaveBeenCalledWith(pane, '/repo', expect.objectContaining({ resumeId: 'thread-61' }));
+    expect(fake.provider.resumeTurn).toHaveBeenCalledWith(pane);
   });
 });

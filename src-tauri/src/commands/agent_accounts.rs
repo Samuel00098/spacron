@@ -261,8 +261,7 @@ pub fn selected_account(provider: &str) -> String {
     // A selection pointing at a directory the user has since deleted resolves
     // back to the default rather than reporting an account that isn't there.
     if selected != DEFAULT_ACCOUNT_ID {
-        let exists = provider_spec(provider)
-            .and_then(|spec| config_dir_for(spec, &selected))
+        let exists = account_dir(provider, &selected)
             .map(|dir| dir.is_dir())
             .unwrap_or(false);
         if !exists {
@@ -296,6 +295,141 @@ pub struct AgentAccount {
     /// login the user then abandoned is listed, but honestly.
     pub signed_in: bool,
     pub active: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Cursor: accounts are API keys
+// ---------------------------------------------------------------------------
+//
+// `CURSOR_CONFIG_DIR` moves Cursor's settings but not its login, which stays in
+// one per-user place (`%APPDATA%\Cursor` on Windows), so Cursor is not in
+// [`ACCOUNT_PROVIDERS`]. An added account is a user API key held in the system
+// keychain, plus a config directory of its own.
+//
+// The key must never be launched without `AGENT_CLI_CREDENTIAL_STORE=memory`:
+// Cursor otherwise exchanges it for tokens and saves them over the user's own
+// login.
+
+const CURSOR: &str = "cursor";
+const CURSOR_STORE_VAR: &str = "AGENT_CLI_CREDENTIAL_STORE";
+const CURSOR_KEY_VAR: &str = "CURSOR_API_KEY";
+const KEYCHAIN_SERVICE: &str = "com.samue.spacron";
+
+fn cursor_default_dir() -> Option<PathBuf> {
+    std::env::var_os("CURSOR_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".cursor")))
+}
+
+/// The email Cursor's CLI says it is signed in as.
+pub(crate) fn cursor_account_email() -> Option<String> {
+    let text = std::fs::read_to_string(cursor_default_dir()?.join("cli-config.json")).ok()?;
+    let json: Value = serde_json::from_str(&text).ok()?;
+    json.pointer("/authInfo/email")?
+        .as_str()
+        .filter(|email| !email.is_empty())
+        .map(str::to_string)
+}
+
+fn cursor_key_entry(account_id: &str) -> Result<keyring::Entry, String> {
+    if !account_id_is_safe(account_id) {
+        return Err("Invalid account id".to_string());
+    }
+    keyring::Entry::new(KEYCHAIN_SERVICE, &format!("cursor_account_{account_id}"))
+        .map_err(|e| format!("Could not open the system keychain: {e}"))
+}
+
+fn cursor_key(account_id: &str) -> Option<String> {
+    cursor_key_entry(account_id).ok()?.get_password().ok().filter(|key| !key.is_empty())
+}
+
+fn managed_ids(provider: &str) -> Vec<String> {
+    let mut ids: Vec<String> = managed_root()
+        .and_then(|root| std::fs::read_dir(root.join(provider)).ok())
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| account_id_is_safe(name))
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The directory behind an account, Cursor included.
+fn account_dir(provider: &str, account_id: &str) -> Option<PathBuf> {
+    if provider != CURSOR {
+        return config_dir_for(provider_spec(provider)?, account_id);
+    }
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return cursor_default_dir();
+    }
+    account_id_is_safe(account_id).then_some(())?;
+    Some(managed_root()?.join(CURSOR).join(account_id))
+}
+
+fn cursor_accounts() -> Vec<AgentAccount> {
+    let managed = managed_ids(CURSOR);
+    if managed.is_empty() && !cursor_default_dir().is_some_and(|dir| dir.is_dir()) {
+        return Vec::new();
+    }
+    let active = selected_account(CURSOR);
+    let email = cursor_account_email();
+    let row = |id: String, label: String, signed_in: bool| AgentAccount {
+        provider: CURSOR.to_string(),
+        provider_name: "Cursor".to_string(),
+        active: id == active,
+        id,
+        label,
+        signed_in,
+    };
+    let mut accounts = vec![row(
+        DEFAULT_ACCOUNT_ID.to_string(),
+        email.clone().unwrap_or_else(|| "Default account".to_string()),
+        email.is_some(),
+    )];
+    for id in managed {
+        let has_key = cursor_key(&id).is_some();
+        accounts.push(row(id.clone(), id, has_key));
+    }
+    accounts
+}
+
+/// Store the API key behind an added Cursor account.
+#[tauri::command(async)]
+pub async fn usage_set_account_key(provider: String, account_id: String, key: String) -> Result<(), String> {
+    if provider != CURSOR {
+        return Err("Only Cursor accounts take an API key".to_string());
+    }
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("Paste the API key first".to_string());
+    }
+    if !account_dir(&provider, &account_id).is_some_and(|dir| dir.is_dir()) {
+        return Err("That account no longer exists".to_string());
+    }
+    cursor_key_entry(&account_id)?
+        .set_password(key)
+        .map_err(|e| format!("Could not save the key to the system keychain: {e}"))
+}
+
+/// Add the secret an account's environment refers to, just before a process is
+/// started. [`usage_account_env`] leaves it out on purpose: that answer goes to
+/// the webview, and the key never should.
+pub(crate) fn add_account_secrets(env: &mut HashMap<String, String>) {
+    if env.get(CURSOR_STORE_VAR).map(String::as_str) != Some("memory") || env.contains_key(CURSOR_KEY_VAR) {
+        return;
+    }
+    let Some(root) = managed_root().map(|root| root.join(CURSOR)) else { return };
+    let key = env
+        .get("CURSOR_CONFIG_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.parent() == Some(root.as_path()))
+        .and_then(|dir| cursor_key(dir.file_name()?.to_str()?));
+    if let Some(key) = key {
+        env.insert(CURSOR_KEY_VAR.to_string(), key);
+    }
 }
 
 /// Read a human label for an account without touching the token.
@@ -458,6 +592,7 @@ pub async fn usage_list_accounts() -> Vec<AgentAccount> {
         }
     }
 
+    accounts.extend(cursor_accounts());
     accounts
 }
 
@@ -466,19 +601,21 @@ pub async fn usage_list_accounts() -> Vec<AgentAccount> {
 /// they started with, because their environment was fixed at spawn.
 #[tauri::command(async)]
 pub async fn usage_select_account(provider: String, account_id: String) -> Result<(), String> {
-    let spec = provider_spec(&provider).ok_or_else(|| "Unknown provider".to_string())?;
+    if provider != CURSOR && provider_spec(&provider).is_none() {
+        return Err("Unknown provider".to_string());
+    }
     if account_id != DEFAULT_ACCOUNT_ID && !account_id_is_safe(&account_id) {
         return Err("Invalid account id".to_string());
     }
-    let dir = config_dir_for(spec, &account_id).ok_or_else(|| "Unknown account".to_string())?;
+    let dir = account_dir(&provider, &account_id).ok_or_else(|| "Unknown account".to_string())?;
     if !dir.is_dir() {
         return Err("That account no longer exists".to_string());
     }
 
     let mut selected = load_selection();
-    selected.insert(provider, account_id);
+    selected.insert(provider.clone(), account_id);
     save_selection(&selected)?;
-    if spec.provider == "codex" {
+    if provider == "codex" {
         crate::commands::chatgpt::account_changed();
     }
     Ok(())
@@ -491,7 +628,9 @@ pub async fn usage_select_account(provider: String, account_id: String) -> Resul
 /// writes its credential there.
 #[tauri::command(async)]
 pub async fn usage_add_account(provider: String, label: String) -> Result<String, String> {
-    let spec = provider_spec(&provider).ok_or_else(|| "Unknown provider".to_string())?;
+    if provider != CURSOR && provider_spec(&provider).is_none() {
+        return Err("Unknown provider".to_string());
+    }
 
     // Derive an id from the user's label so the directory is recognisable on
     // disk, then uniquify it. A label of pure punctuation yields no usable id,
@@ -514,7 +653,7 @@ pub async fn usage_add_account(provider: String, label: String) -> Result<String
 
     let root = managed_root()
         .ok_or_else(|| "No config directory".to_string())?
-        .join(spec.provider);
+        .join(&provider);
     let mut id = base.clone();
     let mut suffix = 2;
     while root.join(&id).exists() {
@@ -530,7 +669,7 @@ pub async fn usage_add_account(provider: String, label: String) -> Result<String
 
     std::fs::create_dir_all(root.join(&id))
         .map_err(|e| format!("Could not create the account directory: {e}"))?;
-    if spec.provider == "antigravity" {
+    if provider == "antigravity" {
         let _ = std::fs::create_dir_all(root.join(&id).join("antigravity-cli"));
         let _ = std::fs::create_dir_all(root.join(&id).join("config"));
     }
@@ -542,14 +681,16 @@ pub async fn usage_add_account(provider: String, label: String) -> Result<String
 /// ours to delete.
 #[tauri::command(async)]
 pub async fn usage_remove_account(provider: String, account_id: String) -> Result<(), String> {
-    let spec = provider_spec(&provider).ok_or_else(|| "Unknown provider".to_string())?;
+    if provider != CURSOR && provider_spec(&provider).is_none() {
+        return Err("Unknown provider".to_string());
+    }
     if account_id == DEFAULT_ACCOUNT_ID {
         return Err("The default account belongs to your home directory".to_string());
     }
     if !account_id_is_safe(&account_id) {
         return Err("Invalid account id".to_string());
     }
-    let dir = config_dir_for(spec, &account_id).ok_or_else(|| "Unknown account".to_string())?;
+    let dir = account_dir(&provider, &account_id).ok_or_else(|| "Unknown account".to_string())?;
     // Belt and braces: `account_id_is_safe` already blocks traversal, but this
     // is a recursive delete, so confirm the path really is inside the managed
     // root before removing it.
@@ -559,6 +700,11 @@ pub async fn usage_remove_account(provider: String, account_id: String) -> Resul
     }
     if dir.is_dir() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("Could not remove the account: {e}"))?;
+    }
+
+    if provider == CURSOR {
+        // Gone already is fine.
+        let _ = cursor_key_entry(&account_id)?.delete_credential();
     }
 
     let mut selected = load_selection();
@@ -588,9 +734,9 @@ pub async fn usage_account_env(
     account_id: Option<String>,
 ) -> HashMap<String, String> {
     let mut env = HashMap::new();
-    let Some(spec) = provider_spec(&provider) else {
+    if provider != CURSOR && provider_spec(&provider).is_none() {
         return env;
-    };
+    }
     let account_id = match account_id.as_deref() {
         Some(requested) if requested == DEFAULT_ACCOUNT_ID => return env,
         Some(requested) if account_id_is_safe(requested) => requested.to_string(),
@@ -599,7 +745,15 @@ pub async fn usage_account_env(
     if account_id == DEFAULT_ACCOUNT_ID {
         return env;
     }
-    if let Some(dir) = config_dir_for(spec, &account_id) {
+    if provider == CURSOR {
+        let dir = account_dir(CURSOR, &account_id).filter(|dir| dir.is_dir());
+        if let Some(dir) = dir.filter(|_| cursor_key(&account_id).is_some()) {
+            env.insert("CURSOR_CONFIG_DIR".to_string(), dir.to_string_lossy().to_string());
+            env.insert(CURSOR_STORE_VAR.to_string(), "memory".to_string());
+        }
+        return env;
+    }
+    if let Some((spec, dir)) = provider_spec(&provider).and_then(|spec| Some((spec, config_dir_for(spec, &account_id)?))) {
         if dir.is_dir() {
             env.insert(
                 spec.config_env.to_string(),

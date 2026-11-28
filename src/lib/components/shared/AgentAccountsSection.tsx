@@ -4,6 +4,7 @@ import { AgentBrandMark } from '$lib/components/shared/useAgentBrand';
 import {
   accountsState,
   accountsFor,
+  addKeyAccount,
   accountEnvFor,
   addAccount,
   connectWebSession,
@@ -37,6 +38,7 @@ export default function AgentAccountsSection() {
   const layout = useStore(layoutSnapshot);
   const [addingFor, setAddingFor] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [apiKey, setApiKey] = useState('');
 
   useEffect(() => {
     void refreshAccounts();
@@ -65,7 +67,7 @@ export default function AgentAccountsSection() {
     closeSettings();
     await runAgentSignIn({
       // Provider id and launch command: Antigravity CLI is 'agy', others match provider.
-      command: provider === 'antigravity' ? 'agy' : provider,
+      command: provider === 'antigravity' ? 'agy' : provider === 'cursor' ? 'cursor-agent' : provider,
       name: providerName,
       cwd,
       projectId,
@@ -76,6 +78,18 @@ export default function AgentAccountsSection() {
           ? `Signing in to ${providerName}. Complete the login in the agent panel.`
           : `Signing in to ${providerName} as this account. The login writes into its own directory, not your default one.`,
     });
+  }
+
+  /** Cursor accounts are a name and an API key: nothing to sign in to. */
+  async function addWithKey(providerName: string) {
+    const ok = await addKeyAccount('cursor', draft.trim(), apiKey.trim());
+    setApiKey('');
+    if (!ok) {
+      showToast(`Could not add a ${providerName} account`, 'error');
+      return;
+    }
+    setDraft('');
+    setAddingFor(null);
   }
 
   async function add(provider: string, providerName: string) {
@@ -122,6 +136,7 @@ export default function AgentAccountsSection() {
                     className="settings-secondary agent-accounts-add-btn"
                     onClick={() => {
                       setDraft('');
+                      setApiKey('');
                       setAddingFor(provider);
                     }}
                   >
@@ -135,7 +150,7 @@ export default function AgentAccountsSection() {
                   <li className="agent-accounts-row" key={account.id} data-active={account.active ? 'true' : 'false'}>
                     <span className="agent-accounts-dot" aria-hidden="true" />
                     <span className="agent-accounts-label">
-                      {account.label}
+                      <span className="agent-accounts-label-text">{account.label}</span>
                       {account.id === DEFAULT_ACCOUNT_ID && <small>System default</small>}
                     </span>
                     {account.active && <span className="agent-accounts-badge">Active</span>}
@@ -154,7 +169,7 @@ export default function AgentAccountsSection() {
                           Use
                         </button>
                       )}
-                      {!account.signedIn && (
+                      {!account.signedIn && !(provider === 'cursor' && account.id !== DEFAULT_ACCOUNT_ID) && (
                         <button
                           type="button"
                           className="settings-link-button"
@@ -192,22 +207,41 @@ export default function AgentAccountsSection() {
                     aria-label={`New ${name} account name`}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') void add(provider, name);
+                      if (e.key === 'Enter' && provider !== 'cursor') void add(provider, name);
                       if (e.key === 'Escape') {
                         e.stopPropagation();
                         setAddingFor(null);
                       }
                     }}
                   />
-                  <button type="button" className="settings-primary" disabled={!draft.trim()} onClick={() => void add(provider, name)}>
-                    Add &amp; sign in
+                  {provider === 'cursor' && (
+                    <input
+                      type="password"
+                      value={apiKey}
+                      autoComplete="off"
+                      placeholder="Cursor API key"
+                      aria-label="Cursor API key"
+                      onChange={(e) => setApiKey(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && draft.trim() && apiKey.trim()) void addWithKey(name);
+                      }}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="settings-primary"
+                    disabled={!draft.trim() || (provider === 'cursor' && !apiKey.trim())}
+                    onClick={() => void (provider === 'cursor' ? addWithKey(name) : add(provider, name))}
+                  >
+                    {provider === 'cursor' ? 'Add account' : <>Add &amp; sign in</>}
                   </button>
                   <button type="button" className="settings-secondary" onClick={() => setAddingFor(null)}>
                     Cancel
                   </button>
                   <small>
-                    Opens {name}&apos;s own login in a terminal, pointed at a fresh config directory.
-                    Spacron never sees your credentials.
+                    {provider === 'cursor'
+                      ? 'Create a user API key in the Cursor dashboard for that account. It is kept in your system keychain, and agents started under this account can read it. Usage numbers still come from the connected cursor.com session.'
+                      : <>Opens {name}&apos;s own login in a terminal, pointed at a fresh config directory. Spacron never sees your credentials.</>}
                   </small>
                 </div>
               )}

@@ -1835,8 +1835,7 @@ input[type='range']::-webkit-slider-thumb:active {
   input:not([type='range']):not([type='checkbox']):not([type='radio']),
   select,
   textarea,
-  .settings-search-input,
-  .usage-meter-track
+  .settings-search-input
 ) {
   box-shadow: var(--edge-well) !important;
 }
@@ -2135,6 +2134,27 @@ html:root.has-bg-media .app-shell :is(.room-panel:has(.terminal-chat-view), .cha
   background: var(--wallpaper-glass-surface);
   backdrop-filter: var(--wallpaper-glass-filter);
   -webkit-backdrop-filter: var(--wallpaper-glass-filter);
+}
+/* One sheet of glass per screen. A chat outside a project is a chat panel inside
+   a layer, and both matched above, so its tint stacked to about twice the
+   opacity of every other panel. */
+html:root.has-bg-media .app-shell .standalone-chat-layer > .chat-mode-panel::before {
+  content: none;
+}
+/* Bots and those chats cover the stage. Left painted, the panels underneath
+   showed through the glass and darkened it. Opacity only, so they stay laid out
+   and their terminals keep measuring. */
+html:root.has-bg-media .app-shell .rooms-table:has(> :is(.bots-layer, .standalone-chat-layer)) :is(.focused-room .room-panel, .chat-mode-layer > .chat-mode-panel, .stage-empty-cta) {
+  opacity: 0 !important;
+  animation: none !important;
+  transition: none !important;
+}
+/* A named view-transition element is a "backdrop root": its own ::before can
+   then only blur what is inside it, so the picture stayed sharp behind chat
+   panes while every other panel frosted it. Chat panes give up the name (and
+   with it the morph animation between layouts) while an image is showing. */
+html:root.has-bg-media .app-shell .room-panel:has(.terminal-chat-view) {
+  view-transition-name: none !important;
 }
 /* Preserve the existing off-stage and moving-panel blur budget. */
 html:root.has-bg-media .app-shell .stage-pane.stage-hidden > .room-panel::before,

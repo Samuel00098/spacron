@@ -18,7 +18,7 @@ import { get } from '$lib/stores/storeCompat';
 import { chatAutoAnswerInline } from '$lib/stores/settings';
 import type { StructuredChatProvider } from './provider';
 import type { StructuredAccess, StructuredModel } from './codex-session';
-import { initialStructuredState, StructuredStateStore } from './state';
+import { initialStructuredState, RESUME_TURN_PROMPT, StructuredStateStore } from './state';
 import { commandRows, setAgentCommands } from '$lib/services/agent-commands';
 
 type Json = Record<string, unknown>;
@@ -33,7 +33,7 @@ function textFrom(value: unknown): string {
 }
 
 const stores = new StructuredStateStore();
-const sessions = new Map<number, { session: AcpSession; requestId: number; responses?: Map<string, (frame: Json) => void> }>();
+const sessions = new Map<number, { session: AcpSession; requestId: number; responses?: Map<string, (frame: Json) => void>; interrupted?: boolean }>();
 
 /** One Pi catalog entry, keyed `provider/id` so equal ids from two providers stay apart. */
 export function piModelRef(row: Json | null): StructuredModel | null {
@@ -131,11 +131,19 @@ export const piProvider: StructuredChatProvider = {
       const session = await openAgentSession('pi', args, cwd, { ...accountEnv, ...await prepareStructuredVisuals(sessionId), ...aboutYouEnv() });
       tail = stderrTail(session);
       const stderr = tail;
-      const runtime = { session, requestId: 0, responses: new Map<string, (frame: Json) => void>() };
+      const runtime: { session: AcpSession; requestId: number; responses: Map<string, (frame: Json) => void>; interrupted?: boolean } = { session, requestId: 0, responses: new Map<string, (frame: Json) => void>() };
       sessions.set(sessionId, runtime);
       await session.onExit(() => {
         const reason = stderr.text();
-        stores.update(sessionId, (state) => state.status === 'closed' ? {} : { status: 'failed', error: reason ? `Pi stopped: ${reason}` : state.error ?? 'Pi stopped.' });
+        stores.update(sessionId, (state) => {
+          if (state.status === 'closed') return {};
+          const error = reason ? `Pi stopped: ${reason}` : state.error ?? 'Pi stopped.';
+          return {
+            status: 'failed',
+            error,
+            ...(state.status === 'working' ? { stoppedTurn: { reason: 'error', detail: error, at: Date.now() } } : {}),
+          };
+        });
       });
       const handleFrame = (frame: Json) => {
         const type = (str(frame.type) ?? str(frame.event) ?? '').toLowerCase();
@@ -202,9 +210,23 @@ export const piProvider: StructuredChatProvider = {
         if (streaming || type === 'tool_start' || type === 'tool_call') stores.update(sessionId, { status: 'working' });
         if (['turn_end', 'agent_settled', 'idle', 'response_end', 'message_end'].includes(type)) {
           activeAssistantIds.delete(sessionId);
-          stores.update(sessionId, { status: 'ready', approvals: [] });
+          const wasInterrupted = Boolean(runtime.interrupted);
+          runtime.interrupted = false;
+          stores.update(sessionId, {
+            status: 'ready',
+            approvals: [],
+            stoppedTurn: wasInterrupted ? { reason: 'interrupted', detail: null, at: Date.now() } : null,
+          });
         }
-        if (type === 'error' || type === 'agent_error') stores.update(sessionId, { status: 'ready', error: textFrom(frame.error ?? frame.message ?? frame) || 'Pi reported an error.' });
+        if (type === 'error' || type === 'agent_error') {
+          runtime.interrupted = false;
+          const message = textFrom(frame.error ?? frame.message ?? frame) || 'Pi reported an error.';
+          stores.update(sessionId, {
+            status: 'ready',
+            error: message,
+            stoppedTurn: { reason: 'error', detail: message, at: Date.now() },
+          });
+        }
       };
       await session.onNotification(handleFrame);
       await session.onRawLine((line) => { try { handleFrame(JSON.parse(line) as Json); } catch { /* diagnostics are not chat frames */ } });
@@ -242,13 +264,33 @@ export const piProvider: StructuredChatProvider = {
     }
     const imageBlocks = acpImageBlocks(previews).map((image) => ({ type: 'image', ...image }));
     activeAssistantIds.delete(sessionId);
+    runtime.interrupted = false;
     stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text, ...(previews.length ? { images: previews } : {}) });
-    stores.update(sessionId, { status: 'working' });
+    stores.update(sessionId, { status: 'working', error: null, stoppedTurn: null });
     const wire = paneWireText(sessionId, text);
     await sendRpc(runtime, 'prompt', { message: wire.text, ...(imageBlocks.length ? { images: imageBlocks } : {}) });
     wire.sent();
   },
-  async interrupt(sessionId) { const runtime = sessions.get(sessionId); if (runtime) await sendRpc(runtime, 'abort', {}); },
+  async resumeTurn(sessionId) {
+    const runtime = sessions.get(sessionId);
+    if (!runtime) return;
+    activeAssistantIds.delete(sessionId);
+    runtime.interrupted = false;
+    stores.update(sessionId, { status: 'working', error: null, stoppedTurn: null });
+    try {
+      await sendRpc(runtime, 'prompt', { message: RESUME_TURN_PROMPT });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stores.update(sessionId, { status: 'ready', error: message, stoppedTurn: { reason: 'error', detail: message, at: Date.now() } });
+    }
+  },
+  async interrupt(sessionId) {
+    const runtime = sessions.get(sessionId);
+    if (runtime) {
+      runtime.interrupted = true;
+      await sendRpc(runtime, 'abort', {});
+    }
+  },
   setModel(sessionId, model) {
     const runtime = sessions.get(sessionId);
     stores.update(sessionId, { model });

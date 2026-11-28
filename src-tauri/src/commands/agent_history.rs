@@ -117,6 +117,94 @@ fn session_homes(agent: &str, default_home: Option<PathBuf>) -> Vec<(Option<Stri
     homes
 }
 
+// ---------------------------------------------------------------------------
+// Continuing a session under another account
+// ---------------------------------------------------------------------------
+
+/// Copy one transcript from `from_home` to the same place under `to_home`, so
+/// the CLI can resume it there. Only the transcript moves: never a credential.
+///
+/// A copy already at the target is only replaced when the source still starts
+/// with all of it. One that went further stays, and two that went different ways
+/// are refused, so neither account ever loses messages.
+fn copy_transcript(from_home: &Path, to_home: &Path, folder: &str, log_path: &Path) -> Result<(), String> {
+    let unreadable = |e: std::io::Error| format!("Could not read that chat: {e}");
+    let root = fs::canonicalize(from_home.join(folder)).map_err(unreadable)?;
+    let source = fs::canonicalize(log_path).map_err(unreadable)?;
+    let relative = source
+        .strip_prefix(&root)
+        .ok()
+        .filter(|_| source.extension().is_some_and(|x| x == "jsonl"))
+        .ok_or("That file is not a chat of this account")?;
+    let target = to_home.join(folder).join(relative);
+    let bytes = fs::read(&source).map_err(unreadable)?;
+    match fs::read(&target) {
+        Ok(existing) if existing.starts_with(&bytes) => return Ok(()),
+        Ok(existing) if !bytes.starts_with(&existing) => {
+            return Err("That account already has a different version of this chat. Resume it from there instead.".into());
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Could not check the other account: {e}")),
+    }
+    let parent = target.parent().ok_or("Invalid chat path")?;
+    let failed = |e: std::io::Error| format!("Could not copy the chat: {e}");
+    fs::create_dir_all(parent).map_err(failed)?;
+    // Grok keeps a chat as a folder of files, with this transcript among them.
+    if source.file_name().is_some_and(|name| name == GROK_TRANSCRIPT) {
+        copy_chat_folder(source.parent().ok_or("Invalid chat path")?, parent).map_err(failed)?;
+    }
+    // Last, so a copy that stopped halfway is tried again rather than trusted.
+    fs::write(&target, &bytes).map_err(failed)
+}
+
+const GROK_TRANSCRIPT: &str = "chat_history.jsonl";
+
+/// Everything beside a Grok transcript, except lock files and links.
+fn copy_chat_folder(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let (kind, name) = (entry.file_type()?, entry.file_name());
+        if kind.is_dir() {
+            copy_chat_folder(&entry.path(), &to.join(&name))?;
+        } else if kind.is_file() && name != GROK_TRANSCRIPT && Path::new(&name).extension().is_none_or(|x| x != "lock") {
+            fs::copy(entry.path(), to.join(&name))?;
+        }
+    }
+    Ok(())
+}
+
+/// Make a past Claude Code, Codex or Grok session resumable under another account.
+/// `None` for an account means the CLI's own home.
+#[tauri::command]
+pub async fn agent_history_copy_to_account(
+    agent: String,
+    log_path: String,
+    from_account: Option<String>,
+    to_account: Option<String>,
+) -> Result<(), String> {
+    let (folder, variable, dot) = match agent.as_str() {
+        "claude" => ("projects", "CLAUDE_CONFIG_DIR", ".claude"),
+        "codex" => ("sessions", "CODEX_HOME", ".codex"),
+        "grok" => ("sessions", "GROK_HOME", ".grok"),
+        _ => return Err("Only Claude Code, Codex and Grok chats can move between accounts".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let homes = session_homes(&agent, env_dir(variable).or_else(|| home().map(|h| h.join(dot))));
+        let home_of = |account: &Option<String>| {
+            homes
+                .iter()
+                .find(|(id, _)| id == account)
+                .map(|(_, path)| path.as_path())
+                .ok_or("That account no longer exists")
+        };
+        copy_transcript(home_of(&from_account)?, home_of(&to_account)?, folder, Path::new(&log_path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 struct Found {
     path: PathBuf,
     times: Times,
@@ -872,5 +960,57 @@ mod tests {
         let changed = Times { created: t.created, modified: t.modified + 1, len: t.len };
         cached(&path, &changed, || { calls += 1; parse_claude(&path, &changed, None) }).unwrap();
         assert_eq!(calls, 2);
+    }
+}
+
+#[cfg(test)]
+mod copy_transcript_tests {
+    use super::*;
+
+    #[test]
+    fn copies_a_chat_and_never_loses_messages() {
+        let base = std::env::temp_dir().join(format!("spacron-copy-chat-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (from, to) = (base.join("from"), base.join("to"));
+        let source = from.join("projects").join("repo").join("chat.jsonl");
+        let target = to.join("projects").join("repo").join("chat.jsonl");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(&to).unwrap();
+        let copy = || copy_transcript(&from, &to, "projects", &source);
+
+        fs::write(&source, "one\n").unwrap();
+        copy().unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "one\n");
+
+        // Continued in the source: the copy catches up.
+        fs::write(&source, "one\ntwo\n").unwrap();
+        copy().unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "one\ntwo\n");
+
+        // Continued in the target: it is left as it is.
+        fs::write(&target, "one\ntwo\nthree\n").unwrap();
+        copy().unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "one\ntwo\nthree\n");
+
+        // Both went their own way: refused.
+        fs::write(&source, "one\ntwo\nother\n").unwrap();
+        assert!(copy().is_err());
+
+        // A Grok chat brings the rest of its folder, but no lock files.
+        let session = from.join("sessions").join("repo").join("id");
+        fs::create_dir_all(&session).unwrap();
+        for name in [GROK_TRANSCRIPT, "summary.json", "summary.json.lock"] {
+            fs::write(session.join(name), "x").unwrap();
+        }
+        copy_transcript(&from, &to, "sessions", &session.join(GROK_TRANSCRIPT)).unwrap();
+        let copied = to.join("sessions").join("repo").join("id");
+        assert!(copied.join(GROK_TRANSCRIPT).is_file() && copied.join("summary.json").is_file());
+        assert!(!copied.join("summary.json.lock").exists());
+
+        // Nothing outside the account's chats can be copied.
+        let secret = from.join("secret.jsonl");
+        fs::write(&secret, "x").unwrap();
+        assert!(copy_transcript(&from, &to, "projects", &secret).is_err());
+        let _ = fs::remove_dir_all(&base);
     }
 }

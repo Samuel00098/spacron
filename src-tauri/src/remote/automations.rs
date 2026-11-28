@@ -382,7 +382,8 @@ async fn execute(workspace: &Path, a: &BoxAutomation, log_path: &Path) -> Result
     // The account selected for this agent in Spacron, as bots and the desktop use.
     let program = Path::new(&argv[0]).file_stem().and_then(|s| s.to_str()).unwrap_or(&argv[0]).to_ascii_lowercase();
     let provider = match program.as_str() { "agy" => "antigravity".to_string(), "cursor-agent" => "cursor".to_string(), _ => program };
-    let account_env = crate::commands::agent_accounts::usage_account_env(provider, None).await;
+    let mut account_env = crate::commands::agent_accounts::usage_account_env(provider, None).await;
+    crate::commands::agent_accounts::add_account_secrets(&mut account_env);
     let mut env: Vec<(&str, &str)> = vec![("SPACRON_AUTOMATION", a.name.as_str())];
     env.extend(account_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     spawn_headless(&argv, &run_dir(workspace, a.cwd.as_deref()), log_path, &env, RUN_TIMEOUT, None).await

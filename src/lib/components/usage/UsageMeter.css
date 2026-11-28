@@ -1,6 +1,5 @@
-/* One usage window as a labelled bar: label · percentage over track over reset.
-   Three stacked rows rather than one line, because the label and the reset both
-   want to truncate and a single line makes them fight the bar for the space.
+/* One usage window as a labelled bar: label · percentage over a bar.
+   Two stacked rows; the reset countdown sits inside the bar.
 
    Carries no positioning of its own; it renders inside whichever surface lists
    it. It inherits the `usage` query container from `.usage-panel`, so the
@@ -9,7 +8,7 @@
 .usage-meter {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto;
   gap: 4px;
   min-width: 0;
 }
@@ -44,28 +43,28 @@
   color: var(--text-primary);
 }
 
+/* A rectangle, not a pill: solid block for the amount, hatching for the rest.
+   `--meter-color` is the one thing severity changes. */
 .usage-meter-track {
+  --meter-color: var(--text-primary);
+  --meter-fill: color-mix(in srgb, var(--meter-color) 36%, var(--bg-primary));
+  position: relative;
   min-width: 28px;
-  height: 6px;
-  border-radius: 999px;
+  height: 28px;
+  border-radius: 6px;
   overflow: hidden;
-  /* The bar is a groove the fill sits in, so it takes the recessed well. */
-  box-shadow: var(--edge-well);
-  /* The empty half of the bar is a recess, not a surface — it should read as
-     "unspent", which is quieter than the panel it sits on. Quiet, not
-     invisible: at 10% the track vanished against the frost and a low
-     percentage looked like an empty row rather than a small number. */
-  background: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--meter-color) 20%, transparent) 0 1px,
+    transparent 1px 4px
+  );
 }
 
 .usage-meter-fill {
   display: block;
   height: 100%;
-  border-radius: inherit;
-  /* The fill has to out-contrast the track it sits in, or a 20% reading is
-     indistinguishable from 0%. */
-  background: var(--accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 6px;
+  background: var(--meter-fill);
   transition: width var(--dur-base, 0.22s) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
@@ -75,34 +74,57 @@
   }
 }
 
+/* The halo keeps the line visible over both the block and the hatching. */
+.usage-meter-pace {
+  position: absolute;
+  z-index: 1;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--text-primary);
+  box-shadow: 0 0 0 1.5px var(--bg-primary);
+}
+
 .usage-meter-reset {
-  font-size: 10.5px;
-  color: var(--text-tertiary, var(--text-secondary));
-  opacity: 0.8;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 10px;
+  translate: 0 -50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-primary) 86%, transparent);
+  color: var(--text-primary);
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-/* Severity is the one place colour is allowed in here. A normal window keeps
-   the accent fill on purpose: if every meter were tinted, the one that actually
-   matters would not stand out. */
+.usage-meter-credits {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Severity is the one place colour is allowed in here: if every meter were
+   tinted, the one that actually matters would not stand out. */
 .usage-meter[data-severity='normal'] .usage-meter-remaining {
   color: var(--success, #7fc7a2);
 }
 
-.usage-meter[data-severity='warn'] .usage-meter-fill {
-  background: var(--warning, #e2c08d);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--warning, #e2c08d) 28%, transparent);
+.usage-meter[data-severity='warn'] .usage-meter-track {
+  --meter-color: var(--warning, #e2c08d);
 }
 
 .usage-meter[data-severity='warn'] .usage-meter-remaining {
   color: var(--warning, #e2c08d);
 }
 
-.usage-meter[data-severity='critical'] .usage-meter-fill {
-  background: var(--error, #c74e39);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--error, #c74e39) 32%, transparent);
+.usage-meter[data-severity='critical'] .usage-meter-track {
+  --meter-color: var(--error, #c74e39);
 }
 
 .usage-meter[data-severity='critical'] .usage-meter-remaining {
@@ -111,7 +133,7 @@
 
 /* ── Narrow rail ─────────────────────────────────────────────────────────
    Each part owns its own row, so nothing here has to be dropped to make the
-   rail's 180px minimum: the label truncates, the reset truncates, and the bar
+   rail's 180px minimum: the label truncates, and the bar
    and its percentage — the answer the meter exists to give — are never the
    things that give way. Only the type steps down. */
 
@@ -124,9 +146,6 @@
     font-size: 11px;
   }
 
-  .usage-meter-reset {
-    font-size: 10px;
-  }
 }
 
 @container usage (max-width: 212px) {

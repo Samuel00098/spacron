@@ -15,6 +15,93 @@
   padding: 8px 10px 7px;
 }
 
+.projects-top-search.with-actions {
+  display: flex;
+  /* In a narrow rail the icons wrap under the field rather than squeeze it away. */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.projects-top-search.with-tools {
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.projects-top-search.with-actions .projects-search-field {
+  flex: 1 1 110px;
+  min-width: 0;
+  margin-right: 2px;
+}
+
+.projects-tool-btn {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.projects-tool-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.projects-tool-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.projects-tool-btn.active {
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  color: var(--text-primary);
+}
+
+.project-card-rooms {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.project-card-room-glyph {
+  display: grid;
+  place-items: center;
+}
+
+.project-card-room-glyph svg {
+  width: 13px;
+  height: 13px;
+}
+
+.project-card-rooms .is-hovered-room {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.project-card-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.project-flat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 14px;
+}
+
+/* Keep the + visible while the launcher it opened is up. */
+.project-card-actions:has([aria-expanded='true']) {
+  opacity: 1;
+}
+
 .projects-header-btn {
   display: flex;
   align-items: center;
@@ -803,9 +890,7 @@
   flex-direction: column;
   gap: 6px;
   margin: 2px 0 4px 0;
-  padding: 8px 8px 9px 8px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+  padding: 0 0 2px;
 }
 
 /* Double-tapping a card always expands it, so a project with nothing open needs
@@ -1861,4 +1946,36 @@
   height: 6px;
   border-radius: 50%;
   background: var(--accent, #4f8cff);
+}
+
+/* A chat found by the sidebar search. */
+.projects-chat-match {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.projects-chat-match:hover {
+  background: var(--bg-hover);
+}
+
+.projects-chat-match span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-chat-match small {
+  flex: none;
+  color: var(--text-muted);
 }

@@ -18,6 +18,8 @@ import { quickSpawnAgent } from '$lib/services/quick-spawn';
 import HistoryBrand from './HistoryBrand.tsx';
 import HandoffHistoryModal from './HandoffHistoryModal.tsx';
 import {
+  continueAccounts,
+  copySessionToAccount,
   historyAgentOptions,
   historyAccountIssue,
   withHistoryOwners,
@@ -254,6 +256,21 @@ export default function AgentHistoryTab() {
     }
   }
 
+  async function continueIn(row: HistoryRow, account: { id: string; label: string }) {
+    const agent = agentOptions.find((a) => a.id === row.agent);
+    if (!agent) return;
+    setBusy(rowKey(row));
+    try {
+      await copySessionToAccount(row, account.id);
+      await quickSpawnAgent(agent.command, { view: 'terminal', resumeId: row.id, worktreePath: row.cwd!, accountId: account.id, accountLabel: account.label });
+      void refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function toggleAgent(id: HistoryAgent) {
     setPrefs({ excludedAgents: prefs.excludedAgents.includes(id) ? prefs.excludedAgents.filter((a) => a !== id) : [...prefs.excludedAgents, id] });
   }
@@ -264,6 +281,7 @@ export default function AgentHistoryTab() {
     const agent = agentOptions.find((a) => a.id === row.agent);
     const accountText = sessionAccountLabel(row, accounts.accounts) ?? 'Account not recorded';
     const accountIssue = historyAccountIssue(row, accounts.accounts);
+    const others = continueAccounts(row, accounts.accounts);
     return (
       <li key={key} className={`ah-row${expanded ? ' is-open' : ''}`}>
         <div className="ah-row-main">
@@ -350,6 +368,22 @@ export default function AgentHistoryTab() {
               </button>
               <button type="button" className="ah-btn" disabled={!resumable(row)} onClick={() => setHandoffRow(row)}>Hand off to another agent</button>
             </div>
+            {others.length > 0 && (
+              <div className="ah-detail-actions">
+                {others.map((account) => (
+                  <button
+                    key={account.id}
+                    type="button"
+                    className="ah-btn"
+                    disabled={busy === key || !resumable(row) || !agent?.installed}
+                    onClick={() => void continueIn(row, account)}
+                    title="Copies this chat into that account and resumes it in a new terminal. The original stays where it is."
+                  >
+                    Continue in {account.id === 'default' ? `default account (${account.label})` : account.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="ah-detail-actions">
               <button type="button" className="ah-btn" disabled={!resumeArgs(row.agent as TranscriptAgent, row.id)} onClick={() => copy(resumeCommand(row), 'resume command')}>Copy resume command</button>
               <button type="button" className="ah-btn" onClick={() => copy(row.id, 'session ID')}>Copy session ID</button>

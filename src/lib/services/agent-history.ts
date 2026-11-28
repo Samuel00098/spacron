@@ -137,6 +137,25 @@ export async function loadAgentHistory(limit = 400): Promise<HistoryRow[]> {
   return invoke<HistoryRow[]>('agent_history_list', { query: { limit } });
 }
 
+/** Agents whose chats can be copied into another account. */
+const COPYABLE_AGENTS = new Set(['claude', 'codex', 'grok']);
+
+/** Signed-in accounts a session can be copied to and continued under. */
+export function continueAccounts<T extends { provider: string; id: string; signedIn: boolean }>(row: HistoryRow, accounts: readonly T[]): T[] {
+  if (!COPYABLE_AGENTS.has(row.agent) || !row.logPath) return [];
+  return accounts.filter((a) => a.provider === row.agent && a.signedIn && a.id !== (row.account ?? 'default'));
+}
+
+/** Copies the session's transcript into another account's folder; logins are never touched. */
+export async function copySessionToAccount(row: HistoryRow, accountId: string): Promise<void> {
+  await invoke('agent_history_copy_to_account', {
+    agent: row.agent,
+    logPath: row.logPath,
+    fromAccount: row.account ?? null,
+    toAccount: accountId === 'default' ? null : accountId,
+  });
+}
+
 /** Recheck CLI availability without fetching remote usage meters. */
 export async function detectHistoryAgents(): Promise<DetectedAgent[]> {
   return invoke<DetectedAgent[]>('usage_detect_agents', { force: true });

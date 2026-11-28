@@ -27,8 +27,16 @@ import type { StructuredChatProvider, StructuredSubagentSession } from './provid
 import { imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
 import { aboutYouEnv } from '$lib/stores/aboutYou';
+import { RESUME_TURN_PROMPT } from './state';
 
 export type StructuredAccess = 'ask' | 'auto' | 'full-access';
+export type StoppedTurnReason = 'interrupted' | 'max_tokens' | 'error' | 'stopped';
+
+export interface StructuredStoppedTurn {
+  reason: StoppedTurnReason;
+  detail: string | null;
+  at: number;
+}
 
 export interface StructuredModel {
   id: string;
@@ -66,6 +74,7 @@ export interface StructuredApproval {
 export interface StructuredChatState {
   status: 'starting' | 'ready' | 'working' | 'failed' | 'closed';
   error: string | null;
+  stoppedTurn?: StructuredStoppedTurn | null;
   items: TerminalChatItem[];
   models: StructuredModel[];
   model: string | null;
@@ -93,6 +102,8 @@ interface Runtime {
   unlisten: UnlistenFn[];
   turnId: string | null;
   cwd: string;
+  interrupted?: boolean;
+  suppressNextUserMessage?: boolean;
 }
 
 const states = new Map<number, StructuredChatState>();
@@ -266,6 +277,7 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
   states.set(sessionId, {
     status: 'starting',
     error: null,
+    stoppedTurn: null,
     items: existing?.items ?? [],
     models: existing?.models ?? [],
     model: opts.model ?? existing?.model ?? null,
@@ -303,7 +315,15 @@ export async function startCodexChat(sessionId: number, cwd: string, opts: { acc
       await session.onExit(() => {
         if (runtimes.get(sessionId) !== runtime) return;
         const reason = tail.text();
-        update(sessionId, (s) => (s.status === 'closed' ? {} : { status: 'failed', error: reason ? `Codex stopped: ${reason}` : s.error ?? 'Codex stopped.' }));
+        update(sessionId, (s) => {
+          if (s.status === 'closed') return {};
+          const error = reason ? `Codex stopped: ${reason}` : s.error ?? 'Codex stopped.';
+          return {
+            status: 'failed',
+            error,
+            ...(s.status === 'working' ? { stoppedTurn: { reason: 'error', detail: error, at: Date.now() } } : {}),
+          };
+        });
       }),
     );
     void tail.dispose.then((off) => runtime.unlisten.push(off));
@@ -368,7 +388,9 @@ export async function sendCodexTurn(sessionId: number, text: string, images: str
   for (const path of images) input.push({ type: 'localImage', path });
   if (!input.length) return;
   const { approvalPolicy, sandboxPolicy } = accessPolicy(state.access, runtime.cwd, sessionId < 0);
-  update(sessionId, { status: 'working', error: null });
+  runtime.interrupted = false;
+  runtime.suppressNextUserMessage = false;
+  update(sessionId, { status: 'working', error: null, stoppedTurn: null });
   try {
     const reply = await runtime.session.request<{ turn?: Json }>('turn/start', {
       threadId: state.threadId,
@@ -383,7 +405,35 @@ export async function sendCodexTurn(sessionId: number, text: string, images: str
     runtime.turnId = str(reply.turn?.id);
     wire.sent();
   } catch (error) {
-    update(sessionId, { status: 'ready', error: error instanceof Error ? error.message : String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    update(sessionId, { status: 'ready', error: message, stoppedTurn: { reason: 'error', detail: message, at: Date.now() } });
+  }
+}
+
+/** Resume a stopped Codex turn without showing a synthetic user prompt bubble. */
+export async function resumeCodexTurn(sessionId: number): Promise<void> {
+  const state = states.get(sessionId);
+  const runtime = runtimes.get(sessionId);
+  if (!state || !runtime?.session || !state.threadId) return;
+  const { approvalPolicy, sandboxPolicy } = accessPolicy(state.access, runtime.cwd, sessionId < 0);
+  runtime.interrupted = false;
+  runtime.suppressNextUserMessage = true;
+  update(sessionId, { status: 'working', error: null, stoppedTurn: null });
+  try {
+    const reply = await runtime.session.request<{ turn?: Json }>('turn/start', {
+      threadId: state.threadId,
+      input: [{ type: 'text', text: RESUME_TURN_PROMPT, text_elements: [] }],
+      ...(state.model ? { model: state.model } : {}),
+      ...(state.effort ? { effort: state.effort } : {}),
+      ...(state.fast === undefined ? {} : { serviceTier: state.fast ? 'priority' : 'default' }),
+      approvalPolicy,
+      sandboxPolicy,
+    });
+    runtime.turnId = str(reply.turn?.id);
+  } catch (error) {
+    runtime.suppressNextUserMessage = false;
+    const message = error instanceof Error ? error.message : String(error);
+    update(sessionId, { status: 'ready', error: message, stoppedTurn: { reason: 'error', detail: message, at: Date.now() } });
   }
 }
 
@@ -391,6 +441,7 @@ export async function interruptCodexTurn(sessionId: number): Promise<void> {
   const state = states.get(sessionId);
   const runtime = runtimes.get(sessionId);
   if (!state?.threadId || !runtime?.session || !runtime.turnId) return;
+  runtime.interrupted = true;
   try {
     await runtime.session.request('turn/interrupt', { threadId: state.threadId, turnId: runtime.turnId });
   } catch {
@@ -483,6 +534,7 @@ export const codexProvider: StructuredChatProvider = {
   subscribe: subscribeStructuredChats,
   start: startCodexChat,
   send: sendCodexTurn,
+  resumeTurn: resumeCodexTurn,
   interrupt: interruptCodexTurn,
   setModel: setStructuredModel,
   setEffort: setStructuredEffort,
@@ -562,13 +614,17 @@ function onNotification(sessionId: number, n: AcpNotification) {
     case 'item/completed': {
       const item = rec(p.item);
       const chat = item ? chatItemFor(item) : null;
+      const runtime = runtimes.get(sessionId);
+      if (chat?.kind === 'user' && runtime?.suppressNextUserMessage) {
+        if (method === 'item/completed') runtime.suppressNextUserMessage = false;
+        break;
+      }
       // `item/started` commonly carries an empty assistant shell; the
       // subsequent deltas own its text, so never let an empty completion
       // replace the streamed content already in the store.
       if (chat?.kind === 'user' && chat.images?.length) {
         if (states.get(sessionId)?.items.some((entry) => entry.id === chat.id)) break;
         const { images, ...user } = chat;
-        const runtime = runtimes.get(sessionId);
         upsertItem(sessionId, user);
         void imageDataUrlsFor(images).then((previews) => {
           if (previews.length && runtime === runtimes.get(sessionId)
@@ -605,16 +661,31 @@ function onNotification(sessionId: number, n: AcpNotification) {
       break;
     case 'turn/completed': {
       const runtime = runtimes.get(sessionId);
-      if (runtime) runtime.turnId = null;
+      const turn = rec(p.turn);
+      const turnStatus = str(turn?.status);
+      const wasInterrupted = Boolean(runtime?.interrupted);
+      if (runtime) {
+        runtime.turnId = null;
+        runtime.interrupted = false;
+        runtime.suppressNextUserMessage = false;
+      }
+      const stopped = wasInterrupted || turnStatus === 'interrupted' || turnStatus === 'failed';
+      const detail = str(rec(turn?.error)?.message) ?? str(turn?.error) ?? null;
       // A failed turn's reason already arrived as an `error` notice.
-      update(sessionId, { status: 'ready', approvals: [] });
+      update(sessionId, (s) => ({
+        status: 'ready',
+        approvals: [],
+        stoppedTurn: stopped
+          ? { reason: turnStatus === 'failed' ? 'error' : 'interrupted', detail, at: Date.now() }
+          : s.error ? s.stoppedTurn ?? null : null,
+      }));
       break;
     }
     case 'error': {
       const message = str(rec(p.error)?.message);
       if (message && p.willRetry !== true) {
         upsertItem(sessionId, { id: `error-${str(p.turnId) ?? Date.now()}`, kind: 'notice', text: message });
-        update(sessionId, { status: 'ready', error: message });
+        update(sessionId, { status: 'ready', error: message, stoppedTurn: { reason: 'error', detail: message, at: Date.now() } });
       }
       break;
     }

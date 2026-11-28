@@ -32,6 +32,7 @@ import {
   recordForPane,
   recordHasConversation,
   renameStructuredSession,
+  resumeStoppedTurn,
   resumeStructuredSessionInPane,
   rewindStructuredSession,
 } from './session-store';
@@ -73,6 +74,7 @@ export const STRUCTURED_COMMANDS: SlashCommand[] = [
   { name: '/account', description: 'Show the connected account for this chat: /account' },
   { name: '/clear', description: 'Start a new conversation in this chat' },
   { name: '/stop', description: 'Cancel the running turn' },
+  { name: '/continue', description: 'Resume a stopped turn without adding a user message' },
   { name: '/retry', description: 'Send your last message again' },
   { name: '/rewind', description: 'Rewind conversation to previous checkpoint: /rewind' },
   { name: '/fork', description: 'Fork this conversation into a new branch: /fork [title]' },
@@ -123,7 +125,7 @@ export function resumable(paneId: number) {
 }
 
 /** Commands that change this pane's session, which only Spacron can do. */
-const PANE_COMMANDS = new Set(['/agent', '/switch', '/model', '/effort', '/permissions', '/compact', '/clear', '/stop', '/resume', '/sidebar', '/side', '/btw', '/terminal', '/handoff']);
+const PANE_COMMANDS = new Set(['/agent', '/switch', '/model', '/effort', '/permissions', '/compact', '/clear', '/stop', '/continue', '/resume', '/sidebar', '/side', '/btw', '/terminal', '/handoff']);
 
 export interface StructuredCommandContext {
   lastUserMessage?: string | null;
@@ -331,6 +333,11 @@ export async function runStructuredCommand(
       if (state?.status !== 'working') return { handled: true, output: 'Nothing is running.' };
       await provider.interrupt(paneId);
       return { handled: true, output: 'Turn cancelled.' };
+    case '/continue': {
+      if (state?.status === 'working') return { handled: true, error: 'A turn is already running.' };
+      const ok = await resumeStoppedTurn(paneId);
+      return ok ? { handled: true } : { handled: true, error: `Couldn't resume ${provider.label}.` };
+    }
     case '/retry': {
       const last = context.lastUserMessage?.trim();
       if (!last) return { handled: true, error: 'There is no earlier message to send again.' };

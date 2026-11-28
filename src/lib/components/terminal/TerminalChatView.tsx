@@ -64,7 +64,7 @@ import type { WorktreeInfo } from '$lib/services/orchestrator/worktree-manager';
 import ImageViewer, { type ViewerImage } from '$lib/components/shared/ImageViewer';
 import { getSessionVisuals, requestTerminalInput, terminalInputRequest, terminalChatInputRequest } from '$lib/stores/terminal';
 import { ChatVisual, splitReply, visualReplyText } from './ChatVisual';
-import { AgentModeChip, AnswerReceipts, GoalPanel, SignInNotice, looksLikeAuthError } from './StructuredChatExtras';
+import { AgentModeChip, AnswerReceipts, GoalPanel, SignInNotice, StoppedTurnNotice, looksLikeAuthError } from './StructuredChatExtras';
 import { readChatDraft, writeChatDraft } from '$lib/services/structured-chat/drafts';
 import { parseDroppedPaths } from '$lib/services/structured-chat/attachments';
 import { clearStructuredChatUnread, markStructuredChatUnread } from '$lib/services/structured-chat/panes';
@@ -137,7 +137,7 @@ import { useStructuredChatHistory, type StructuredChatAgent } from '$lib/service
 import { AskCard } from './AskCard';
 import PermissionCard, { approvalChoices } from './PermissionCard';
 import { answerLabels, type AskAnswer } from '$lib/services/structured-chat/ask';
-import { answerStructuredApproval, hydrateStructuredHistory, reconnectStructuredSession, recordForPane } from '$lib/services/structured-chat/session-store';
+import { answerStructuredApproval, hydrateStructuredHistory, reconnectStructuredSession, recordForPane, resumeStoppedTurn } from '$lib/services/structured-chat/session-store';
 import { runStructuredCommand, STRUCTURED_COMMANDS } from '$lib/services/structured-chat/commands';
 import { modelCatalogNote, modelCatalogStatus, selectedModelIssue } from '$lib/services/structured-chat/model-catalog';
 import { requestHandoffPicker } from '$lib/services/structured-chat/handoff-coordinator';
@@ -201,7 +201,7 @@ type PendingSend = { id: number; text: string; key: string; seenBefore: number; 
 /** An image waiting in the composer: saved to disk (the CLI gets the path) with a preview to show. */
 type Attachment = { id: number; path: string; name: string; preview: string | null; revoke?: string };
 
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
 /** Quote a path only when it has spaces, with forward slashes, as a terminal drop does. */
 function terminalPath(path: string): string {
@@ -387,6 +387,8 @@ export default function TerminalChatView({
   const [items, setItems] = useState<TerminalChatItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resumingTurn, setResumingTurn] = useState(false);
+  const [dismissedStoppedAt, setDismissedStoppedAt] = useState<number | null>(null);
   const reconnectChat = () => {
     setError(null);
     void reconnectStructuredSession(sessionId).then((ok) => {
@@ -394,6 +396,20 @@ export default function TerminalChatView({
       const detail = structuredAgent ? getStructuredChat(structuredAgent, sessionId)?.error : null;
       setError(detail ?? `Couldn't reconnect ${agentLabel}. The conversation so far is kept above.`);
     });
+  };
+  const resumeChatTurn = async () => {
+    if (resumingTurn) return;
+    setResumingTurn(true);
+    setError(null);
+    try {
+      const ok = await resumeStoppedTurn(sessionId);
+      if (!ok) {
+        const detail = structuredAgent ? getStructuredChat(structuredAgent, sessionId)?.error : null;
+        setError(detail ?? `Couldn't resume ${agentLabel}.`);
+      }
+    } finally {
+      setResumingTurn(false);
+    }
   };
 
   const [transcriptBusy, setTranscriptBusy] = useState<boolean | null>(null);
@@ -2165,9 +2181,27 @@ export default function TerminalChatView({
             onRetry={reconnectChat}
           />
         )}
+        {structuredMode && !busy && structuredState?.stoppedTurn && !error && structuredState.stoppedTurn.at !== dismissedStoppedAt && (
+          <StoppedTurnNotice
+            label={agentLabel}
+            stopped={structuredState.stoppedTurn}
+            resuming={resumingTurn}
+            onResume={() => void resumeChatTurn()}
+            onDismiss={() => setDismissedStoppedAt(structuredState.stoppedTurn?.at ?? null)}
+          />
+        )}
         {error && (
           <div className="terminal-chat-error" role="alert">
             <span>{error}</span>
+            {structuredMode && !busy && structuredState?.stoppedTurn && !looksLikeAuthError(error) && (
+              <button
+                type="button"
+                disabled={resumingTurn}
+                onClick={() => void resumeChatTurn()}
+              >
+                {resumingTurn ? 'Resuming…' : 'Resume turn'}
+              </button>
+            )}
             {structuredMode && (structuredState?.status === 'failed' || structuredState?.status === 'closed' || !structuredState) && (
               <button
                 type="button"

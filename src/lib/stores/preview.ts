@@ -547,6 +547,10 @@ export async function openUrlInPreviewPanel(url: string): Promise<void> {
   }
   navigatePreviewTab(url);
   const { useLayoutStore } = await import('./zustand/layout');
+  // A closed Preview opens at the side, so a link never takes the stage from
+  // what you were doing. One already on the stage stays where you put it.
+  const layout = useLayoutStore.getState();
+  if (!layout.previewVisible) layout.setPreviewDocked(true);
   useLayoutStore.getState().revealPreview();
 }
 

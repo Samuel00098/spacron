@@ -149,7 +149,7 @@ function ProviderRow({
         <>
           <div className="usage-row-meters">
             {provider.windows.map((window) => (
-              <UsageMeter key={window.label} window={window} display={display} now={now} />
+              <UsageMeter key={window.label} window={window} display={display} credits={provider.resetCreditsAvailable} now={now} />
             ))}
           </div>
           {/* A reporting provider can still have something to say — spent
@@ -471,7 +471,7 @@ export default function UsagePanel() {
           {selectedProvider.account && <p className="usage-detail-account-label">{selectedProvider.account}</p>}
           {hasNumbers(selectedProvider) ? (
             <div className="usage-detail-meters">
-              {selectedProvider.windows.map((window) => <UsageMeter key={window.label} window={window} display={display} now={now} />)}
+              {selectedProvider.windows.map((window) => <UsageMeter key={window.label} window={window} display={display} credits={selectedProvider.resetCreditsAvailable} now={now} />)}
               {selectedProvider.note && <p className="usage-row-note">{selectedProvider.note}</p>}
             </div>
           ) : (

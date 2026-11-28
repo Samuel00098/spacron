@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { openUrlInPreviewPanel } from '$lib/stores/preview';
 import { Excalidraw } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import type { PersistedSketchScene } from './legacySketchToScene';
@@ -46,6 +47,13 @@ export default function ExcalidrawCanvas({ initialScene, theme, onChange }: Exca
     <Excalidraw
       initialData={initialData as unknown as Parameters<typeof Excalidraw>[0]['initialData']}
       theme={theme}
+      onLinkOpen={(element, event) => {
+        // Links between shapes stay with Excalidraw; web links go to Preview.
+        const link = element.link ?? '';
+        if (!/^https?:\/\//i.test(link) || link.startsWith(window.location.origin)) return;
+        event.preventDefault();
+        void openUrlInPreviewPanel(link);
+      }}
       onChange={(elements, appState, files) => {
         const background = appState.viewBackgroundColor;
         onChange({

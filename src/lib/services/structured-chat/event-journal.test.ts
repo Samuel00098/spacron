@@ -51,6 +51,19 @@ describe('diffStructuredState', () => {
     expect(resolved.map((e) => e.type)).toEqual(['approval.resolved']);
   });
 
+  it('emits turn.interrupted when stoppedTurn is set even without an error', () => {
+    const prev = state({ status: 'working' });
+    const next = state({
+      status: 'ready',
+      error: null,
+      stoppedTurn: { reason: 'interrupted', detail: null, at: 1000 },
+    });
+    const events = diffStructuredState(prev, next);
+    expect(events).toEqual([
+      { type: 'turn.interrupted', payload: { status: 'ready', reason: 'interrupted' } },
+    ]);
+  });
+
   it('strips image bytes from journaled items', () => {
     const next = state({ items: [{ id: 'u', kind: 'user', text: 'look', images: ['data:image/png;base64,AAAA'] }] });
     const item = diffStructuredState(null, next)[0].payload.item as TerminalChatItem;

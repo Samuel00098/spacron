@@ -202,8 +202,10 @@ impl AcpManager {
         for key in inherited_agent_session_vars() {
             builder.env_remove(key);
         }
+        let mut env = args.env.clone();
+        crate::commands::agent_accounts::add_account_secrets(&mut env);
         builder
-            .envs(&args.env)
+            .envs(&env)
             .current_dir(args.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

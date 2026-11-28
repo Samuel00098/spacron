@@ -14,7 +14,7 @@ export default function BotsSidebar() {
   const open = useStore(botsOpen);
   const selected = useStore(selectedBotId);
   const state = useStore(botHostState);
-  const [collapsed, setCollapsed] = useState(() => loadBoolean('spacron_bots_collapsed'));
+  const [collapsed, setCollapsed] = useState(() => loadBoolean('spacron_bots_collapsed', true));
   const mine = visibleBots(list).sort((a, b) => a.name.localeCompare(b.name));
   function toggle() {
     setCollapsed((current) => {
@@ -26,7 +26,7 @@ export default function BotsSidebar() {
     <section className="bots-sidebar" aria-label="Bots">
       <div className="bots-sidebar-heading">
         <button type="button" className="bots-sidebar-toggle" aria-expanded={!collapsed} aria-controls="bots-sidebar-list" onClick={toggle} title={collapsed ? 'Expand Bots' : 'Collapse Bots'}>
-          <svg className={collapsed ? '' : 'expanded'} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg><span>Bots</span>
+          <svg className={collapsed ? '' : 'expanded'} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg><span>Bots</span>{collapsed && mine.length > 0 && <span className="sidebar-fold-count">{mine.length}</span>}
         </button>
         <button type="button" aria-label="New bot" title="New bot" onClick={() => openBots(NEW_BOT)}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>

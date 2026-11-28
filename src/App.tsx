@@ -40,6 +40,7 @@ import {
   uiFontSize,
   fontSize,
   resolvedFontFamily,
+  matchTerminalFont,
   userShortcuts,
   matchShortcut,
   type KeyboardShortcut,
@@ -263,6 +264,28 @@ export default function App() {
       document.documentElement.style.setProperty('--editor-font-family', family);
     });
 
+    // "Match terminal font and color": publish the terminal's family and text
+    // colour as the app-wide UI font/text colour by overriding the root vars.
+    // Inline root styles beat the stylesheet's :root values; clearing them
+    // restores the theme. Terminal foreground mirrors terminal-theme.ts.
+    const applyMatchTerminal = () => {
+      const rootEl = document.documentElement;
+      if (get(matchTerminalFont)) {
+        const light = rootEl.classList.contains('light-theme');
+        rootEl.style.setProperty('--font-sans', get(resolvedFontFamily));
+        rootEl.style.setProperty('--text-primary', light ? '#171717' : '#ffffff');
+        rootEl.style.setProperty('--text-color', light ? '#171717' : '#ffffff');
+      } else {
+        rootEl.style.removeProperty('--font-sans');
+        rootEl.style.removeProperty('--text-primary');
+        rootEl.style.removeProperty('--text-color');
+      }
+    };
+    const unsubscribeMatchTerminal = matchTerminalFont.subscribe(applyMatchTerminal);
+    const unsubscribeMatchFamily = resolvedFontFamily.subscribe(applyMatchTerminal);
+    const matchObserver = new MutationObserver(applyMatchTerminal);
+    matchObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
     let activeShortcuts: KeyboardShortcut[] = [];
     const unsubscribeShortcuts = userShortcuts.subscribe((value) => {
       activeShortcuts = value || [];
@@ -300,6 +323,9 @@ export default function App() {
       unsubscribeUiFontSize();
       unsubscribeFontSize();
       unsubscribeFontFamily();
+      unsubscribeMatchTerminal();
+      unsubscribeMatchFamily();
+      matchObserver.disconnect();
       unlistenClose?.();
       unlistenOpenPaths?.();
       unsubscribeShortcuts();

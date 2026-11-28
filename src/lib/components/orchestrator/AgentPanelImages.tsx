@@ -2,7 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import * as agentPanelImagesModule from '$lib/stores/agentPanelImages';
-import { requestTerminalInput } from '$lib/stores/terminal';
+import { requestTerminalInput, terminalChatInputRequest } from '$lib/stores/terminal';
+import { structuredChatPanes, useStructuredChatPane } from '$lib/services/structured-chat/panes';
+import { isTerminalChatView, useTerminalChatView } from '$lib/services/terminal-chat';
+import { get } from '$lib/stores/storeCompat';
+import { showToast } from '$lib/stores/notification';
 import { isImagePath, getImageMimeType } from '$lib/stores/editor';
 import { isTauriRuntime, dropPositionToCss } from '$lib/utils/tauri';
 import { isPointOverDropTarget } from '$lib/utils/drop-target';
@@ -20,7 +24,14 @@ function isOverElement(el: Element, clientX: number, clientY: number): boolean {
   return isPointOverDropTarget(el, clientX, clientY);
 }
 
+function isPaneInChatView(sessionId: number): boolean {
+  return Boolean(get(structuredChatPanes)[sessionId]) || isTerminalChatView(sessionId);
+}
+
 export default function AgentPanelImages({ sessionId }: Props) {
+  const structuredAgent = useStructuredChatPane(sessionId);
+  const terminalChatView = useTerminalChatView(sessionId);
+  const inChatView = Boolean(structuredAgent) || terminalChatView;
   const allImages = useStore(agentPanelImagesModule.agentPanelImages);
   const images = allImages.get(sessionId) ?? [];
   const [isDragOver, setIsDragOver] = useState(false);
@@ -30,13 +41,24 @@ export default function AgentPanelImages({ sessionId }: Props) {
   const internalDropHandledRef = useRef(false);
   const isExplorerDragRef = useRef(false);
 
-  // Deliver the path through xterm's bracketed paste (no trailing Enter), so
-  // a TUI composer like opencode's reads it as an image attachment sitting in
-  // its input box. Direct PTY writes with `\r` submitted the prompt
-  // immediately instead of attaching.
+  // Deliver the path to the active surface: chat view receives it as a
+  // composer attachment chip, while terminal view receives a bracketed paste
+  // (no trailing Enter) so TUI agents attach it without auto-submitting.
   const deliverPathToComposer = useCallback(
-    (path: string) => {
+    (path: string, name?: string, previewUrl?: string | null) => {
       const normalized = path.replace(/\\/g, '/');
+      if (isPaneInChatView(sessionId)) {
+        terminalChatInputRequest.set({
+          sessionId,
+          text: '',
+          image: {
+            path: normalized,
+            name: name ?? (normalized.split('/').pop() || 'image'),
+            dataUrl: previewUrl ?? undefined,
+          },
+        });
+        return;
+      }
       const quoted = normalized.includes(' ') ? `"${normalized}"` : normalized;
       requestTerminalInput(sessionId, quoted);
     },
@@ -44,21 +66,20 @@ export default function AgentPanelImages({ sessionId }: Props) {
   );
 
   const addImageFromPath = useCallback(async (path: string) => {
-    try {
-      const bytes = await invoke<number[]>('fs_read_binary', { path });
-      const mimeType = getImageMimeType(path);
-      const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
-      const objectUrl = URL.createObjectURL(blob);
-      const name = path.split(/[\\/]/).pop() || 'image';
+    const normalized = path.replace(/\\/g, '/');
+    const name = normalized.split('/').pop() || 'image';
+    const preview = await invoke<string>('chat_image_preview', { path }).catch(() => null);
+    if (!isPaneInChatView(sessionId) && preview) {
       agentPanelImagesModule.agentPanelImages.add(sessionId, {
         id: crypto.randomUUID(),
-        objectUrl,
-        diskPath: path,
+        objectUrl: preview,
+        diskPath: normalized,
         name,
       });
-      deliverPathToComposer(path);
-    } catch (error) {
-      console.error('Failed to add image from disk:', error);
+    }
+    deliverPathToComposer(normalized, name, preview);
+    if (!preview) {
+      showToast(`Attached ${name} (preview unavailable)`, 'info');
     }
   }, [sessionId, deliverPathToComposer]);
 
@@ -75,25 +96,30 @@ export default function AgentPanelImages({ sessionId }: Props) {
       const mimeType = getImageMimeType(normalized);
       const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
       const objectUrl = URL.createObjectURL(blob);
-      agentPanelImagesModule.agentPanelImages.add(sessionId, {
-        id: crypto.randomUUID(),
-        objectUrl,
-        diskPath: normalized,
-        name,
-      });
-      deliverPathToComposer(normalized);
+      if (!isPaneInChatView(sessionId)) {
+        agentPanelImagesModule.agentPanelImages.add(sessionId, {
+          id: crypto.randomUUID(),
+          objectUrl,
+          diskPath: normalized,
+          name,
+        });
+      }
+      deliverPathToComposer(normalized, name, objectUrl);
     } catch (error) {
       console.error('Failed to add pasted image:', error);
+      showToast('Failed to attach pasted image', 'error');
     }
   }, [sessionId, deliverPathToComposer]);
 
   const handlePaste = useCallback(async (event: React.ClipboardEvent) => {
-    const items = Array.from(event.clipboardData?.items ?? []).filter((item) =>
-      item.type.startsWith('image/')
-    );
     const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
       file.type.startsWith('image/')
     );
+    const items = files.length
+      ? []
+      : Array.from(event.clipboardData?.items ?? []).filter((item) =>
+          item.type.startsWith('image/')
+        );
     if (!items.length && !files.length) return;
     event.preventDefault();
     event.stopPropagation();
@@ -185,6 +211,7 @@ export default function AgentPanelImages({ sessionId }: Props) {
 
   // ── Internal explorer drag (custom pointer events) ──
   useEffect(() => {
+    if (inChatView) return;
     const handleStart = () => { isExplorerDragRef.current = true; };
 
     const handleMove = (event: Event) => {
@@ -225,11 +252,11 @@ export default function AgentPanelImages({ sessionId }: Props) {
       window.removeEventListener('spacron-explorer-drag-move', handleMove);
       window.removeEventListener('spacron-explorer-drag-end', handleEnd);
     };
-  }, [addImageFromPath]);
+  }, [addImageFromPath, inChatView]);
 
   // ── HTML5 dragover/drop on document (fallback for non-Tauri drops) ──
   useEffect(() => {
-    if (typeof document === 'undefined') return;
+    if (inChatView || typeof document === 'undefined') return;
 
     const handleDocumentDragOver = (event: DragEvent) => {
       if (!isExplorerDragRef.current) return;
@@ -269,11 +296,11 @@ export default function AgentPanelImages({ sessionId }: Props) {
       document.removeEventListener('dragover', handleDocumentDragOver);
       document.removeEventListener('drop', handleDocumentDrop);
     };
-  }, [addImageFromPath]);
+  }, [addImageFromPath, inChatView]);
 
   // ── OS file manager drag (Tauri event) ──
   useEffect(() => {
-    if (!isTauriRuntime()) return;
+    if (inChatView || !isTauriRuntime()) return;
     let unlisten: (() => void) | undefined;
 
     getCurrentWindow().onDragDropEvent((event) => {
@@ -315,7 +342,7 @@ export default function AgentPanelImages({ sessionId }: Props) {
     }).then((u) => { unlisten = u; });
 
     return () => { unlisten?.(); };
-  }, [addImageFromPath]);
+  }, [addImageFromPath, inChatView]);
 
   // Escape closes the expanded preview.
   useEffect(() => {
@@ -326,6 +353,8 @@ export default function AgentPanelImages({ sessionId }: Props) {
     document.addEventListener('keydown', onKeyDown, true);
     return () => document.removeEventListener('keydown', onKeyDown, true);
   }, [expandedImage]);
+
+  if (inChatView) return null;
 
   return (
     <div

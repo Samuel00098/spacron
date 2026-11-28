@@ -371,6 +371,9 @@ function bindProjectAutosave() {
     selectedPath,
     layout,
     rightSidebarTab,
+    // Open or closed is its own store too: without it, quitting right after
+    // opening or closing the sidebar forgot the change.
+    rightSidebarVisible,
     // The Terminal room's open/closed state is its own store, not a `layout`
     // field, so without it here closing the Terminal never scheduled a save —
     // and the per-project room list the Projects panel reads went stale.
@@ -1353,6 +1356,21 @@ export async function restoreProjectState(projectId: string, rootPath: string) {
         }
       }
     }
+    // A saved stage is back by now, so show it: what follows only reads project
+    // files for tasks, inbox and memory, none of which changes the arrangement.
+    // Autosave stays muted until the whole restore ends. A project with no saved
+    // layout stays hidden, because its default stage is only set at the end.
+    if (restoredLayout && generation === restoreProjectStateGeneration) {
+      // Let the restored stage render while still marked as switching. Lifted in
+      // the same batch, the shell reads the restored Preview as newly opened and
+      // forces the right sidebar open over this project's own closed state.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (generation === restoreProjectStateGeneration) {
+        isProjectSwitching.set(false);
+        useWorkspaceStore.getState().setSwitchingPhase(null);
+      }
+    }
+
     // Load this project's orchestrator state LAST, once its terminal sessions
     // are back. Order matters twice over: the loader reconciles persisted tasks
     // against live sessions (running it early resets every in-progress task to

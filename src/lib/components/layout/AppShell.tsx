@@ -131,10 +131,9 @@ import type { TerminalSessionInfo } from '$lib/stores/terminal';
 import { toggleActiveTerminalChatView } from '$lib/services/terminal-chat';
 import type { RightDrawerTool } from '$lib/stores/layout';
 import SideChatPane from '$lib/components/terminal/SideChatPane';
+import { useProjectPanelState } from '$lib/react/useProjectPanelState';
 import { isVirtualStructuredPane } from '$lib/services/structured-chat/session-store';
 import { removeSideChat, sideChats } from '$lib/services/structured-chat/side-chats';
-import { useSideChatSource } from '$lib/services/structured-chat/side-chat-source';
-import { runStructuredCommand } from '$lib/services/structured-chat/commands';
 import { structuredChatPanes } from '$lib/services/structured-chat/panes';
 import { hoveredStageRoom, layoutControlCommand, publishLayoutSnapshot } from '$lib/stores/layoutControl';
 import { isFullscreenRoom, resolveStageExpansion } from './fullscreenRooms.ts';
@@ -228,8 +227,8 @@ const SPLIT_FIT_PANES = 6;
 // Project switch veil. SETTLE covers the double-rAF refit, the 80 ms atlas
 // repaint and a full-screen TUI answering its SIGWINCH, so the stage is final
 // before it shows. REVEAL must match `project-stage-in` in AppShell.css.
-const PROJECT_SETTLE_MS = 150;
-const PROJECT_REVEAL_MS = 200;
+const PROJECT_SETTLE_MS = 80;
+const PROJECT_REVEAL_MS = 140;
 
 function getAgentRoomSessionId(id: AgentRoomId): number {
   return Number(id.slice('agent:'.length));
@@ -387,7 +386,7 @@ const LEFT_TOOL_META: Record<LeftDrawerTool, { title: string; icon: React.ReactN
 // The first group in the right sidebar is the workspace navigator. The
 // existing utility tools follow it in the same sidebar.
 // Search lives inside Files (its search box), so it is not a surface of its own.
-const RIGHT_NAVIGATOR_TOOLS = ['files', 'git', 'problems', 'snapshots', 'snippets'] as const;
+const RIGHT_NAVIGATOR_TOOLS = ['files', 'git', 'snapshots', 'snippets'] as const;
 type RightNavigatorTool = (typeof RIGHT_NAVIGATOR_TOOLS)[number];
 
 // The RIGHT drawer hosts the layout-backed tools (including Code Review).
@@ -1813,19 +1812,6 @@ export default function AppShell() {
   function renderLeftUtilityPanel() {
     if (!leftDrawerOpen) return null;
 
-    const renderRoomNavItem = (item: ActivityItem) => (
-      <button
-        key={item.id}
-        type="button"
-        className={`left-sidebar-nav-item${item.active ? ' active' : ''}`}
-        onClick={item.onClick}
-        aria-pressed={item.active}
-      >
-        <span className="left-sidebar-nav-icon" aria-hidden="true">{item.icon}</span>
-        <span className="left-sidebar-nav-label">{item.title}</span>
-      </button>
-    );
-
     return (
       <aside
         className="left-utility-panel left-sidebar bento-card"
@@ -1858,12 +1844,8 @@ export default function AppShell() {
           </button>
         </header>
 
-        <nav className="left-sidebar-nav" aria-label="Workspace tools">
-          {[tasksItem, sketchItem, libraryItem].map(renderRoomNavItem)}
-        </nav>
-
         <div className="drawer-body">
-          <ProjectHUD />
+          <ProjectHUD tools={[tasksItem, sketchItem, libraryItem]} />
         </div>
 
         <UsagePanel />
@@ -1963,8 +1945,9 @@ export default function AppShell() {
   // move to a surface on their own, the matching tab is selected (or added).
   type RightSurfaceId = 'preview' | 'sidechat' | RightNavigatorTool | RightTool;
   type RightSidebarTabItem = { id: string; surface: RightSurfaceId; previewTabId?: string; sidePaneId?: number };
-  const [rightTabs, setRightTabs] = useState<RightSidebarTabItem[]>([]);
-  const [activeRightTabId, setActiveRightTabId] = useState<string | null>(null);
+  // Kept per project: each one comes back with its own tabs, not the last one's.
+  const [rightTabs, setRightTabs] = useProjectPanelState<RightSidebarTabItem[]>('rightSidebarTabs', []);
+  const [activeRightTabId, setActiveRightTabId] = useProjectPanelState<string | null>('rightSidebarActiveTab', null);
   const activeRightTab = rightTabs.find((t) => t.id === activeRightTabId) ?? null;
   const [surfaceMenuAnchor, setSurfaceMenuAnchor] = useState<DOMRect | null>(null);
   const rightTabSeqRef = useRef(0);
@@ -2013,12 +1996,8 @@ export default function AppShell() {
 
   /** "+" menu / picker: always opens a new tab, even for a surface already open. */
   function openRightSurfaceTab(surface: RightSurfaceId) {
-    // A side chat's tab is added once its fork has opened.
-    if (surface === 'sidechat') {
-      setSurfaceMenuAnchor(null);
-      void startSideChat();
-      return;
-    }
+    // Side chats open only from /side in an agent chat, which adds the tab.
+    if (surface === 'sidechat') return;
     if (surface === 'preview' && layoutState.previewVisible && !layoutState.previewDocked) return;
     setSurfaceMenuAnchor(null);
     let previewTabId: string | undefined;
@@ -2079,21 +2058,6 @@ export default function AppShell() {
   const sideChatState = useStore(sideChats);
   const openingSideChatRef = useRef(false);
   const sideTabId = (paneId: number) => `rtab-side-${paneId}`;
-  // The "Side chat" entry stays greyed out until a chat has a message.
-  const sideSource = useSideChatSource(activeProjectIdValue ?? null, currentActiveSessionId);
-  const startingSideChatRef = useRef(false);
-  async function startSideChat() {
-    const agent = sideSource == null ? null : get(structuredChatPanes)[sideSource];
-    if (sideSource == null || !agent || startingSideChatRef.current) return;
-    startingSideChatRef.current = true;
-    try {
-      // The same path as typing /side in that chat.
-      const result = await runStructuredCommand(agent, sideSource, '/side');
-      if (result.error) showToast(result.error, 'warning');
-    } finally {
-      startingSideChatRef.current = false;
-    }
-  }
 
   useEffect(() => {
     const activeVirtualPanes = get(structuredChatPanes);
@@ -2129,7 +2093,21 @@ export default function AppShell() {
   }, [sideChatState.show?.nonce]);
 
   const rightSyncRef = useRef({ open: rightSidebarOpen, surface: storeRightSurface });
+  const rightSwitchedRef = useRef(false);
   useEffect(() => {
+    // Mid-switch the stores are half the old project and half the new one, so
+    // nothing here may add a tab or reopen one. Settle once, when it is done.
+    if (projectSwitching) {
+      rightSwitchedRef.current = true;
+      rightSurfaceChosenRef.current = false;
+      return;
+    }
+    if (rightSwitchedRef.current) {
+      rightSwitchedRef.current = false;
+      rightSyncRef.current = { open: rightSidebarOpen, surface: storeRightSurface };
+      if (rightSidebarOpen) followStoreSurface(storeRightSurface);
+      return;
+    }
     const prev = rightSyncRef.current;
     rightSyncRef.current = { open: rightSidebarOpen, surface: storeRightSurface };
     if (!rightSidebarOpen) {
@@ -2154,13 +2132,13 @@ export default function AppShell() {
       openingSideChatRef.current = false;
       return;
     }
-    if (opened && !chosen && prev.surface === storeRightSurface && !projectSwitching) {
+    if (opened && !chosen && prev.surface === storeRightSurface) {
       // Opened by hand: bring back the tab that was showing (or the list).
       if (activeRightTab) applyRightTab(activeRightTab);
       return;
     }
     if (opened || prev.surface !== storeRightSurface) followStoreSurface(storeRightSurface);
-  }, [rightSidebarOpen, storeRightSurface]);
+  }, [rightSidebarOpen, storeRightSurface, projectSwitching]);
 
   type RightSurface = {
     id: RightSurfaceId;
@@ -2171,7 +2149,7 @@ export default function AppShell() {
   };
   const browserIcon = <Icon><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Icon>;
   const NAVIGATOR_SHORTCUTS: Record<RightNavigatorTool, string> = {
-    files: 'F', git: 'G', problems: 'P', snapshots: 'N', snippets: 'I',
+    files: 'F', git: 'G', snapshots: 'N', snippets: 'I',
   };
   const TOOL_SHORTCUTS: Record<RightTool, string> = {
     review: 'D', fleet: 'A', toolbox: 'T', http: 'H', db: 'Q', containers: 'C', env: 'E', mobile: 'M',
@@ -2204,7 +2182,7 @@ export default function AppShell() {
       ? LEFT_TOOL_META[id as RightNavigatorTool]
       : RIGHT_TOOL_META[id as RightTool];
   const surfaceAvailable = (surface: RightSurface) =>
-    surface.id === 'sidechat' ? sideSource != null : !surface.needsProject || activeProjectIdValue != null;
+    surface.id !== 'sidechat' && (!surface.needsProject || activeProjectIdValue != null);
 
   function handleSurfaceKey(event: React.KeyboardEvent) {
     if (event.key === 'Escape' && surfaceMenuAnchor) {
@@ -2233,7 +2211,7 @@ export default function AppShell() {
             className={itemClass}
             onClick={() => openRightSurfaceTab(surface.id)}
             disabled={!available}
-            title={inRoom ? 'Browser is open in the main room' : available ? `${surface.title} (${surface.shortcut})` : surface.id === 'sidechat' ? `${surface.title}: send a message in an agent chat first` : `${surface.title} — open a project first`}
+            title={inRoom ? 'Browser is open in the main room' : available ? `${surface.title} (${surface.shortcut})` : surface.id === 'sidechat' ? `${surface.title}: type /side in an agent chat` : `${surface.title} — open a project first`}
             aria-keyshortcuts={surface.shortcut}
           >
             <span className="right-surface-icon" aria-hidden="true">{surface.icon}</span>

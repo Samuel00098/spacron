@@ -1,10 +1,13 @@
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type { StructuredAccess, StructuredChatState } from './codex-session';
 
+export const RESUME_TURN_PROMPT = 'Continue from where you stopped without repeating completed work.';
+
 export function initialStructuredState(access: StructuredAccess = 'ask', previous?: StructuredChatState): StructuredChatState {
   return {
     status: 'starting',
     error: null,
+    stoppedTurn: null,
     items: previous?.items ?? [],
     models: previous?.models ?? [],
     model: previous?.model ?? null,

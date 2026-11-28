@@ -120,6 +120,8 @@ pub async fn chat_image_preview(path: String) -> Result<String, String> {
             "gif" => "image/gif",
             "webp" => "image/webp",
             "bmp" => "image/bmp",
+            "svg" => "image/svg+xml",
+            "avif" => "image/avif",
             _ => return Err("Not an image".to_string()),
         };
         let size = fs::metadata(&p).map_err(|e| e.to_string())?.len();

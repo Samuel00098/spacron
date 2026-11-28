@@ -40,6 +40,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  filter: blur(4.5px);
+  user-select: none;
 }
 
 .account-switch-menu {
@@ -133,6 +135,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  filter: blur(4.5px);
+  user-select: none;
 }
 
 .account-switch-flag {

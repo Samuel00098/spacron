@@ -1,32 +1,46 @@
-import { severityOf, type UsageWindow, describeReset } from '$lib/stores/usage';
+import { severityOf, resetAtMs, type UsageWindow } from '$lib/stores/usage';
 import './UsageMeter.css';
 
 interface Props {
   window: UsageWindow;
-  /** Show the reset time beside the percentage. Off in dense contexts like the titlebar. */
+  /** Show the reset countdown inside the bar. */
   showReset?: boolean;
   display?: 'used' | 'left';
+  /** Rate-limit reset credits the provider still has, shown beside the countdown. */
+  credits?: number | null;
   now?: number;
 }
 
+/** "45m", "4h 55m", "1d 14h". */
+function countdown(ms: number): string {
+  const mins = Math.round(ms / 60000);
+  if (mins <= 0) return 'now';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
 /**
- * One usage window as a labelled bar.
+ * One usage window: a label and percentage over a rectangular bar.
  *
- * The percentage is stated as text as well as drawn, because the bar alone is
- * only comparable against itself — "how close am I?" is a number question, and
- * a 4px-wide difference in fill does not answer it.
- *
- * Laid out on one line (label · bar · percent · reset) so a row of windows
- * stays as tall as its header — the compact shape the usage popup is meant to
- * have. The reset time is the least-loaded fact, so it sits at the far right,
- * small, rather than on its own line.
+ * The solid block is the amount, the hatching is the rest, and the upright
+ * marker is the pace line: where the block would end if the allowance were
+ * spent evenly across the window. The countdown to the reset sits in the bar.
  */
-export default function UsageMeter({ window, showReset = true, display = 'left', now = Date.now() }: Props) {
+export default function UsageMeter({ window, showReset = true, display = 'left', credits, now = Date.now() }: Props) {
   const severity = severityOf(window.usedPercent);
-  const reset = showReset ? describeReset(window, now) : null;
-  const percent = Math.round(display === 'used' ? window.usedPercent : 100 - window.usedPercent);
-  const remaining = Math.max(0, Math.round(100 - window.usedPercent));
-  const shownPercent = display === 'used' ? Math.round(window.usedPercent) : remaining;
+  const used = Math.min(100, Math.max(0, window.usedPercent));
+  const percent = Math.round(display === 'used' ? used : 100 - used);
+
+  const resetAt = resetAtMs(window);
+  const reset = showReset && resetAt != null ? countdown(resetAt - now) : null;
+  // Needs both the reset instant and the window's length; some providers give only one.
+  let pace: number | null = null;
+  if (resetAt != null && window.windowMinutes) {
+    const timeLeft = Math.min(1, Math.max(0, (resetAt - now) / (window.windowMinutes * 60000)));
+    pace = (display === 'used' ? 1 - timeLeft : timeLeft) * 100;
+  }
 
   return (
     <div className="usage-meter" data-severity={severity}>
@@ -34,7 +48,7 @@ export default function UsageMeter({ window, showReset = true, display = 'left',
         <span className="usage-meter-label" title={window.label}>
           {window.label} window
         </span>
-        <span className="usage-meter-remaining">{shownPercent}% {display}</span>
+        <span className="usage-meter-remaining">{percent}% {display}</span>
       </div>
       <div
         className="usage-meter-track"
@@ -42,15 +56,27 @@ export default function UsageMeter({ window, showReset = true, display = 'left',
         aria-valuenow={percent}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label={`${window.label} window: ${shownPercent}% ${display}`}
+        aria-label={`${window.label} window: ${percent}% ${display}${reset ? `, resets in ${reset}` : ''}`}
       >
         <span className="usage-meter-fill" style={{ width: `${percent}%` }} />
+        {pace != null && (
+          <span className="usage-meter-pace" style={{ left: `${pace}%`, translate: `-${pace}% 0` }} title="Even pace for this window" />
+        )}
+        {reset && (
+          <span className="usage-meter-reset" title={`Resets in ${reset}`}>
+            <span aria-hidden="true">↻</span> {reset}
+            {credits ? (
+              <span className="usage-meter-credits" title={`${credits} reset credit${credits === 1 ? '' : 's'} available`}>
+                <span aria-hidden="true">·</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 7h18v3a2 2 0 0 0 0 4v3H3v-3a2 2 0 0 0 0-4z" />
+                </svg>
+                {credits}
+              </span>
+            ) : null}
+          </span>
+        )}
       </div>
-      {reset && (
-        <span className="usage-meter-reset" title={reset}>
-          {reset}
-        </span>
-      )}
     </div>
   );
 }

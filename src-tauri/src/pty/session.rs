@@ -74,7 +74,8 @@ pub fn spawn(
     for key in crate::acp::inherited_agent_session_vars() {
         cmd.env_remove(key);
     }
-    if let Some(env_vars) = env {
+    if let Some(mut env_vars) = env {
+        crate::commands::agent_accounts::add_account_secrets(&mut env_vars);
         for (k, v) in env_vars {
             cmd.env(k, v);
         }

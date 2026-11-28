@@ -110,6 +110,11 @@
   white-space: nowrap;
 }
 
+.agent-accounts-label-text {
+  filter: blur(4.5px);
+  user-select: none;
+}
+
 .agent-accounts-label small {
   margin-left: 8px;
   color: var(--text-muted);

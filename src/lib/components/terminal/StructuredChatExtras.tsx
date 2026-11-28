@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useReducer } from 'react';
 import { useStore } from '$lib/react/useStore';
 import { useStructuredChatUnread } from '$lib/services/structured-chat/panes';
+import type { StructuredStoppedTurn } from '$lib/services/structured-chat/provider';
 import {
   approvalReceipts,
   recordHasConversation,
@@ -176,6 +177,36 @@ export function SignInNotice({ label, onRetry, onOpenTerminal }: {
       </span>
       <button type="button" className="tcr-link-btn" onClick={onRetry}>Retry</button>
       <button type="button" className="tcr-link-btn" onClick={onOpenTerminal}>Open terminal</button>
+    </div>
+  );
+}
+
+/**
+ * Shown above the composer when an agent turn stopped early (interrupted, hit
+ * a turn/token limit, or halted mid-work), offering a one-click native resume.
+ */
+export function StoppedTurnNotice({ label, stopped, resuming, onResume, onDismiss }: {
+  label: string;
+  stopped: StructuredStoppedTurn;
+  resuming: boolean;
+  onResume: () => void;
+  onDismiss: () => void;
+}) {
+  const headline = stopped.reason === 'interrupted'
+    ? `${label} turn stopped.`
+    : stopped.reason === 'max_tokens'
+      ? `${label} hit its turn limit.`
+      : `${label} stopped early.`;
+  const detail = stopped.reason !== 'interrupted' && stopped.detail ? ` ${stopped.detail}` : '';
+  return (
+    <div className="tcr-command-notice structured-chat-stopped" role="status">
+      <span>
+        <strong>{headline}</strong>{detail}
+      </span>
+      <button type="button" className="tcr-link-btn" disabled={resuming} onClick={onResume}>
+        {resuming ? 'Resuming…' : 'Resume turn'}
+      </button>
+      <button type="button" className="tcr-link-btn" onClick={onDismiss}>Dismiss</button>
     </div>
   );
 }

@@ -1842,7 +1842,18 @@ async fn fetch_grok(client: &reqwest::Client, spec: &ProviderSpec) -> ProviderUs
             return ProviderUsage::blank(spec, UsageStatus::Expired);
         }
         if !response.status().is_success() {
-            last_status = Some(response.status());
+            let status = response.status();
+            // xAI refuses Grok Build while the account's privacy setting is a
+            // legacy mode, and only the body says so.
+            if status == reqwest::StatusCode::FORBIDDEN
+                && response.text().await.is_ok_and(|text| text.contains("WKE=privacy-mode:"))
+            {
+                return ProviderUsage::failed(
+                    spec,
+                    "Switch your xAI account to Privacy Mode to show Grok usage limits.",
+                );
+            }
+            last_status = Some(status);
             continue;
         }
         let Ok(body) = response.json::<Value>().await else {
@@ -1894,9 +1905,26 @@ fn parse_grok_windows(body: &Value) -> Vec<UsageWindow> {
         .and_then(|p| p.get("end"))
         .or_else(|| grok_field(body, "billingPeriodEnd"));
 
+    // A period's length is what lets the meter draw its pace line.
+    let boundary = |key: &str| {
+        let text = period?.get(key)?.as_str()?;
+        iso8601_to_epoch_secs(&text.replace("+00:00", "Z"))
+    };
+    let minutes = match (boundary("start"), boundary("end")) {
+        (Some(start), Some(end)) if end > start => Some(((end - start) / 60) as u64),
+        _ => None,
+    };
+    let window = |percent: f64| {
+        let window = UsageWindow::new(label, percent).with_reset(reset);
+        match minutes {
+            Some(minutes) => window.with_window(minutes),
+            None => window,
+        }
+    };
+
     // Preferred: an explicit percentage.
     if let Some(percent) = grok_field(body, "creditUsagePercent").and_then(Value::as_f64) {
-        return vec![UsageWindow::new(label, percent).with_reset(reset)];
+        return vec![window(percent)];
     }
 
     // Otherwise derive it from used/limit — but only when there is a real
@@ -1906,8 +1934,16 @@ fn parse_grok_windows(body: &Value) -> Vec<UsageWindow> {
     let limit = grok_amount(grok_field(body, "monthlyLimit"));
     if let (Some(used), Some(limit)) = (used, limit) {
         if limit > 0.0 {
-            return vec![UsageWindow::new(label, used / limit * 100.0).with_reset(reset)];
+            return vec![window(used / limit * 100.0)];
         }
+    }
+
+    // Grok leaves the percentage out while it is zero, which is what a free or
+    // unused account answers: a complete weekly or monthly period and no number.
+    // T3 Code reads that as 0% used, and so do we.
+    let percent_absent = grok_field(body, "creditUsagePercent").is_none();
+    if percent_absent && matches!(label, "Weekly" | "Monthly") && minutes.is_some() {
+        return vec![window(0.0)];
     }
 
     Vec::new()
@@ -4219,9 +4255,13 @@ mod tests {
         )
         .unwrap();
 
-        // No percentage and no limit — this must yield NO window rather than a
-        // 0% bar implying a healthy untouched quota.
-        assert!(parse_grok_windows(&body).is_empty());
+        // No percentage: Grok omits it while it is zero.
+        let windows = parse_grok_windows(&body);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].label, "Weekly");
+        assert_eq!(windows[0].used_percent, 0.0);
+        assert_eq!(windows[0].window_minutes, Some(10_080));
+        assert!(windows[0].resets_at_iso.is_some());
     }
 
     #[test]

@@ -24,7 +24,7 @@ import { chatAutoAnswerInline } from '$lib/stores/settings';
 import type { TerminalChatItem } from '$lib/services/terminal-chat';
 import type { StructuredChatProvider } from './provider';
 import type { StructuredAccess, StructuredModel } from './codex-session';
-import { initialStructuredState, StructuredStateStore } from './state';
+import { initialStructuredState, RESUME_TURN_PROMPT, StructuredStateStore } from './state';
 import { allAnswered, answerLabels, askTitle, type AskAnswer, type AskQuestion } from './ask';
 import { answeredInput, isAskUserQuestion, parseAskUserQuestion, type ClaudeQuestion } from './claude-questions';
 import type { StructuredApproval } from './codex-session';
@@ -66,6 +66,7 @@ interface Runtime {
   questions: Map<string, { input: Json; asked: AskQuestion[] }>;
   stderr: ReturnType<typeof stderrTail>;
   exited: boolean;
+  interrupted?: boolean;
 }
 
 const stores = new StructuredStateStore();
@@ -262,7 +263,15 @@ async function start(sessionId: number, cwd: string, options: { access?: Structu
       const reason = current.stderr.text();
       failControls(current, new Error(reason ?? 'Claude exited.'));
       if (sessions.get(sessionId) !== current) return;
-      stores.update(sessionId, (state) => state.status === 'closed' ? {} : { status: 'failed', error: reason ? `Claude stopped: ${reason}` : state.error ?? 'Claude stopped.' });
+      stores.update(sessionId, (state) => {
+        if (state.status === 'closed') return {};
+        const error = reason ? `Claude stopped: ${reason}` : state.error ?? 'Claude stopped.';
+        return {
+          status: 'failed',
+          error,
+          ...(state.status === 'working' ? { stoppedTurn: { reason: 'error', detail: error, at: Date.now() } } : {}),
+        };
+      });
     });
     const initialized = await control(sessionId, 'initialize', {}, INITIALIZE_TIMEOUT_MS);
     const rawModels = initialized.models ?? rec(initialized.modelCatalog)?.models ?? [];
@@ -303,10 +312,11 @@ async function send(sessionId: number, text: string, images: string[] = []): Pro
     stores.update(sessionId, { status: 'failed', error: 'Claude is not running. Reconnect to continue.' });
     return;
   }
+  runtime.interrupted = false;
   // A path attachment has to be read before it can be sent as an image block.
   const dataUrls = await imageDataUrlsFor(images);
   stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text, images: dataUrls.length ? dataUrls : undefined });
-  stores.update(sessionId, { status: 'working', error: null });
+  stores.update(sessionId, { status: 'working', error: null, stoppedTurn: null });
   const content: Json[] = [];
   for (const image of dataUrls) {
     const parsed = parseImageDataUrl(image);
@@ -322,11 +332,32 @@ async function send(sessionId: number, text: string, images: string[] = []): Pro
     await runtime.session.writeRaw(`${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`);
     wire.sent();
   } catch (error) {
-    stores.update(sessionId, { status: 'failed', error: `Couldn't send to Claude: ${error instanceof Error ? error.message : String(error)}` });
+    const message = `Couldn't send to Claude: ${error instanceof Error ? error.message : String(error)}`;
+    stores.update(sessionId, { status: 'failed', error: message, stoppedTurn: { reason: 'error', detail: message, at: Date.now() } });
+  }
+}
+
+async function resumeTurn(sessionId: number): Promise<void> {
+  const runtime = sessions.get(sessionId);
+  const state = stores.get(sessionId);
+  if (!runtime || !state) return;
+  if (runtime.exited) {
+    stores.update(sessionId, { status: 'failed', error: 'Claude is not running. Reconnect to continue.' });
+    return;
+  }
+  runtime.interrupted = false;
+  stores.update(sessionId, { status: 'working', error: null, stoppedTurn: null });
+  try {
+    await runtime.session.writeRaw(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: RESUME_TURN_PROMPT }] } })}\n`);
+  } catch (error) {
+    const message = `Couldn't resume Claude: ${error instanceof Error ? error.message : String(error)}`;
+    stores.update(sessionId, { status: 'failed', error: message, stoppedTurn: { reason: 'error', detail: message, at: Date.now() } });
   }
 }
 
 async function interrupt(sessionId: number): Promise<void> {
+  const runtime = sessions.get(sessionId);
+  if (runtime) runtime.interrupted = true;
   try { await control(sessionId, 'interrupt', {}, 15_000); } catch { /* the turn may have just finished */ }
 }
 
@@ -505,10 +536,22 @@ function onFrame(sessionId: number, frame: AcpNotification | Json): void {
   if (type === 'result') {
     const usage = rec(value.usage);
     const used = usage ? ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].reduce((sum, key) => sum + (typeof usage[key] === 'number' ? usage[key] as number : 0), 0) : null;
+    const subtype = str(value.subtype);
+    const isError = value.is_error === true || (Boolean(subtype) && subtype !== 'success');
+    const errorText = isError
+      ? (textFrom(value.result) || (Array.isArray(value.errors) ? value.errors.map(textFrom).join('\n') : '') || 'Claude could not finish this turn.')
+      : null;
+    const wasInterrupted = Boolean(runtime?.interrupted);
+    if (runtime) runtime.interrupted = false;
     stores.update(sessionId, {
       status: 'ready',
-      error: value.is_error === true || (str(value.subtype) && str(value.subtype) !== 'success')
-        ? (textFrom(value.result) || (Array.isArray(value.errors) ? value.errors.map(textFrom).join('\n') : '') || 'Claude could not finish this turn.')
+      error: errorText,
+      stoppedTurn: wasInterrupted || isError
+        ? {
+            reason: wasInterrupted ? 'interrupted' : subtype === 'error_max_turns' ? 'max_tokens' : 'error',
+            detail: errorText,
+            at: Date.now(),
+          }
         : null,
       approvals: [],
       // Claude reports what it really ran: show Fast mode off if it refused.
@@ -548,6 +591,7 @@ export const claudeProvider: StructuredChatProvider = {
   subscribe: stores.subscribe.bind(stores),
   start,
   send,
+  resumeTurn,
   interrupt,
   setModel,
   setEffort,

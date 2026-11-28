@@ -1229,7 +1229,8 @@ async fn execute(root: &Path, bot: &BoxBot, run_id: &str, prompt: &str, log_path
     // accounts), like every other launch. Without it a bot always used the CLI's
     // own default login, which can be a different account that is out of credit
     // while the usage meter, which shows the selected account, still has room.
-    let account_env = crate::commands::agent_accounts::usage_account_env(account_provider(&argv[0]), None).await;
+    let mut account_env = crate::commands::agent_accounts::usage_account_env(account_provider(&argv[0]), None).await;
+    crate::commands::agent_accounts::add_account_secrets(&mut account_env);
     let mut env: Vec<(&str, &str)> = vec![("SPACRON_BOT", bot.name.as_str()), ("MCP_TIMEOUT", "120000")];
     env.extend(account_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     let program = program_name(&argv[0]);

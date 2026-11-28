@@ -36,10 +36,9 @@
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.04) 0%, transparent 35%),
-    radial-gradient(150% 120% at -8% -5%, color-mix(in srgb, var(--accent) 4%, transparent) 0%, transparent 50%);
-  mix-blend-mode: screen;
+  /* Sheen removed: it showed as a gradient in the top-left of an empty editor */
+  background: none;
+  display: none;
 }
 
 /* Ensure CodeMirror content renders above the overlay */

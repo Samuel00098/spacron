@@ -37,6 +37,7 @@ const h = vi.hoisted(() => {
     forkStructuredSession: vi.fn(async (_id, opts) => ({ id: 'fork-1', title: opts?.title ?? 'Chat (fork)', forkMode: 'native' })),
     rewindStructuredSession: vi.fn(async () => true),
     renameStructuredSession: vi.fn(() => true),
+    resumeStoppedTurn: vi.fn(async () => true),
     // A chat opened and never used (id `empty`) holds nothing worth resuming.
     recordHasConversation: vi.fn((record: { id: string }) => record.id !== 'empty'),
     resumeStructuredSessionInPane: vi.fn(async () => true),
@@ -237,5 +238,18 @@ describe('structured slash commands', () => {
     const termRes = await runStructuredCommand('codex', 1, '/terminal');
     expect(termRes.handled).toBe(true);
     expect(termRes.error).toContain('Create project from chat');
+  });
+
+  it('handles /continue by resuming a stopped turn and refuses while working', async () => {
+    h.state.status = 'working';
+    const busyRes = await runStructuredCommand('codex', 1, '/continue');
+    expect(busyRes.handled).toBe(true);
+    expect(busyRes.error).toContain('already running');
+    expect(h.store.resumeStoppedTurn).not.toHaveBeenCalled();
+
+    h.state.status = 'ready';
+    const res = await runStructuredCommand('codex', 1, '/continue');
+    expect(res).toEqual({ handled: true });
+    expect(h.store.resumeStoppedTurn).toHaveBeenCalledWith(1);
   });
 });

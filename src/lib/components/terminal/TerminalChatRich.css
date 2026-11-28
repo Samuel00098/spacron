@@ -919,6 +919,13 @@
   --tc-line-strong: rgba(0, 0, 0, 0.17);
   background: rgb(var(--terminal-surface-rgb, 239, 239, 239));
 }
+/* On the user's own image the terminal is see-through to the panel's glass, so
+   matching it means no fill here: a solid one covered the glass and ignored
+   Settings > Panel opacity. It follows both
+   theme rules above so that neither paints over it. */
+:root.has-bg-media .terminal-chat-view[data-match-terminal] {
+  background: transparent;
+}
 #app#app .terminal-chat-view[data-match-terminal],
 #app#app .terminal-chat-view[data-match-terminal] :where(*):not(pre, pre *, code, code *, kbd, samp) {
   font-family: var(--terminal-font-family, ui-monospace, monospace) !important;

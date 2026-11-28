@@ -28,7 +28,7 @@ import { acpImageBlocks, imageDataUrlsFor } from './attachments';
 import { prepareStructuredVisuals } from './visuals';
 import { aboutYouEnv } from '$lib/stores/aboutYou';
 import type { StructuredChatProvider } from './provider';
-import { initialStructuredState, StructuredStateStore } from './state';
+import { initialStructuredState, RESUME_TURN_PROMPT, StructuredStateStore } from './state';
 import { acpCommandsFrom, setAgentCommands } from '$lib/services/agent-commands';
 
 type Json = Record<string, unknown>;
@@ -380,7 +380,15 @@ function makeProvider(agent: string): StructuredChatProvider {
       await session.onExit(() => {
         exited = true;
         const reason = tail.text();
-        stores.update(sessionId, (state) => state.status === 'closed' ? {} : { status: 'failed', error: reason ? `${launch.label} stopped: ${reason}` : state.error ?? `${launch.label} stopped.` });
+        stores.update(sessionId, (state) => {
+          if (state.status === 'closed') return {};
+          const error = reason ? `${launch.label} stopped: ${reason}` : state.error ?? `${launch.label} stopped.`;
+          return {
+            status: 'failed',
+            error,
+            ...(state.status === 'working' ? { stoppedTurn: { reason: 'error', detail: error, at: Date.now() } } : {}),
+          };
+        });
       });
       const initialized = await withTimeout(initializeAcp(session, ELICITATION_AGENTS.has(agent) ? { ...ACP_NO_CLIENT_TOOLS, elicitation: { form: {} } } : ACP_NO_CLIENT_TOOLS), 60_000, `${launch.label} did not answer initialize`);
       const methods = initialized.authMethods.map((method) => str(rec(method)?.id)).filter((id): id is string => !!id);
@@ -446,6 +454,52 @@ function makeProvider(agent: string): StructuredChatProvider {
     }
   }
 
+  async function runPrompt(
+    sessionId: number,
+    runtime: { session: AcpSession; sessionId: string; cwd: string; modes?: string[] },
+    promptText: string,
+    imageBlocks: ReturnType<typeof acpImageBlocks>,
+    onSent?: () => void,
+  ): Promise<void> {
+    // A typed message or resume supersedes a question card left from the last turn.
+    textAsks.delete(sessionId);
+    stores.update(sessionId, { status: 'working', error: null, approvals: [], stoppedTurn: null });
+    try {
+      const result = await promptAcpNativeSession(runtime.session, runtime.sessionId, promptText, imageBlocks);
+      onSent?.();
+      if (sessions.get(sessionId) !== runtime) return;
+      const stopReason = result?.stopReason;
+      const asked = stopReason === 'cancelled' ? undefined : textAsks.get(sessionId);
+      if (!asked) textAsks.delete(sessionId);
+      const stoppedTurn = stopReason === 'cancelled'
+        ? { reason: 'interrupted' as const, detail: null, at: Date.now() }
+        : stopReason && stopReason !== 'end_turn'
+          ? {
+              reason: (stopReason === 'max_tokens' || stopReason === 'max_turn_requests' ? 'max_tokens' : 'stopped') as 'max_tokens' | 'stopped',
+              detail: stopReason.replace(/_/g, ' '),
+              at: Date.now(),
+            }
+          : null;
+      stores.update(sessionId, (state) => state.status !== 'working' ? {} : {
+        status: 'ready',
+        approvals: asked ? [askApproval(asked.requestId, 'antigravity', asked.questions)] : [],
+        stoppedTurn,
+        ...(stopReason && stopReason !== 'end_turn' && stopReason !== 'cancelled'
+          ? { error: `Turn stopped (${stopReason.replace(/_/g, ' ')}).` }
+          : {}),
+      });
+    } catch (error) {
+      if (sessions.get(sessionId) !== runtime) return;
+      const message = error instanceof Error ? error.message : String(error);
+      stores.update(sessionId, (state) => state.status !== 'working' ? {} : {
+        status: 'ready',
+        approvals: [],
+        error: message,
+        stoppedTurn: { reason: 'error', detail: message, at: Date.now() },
+      });
+    }
+  }
+
   async function send(sessionId: number, text: string, images: string[] = []): Promise<void> {
     const runtime = sessions.get(sessionId);
     if (!runtime || (!text.trim() && !images.length)) return;
@@ -458,32 +512,16 @@ function makeProvider(agent: string): StructuredChatProvider {
       return;
     }
     stores.upsert(sessionId, { id: `user-${Date.now()}`, kind: 'user', text, images: dataUrls.length ? dataUrls : undefined });
-    // A typed message supersedes a question card left from the last turn.
-    textAsks.delete(sessionId);
-    stores.update(sessionId, { status: 'working', error: null, approvals: [] });
     const wire = paneWireText(sessionId, text);
-    try {
-      const result = await promptAcpNativeSession(runtime.session, runtime.sessionId, wire.text, acpImageBlocks(dataUrls));
-      wire.sent();
-      if (sessions.get(sessionId) !== runtime) return;
-      const stopReason = result?.stopReason;
-      const asked = stopReason === 'cancelled' ? undefined : textAsks.get(sessionId);
-      if (!asked) textAsks.delete(sessionId);
-      stores.update(sessionId, (state) => state.status !== 'working' ? {} : {
-        status: 'ready',
-        approvals: asked ? [askApproval(asked.requestId, 'antigravity', asked.questions)] : [],
-        ...(stopReason && stopReason !== 'end_turn' && stopReason !== 'cancelled'
-          ? { error: `Turn stopped (${stopReason.replace(/_/g, ' ')}).` }
-          : {}),
-      });
-    } catch (error) {
-      if (sessions.get(sessionId) !== runtime) return;
-      stores.update(sessionId, (state) => state.status !== 'working' ? {} : {
-        status: 'ready',
-        approvals: [],
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await runPrompt(sessionId, runtime, wire.text, acpImageBlocks(dataUrls), () => wire.sent());
+  }
+
+  async function resumeTurn(sessionId: number): Promise<void> {
+    const runtime = sessions.get(sessionId);
+    if (!runtime) return;
+    activeAssistantIds.delete(sessionId);
+    activeReasoningIds.delete(sessionId);
+    await runPrompt(sessionId, runtime, RESUME_TURN_PROMPT, []);
   }
 
   async function interrupt(sessionId: number): Promise<void> {
@@ -703,6 +741,7 @@ function makeProvider(agent: string): StructuredChatProvider {
     subscribe: stores.subscribe.bind(stores),
     start,
     send,
+    resumeTurn,
     interrupt,
     setModel,
     setEffort,

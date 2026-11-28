@@ -755,6 +755,25 @@ export async function reconnectStructuredSession(paneId: number): Promise<boolea
   }
 }
 
+/**
+ * Resume a stopped or interrupted turn in this pane without adding a user
+ * message to the transcript. Reconnects the provider first if it exited or failed.
+ */
+export async function resumeStoppedTurn(paneId: number): Promise<boolean> {
+  const record = recordForPane(paneId);
+  const agent = record?.provider ?? get(structuredChatPanes)[paneId];
+  const provider = structuredChatProvider(agent);
+  if (!provider?.resumeTurn) return false;
+  const state = provider.get(paneId);
+  if (state?.status === 'working') return false;
+  if (!state || state.status === 'failed' || state.status === 'closed') {
+    const ok = await reconnectStructuredSession(paneId);
+    if (!ok) return false;
+  }
+  await provider.resumeTurn(paneId);
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Explicit session operations
 // ---------------------------------------------------------------------------

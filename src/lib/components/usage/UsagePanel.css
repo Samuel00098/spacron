@@ -457,10 +457,10 @@
 }
 
 .usage-row-mini-track {
-  height: 5px;
+  height: 10px;
   overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
+  border-radius: 3px;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-primary) 22%, transparent) 0 1px, transparent 1px 4px);
 }
 
 .usage-row-mini-track span {
@@ -544,6 +544,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  filter: blur(4.5px);
+  user-select: none;
 }
 
 .usage-row-meters {
@@ -689,6 +691,11 @@
   font-size: 11px;
 }
 
+.usage-detail-account-label {
+  filter: blur(4.5px);
+  user-select: none;
+}
+
 .usage-detail-meters {
   display: flex;
   flex-direction: column;
@@ -736,7 +743,13 @@
   color: var(--text-primary);
 }
 
-.usage-detail-account > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-detail-account > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  filter: blur(4.5px);
+  user-select: none;
+}
 .usage-detail-account > span:last-child { font-variant-numeric: tabular-nums; }
 
 .usage-detail-manage {

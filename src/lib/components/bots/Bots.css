@@ -8,6 +8,7 @@
 .bots-sidebar-toggle svg { transition: transform var(--dur-fast); }
 .bots-sidebar-toggle svg.expanded { transform: rotate(90deg); }
 #bots-sidebar-list[hidden] { display: none; }
+.sidebar-fold-count { margin-left: 4px; opacity: .65; font-variant-numeric: tabular-nums; }
 .bots-sidebar-row { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .bots-sidebar-row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bots-sidebar-row:hover { background: var(--bg-hover); }
@@ -40,7 +41,8 @@
 .bots-header p { margin-top: 4px; color: var(--text-muted); }
 .bots-header-icon, .bots-empty-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: var(--bg-tertiary); border-radius: 12px; box-shadow: var(--surface-outline); }
 .bots-header-icon { width: 44px; height: 44px; }
-.bots-body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 28px 32px; }
+/* `none`, not `contain`: only `none` stops WebView2's elastic bounce at the ends. */
+.bots-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: none; padding: 22px 28px 32px; }
 
 .bots-error { margin: 10px 0; padding: 9px 12px; border-radius: 8px; background: color-mix(in srgb, var(--error, #f85149) 12%, transparent); color: var(--error, #f85149); }
 .bots-panel > .bots-error { margin: 12px 28px 0; }
@@ -447,3 +449,23 @@
 .bots-panel .bots-chat-divider button.armed { color: var(--error, #f85149); background: color-mix(in srgb, var(--error, #f85149) 14%, transparent); }
 .bots-panel .bots-chat-divider button:disabled { opacity: 0.4; cursor: default; }
 .bots-panel .bots-chat-earlier { align-self: center; }
+
+/* On the user's own image every filled surface in Bots was solid, a block that
+   ignored Settings > Panel opacity. A light wash instead lets the panel's glass,
+   which does follow the slider, show through. */
+html.has-bg-media .bots-panel :is(.bots-card, .bots-template, .bots-editor-main, .bots-editor-side, .bots-section, .bots-template-picker, .bots-no-runs, .bots-header-icon) {
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+html.has-bg-media .bots-panel :is(.bots-card, .bots-template):hover {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+html.has-bg-media .bots-panel .bots-template[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+html.has-bg-media .bots-editor-footer { background: transparent; }
+html.has-bg-media .bots-panel .bots-chat-suggestions button {
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+html.has-bg-media .bots-panel .bots-chat-suggestions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}

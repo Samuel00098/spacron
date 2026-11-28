@@ -1097,6 +1097,8 @@ export const accentColor = persistentWritable<string>('accentColor', '');
 // frost/glass opacity of every surface — works with or without a background image,
 // letting the desktop/acrylic (or the image) show through. Default 0.
 export const interfaceTransparency = persistentWritable<number>('interfaceTransparency', 0);
+/** When on, the whole app uses the terminal's font family and text color. */
+export const matchTerminalFont = persistentWritable<boolean>('matchTerminalFont', false);
 
 // Background image — an optional personalization layer painted behind the frosted UI.
 // The image file lives in the app data dir (managed by the Rust backend); this only
@@ -1245,6 +1247,7 @@ export function resetSettingsToDefault() {
   appearance.set('system');
   accentColor.set('');
   interfaceTransparency.set(0);
+  matchTerminalFont.set(false);
   backgroundImageEnabled.set(false);
   backgroundImageOpacity.set(100);
   backgroundImageBlur.set(0);

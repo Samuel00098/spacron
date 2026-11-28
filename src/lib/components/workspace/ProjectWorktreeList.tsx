@@ -54,6 +54,7 @@ export default function ProjectWorktreeList({
   onNewItem,
   newItemLabel = 'New agent here',
   renderNewItem,
+  emptyText,
 }: {
   projectId: string;
   /** The project root: a project git cannot list still shows its master row. */
@@ -69,6 +70,8 @@ export default function ProjectWorktreeList({
   /** Replaces the row's + button with a control of the caller's (the agent
    *  launcher, aimed at this worktree). */
   renderNewItem?: (worktree: ProjectWorktree) => ReactNode;
+  /** Shown when the only worktree has nothing in it. */
+  emptyText?: string;
 }) {
   const all = useStore(worktreesByProject);
   const active = useStore(activeWorktreeByProject);
@@ -131,6 +134,16 @@ export default function ProjectWorktreeList({
   }, [worktrees, sessions, threads]);
 
   if (!worktrees || worktrees.length === 0) return null;
+
+  // Only the main checkout: no header and no row to pick, just what is in it.
+  // The project's own row carries the actions (see ProjectHUD).
+  if (worktrees.length === 1 && worktrees[0].is_main && !worktrees[0].missing) {
+    return (
+      <div className="project-flat-list">
+        {renderChildren?.(worktrees[0]) || (emptyText && <div className="project-contents-empty">{emptyText}</div>)}
+      </div>
+    );
+  }
 
   const rows = orderWorktreeTree(worktrees);
   const childCount = new Map<string, number>();

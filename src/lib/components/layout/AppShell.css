@@ -899,7 +899,7 @@
 }
 .app-shell .rooms-table.project-revealing .focused-room .room-panel,
 .app-shell .rooms-table.project-revealing .stage-empty-cta {
-  animation: project-stage-in 200ms var(--ease-out) both !important;
+  animation: project-stage-in 140ms var(--ease-out) both !important;
 }
 /* Only a slow (cold) restore ever shows this: the delay outlasts a warm switch,
    so a quick hop between projects never flashes a loading line. */
@@ -913,6 +913,11 @@
   color: var(--text-muted);
   font-size: 12px;
   pointer-events: none;
+  animation: project-stage-in 200ms var(--ease-out) 450ms both;
+}
+/* The sidebar's "Loading project tools" waits the same way, so a quick switch
+   never flashes a spinner. */
+.app-shell .right-sidebar-loading-tools {
   animation: project-stage-in 200ms var(--ease-out) 450ms both;
 }
 @keyframes project-stage-in {
@@ -3322,12 +3327,12 @@
 }
 
 .app-shell .left-sidebar .project-sidebar-card {
-  padding: 12px 10px;
+  padding: 9px 10px;
   border-radius: 10px;
 }
 
 .app-shell .left-sidebar .project-contents {
-  margin-top: 8px;
+  margin-top: 2px;
 }
 
 .app-shell .left-sidebar-footer {

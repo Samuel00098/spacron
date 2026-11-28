@@ -65,6 +65,38 @@ fn auth_file_has_chatgpt_login(path: &std::path::Path) -> bool {
     mode.eq_ignore_ascii_case("chatgpt") && json["tokens"].is_object()
 }
 
+fn decode_jwt_payload(token: &str) -> Option<Value> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let payload = token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn read_local_auth_status(path: &std::path::Path) -> Option<(String, Option<String>, Option<String>)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let json = serde_json::from_str::<Value>(&text).ok()?;
+    let mode = json["auth_mode"].as_str().unwrap_or("");
+    if mode.eq_ignore_ascii_case("chatgpt") && json["tokens"].is_object() {
+        let payload = json["tokens"]["id_token"].as_str().and_then(decode_jwt_payload);
+        let email = payload.as_ref().and_then(|p| p["email"].as_str()).map(str::to_string);
+        let plan = payload
+            .as_ref()
+            .and_then(|p| {
+                p["https://api.openai.com/auth"]["chatgpt_plan_type"]
+                    .as_str()
+                    .or_else(|| p["chatgpt_plan_type"].as_str())
+            })
+            .map(str::to_string);
+        return Some(("chatgpt".to_string(), email, plan));
+    }
+    if mode.eq_ignore_ascii_case("apikey")
+        || json["OPENAI_API_KEY"].as_str().is_some_and(|k| !k.trim().is_empty())
+    {
+        return Some(("apiKey".to_string(), None, None));
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // App-server session
 // ---------------------------------------------------------------------------
@@ -860,7 +892,19 @@ pub async fn chatgpt_status() -> ChatGptStatus {
             status.plan = account["planType"].as_str().map(str::to_string);
             SIGNED_IN.store(if status.signed_in { 2 } else { 1 }, Ordering::Relaxed);
         }
-        Err(error) => status.error = Some(error),
+        Err(error) => {
+            if let Some((mode, email, plan)) =
+                codex_home().and_then(|home| read_local_auth_status(&home.join("auth.json")))
+            {
+                status.signed_in = mode == "chatgpt";
+                status.auth_mode = Some(mode);
+                status.email = email;
+                status.plan = plan;
+                SIGNED_IN.store(if status.signed_in { 2 } else { 1 }, Ordering::Relaxed);
+            } else {
+                status.error = Some(error);
+            }
+        }
     }
     status
 }
@@ -971,6 +1015,32 @@ mod tests {
         assert!(!auth_file_has_chatgpt_login(&file));
         std::fs::write(&file, "not json").unwrap();
         assert!(!auth_file_has_chatgpt_login(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_auth_status_reads_jwt_email_and_plan() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let dir = std::env::temp_dir().join(format!("spacron-chatgpt-local-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("auth.json");
+        let payload = URL_SAFE_NO_PAD.encode(
+            r#"{"email":"user@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"plus"}}"#,
+        );
+        let jwt = format!("header.{payload}.sig");
+        std::fs::write(
+            &file,
+            format!(r#"{{"auth_mode":"chatgpt","tokens":{{"access_token":"x","id_token":"{jwt}"}}}}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            read_local_auth_status(&file),
+            Some(("chatgpt".to_string(), Some("user@example.com".to_string()), Some("plus".to_string())))
+        );
+        std::fs::write(&file, r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-x"}"#).unwrap();
+        assert_eq!(read_local_auth_status(&file), Some(("apiKey".to_string(), None, None)));
+        std::fs::write(&file, "not json").unwrap();
+        assert_eq!(read_local_auth_status(&file), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

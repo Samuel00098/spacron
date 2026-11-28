@@ -1521,16 +1521,14 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
         const name = path.split('/').pop() || path;
         if (isImagePath(path)) {
           try {
-            const bytes = await invoke<number[]>('fs_read_binary', { path });
-            const mimeType = getImageMimeType(path);
-            const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
+            const previewUrl = await invoke<string>('chat_image_preview', { path });
             next.push({
               id: `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               name,
-              type: mimeType,
-              size: bytes.length,
+              type: getImageMimeType(path),
+              size: 0,
               path,
-              previewUrl: URL.createObjectURL(blob),
+              previewUrl,
             });
           } catch {
             next.push({
@@ -2731,7 +2729,7 @@ export function ProjectChatModePanel({ chatProject, standalone = false, onCreate
             </div>
             <span className="chat-mode-composer-spacer" aria-hidden="true" />
             <div className="chat-mode-composer-actions">
-              <button type="button" className="chat-mode-composer-icon-btn" onClick={() => { if (standalone) ensureConversationThread(); fileInputRef.current?.click(); }} disabled={!project || attachmentBusy || attachments.length >= 5} title="Attach files or images (or drag and drop files here, paste images)" aria-label="Attach files or images"><PaperclipIcon /></button>
+              <button type="button" className="chat-mode-composer-icon-btn" onClick={() => { if (standalone) ensureConversationThread(); fileInputRef.current?.click(); }} disabled={(!project && !standalone) || attachmentBusy || attachments.length >= 5} title="Attach files or images (or drag and drop files here, paste images)" aria-label="Attach files or images"><PaperclipIcon /></button>
               <button type="button" className="chat-mode-composer-icon-btn" onClick={openThreadPicker} disabled={!project} title="@-mention another thread to bring its recent context into this message" aria-label="@-mention a thread">@</button>
               <button type="button" className={`chat-mode-composer-icon-btn${dictationLive ? ' active' : ''}`} onClick={toggleDictation} disabled={!project || transcriptionPhase === 'processing'} title={dictationLive ? 'Stop dictation and put the transcript in the composer' : 'Dictate a message'} aria-label="Dictate a message"><VoiceInputIcon className="chat-mode-composer-action-icon chat-mode-microphone-icon" /></button>
               {dictationLive && (

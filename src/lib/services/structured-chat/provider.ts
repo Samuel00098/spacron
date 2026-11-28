@@ -112,6 +112,8 @@ export interface StructuredChatProvider {
   fork?(sessionId: number, newSessionId?: number): Promise<{ nativeSessionId: string | null; forkSourceId?: string | null } | boolean>;
   /** Mid-turn steering / prompt injection when supported. */
   steer?(sessionId: number, text: string, images?: string[]): Promise<void>;
+  /** Resume a stopped or interrupted turn without appending a user message. */
+  resumeTurn?(sessionId: number): Promise<void>;
   /** Native context compaction when supported. */
   compact?(sessionId: number): Promise<void>;
   /** Active subagents for this session. */
@@ -124,4 +126,4 @@ export interface StructuredChatProvider {
   cancelSubagent?(sessionId: number, subagentId: string): Promise<void>;
 }
 
-export type { StructuredAccess, StructuredApproval, StructuredApprovalOption, StructuredChatState, StructuredModel };
+export type { StoppedTurnReason, StructuredAccess, StructuredApproval, StructuredApprovalOption, StructuredChatState, StructuredModel, StructuredStoppedTurn } from './codex-session';

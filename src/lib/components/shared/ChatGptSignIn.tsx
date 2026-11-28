@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { providerApiKeyExists } from '$lib/services/ai-keychain';
@@ -122,12 +122,25 @@ export function ChatGptSignIn({
   };
 
   const plan = status?.plan ? status.plan.charAt(0).toUpperCase() + status.plan.slice(1) : null;
-  let detail = 'Checking…';
+  let detail: ReactNode = 'Checking…';
   if (status && !checking) {
     if (!status.installed) detail = 'The Codex CLI is not installed';
-    else if (status.signedIn) detail = `Signed in${status.email ? ` as ${status.email}` : ''}${plan ? ` · ChatGPT ${plan}` : ''}`;
+    else if (status.signedIn) {
+      detail = (
+        <>
+          Signed in
+          {status.email ? (
+            <>
+              {' as '}
+              <span style={{ filter: 'blur(4.5px)', userSelect: 'none' }}>{status.email}</span>
+            </>
+          ) : null}
+          {plan ? ` · ChatGPT ${plan}` : ''}
+        </>
+      );
+    }
     else if (status.authMode === 'apiKey') detail = 'Codex is using an API key, not a ChatGPT plan';
-    else if (status.error) detail = status.error;
+    else if (status.error) detail = readableError(status.error);
     else detail = 'Not signed in';
   }
 

@@ -74,6 +74,10 @@ import ProjectWorktreeList from './ProjectWorktreeList';
 import { mainWorktreeRow, openCreateWorktree, setActiveWorktree, worktreesByProject } from '$lib/stores/projectWorktrees';
 import { worktreeForPath } from '$lib/services/project-worktrees';
 import AgentQuickAdd from '$lib/components/shared/AgentQuickAdd';
+import { createTerminalSession } from '$lib/stores/terminal';
+import { showToast } from '$lib/stores/notification';
+import { listStandaloneStructuredRecords, structuredSessions } from '$lib/services/structured-chat/session-store';
+import { showStandaloneStructuredChat } from '$lib/stores/chatNavigation';
 import { showProjectChat } from '$lib/stores/chatNavigation';
 import {
   allProjectSettings,
@@ -207,7 +211,6 @@ const DEFAULT_ROOM_GLYPH = (
 
 // Rooms with a richer row of their own above the generic ones: preview says what
 // state it is in, DeepSeek shows its assistant name and whether it is isolated.
-const ROOMS_WITH_OWN_ROW = new Set(['preview', 'editor', 'deepseek']);
 
 const TOOL_ROW_LABELS: Record<string, string> = {
   terminal: 'Terminal',
@@ -281,7 +284,19 @@ function chatStatusRank(status: ChatThreadStatus): number {
   }
 }
 
-export default function ProjectHUD() {
+/** A workspace tool shown as an icon beside Search. */
+export interface SidebarTool {
+  id: string;
+  title: string;
+  icon: ReactNode;
+  active?: boolean;
+  onClick: () => void;
+}
+
+/** Open rooms that get no icon on a project row: DeepSeek lists with the agents, the rest sit beside Search. */
+const ROOMS_WITHOUT_ROW_ICON = new Set(['deepseek', 'tasks', 'sketch', 'library']);
+
+export default function ProjectHUD({ tools = [] }: { tools?: SidebarTool[] } = {}) {
   const rawWorkspaces = useWorkspaceStore((s) => s.recentWorkspaces) || [];
   const activeWsId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const activeProjId = useWorkspaceStore((s) => s.activeProjectId);
@@ -478,6 +493,7 @@ export default function ProjectHUD() {
   const hoveredRoom = useStore(hoveredStageRoom);
   const deepSeekPlacementState = useStore(deepSeekPlacements);
   const allChatThreads = useStore(chatThreadState);
+  const standaloneRecords = useStore(structuredSessions);
   const currentInteractionMode = useStore(interactionMode);
   const [persistedTasksByProject, setPersistedTasksByProject] = useState<Map<string, OrchestratorTask>>(new Map());
 
@@ -926,22 +942,52 @@ export default function ProjectHUD() {
     setInteractionMode('chat');
   }
 
+  // Chats whose title matches the search: open agents and chat threads in any
+  // listed project, then chats outside a project.
+  const chatMatches: { key: string; title: string; where: string; open: () => void }[] = [];
+  if (query) {
+    const matches = (title: string) => title.toLowerCase().includes(query);
+    for (const item of projectItems) {
+      const projectId = item.path ? projectIdByPath.get(item.path) : undefined;
+      if (!projectId || hiddenProjectsWithConfig.has(normalizeProjectPath(item.path))) continue;
+      const sessions = sessionsByProject.get(projectId) ?? [];
+      for (const session of sessions.filter(isAgentSession)) {
+        const title = getSessionPaneDisplayTitle(session, sessions) || getSessionPromptTargetLabel(session, sessions);
+        if (!matches(title)) continue;
+        chatMatches.push({
+          key: `agent:${session.id}`,
+          title,
+          where: item.name,
+          open: () => { openRoom(item.workspaceId, item.path, `agent:${session.id}`).catch(console.error); },
+        });
+      }
+      for (const thread of allChatThreads.threadsByProject[projectId] ?? []) {
+        if (thread.archived || !matches(thread.title)) continue;
+        chatMatches.push({
+          key: `thread:${thread.id}`,
+          title: thread.title,
+          where: item.name,
+          open: () => {
+            selectChatThread(projectId, thread.id);
+            void handleOpen(item.workspaceId, item.path).then(() => setInteractionMode('chat'));
+          },
+        });
+      }
+    }
+    for (const record of listStandaloneStructuredRecords(standaloneRecords)) {
+      const title = record.title?.trim() || 'New chat';
+      if (!matches(title)) continue;
+      chatMatches.push({ key: `chat:${record.id}`, title, where: '', open: () => showStandaloneStructuredChat(record.id) });
+    }
+  }
+
   // Render a project card
   function renderProjectCard(p: ProjectItem) {
     const projectId = p.path ? projectIdByPath.get(p.path) ?? null : null;
     const projectIcon = projectIconFor(allProjectConfigs, p.path, projectId);
     const projectSessions = projectId ? sessionsByProject.get(projectId) ?? [] : [];
     const projectRooms = projectId ? openRoomsByProject.get(projectId) ?? [] : [];
-    const previewIsRunning = projectRooms.includes('preview');
-    const editorIsRunning = projectRooms.includes('editor');
     const deepSeekIsRunning = projectRooms.includes('deepseek');
-    // Rooms that already have a row of their own in the list â€” either a bespoke
-    // one above, or one per session below. The terminal room is the shells'
-    // container: while it holds a session, that session IS the row, and a
-    // separate "Terminal" entry beside it just reads as a second terminal. With
-    // the room open and empty, the room row is the only thing left to show.
-    const coveredRooms = new Set(ROOMS_WITH_OWN_ROW);
-    if (projectSessions.length > 0) coveredRooms.add('terminal');
     const allProjectTasks = projectId ? tasksByProject.get(projectId) ?? [] : [];
     const storedThreads = projectId ? allChatThreads.threadsByProject[projectId] ?? [] : [];
     const activeThreadId = projectId ? allChatThreads.activeThreadByProject[projectId] ?? null : null;
@@ -1071,13 +1117,24 @@ export default function ProjectHUD() {
     const mainThreadList = buildThreadList(chatRows, p.path);
     const isPinnedProject = Boolean(p.path) && pinnedProjects.has(normalizeProjectPath(p.path));
     const hasOpenContents = projectSessions.length > 0 || projectRooms.length > 0 || allProjectTasks.length > 0;
-    // Grouped by worktree, agents and the DeepSeek panel list under their own
-    // worktree, so the Active section only holds the rooms that stay here.
-    const hasActiveRows = groupByWorktree
-      ? projectRooms.some((room) => room !== 'deepseek')
-      : projectRooms.length > 0 || projectSessions.length > 0;
     const hasContents = hasOpenContents || chatRows.length > 0 || Boolean(p.path);
     const isExpanded = p.path ? expandedProjects.has(p.path) : false;
+    // With only the main checkout there is nothing to choose between, so its
+    // agents list straight under the project and its actions move to this row.
+    const singleWorktree = projectWorktreeRows.length === 1 && projectWorktreeRows[0].is_main && !projectWorktreeRows[0].missing;
+    const canLaunchAgent = singleWorktree && currentInteractionMode === 'cli' && projectId !== null && projectId === activeProjId;
+    const canStartThread = singleWorktree && currentInteractionMode === 'chat' && projectId !== null;
+    // Other open tools (Editor, Browser…) are icons on the project row.
+    const rowRooms = currentInteractionMode === 'cli' && (p.isActive || isExpanded)
+      ? projectRooms.filter((room) => !ROOMS_WITHOUT_ROW_ICON.has(room) && !(room === 'terminal' && projectSessions.length > 0))
+      : [];
+    const agentCount = projectSessions.filter(isAgentSession).length;
+    const plusIcon = (
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+    );
     const itemIndex = projectItems.findIndex(
       (item) => item.workspaceId === p.workspaceId && item.path === p.path,
     );
@@ -1485,23 +1542,55 @@ export default function ProjectHUD() {
 
           </div>
 
+          {rowRooms.length > 0 && (
+            <div className="project-card-rooms" onClick={(e) => e.stopPropagation()}>
+              {rowRooms.map((room) => {
+                const label = room === 'preview' ? 'Browser' : TOOL_ROW_LABELS[room] ?? room.charAt(0).toUpperCase() + room.slice(1);
+                return (
+                  <button
+                    key={room}
+                    type="button"
+                    className={`hud-card-action-btn${projectId === activeProjId && hoveredRoom === room ? ' is-hovered-room' : ''}`}
+                    onClick={() => openRoom(p.workspaceId, p.path, room).catch(console.error)}
+                    title={`${label}: ${room === 'preview' ? 'running' : 'open'}`}
+                    aria-label={`Show ${label} in ${p.name}`}
+                  >
+                    <span className="project-card-room-glyph" aria-hidden="true">{ROOM_GLYPHS[room] ?? DEFAULT_ROOM_GLYPH}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {!isExpanded && agentCount > 0 && (
+            <span className="project-card-count" title={`${agentCount} agent${agentCount === 1 ? '' : 's'}`}>{agentCount}</span>
+          )}
+
           {/* Action Buttons: Three Dots Menu */}
           <div className={`project-card-actions hud-menu-container${showOptionsMenu ? ' has-active-menu' : ''}`} onClick={(e) => e.stopPropagation()}>
-            {projectId && (
+            {canLaunchAgent ? (
+              <AgentQuickAdd
+                className="hud-card-action-btn"
+                title={`New agent in ${p.name}`}
+                launchFrom={projectWorktreeRows[0].path}
+                icon={plusIcon}
+              />
+            ) : projectId && (canStartThread || !singleWorktree) && (
               <button
                 type="button"
                 className="hud-card-action-btn"
                 onClick={() => {
                   if (p.path && !isExpanded) toggleProjectExpanded(p.path);
-                  openCreateWorktree(projectId, null, undefined, { id: projectId, name: p.name, root_path: p.path! });
+                  if (canStartThread) {
+                    setActiveWorktree(projectId, null);
+                    void openChatThread(p.workspaceId, p.path, null);
+                  } else {
+                    openCreateWorktree(projectId, null, undefined, { id: projectId, name: p.name, root_path: p.path! });
+                  }
                 }}
-                title="Create worktree"
-                aria-label={`Create worktree in ${p.name}`}
+                title={canStartThread ? 'New chat thread' : 'Create worktree'}
+                aria-label={`${canStartThread ? 'New chat thread' : 'Create worktree'} in ${p.name}`}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
+                {plusIcon}
               </button>
             )}
             <button
@@ -1573,6 +1662,49 @@ export default function ProjectHUD() {
                   <span>Rename Project</span>
                 </button>
 
+                {p.path && projectId && singleWorktree && (
+                  <>
+                    <button
+                      type="button"
+                      className="hud-options-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setActiveMenuKey(null);
+                        if (!isExpanded) toggleProjectExpanded(p.path);
+                        void createTerminalSession(p.path, undefined, projectId);
+                      }}
+                    >
+                      <span>New terminal</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="hud-options-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setActiveMenuKey(null);
+                        if (!isExpanded) toggleProjectExpanded(p.path);
+                        openCreateWorktree(projectId, null, undefined, { id: projectId, name: p.name, root_path: p.path! });
+                      }}
+                    >
+                      <span>Create worktree</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="hud-options-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setActiveMenuKey(null);
+                        navigator.clipboard.writeText(p.path)
+                          .then(() => showToast('Path copied', 'success', 1500))
+                          .catch(() => showToast('Could not copy the path', 'error'));
+                      }}
+                    >
+                      <span>Copy path</span>
+                    </button>
+                    <div className="hud-options-menu-divider" />
+                  </>
+                )}
+
                 {p.path && (
                   <>
                     <button
@@ -1640,6 +1772,7 @@ export default function ProjectHUD() {
                 rootPath={p.path}
                 sessions={projectSessions}
                 threads={storedThreads}
+                emptyText={currentInteractionMode === 'chat' ? 'No threads yet' : 'Nothing open in this project'}
                 newItemLabel="New chat thread here"
                 onNewItem={currentInteractionMode === 'chat' ? (worktree) => {
                   setActiveWorktree(projectId, worktree.is_main ? null : worktree.path);
@@ -1698,37 +1831,7 @@ export default function ProjectHUD() {
             {currentInteractionMode === 'cli' && !groupByWorktree && projectRooms.length === 0 && projectSessions.length === 0 && (
               <div className="project-contents-empty">Nothing open in this project</div>
             )}
-            {currentInteractionMode === 'cli' && <>
-            {hasActiveRows && (
-              <div className="project-contents-section">
-                {/* Covers both senses: a panel that is open, and a process
-                    that is actually running inside one. */}
-                <div className="project-contents-label">Active</div>
-                {previewIsRunning && renderOpenRoomRow('preview', 'Browser', ROOM_GLYPHS.preview, 'active', 'Browser: running')}
-                {editorIsRunning && renderOpenRoomRow('editor', 'Editor', ROOM_GLYPHS.editor)}
-                {!groupByWorktree && deepSeekIsRunning && p.path && (() => {
-                  // Listed like an agent: its assistant name, the product beside it.
-                  const dsRoot = deepSeekPanelRoot(deepSeekPlacementState, projectId, p.path);
-                  const isolated = !sameFolder(dsRoot, p.path);
-                  const name = deepSeekAgentName(dsRoot, projectSessions.map((s) => s.agentName ?? '').filter(Boolean));
-                  return renderOpenRoomRow(
-                    'deepseek', name, <AgentBrandMark command="dsh" name="DeepSeek Harness" />,
-                    isolated ? 'DeepSeek Harness Â· worktree' : 'DeepSeek Harness',
-                    `${name}: DeepSeek Harness, running`,
-                  );
-                })()}
-                {/* Every other open room. The list is the project's one answer to
-                    "what is open here?" now that the Rooms chips are gone. */}
-                {projectRooms
-                  .filter((room) => !coveredRooms.has(room))
-                  .map((room) => renderOpenRoomRow(
-                    room, TOOL_ROW_LABELS[room] ?? room, ROOM_GLYPHS[room] ?? DEFAULT_ROOM_GLYPH,
-                  ))}
-                {!groupByWorktree && projectSessions.map(renderSessionRow)}
-              </div>
-            )}
-
-            </>}
+            {currentInteractionMode === 'cli' && !groupByWorktree && projectSessions.map(renderSessionRow)}
           </div>
         )}
       </div>
@@ -1737,7 +1840,7 @@ export default function ProjectHUD() {
 
   return (
     <div className="projects-sidebar-panel">
-      <div className="projects-top-search">
+      <div className={`projects-top-search with-actions${tools.length ? ' with-tools' : ''}`}>
         <div className="projects-search-field">
           <svg className="projects-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
             <circle cx="11" cy="11" r="8" />
@@ -1749,7 +1852,7 @@ export default function ProjectHUD() {
             placeholder="Search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            aria-label="Search projects"
+            aria-label="Search projects and chats"
           />
           {search && (
             <button type="button" className="projects-search-clear" onClick={() => setSearch('')} title="Clear search" aria-label="Clear search">
@@ -1758,22 +1861,35 @@ export default function ProjectHUD() {
               </svg>
             </button>
           )}
-          <button
-            ref={sourceButtonRef}
-            type="button"
-            className={`projects-source-trigger${sourceMenuOpen ? ' active' : ''}`}
-            onClick={toggleSourceMenu}
-            title="Create or open a project"
-            aria-label="Create or open a project"
-            aria-haspopup="menu"
-            aria-expanded={sourceMenuOpen}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
-              <path d="M12 10v6M9 13h6" />
-            </svg>
-          </button>
         </div>
+        <button
+          ref={sourceButtonRef}
+          type="button"
+          className={`projects-tool-btn projects-source-trigger${sourceMenuOpen ? ' active' : ''}`}
+          onClick={toggleSourceMenu}
+          title="Create or open a project"
+          aria-label="Create or open a project"
+          aria-haspopup="menu"
+          aria-expanded={sourceMenuOpen}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+            <path d="M12 10v6M9 13h6" />
+          </svg>
+        </button>
+        {tools.map((tool) => (
+          <button
+            key={tool.id}
+            type="button"
+            className={`projects-tool-btn${tool.active ? ' active' : ''}`}
+            onClick={tool.onClick}
+            title={tool.title}
+            aria-label={tool.title}
+            aria-pressed={tool.active}
+          >
+            {tool.icon}
+          </button>
+        ))}
       </div>
       {/* Main Scrollable Body */}
       <div className="projects-panel-body scrollable">
@@ -1805,6 +1921,7 @@ export default function ProjectHUD() {
                     </svg>
                   </button>
                   <span className="projects-section-title">Projects</span>
+                  {isProjectsCollapsed && filteredProjects.length > 0 && <span className="sidebar-fold-count">{filteredProjects.length}</span>}
                 </div>
 
                 <div className="projects-section-header-right" onClick={(e) => e.stopPropagation()}>
@@ -1959,13 +2076,29 @@ export default function ProjectHUD() {
           );
         })()}
 
-        <BotsSidebar />
-        <StandaloneChatsSidebar />
+        {!query && <BotsSidebar />}
+        {!query && <StandaloneChatsSidebar />}
+
+        {chatMatches.length > 0 && (
+          <div className="projects-section-group" aria-label="Matching chats">
+            <div className="projects-section-header">
+              <span className="projects-section-title">Chats</span>
+            </div>
+            <div className="project-flat-list">
+              {chatMatches.map((match) => (
+                <button key={match.key} type="button" className="projects-chat-match" onClick={match.open} title={match.title}>
+                  <span>{match.title}</span>
+                  {match.where && <small>{match.where}</small>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Global Empty Search State */}
-        {search && filteredProjects.length === 0 && (
+        {query && filteredProjects.length === 0 && chatMatches.length === 0 && (
           <div className="projects-empty-state">
-            <p className="projects-empty-title">No projects match "{search}"</p>
+            <p className="projects-empty-title">No projects or chats match "{search}"</p>
             <button type="button" className="projects-empty-action-btn" onClick={() => setSearch('')}>
               Clear Search
             </button>

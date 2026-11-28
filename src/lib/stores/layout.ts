@@ -71,7 +71,7 @@ export const terminalRoomOpen = writable(false);
  * every launch or reload starts closed, and it stays open only once the user
  * opens it during the session. */
 export const rightSidebarVisible = writable(false);
-export const RIGHT_SIDEBAR_NAVIGATOR_TABS = ['files', 'search', 'git', 'problems', 'snapshots', 'snippets'] as const;
+export const RIGHT_SIDEBAR_NAVIGATOR_TABS = ['files', 'search', 'git', 'snapshots', 'snippets'] as const;
 export type RightSidebarNavigatorTab = (typeof RIGHT_SIDEBAR_NAVIGATOR_TABS)[number];
 // 'preview' is the docked Preview. It is not a drawer tool: it has no aux flag,
 // and it stays mounted while another tab is showing so the page never reloads.
